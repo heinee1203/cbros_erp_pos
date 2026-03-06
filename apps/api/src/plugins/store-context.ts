@@ -21,6 +21,8 @@ const storeContextPluginFn: FastifyPluginAsync = async (app) => {
       return;
     }
 
+    // After auth plugin's global hook, request.user is set for non-skip paths.
+    // If somehow still null, skip (auth plugin will have already thrown 401).
     if (!request.user) {
       return;
     }

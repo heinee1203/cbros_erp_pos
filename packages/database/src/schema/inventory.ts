@@ -4,6 +4,7 @@ import {
   integer,
   timestamp,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { products } from "./products";
 import { locations } from "./locations";
@@ -34,5 +35,7 @@ export const inventory = pgTable(
       table.productId,
       table.locationId,
     ),
+    // B-Tree on location_id for fast per-store inventory queries
+    index("idx_inventory_location_id").on(table.locationId),
   ],
 );

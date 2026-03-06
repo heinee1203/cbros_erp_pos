@@ -6,9 +6,7 @@ import { paginationSchema } from "@apex/types";
 import type { PaginatedResponse } from "@apex/types";
 
 export const productRoutes: FastifyPluginAsync = async (app) => {
-  app.addHook("onRequest", async (request) => {
-    await app.authenticate(request);
-  });
+  // Auth is handled globally by the auth plugin — no per-route hook needed
 
   app.get("/", async (request, reply) => {
     const query = paginationSchema.safeParse(request.query);

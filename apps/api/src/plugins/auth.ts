@@ -15,6 +15,9 @@ declare module "fastify" {
   }
 }
 
+// Paths that do NOT require authentication
+const PUBLIC_PATHS = ["/health", "/auth/login", "/auth/register"];
+
 const authPluginFn: FastifyPluginAsync = async (app) => {
   app.decorate(
     "authenticate",
@@ -26,6 +29,14 @@ const authPluginFn: FastifyPluginAsync = async (app) => {
       }
     },
   );
+
+  // Global auth hook — runs before store-context for all non-public routes
+  app.addHook("onRequest", async (request, reply) => {
+    if (PUBLIC_PATHS.some((p) => request.url.startsWith(p))) {
+      return;
+    }
+    await app.authenticate(request);
+  });
 };
 
 export const authPlugin = fp(authPluginFn, {
