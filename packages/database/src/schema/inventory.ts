@@ -5,8 +5,8 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { products } from "./products.js";
-import { locations } from "./locations.js";
+import { products } from "./products";
+import { locations } from "./locations";
 
 export const inventory = pgTable(
   "inventory",

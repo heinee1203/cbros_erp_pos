@@ -9,7 +9,7 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { organizations } from "./organizations.js";
+import { organizations } from "./organizations";
 
 export const productCategoryEnum = pgEnum("product_category", [
   "TIRES",

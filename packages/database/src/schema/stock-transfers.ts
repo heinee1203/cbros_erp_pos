@@ -7,10 +7,10 @@ import {
   pgEnum,
   index,
 } from "drizzle-orm/pg-core";
-import { organizations } from "./organizations.js";
-import { locations } from "./locations.js";
-import { users } from "./users.js";
-import { products } from "./products.js";
+import { organizations } from "./organizations";
+import { locations } from "./locations";
+import { users } from "./users";
+import { products } from "./products";
 
 export const transferStatusEnum = pgEnum("transfer_status", [
   "DRAFT",

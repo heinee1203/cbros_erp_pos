@@ -6,7 +6,7 @@ import {
   pgEnum,
   index,
 } from "drizzle-orm/pg-core";
-import { organizations } from "./organizations.js";
+import { organizations } from "./organizations";
 
 export const locationTypeEnum = pgEnum("location_type", [
   "WAREHOUSE",

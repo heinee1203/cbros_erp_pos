@@ -5,8 +5,8 @@ import {
   timestamp,
   pgEnum,
 } from "drizzle-orm/pg-core";
-import { organizations } from "./organizations.js";
-import { locations } from "./locations.js";
+import { organizations } from "./organizations";
+import { locations } from "./locations";
 
 export const userRoleEnum = pgEnum("user_role", [
   "ADMIN",
