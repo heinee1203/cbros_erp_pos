@@ -1,0 +1,21 @@
+{
+  "name": "apex-pos",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @apex/api dev",
+    "build": "pnpm --filter @apex/api build",
+    "db:generate": "pnpm --filter @apex/database generate",
+    "db:migrate": "pnpm --filter @apex/database migrate",
+    "db:seed": "pnpm --filter @apex/database seed",
+    "db:studio": "pnpm --filter @apex/database studio",
+    "typecheck": "tsc --build",
+    "clean": "rm -rf apps/*/dist packages/*/dist"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
