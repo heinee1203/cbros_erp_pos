@@ -31,3 +31,22 @@ export const TransferStatus = {
 } as const;
 export type TransferStatus =
   (typeof TransferStatus)[keyof typeof TransferStatus];
+
+export const JournalReferenceType = {
+  SALE: "SALE",
+  RECEIVING: "RECEIVING",
+  TRANSFER_IN: "TRANSFER_IN",
+  TRANSFER_OUT: "TRANSFER_OUT",
+  ADJUSTMENT: "ADJUSTMENT",
+  RETURN: "RETURN",
+  STOCKTAKE: "STOCKTAKE",
+  VOID: "VOID",
+} as const;
+export type JournalReferenceType =
+  (typeof JournalReferenceType)[keyof typeof JournalReferenceType];
+
+export const ActorType = {
+  USER: "USER",
+  SYSTEM: "SYSTEM",
+} as const;
+export type ActorType = (typeof ActorType)[keyof typeof ActorType];

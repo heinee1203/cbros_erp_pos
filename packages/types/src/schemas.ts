@@ -51,3 +51,37 @@ export interface StoreContext {
   orgId: string;
   locationType: string;
 }
+
+// ── Stock Journal ──
+export const stockJournalEntrySchema = z.object({
+  productId: z.string().uuid(),
+  locationId: z.string().uuid(),
+  changeQuantity: z.number().int(),
+  referenceType: z.enum(["SALE", "RECEIVING", "TRANSFER_IN", "TRANSFER_OUT", "ADJUSTMENT", "RETURN", "STOCKTAKE", "VOID"]),
+  referenceId: z.string().uuid(),
+  referenceLineId: z.string().uuid().optional(),
+  unitCostSnapshot: z.string().optional(),
+  actorType: z.enum(["USER", "SYSTEM"]).default("USER"),
+  effectiveAt: z.string().datetime().optional(),
+  notes: z.string().max(500).optional(),
+});
+export type StockJournalEntry = z.infer<typeof stockJournalEntrySchema>;
+
+// ── Product Family ──
+export const productFamilySchema = z.object({
+  name: z.string().min(1).max(255),
+  slug: z.string().min(1).max(255).regex(/^[a-z0-9-]+$/),
+});
+export type ProductFamilyInput = z.infer<typeof productFamilySchema>;
+
+// ── Vehicle Compatibility ──
+export const vehicleCompatibilitySchema = z.object({
+  productId: z.string().uuid(),
+  make: z.string().min(1).max(100),
+  model: z.string().min(1).max(100),
+  yearStart: z.number().int().min(1900).max(2100),
+  yearEnd: z.number().int().min(1900).max(2100),
+  engine: z.string().max(100).optional(),
+  notes: z.string().max(255).optional(),
+});
+export type VehicleCompatibilityInput = z.infer<typeof vehicleCompatibilitySchema>;

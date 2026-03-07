@@ -5,7 +5,9 @@ import {
   timestamp,
   uniqueIndex,
   index,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { products } from "./products";
 import { locations } from "./locations";
 
@@ -37,5 +39,6 @@ export const inventory = pgTable(
     ),
     // B-Tree on location_id for fast per-store inventory queries
     index("idx_inventory_location_id").on(table.locationId),
+    check("chk_stock_level_non_negative", sql`stock_level >= 0`),
   ],
 );

@@ -10,6 +10,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { organizations } from "./organizations";
+import { productFamilies } from "./product-families";
 
 export const productCategoryEnum = pgEnum("product_category", [
   "TIRES",
@@ -36,6 +37,7 @@ export const products = pgTable(
     costPrice: numeric("cost_price", { precision: 12, scale: 2 })
       .notNull()
       .default("0.00"),
+    familyId: uuid("family_id").references(() => productFamilies.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -53,5 +55,6 @@ export const products = pgTable(
     index("idx_products_name_trgm").using("gin", sql`name gin_trgm_ops`),
     // Enforce exactly 10 characters for mnemonic SKU at DB level
     check("chk_mnemonic_sku_length", sql`char_length(mnemonic_sku) = 10`),
+    index("idx_products_family_id").on(table.familyId),
   ],
 );

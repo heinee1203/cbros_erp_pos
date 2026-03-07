@@ -6,7 +6,9 @@ import {
   timestamp,
   pgEnum,
   index,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { locations } from "./locations";
 import { users } from "./users";
@@ -65,5 +67,8 @@ export const stockTransferItems = pgTable(
     quantity: integer("quantity").notNull(),
     receivedQuantity: integer("received_quantity"),
   },
-  (table) => [index("idx_transfer_items_transfer_id").on(table.transferId)],
+  (table) => [
+    index("idx_transfer_items_transfer_id").on(table.transferId),
+    check("chk_transfer_quantity_positive", sql`quantity > 0`),
+  ],
 );
