@@ -9,6 +9,8 @@
     "db:seed": "pnpm --filter @apex/database seed",
     "db:studio": "pnpm --filter @apex/database studio",
     "typecheck": "tsc --build",
+    "web:dev": "pnpm --filter @apex/web dev",
+    "web:build": "pnpm --filter @apex/web build",
     "clean": "rm -rf apps/*/dist packages/*/dist"
   },
   "devDependencies": {
