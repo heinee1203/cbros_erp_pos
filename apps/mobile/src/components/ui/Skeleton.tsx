@@ -1,0 +1,52 @@
+import React, { useEffect, useRef } from 'react';
+import { Animated, StyleSheet, ViewStyle } from 'react-native';
+import { colors } from '@/theme';
+
+interface SkeletonProps {
+  width: number | string;
+  height: number;
+  borderRadius?: number;
+  style?: ViewStyle;
+}
+
+function SkeletonInner({ width, height, borderRadius = 4, style }: SkeletonProps) {
+  const opacity = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, {
+          toValue: 0.7,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0.3,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    animation.start();
+
+    return () => animation.stop();
+  }, [opacity]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.base,
+        { width, height, borderRadius, opacity },
+        style,
+      ]}
+    />
+  );
+}
+
+export const Skeleton = React.memo(SkeletonInner);
+
+const styles = StyleSheet.create({
+  base: {
+    backgroundColor: colors.bg.surface,
+  },
+});
