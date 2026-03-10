@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,9 +15,11 @@ import type { StackNavigationProp } from '@react-navigation/stack';
 import { useCatalogSearch, type CatalogItem } from '@/hooks/use-catalog-search';
 import ProductListItem from '@/components/ProductListItem';
 import SyncStatusBar from '@/components/SyncStatusBar';
+import { FavoritesGrid } from '@/components/FavoritesGrid';
 import { useScanner } from '@/hardware/scanner/context';
 import { useCartStore, selectLineCount } from '@/stores/cart-store';
 import { runFullSync } from '@/sync/sync-manager';
+import { addFavorite, isFavorite } from '@/storage/favorites';
 import { Chip, Toast } from '@/components/ui';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import type { POSStackParamList } from '@/app/MainTabs';
@@ -80,6 +82,21 @@ export default function CatalogScreen() {
     };
   }, [scanner, searchByBarcode, addLine, showToast]);
 
+  // Build product map for FavoritesGrid from current results
+  const productMap = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; retailPrice: number; available: number; reorderPoint: number }>();
+    for (const item of results) {
+      map.set(item.serverId, {
+        id: item.serverId,
+        name: item.name,
+        retailPrice: item.unitPrice,
+        available: item.stockLevel - item.reservedLevel,
+        reorderPoint: item.reorderPoint,
+      });
+    }
+    return map;
+  }, [results]);
+
   const handleProductPress = useCallback((item: CatalogItem) => {
     addLine({
       serverId: item.serverId,
@@ -91,6 +108,41 @@ export default function CatalogScreen() {
     });
     showToast(`Added: ${item.name}`);
   }, [addLine, showToast]);
+
+  const handleProductLongPress = useCallback((item: CatalogItem) => {
+    if (isFavorite(item.serverId)) {
+      showToast('Already in favorites');
+      return;
+    }
+    addFavorite(item.serverId);
+    showToast(`★ ${item.name}`);
+  }, [showToast]);
+
+  const handleFavoriteAddToCart = useCallback((product: { id: string; name: string; retailPrice: number }) => {
+    // Find the full CatalogItem from results for sku/barcode info
+    const item = results.find(r => r.serverId === product.id);
+    if (item) {
+      addLine({
+        serverId: item.serverId,
+        name: item.name,
+        sku: item.sku,
+        mnemonicSku: item.mnemonicSku,
+        barcode: item.barcode,
+        unitPrice: item.unitPrice,
+      });
+    } else {
+      // Fallback if item not in current results (e.g., filtered by category)
+      addLine({
+        serverId: product.id,
+        name: product.name,
+        sku: '',
+        mnemonicSku: '',
+        barcode: null,
+        unitPrice: product.retailPrice,
+      });
+    }
+    showToast(`Added: ${product.name}`);
+  }, [results, addLine, showToast]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -120,8 +172,8 @@ export default function CatalogScreen() {
   }, [scanner, searchByBarcode, addLine, showToast]);
 
   const renderItem = useCallback(({ item, index }: { item: CatalogItem; index: number }) => (
-    <ProductListItem item={item} index={index} onPress={handleProductPress} />
-  ), [handleProductPress]);
+    <ProductListItem item={item} index={index} onPress={handleProductPress} onLongPress={handleProductLongPress} />
+  ), [handleProductPress, handleProductLongPress]);
 
   return (
     <View style={styles.container}>
@@ -211,6 +263,9 @@ export default function CatalogScreen() {
         data={results}
         keyExtractor={item => item.id}
         renderItem={renderItem}
+        ListHeaderComponent={
+          <FavoritesGrid productMap={productMap} onAddToCart={handleFavoriteAddToCart} />
+        }
         refreshControl={
           <RefreshControl
             refreshing={refreshing}

@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,8 @@ import { useCheckout } from '@/hooks/use-checkout';
 import { usePrinter } from '@/hardware/printer/context';
 import type { ReceiptData } from '@/hardware/printer/types';
 import { useAuth } from '@/hooks/use-auth';
+import { CustomerLookup } from '@/components/CustomerLookup';
+import type { Customer, Vehicle } from '@/hooks/use-customer-search';
 import { colors, textStyles, spacing, radius, layout, fonts, fontSize } from '@/theme';
 import { Button, Card, Chip } from '@/components/ui';
 
@@ -60,6 +62,15 @@ export default function CartScreen() {
   const grandTotal = useCartStore(selectGrandTotal);
   const change = useCartStore(selectChange);
   const lineCount = useCartStore(selectLineCount);
+
+  const attachCustomer = useCartStore(s => s.attachCustomer);
+  const detachCustomer = useCartStore(s => s.detachCustomer);
+
+  const [customerLookupVisible, setCustomerLookupVisible] = useState(false);
+
+  const handleSelectCustomer = useCallback((customer: Customer, vehicle?: Vehicle) => {
+    attachCustomer(customer.id, customer.name, vehicle?.id);
+  }, [attachCustomer]);
 
   const { status, error, result, checkout, reset } = useCheckout();
 
@@ -244,15 +255,28 @@ export default function CartScreen() {
       </View>
 
       {/* Customer bar */}
-      {customerName && (
+      {customerName ? (
         <Card style={styles.customerCard} padded={false}>
           <View style={styles.customerBar}>
-            <Text style={styles.customerName}>{customerName}</Text>
-            {vehicleId && (
-              <Text style={styles.customerVehicle}>Vehicle attached</Text>
-            )}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.customerName}>{customerName}</Text>
+              {vehicleId && (
+                <Text style={styles.customerVehicle}>Vehicle attached</Text>
+              )}
+            </View>
+            <Pressable onPress={detachCustomer} hitSlop={8}>
+              <Text style={styles.detachText}>✕</Text>
+            </Pressable>
           </View>
         </Card>
+      ) : (
+        <Pressable
+          style={styles.addCustomerButton}
+          onPress={() => setCustomerLookupVisible(true)}
+          android_ripple={{ color: colors.accent.glow }}
+        >
+          <Text style={styles.addCustomerText}>+ Add Customer</Text>
+        </Pressable>
       )}
 
       {/* Line items */}
@@ -335,6 +359,12 @@ export default function CartScreen() {
           />
         </View>
       )}
+
+      <CustomerLookup
+        visible={customerLookupVisible}
+        onClose={() => setCustomerLookupVisible(false)}
+        onSelect={handleSelectCustomer}
+      />
     </SafeAreaView>
   );
 }
@@ -378,6 +408,27 @@ const styles = StyleSheet.create({
   },
   customerBar: {
     padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  detachText: {
+    ...textStyles.body,
+    color: colors.text.muted,
+    paddingHorizontal: spacing.sm,
+  },
+  addCustomerButton: {
+    marginHorizontal: layout.screenPadding,
+    marginTop: spacing.sm,
+    paddingVertical: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    borderRadius: radius.md,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+  },
+  addCustomerText: {
+    ...textStyles.caption,
+    color: colors.text.secondary,
   },
   customerName: {
     ...textStyles.bodyMedium,

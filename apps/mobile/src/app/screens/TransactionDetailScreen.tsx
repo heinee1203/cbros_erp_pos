@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,9 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import { useSaleDetailQuery } from '@/hooks/use-transactions';
 import { usePrinter } from '@/hardware/printer/context';
 import { useAuth } from '@/hooks/use-auth';
+import { PinPad } from '@/components/PinPad';
+import { RefundFlow } from '@/components/RefundFlow';
+import { apiFetch } from '@/services/api-client';
 import { colors, textStyles, spacing, layout, radius } from '@/theme';
 import { Card, Badge, Divider, Button } from '@/components/ui';
 import type { ReceiptData } from '@/hardware/printer/types';
@@ -34,9 +37,37 @@ export default function TransactionDetailScreen() {
   const navigation = useNavigation();
   const route = useRoute<Route>();
   const { saleId } = route.params;
-  const { data: sale, isLoading } = useSaleDetailQuery(saleId);
+  const { data: sale, isLoading, refetch } = useSaleDetailQuery(saleId);
   const printer = usePrinter();
   const { user } = useAuth();
+
+  const [pinVisible, setPinVisible] = useState(false);
+  const [refundVisible, setRefundVisible] = useState(false);
+
+  const verifyPin = useCallback(async (pin: string): Promise<boolean> => {
+    try {
+      const res = await apiFetch<{ valid: boolean }>('/auth/verify-pin', {
+        method: 'POST',
+        body: JSON.stringify({ pin }),
+      });
+      return res.valid;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const handleRefundPress = useCallback(() => {
+    setPinVisible(true);
+  }, []);
+
+  const handlePinVerified = useCallback(() => {
+    setPinVisible(false);
+    setRefundVisible(true);
+  }, []);
+
+  const handleRefunded = useCallback(() => {
+    refetch();
+  }, [refetch]);
 
   const handleReprint = useCallback(async () => {
     if (!sale) return;
@@ -176,7 +207,43 @@ export default function TransactionDetailScreen() {
             </View>
           ))}
         </Card>
+
+        {/* Refund button — only for completed sales */}
+        {sale.status === 'COMPLETED' && (
+          <Button
+            title="Refund"
+            variant="danger"
+            fullWidth
+            onPress={handleRefundPress}
+            style={styles.refundButton}
+          />
+        )}
       </ScrollView>
+
+      <PinPad
+        visible={pinVisible}
+        onClose={() => setPinVisible(false)}
+        onVerified={handlePinVerified}
+        verifyPin={verifyPin}
+      />
+
+      {sale && (
+        <RefundFlow
+          visible={refundVisible}
+          onClose={() => setRefundVisible(false)}
+          saleId={sale.id}
+          saleNo={sale.saleNo}
+          lines={sale.lines.map(l => ({
+            id: l.id,
+            productName: l.productName,
+            sku: l.mnemonicSku,
+            quantity: l.quantity,
+            unitPrice: parseFloat(l.unitPrice),
+            lineTotal: parseFloat(l.lineTotal),
+          }))}
+          onRefunded={handleRefunded}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -315,5 +382,9 @@ const styles = StyleSheet.create({
   paymentAmount: {
     ...textStyles.monoMd,
     color: colors.text.primary,
+  },
+  refundButton: {
+    marginTop: spacing.md,
+    marginBottom: spacing.lg,
   },
 });
