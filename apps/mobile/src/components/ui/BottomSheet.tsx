@@ -7,6 +7,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius } from '@/theme';
 
 interface BottomSheetProps {
@@ -16,6 +17,10 @@ interface BottomSheetProps {
   title?: string;
 }
 
+/**
+ * Phone: slides up from bottom (full width).
+ * Tablet: centered dialog (max 480dp wide, rounded corners).
+ */
 export function BottomSheet({
   visible,
   onClose,
@@ -23,27 +28,39 @@ export function BottomSheet({
   title,
 }: BottomSheetProps) {
   const insets = useSafeAreaInsets();
+  const { isTablet } = useLayout();
 
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="slide"
+      animationType={isTablet ? 'fade' : 'slide'}
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, isTablet && styles.overlayTablet]}>
         <Pressable style={styles.backdrop} onPress={onClose} />
         <View
           style={[
-            styles.sheet,
-            { paddingBottom: Math.max(insets.bottom, spacing.lg) },
+            isTablet ? styles.dialog : styles.sheet,
+            !isTablet && { paddingBottom: Math.max(insets.bottom, spacing.lg) },
           ]}
         >
-          <View style={styles.handleContainer}>
-            <View style={styles.handle} />
-          </View>
-          {title && <Text style={styles.title}>{title}</Text>}
+          {!isTablet && (
+            <View style={styles.handleContainer}>
+              <View style={styles.handle} />
+            </View>
+          )}
+          {title && (
+            <View style={isTablet ? styles.dialogHeader : undefined}>
+              <Text style={styles.title}>{title}</Text>
+              {isTablet && (
+                <Pressable onPress={onClose} hitSlop={8}>
+                  <Text style={styles.closeButton}>{'\u2715'}</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
           <View style={styles.content}>{children}</View>
         </View>
       </View>
@@ -56,15 +73,47 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
   },
+  overlayTablet: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
+  // Phone: bottom sheet
   sheet: {
     backgroundColor: colors.bg.elevated,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     paddingHorizontal: spacing.lg,
+  },
+  // Tablet: centered dialog
+  dialog: {
+    backgroundColor: colors.bg.elevated,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing['2xl'],
+    paddingBottom: spacing['2xl'],
+    paddingTop: spacing.lg,
+    width: 480,
+    maxWidth: '90%',
+    maxHeight: '80%',
+    elevation: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+  },
+  dialogHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  closeButton: {
+    ...textStyles.body,
+    color: colors.text.muted,
+    fontSize: 18,
   },
   handleContainer: {
     alignItems: 'center',

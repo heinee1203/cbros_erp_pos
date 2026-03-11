@@ -21,6 +21,7 @@ import { useCartStore, selectLineCount } from '@/stores/cart-store';
 import { runFullSync } from '@/sync/sync-manager';
 import { addFavorite, isFavorite } from '@/storage/favorites';
 import { Chip, Toast } from '@/components/ui';
+import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import type { POSStackParamList } from '@/app/MainTabs';
 
@@ -30,6 +31,7 @@ type Nav = StackNavigationProp<POSStackParamList, 'Catalog'>;
 
 export default function CatalogScreen() {
   const navigation = useNavigation<Nav>();
+  const { isTablet, screenPadding } = useLayout();
   const scanner = useScanner();
   const addLine = useCartStore(s => s.addLine);
   const lineCount = useCartStore(selectLineCount);
@@ -177,21 +179,23 @@ export default function CatalogScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
+      {/* Header — hide Cart button on tablet (cart panel is visible) */}
+      <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
         <Text style={styles.headerTitle}>APEX</Text>
-        <Pressable
-          style={styles.cartButton}
-          onPress={() => navigation.navigate('Cart')}
-          android_ripple={{ color: colors.accent.glow }}
-        >
-          <Text style={styles.cartIcon}>Cart</Text>
-          {lineCount > 0 && (
-            <View style={styles.cartBadge}>
-              <Text style={styles.cartBadgeText}>{lineCount}</Text>
-            </View>
-          )}
-        </Pressable>
+        {!isTablet && (
+          <Pressable
+            style={styles.cartButton}
+            onPress={() => navigation.navigate('Cart')}
+            android_ripple={{ color: colors.accent.glow }}
+          >
+            <Text style={styles.cartIcon}>Cart</Text>
+            {lineCount > 0 && (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>{lineCount}</Text>
+              </View>
+            )}
+          </Pressable>
+        )}
       </View>
 
       {/* Sync status bar */}
@@ -206,7 +210,7 @@ export default function CatalogScreen() {
       />
 
       {/* Search bar with integrated SCAN button */}
-      <View style={styles.searchBar}>
+      <View style={[styles.searchBar, { paddingHorizontal: screenPadding }]}>
         <View
           style={[
             styles.searchInputContainer,
@@ -241,7 +245,7 @@ export default function CatalogScreen() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipRow}
+        contentContainerStyle={[styles.chipRow, { paddingHorizontal: screenPadding }]}
       >
         <Chip
           label="All"

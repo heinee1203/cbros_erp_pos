@@ -25,6 +25,7 @@ import type { ReceiptData } from '@/hardware/printer/types';
 import { useAuth } from '@/hooks/use-auth';
 import { CustomerLookup } from '@/components/CustomerLookup';
 import type { Customer, Vehicle } from '@/hooks/use-customer-search';
+import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout, fonts, fontSize } from '@/theme';
 import { Button, Card, Chip } from '@/components/ui';
 
@@ -42,6 +43,7 @@ const PAYMENT_METHODS = [
 
 export default function CartScreen() {
   const navigation = useNavigation();
+  const { isTablet, screenPadding } = useLayout();
   const { user, locations, locationId } = useAuth();
   const printer = usePrinter();
 
@@ -114,8 +116,8 @@ export default function CartScreen() {
   const handleNewSale = useCallback(() => {
     clear();
     reset();
-    navigation.goBack();
-  }, [clear, reset, navigation]);
+    if (!isTablet) navigation.goBack();
+  }, [clear, reset, navigation, isTablet]);
 
   const handlePrintReceipt = useCallback(() => {
     if (!result) return;
@@ -233,12 +235,18 @@ export default function CartScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} hitSlop={8}>
-          <Text style={styles.backText}>{'\u2190'} Back</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>Cart ({lineCount})</Text>
+      {/* Header — tablet: no Back button (persistent panel) */}
+      <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
+        {!isTablet ? (
+          <Pressable onPress={() => navigation.goBack()} hitSlop={8}>
+            <Text style={styles.backText}>{'\u2190'} Back</Text>
+          </Pressable>
+        ) : (
+          <Text style={styles.panelTitle}>Cart</Text>
+        )}
+        <Text style={isTablet ? styles.cartCount : styles.headerTitle}>
+          {isTablet ? `${lineCount} items` : `Cart (${lineCount})`}
+        </Text>
         <Pressable
           onPress={() => {
             if (lines.length > 0) {
@@ -393,6 +401,14 @@ const styles = StyleSheet.create({
   headerTitle: {
     ...textStyles.heading,
     color: colors.text.primary,
+  },
+  panelTitle: {
+    ...textStyles.subheading,
+    color: colors.text.primary,
+  },
+  cartCount: {
+    ...textStyles.caption,
+    color: colors.text.secondary,
   },
   clearText: {
     ...textStyles.bodyMedium,

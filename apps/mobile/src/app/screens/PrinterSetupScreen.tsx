@@ -14,11 +14,13 @@ import { usePrinter } from '@/hardware/printer/context';
 import type { PrinterDevice } from '@/hardware/printer/types';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import { Button, Card, Chip } from '@/components/ui';
 
 export default function PrinterSetupScreen() {
   const navigation = useNavigation();
+  const { isTablet, screenPadding } = useLayout();
   const printer = usePrinter();
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<PrinterDevice[]>([]);
@@ -82,7 +84,11 @@ export default function PrinterSetupScreen() {
       <FlatList
         data={devices}
         keyExtractor={d => d.id}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingHorizontal: screenPadding },
+          isTablet && styles.tabletContent,
+        ]}
         ListHeaderComponent={
           <>
             {/* Status */}
@@ -208,9 +214,13 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
   },
   scrollContent: {
-    paddingHorizontal: layout.screenPadding,
     paddingTop: spacing.lg,
     paddingBottom: spacing['3xl'],
+  },
+  tabletContent: {
+    maxWidth: 600,
+    alignSelf: 'center',
+    width: '100%',
   },
   card: {
     marginBottom: spacing.md,

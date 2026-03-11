@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { View, Text, Pressable, StyleSheet, Alert } from 'react-native';
-import { colors, textStyles, spacing, layout } from '@/theme';
+import { colors, textStyles, spacing } from '@/theme';
+import { useLayout } from '@/hooks/use-layout';
 import { getFavoriteIds, removeFavorite } from '@/storage/favorites';
 import { FavoriteTile } from './FavoriteTile';
 import { storage } from '@/storage/mmkv';
@@ -22,6 +23,7 @@ interface FavoritesGridProps {
 }
 
 export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
+  const { favoriteColumns, favoriteMax, screenPadding } = useLayout();
   const favoriteIds = getFavoriteIds();
   const [collapsed, setCollapsed] = useState(
     () => storage.getBoolean(COLLAPSED_KEY) ?? false,
@@ -43,7 +45,7 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
   const favorites = favoriteIds
     .map(id => productMap.get(id))
     .filter((p): p is Product => p != null)
-    .slice(0, 6); // Max 6 tiles (3x2 grid)
+    .slice(0, favoriteMax);
 
   if (favorites.length === 0) return null;
 
@@ -65,17 +67,17 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
     );
   };
 
-  // Build rows of 3
+  // Build rows using adaptive column count
   const rows: Product[][] = [];
-  for (let i = 0; i < favorites.length; i += 3) {
-    rows.push(favorites.slice(i, i + 3));
+  for (let i = 0; i < favorites.length; i += favoriteColumns) {
+    rows.push(favorites.slice(i, i + favoriteColumns));
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingHorizontal: screenPadding }]}>
       <Pressable style={styles.header} onPress={toggleCollapse}>
         <Text style={styles.headerText}>Quick Add</Text>
-        <Text style={styles.chevron}>{collapsed ? '▸' : '▾'}</Text>
+        <Text style={styles.chevron}>{collapsed ? '\u25B8' : '\u25BE'}</Text>
       </Pressable>
 
       {!collapsed && (
@@ -94,7 +96,7 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
                 />
               ))}
               {/* Fill empty slots to maintain grid alignment */}
-              {row.length < 3 && Array.from({ length: 3 - row.length }).map((_, i) => (
+              {row.length < favoriteColumns && Array.from({ length: favoriteColumns - row.length }).map((_, i) => (
                 <View key={`empty-${i}`} style={styles.emptySlot} />
               ))}
             </View>
@@ -107,7 +109,6 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
 
 const styles = StyleSheet.create({
   container: {
-    paddingHorizontal: layout.screenPadding,
     paddingTop: spacing.sm,
     paddingBottom: spacing.xs,
   },

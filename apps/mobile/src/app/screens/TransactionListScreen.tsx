@@ -12,6 +12,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSalesListQuery, getCachedTransactions, type SaleListItem } from '@/hooks/use-transactions';
 import { getPendingSales } from '@/storage/pending-sales';
+import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, layout } from '@/theme';
 import { Badge } from '@/components/ui';
 import type { TransactionsStackParamList } from '@/app/MainTabs';
@@ -35,6 +36,7 @@ function getBadgeVariant(status: string): 'success' | 'danger' {
 
 export default function TransactionListScreen() {
   const navigation = useNavigation<Nav>();
+  const { screenPadding } = useLayout();
   const { data: sales, isLoading, refetch } = useSalesListQuery();
   const pendingSales = getPendingSales();
 
@@ -62,7 +64,7 @@ export default function TransactionListScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
         <Text style={styles.headerTitle}>Transactions</Text>
         <Text style={styles.headerSubtitle}>Today</Text>
       </View>

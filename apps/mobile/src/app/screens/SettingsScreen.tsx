@@ -18,6 +18,7 @@ import { reconcilePendingSales } from '@/hooks/use-checkout';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
 import type { SettingsStackParamList } from '@/app/MainTabs';
+import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, layout } from '@/theme';
 import { Button, Card } from '@/components/ui';
 
@@ -33,6 +34,7 @@ function fmtSyncTime(ts: string | null): string {
 
 export default function SettingsScreen() {
   const navigation = useNavigation<Nav>();
+  const { isTablet, screenPadding } = useLayout();
   const { user, logout, locations, locationId, setLocationId } = useAuth();
   const syncStatus = getSyncStatus();
   const pendingSales = getPendingSales();
@@ -64,11 +66,15 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
         <Text style={styles.headerTitle}>Settings</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={[
+        styles.scrollContent,
+        { paddingHorizontal: screenPadding },
+        isTablet && styles.tabletContent,
+      ]}>
         {/* Account */}
         <Card style={styles.card}>
           <Text style={styles.sectionLabel}>ACCOUNT</Text>
@@ -184,8 +190,12 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
   },
   scrollContent: {
-    paddingHorizontal: layout.screenPadding,
     paddingBottom: spacing['3xl'],
+  },
+  tabletContent: {
+    maxWidth: 600,
+    alignSelf: 'center',
+    width: '100%',
   },
   card: {
     marginBottom: spacing.md,

@@ -16,6 +16,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { PinPad } from '@/components/PinPad';
 import { RefundFlow } from '@/components/RefundFlow';
 import { apiFetch } from '@/services/api-client';
+import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, layout, radius } from '@/theme';
 import { Card, Badge, Divider, Button } from '@/components/ui';
 import type { ReceiptData } from '@/hardware/printer/types';
@@ -35,6 +36,7 @@ function getBadgeVariant(status: string): 'success' | 'danger' {
 
 export default function TransactionDetailScreen() {
   const navigation = useNavigation();
+  const { isTablet, screenPadding } = useLayout();
   const route = useRoute<Route>();
   const { saleId } = route.params;
   const { data: sale, isLoading, refetch } = useSaleDetailQuery(saleId);
@@ -131,7 +133,11 @@ export default function TransactionDetailScreen() {
         />
       </View>
 
-      <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+      <ScrollView style={styles.body} contentContainerStyle={[
+        styles.bodyContent,
+        { padding: screenPadding },
+        isTablet && styles.tabletBody,
+      ]}>
         {/* Status + time */}
         <View style={styles.statusRow}>
           <Badge label={sale.status} variant={getBadgeVariant(sale.status)} />
@@ -288,8 +294,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   bodyContent: {
-    padding: layout.screenPadding,
     gap: spacing.sm,
+  },
+  tabletBody: {
+    maxWidth: 700,
+    alignSelf: 'center',
+    width: '100%',
   },
   statusRow: {
     flexDirection: 'row',
