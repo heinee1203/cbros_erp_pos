@@ -15,6 +15,19 @@ import TransactionDetailScreen from './screens/TransactionDetailScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import PrinterSetupScreen from './screens/PrinterSetupScreen';
 
+// ─── Tablet offset wrapper ───
+// NavRail is absolutely positioned at left:0 inside the tabBar slot.
+// Scenes render full-width, so we offset them on tablet.
+function TabletOffset({ children }: { children: React.ReactNode }) {
+  const { isTablet } = useLayout();
+  if (!isTablet) return <>{children}</>;
+  return (
+    <View style={{ flex: 1, marginLeft: NAV_RAIL_WIDTH }}>
+      {children}
+    </View>
+  );
+}
+
 // ─── POS Stack ───
 export type POSStackParamList = {
   Catalog: undefined;
@@ -38,11 +51,12 @@ function POSNavigator() {
   const { isTablet } = useLayout();
 
   if (isTablet) {
-    // Single screen with split view — no stack navigation needed
     return (
-      <POSStack.Navigator screenOptions={{ headerShown: false }}>
-        <POSStack.Screen name="Catalog" component={POSSplitScreen} />
-      </POSStack.Navigator>
+      <TabletOffset>
+        <POSStack.Navigator screenOptions={{ headerShown: false }}>
+          <POSStack.Screen name="Catalog" component={POSSplitScreen} />
+        </POSStack.Navigator>
+      </TabletOffset>
     );
   }
 
@@ -64,10 +78,12 @@ const TxStack = createStackNavigator<TransactionsStackParamList>();
 
 function TransactionsNavigator() {
   return (
-    <TxStack.Navigator screenOptions={{ headerShown: false }}>
-      <TxStack.Screen name="TransactionList" component={TransactionListScreen} />
-      <TxStack.Screen name="TransactionDetail" component={TransactionDetailScreen} />
-    </TxStack.Navigator>
+    <TabletOffset>
+      <TxStack.Navigator screenOptions={{ headerShown: false }}>
+        <TxStack.Screen name="TransactionList" component={TransactionListScreen} />
+        <TxStack.Screen name="TransactionDetail" component={TransactionDetailScreen} />
+      </TxStack.Navigator>
+    </TabletOffset>
   );
 }
 
@@ -81,15 +97,27 @@ const SettingsStack = createStackNavigator<SettingsStackParamList>();
 
 function SettingsNavigator() {
   return (
-    <SettingsStack.Navigator screenOptions={{ headerShown: false }}>
-      <SettingsStack.Screen name="SettingsHome" component={SettingsScreen} />
-      <SettingsStack.Screen name="PrinterSetup" component={PrinterSetupScreen} />
-    </SettingsStack.Navigator>
+    <TabletOffset>
+      <SettingsStack.Navigator screenOptions={{ headerShown: false }}>
+        <SettingsStack.Screen name="SettingsHome" component={SettingsScreen} />
+        <SettingsStack.Screen name="PrinterSetup" component={PrinterSetupScreen} />
+      </SettingsStack.Navigator>
+    </TabletOffset>
   );
 }
 
 // ─── Main Tabs ───
 const Tab = createBottomTabNavigator();
+
+/**
+ * Custom tab bar that renders NavRail on the left via absolute positioning.
+ * Returns null for the actual tab bar slot (bottom) since NavRail handles nav.
+ * NavRail is absolutely positioned but the scene content is offset by
+ * wrapping each screen's content with left padding in their own layouts.
+ */
+function TabletTabBar(props: any) {
+  return <NavRail {...props} />;
+}
 
 export default function MainTabs() {
   const { isTablet } = useLayout();
@@ -103,8 +131,7 @@ export default function MainTabs() {
     <View style={{ flex: 1, backgroundColor: colors.bg.primary }}>
       <SyncStatusBar />
       <Tab.Navigator
-        tabBar={(props: any) => (isTablet ? <NavRail {...props} /> : undefined)}
-        sceneContainerStyle={isTablet ? { marginLeft: NAV_RAIL_WIDTH } : undefined}
+        tabBar={isTablet ? TabletTabBar : undefined}
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: colors.tab.active,

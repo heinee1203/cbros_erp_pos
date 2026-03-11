@@ -15,10 +15,14 @@ const TAB_ICONS: Record<string, string> = {
   Settings: '\u2699',   // ⚙ gear
 };
 
+/** Width of the navigation rail in dp */
+export const NAV_RAIL_WIDTH = 72;
+
 /**
  * Vertical navigation rail for tablet layout.
  * Replaces the bottom tab bar when screen width >= 768dp.
  * Material Design 3 style: 72dp wide, icons + labels.
+ * Receives BottomTabBarProps from the tabBar prop of Tab.Navigator.
  */
 export function NavRail({ state, navigation }: BottomTabBarProps) {
   return (
@@ -52,9 +56,6 @@ export function NavRail({ state, navigation }: BottomTabBarProps) {
     </View>
   );
 }
-
-/** Width of the navigation rail in dp */
-export const NAV_RAIL_WIDTH = 72;
 
 const styles = StyleSheet.create({
   container: {
