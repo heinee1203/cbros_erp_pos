@@ -79,6 +79,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       eq(products.orgId, orgId),
     ];
 
+    // Default: active products only. ADMIN/MANAGER can include inactive.
+    const includeInactive = q.includeInactive === "true" && MANAGE_ROLES.includes(request.user.role);
+    if (!includeInactive) {
+      conditions.push(eq(products.isActive, true));
+    }
+
     if (q.search && q.search.length >= 2) {
       conditions.push(ilike(products.name, `%${q.search}%`));
     }
@@ -183,6 +189,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         and(
           eq(inventory.locationId, locationId),
           eq(products.orgId, orgId),
+          eq(products.isActive, true),
           isBarcodeLookup
             ? eq(products.barcode, q)
             : sql`(name % ${q} OR sku ILIKE ${q + "%"} OR mnemonic_sku ILIKE ${q + "%"})`,

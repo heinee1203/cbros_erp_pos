@@ -50,6 +50,7 @@ export const JournalReferenceType = {
   VOID: "VOID",
   JOB_CARD_ISSUE: "JOB_CARD_ISSUE",
   JOB_CARD_RETURN: "JOB_CARD_RETURN",
+  OPENING_BALANCE: "OPENING_BALANCE",
 } as const;
 export type JournalReferenceType =
   (typeof JournalReferenceType)[keyof typeof JournalReferenceType];

@@ -1,19 +1,48 @@
 import { db } from "@apex/database";
 import { products, inventory } from "@apex/database/schema";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, asc, sql } from "drizzle-orm";
 
 interface SyncOpts {
   orgId: string;
   locationId: string;
   since?: string; // ISO timestamp
+  cursor?: string; // UUID — keyset pagination cursor
+  limit?: number; // default 500, max 1000
 }
 
-export async function getCatalogDelta(opts: SyncOpts) {
-  const { orgId, since } = opts;
+interface SyncResult<T> {
+  data: T[];
+  syncedAt: string;
+  count: number;
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+function clampLimit(raw?: number): number {
+  const limit = raw ?? 500;
+  return Math.min(Math.max(1, limit), 1000);
+}
+
+export async function getCatalogDelta(opts: SyncOpts): Promise<SyncResult<any>> {
+  const { orgId, since, cursor } = opts;
+  const limit = clampLimit(opts.limit);
 
   const conditions = [eq(products.orgId, orgId)];
   if (since) {
     conditions.push(gt(products.updatedAt, new Date(since)));
+  }
+
+  if (cursor) {
+    const [cursorRow] = await db
+      .select({ updatedAt: products.updatedAt })
+      .from(products)
+      .where(eq(products.id, cursor))
+      .limit(1);
+    if (cursorRow) {
+      conditions.push(
+        sql`(${products.updatedAt}, ${products.id}) > (${cursorRow.updatedAt}, ${cursor})`,
+      );
+    }
   }
 
   const rows = await db
@@ -25,18 +54,31 @@ export async function getCatalogDelta(opts: SyncOpts) {
       barcode: products.barcode,
       category: products.category,
       unitPrice: products.unitPrice,
+      isActive: products.isActive,
       familyId: products.familyId,
       updatedAt: products.updatedAt,
     })
     .from(products)
     .where(and(...conditions))
-    .orderBy(products.updatedAt);
+    .orderBy(asc(products.updatedAt), asc(products.id))
+    .limit(limit + 1);
 
-  return rows;
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore ? data[data.length - 1].id : null;
+
+  return {
+    data,
+    syncedAt: new Date().toISOString(),
+    count: data.length,
+    nextCursor,
+    hasMore,
+  };
 }
 
-export async function getInventoryDelta(opts: SyncOpts) {
-  const { orgId, locationId, since } = opts;
+export async function getInventoryDelta(opts: SyncOpts): Promise<SyncResult<any>> {
+  const { orgId, locationId, since, cursor } = opts;
+  const limit = clampLimit(opts.limit);
 
   const conditions = [
     eq(inventory.orgId, orgId),
@@ -44,6 +86,19 @@ export async function getInventoryDelta(opts: SyncOpts) {
   ];
   if (since) {
     conditions.push(gt(inventory.updatedAt, new Date(since)));
+  }
+
+  if (cursor) {
+    const [cursorRow] = await db
+      .select({ updatedAt: inventory.updatedAt })
+      .from(inventory)
+      .where(eq(inventory.id, cursor))
+      .limit(1);
+    if (cursorRow) {
+      conditions.push(
+        sql`(${inventory.updatedAt}, ${inventory.id}) > (${cursorRow.updatedAt}, ${cursor})`,
+      );
+    }
   }
 
   const rows = await db
@@ -58,7 +113,18 @@ export async function getInventoryDelta(opts: SyncOpts) {
     })
     .from(inventory)
     .where(and(...conditions))
-    .orderBy(inventory.updatedAt);
+    .orderBy(asc(inventory.updatedAt), asc(inventory.id))
+    .limit(limit + 1);
 
-  return rows;
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore ? data[data.length - 1].id : null;
+
+  return {
+    data,
+    syncedAt: new Date().toISOString(),
+    count: data.length,
+    nextCursor,
+    hasMore,
+  };
 }

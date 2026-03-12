@@ -196,11 +196,12 @@ export async function createSale(
 
     for (const line of input.lines) {
       const [product] = await tx
-        .select({ unitPrice: products.unitPrice, id: products.id })
+        .select({ unitPrice: products.unitPrice, id: products.id, isActive: products.isActive })
         .from(products)
         .where(and(eq(products.id, line.productId), eq(products.orgId, orgId)))
         .limit(1);
       if (!product) throw new Error(`Product ${line.productId} not found`);
+      if (!product.isActive) throw new Error(`Product ${line.productId} is discontinued`);
 
       const effectivePrice = line.overridePrice
         ? parseFloat(line.overridePrice)

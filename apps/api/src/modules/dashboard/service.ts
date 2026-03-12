@@ -147,9 +147,10 @@ async function getProcurementSummary(
       draftPOs: r.draft_pos ?? 0,
       awaitingReceiving: r.awaiting_receiving ?? 0,
     };
-  } catch {
-    // Table may not exist yet (not migrated)
-    return null;
+  } catch (err: any) {
+    // 42P01 = undefined_table (not yet migrated)
+    if (err.code === "42P01") return null;
+    throw err;
   }
 }
 
@@ -198,9 +199,10 @@ async function getJobCardSummary(
       inProgress: r.in_progress ?? 0,
       workCompleted: r.work_completed ?? 0,
     };
-  } catch {
-    // Table may not exist yet (not migrated)
-    return null;
+  } catch (err: any) {
+    // 42P01 = undefined_table (not yet migrated)
+    if (err.code === "42P01") return null;
+    throw err;
   }
 }
 
@@ -262,9 +264,10 @@ async function getFinancialKPI(
     totalGrossProfit: r.total_gross_profit,
     avgGrossMarginPct: r.avg_gross_margin_pct,
   };
-  } catch {
-    // Tables may not exist yet (job_cards not migrated)
-    return null;
+  } catch (err: any) {
+    // 42P01 = undefined_table (job_cards not migrated)
+    if (err.code === "42P01") return null;
+    throw err;
   }
 }
 

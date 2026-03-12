@@ -7,6 +7,7 @@ import {
   index,
   numeric,
   check,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { organizations } from "./organizations";
@@ -45,6 +46,8 @@ export const products = pgTable(
     mnemonicCostCode: varchar("mnemonic_cost_code", { length: 10 }),
     /** EAN-13 barcode — 13 digits, nullable, unique per org when set */
     barcode: varchar("barcode", { length: 13 }),
+    /** Soft delete — inactive products are hidden from POS and search by default */
+    isActive: boolean("is_active").notNull().default(true),
     familyId: uuid("family_id").references(() => productFamilies.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -66,5 +69,6 @@ export const products = pgTable(
     index("idx_products_family_id").on(table.familyId),
     index("idx_products_barcode").on(table.barcode),
     check("chk_barcode_format", sql`barcode IS NULL OR barcode ~ '^\\d{13}$'`),
+    index("idx_products_is_active").on(table.isActive),
   ],
 );

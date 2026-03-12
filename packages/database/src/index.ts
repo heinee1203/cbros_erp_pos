@@ -23,8 +23,7 @@ export type Database = typeof db;
 
 /**
  * Transaction-compatible DB client type.
- * Drizzle's PgTransaction generic is complex; this alias ensures
- * helper functions work with both `db` and `tx` inside db.transaction().
+ * Uses a structural Pick type so helper functions accept both `db` and
+ * `tx` inside db.transaction() with full autocomplete and type checking.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type DbOrTx = any;
+export type DbOrTx = Pick<typeof db, "select" | "insert" | "update" | "delete" | "execute">;

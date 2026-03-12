@@ -56,7 +56,7 @@ export const stockJournalEntrySchema = z.object({
   productId: z.string().uuid(),
   locationId: z.string().uuid(),
   changeQuantity: z.number().int(),
-  referenceType: z.enum(["SALE", "RECEIVING", "TRANSFER_IN", "TRANSFER_OUT", "ADJUSTMENT", "RETURN", "STOCKTAKE", "VOID", "JOB_CARD_ISSUE", "JOB_CARD_RETURN"]),
+  referenceType: z.enum(["SALE", "RECEIVING", "TRANSFER_IN", "TRANSFER_OUT", "ADJUSTMENT", "RETURN", "STOCKTAKE", "VOID", "JOB_CARD_ISSUE", "JOB_CARD_RETURN", "OPENING_BALANCE"]),
   referenceId: z.string().uuid(),
   referenceLineId: z.string().uuid().optional(),
   unitCostSnapshot: z.string().optional(),
@@ -287,7 +287,8 @@ export const createSaleSchema = z.object({
 export type CreateSaleInput = z.infer<typeof createSaleSchema>;
 
 // ── Sale: Complete (checkout) ──
-const PAYMENT_METHODS = ["CASH", "CARD", "CREDIT_CARD", "DEBIT_CARD", "EFT", "QRPH", "GCASH", "MAYA", "BANK_TRANSFER", "ACCOUNT", "OTHER"] as const;
+// CARD is deprecated — existing records reclassified to CREDIT_CARD in migration 0020
+const PAYMENT_METHODS = ["CASH", "CREDIT_CARD", "DEBIT_CARD", "EFT", "QRPH", "GCASH", "MAYA", "BANK_TRANSFER", "ACCOUNT", "OTHER"] as const;
 
 export const completeSaleSchema = z.object({
   idempotencyKey: z.string().min(1).max(255),

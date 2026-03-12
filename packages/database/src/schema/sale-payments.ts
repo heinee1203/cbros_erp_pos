@@ -12,7 +12,7 @@ import { sales } from "./sales";
 
 export const paymentMethodEnum = pgEnum("payment_method", [
   "CASH",
-  "CARD",
+  "CARD", // @deprecated — reclassified to CREDIT_CARD in migration 0020. Kept for backward compat.
   "CREDIT_CARD",
   "DEBIT_CARD",
   "EFT",
