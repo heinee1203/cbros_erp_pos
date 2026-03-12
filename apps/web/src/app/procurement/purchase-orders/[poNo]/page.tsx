@@ -6,8 +6,10 @@ import Link from "next/link";
 import { Printer } from "lucide-react";
 import {
   usePOQuery,
+  usePOReceipts,
   type PODetail,
   type POLine,
+  type POReceipt,
 } from "@/hooks/use-po-query";
 import {
   useSubmitPOMutation,
@@ -112,6 +114,12 @@ function PODetailView({
   const canReceive = RECEIVABLE_STATES.has(po.status);
   const isDraft = po.status === "DRAFT";
 
+  const totalOrdered = po.lines.reduce((sum, l) => sum + l.orderedQty, 0);
+  const totalReceived = po.lines.reduce((sum, l) => sum + l.receivedAcceptedQty, 0);
+  const totalRejected = po.lines.reduce((sum, l) => sum + l.rejectedQty, 0);
+  const totalRemaining = totalOrdered - totalReceived - totalRejected;
+  const pctReceived = totalOrdered > 0 ? Math.round((totalReceived / totalOrdered) * 100) : 0;
+
   return (
     <div className="mx-auto max-w-7xl space-y-5">
       {/* ── Header ── */}
@@ -206,6 +214,29 @@ function PODetailView({
         <TimelineCard label="Cancelled" date={po.cancelledAt} />
       </div>
 
+      {/* ── Receipt Progress Bar ── */}
+      {!isDraft && (
+        <div className="rounded-lg border border-border p-3">
+          <div className="mb-2 flex items-center justify-between text-xs">
+            <span className="font-medium text-foreground">{totalOrdered} items ordered</span>
+            <span className="text-muted-foreground">
+              {totalReceived} received
+              {totalRejected > 0 && ` \u00b7 ${totalRejected} rejected`}
+              {totalRemaining > 0 && ` \u00b7 ${totalRemaining} remaining`}
+            </span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-success transition-all duration-500"
+              style={{ width: `${pctReceived}%` }}
+            />
+          </div>
+          <div className="mt-1.5 text-[10px] text-muted-foreground">
+            {pctReceived}% received
+          </div>
+        </div>
+      )}
+
       {/* ── Receiving Grid (the core of this page) ── */}
       {canReceive ? (
         <ReceivingGrid po={po} refetch={refetch} />
@@ -214,7 +245,7 @@ function PODetailView({
       )}
 
       {/* ── Receipt Event History ── */}
-      {po.receiptEvents.length > 0 && (
+      {(po.receiptEvents.length > 0 || !isDraft) && (
         <ReceiptHistory po={po} />
       )}
 
@@ -261,6 +292,7 @@ function ReceivingGrid({
     costChanged: boolean;
     error: string | null;
     highlighted: boolean;
+    checked: boolean;
   }
 
   const [lineStates, setLineStates] = useState<Record<string, LineState>>(
@@ -274,6 +306,7 @@ function ReceivingGrid({
           costChanged: false,
           error: null,
           highlighted: false,
+          checked: false,
         };
       }
       return init;
@@ -282,6 +315,8 @@ function ReceivingGrid({
 
   const [scanValue, setScanValue] = useState("");
   const [receiptNotes, setReceiptNotes] = useState("");
+  const [supplierDrNo, setSupplierDrNo] = useState("");
+  const [drError, setDrError] = useState<string | null>(null);
 
   // ── Mutation hook ──
   const receiveMut = useReceivePOMutation(
@@ -298,6 +333,31 @@ function ReceivingGrid({
       ),
     [po.lines],
   );
+
+  // ── Select-all / toggle logic ──
+  const allChecked = receivableLines.length > 0 &&
+    receivableLines.every((l) => lineStates[l.id]?.checked);
+  const someChecked = receivableLines.some((l) => lineStates[l.id]?.checked);
+
+  const toggleAll = useCallback(() => {
+    setLineStates((prev) => {
+      const next = { ...prev };
+      const newVal = !allChecked;
+      for (const line of receivableLines) {
+        if (next[line.id]) {
+          next[line.id] = { ...next[line.id], checked: newVal };
+        }
+      }
+      return next;
+    });
+  }, [allChecked, receivableLines]);
+
+  const toggleLine = useCallback((lineId: string) => {
+    setLineStates((prev) => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], checked: !prev[lineId]?.checked },
+    }));
+  }, []);
 
   // ── Scan assist: jump focus to matching PO line ──
   const lineRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
@@ -316,7 +376,9 @@ function ReceivingGrid({
       );
 
       if (matchedLine) {
-        // Clear all highlights, then highlight the matched line
+        // Compute remaining for this line
+        const remaining = matchedLine.orderedQty - matchedLine.receivedAcceptedQty - matchedLine.rejectedQty;
+        // Clear all highlights, then highlight + auto-check the matched line
         setLineStates((prev) => {
           const next = { ...prev };
           for (const key of Object.keys(next)) {
@@ -326,6 +388,9 @@ function ReceivingGrid({
             next[matchedLine.id] = {
               ...next[matchedLine.id],
               highlighted: true,
+              checked: true,
+              acceptedQty: remaining,
+              error: null,
             };
           }
           return next;
@@ -402,29 +467,40 @@ function ReceivingGrid({
   const hasValidLines = useMemo(() => {
     return receivableLines.some((line) => {
       const state = lineStates[line.id];
-      if (!state) return false;
-      return (
-        (state.acceptedQty > 0 || state.rejectedQty > 0) && !state.error
-      );
+      if (!state || !state.checked) return false;
+      return (state.acceptedQty > 0 || state.rejectedQty > 0) && !state.error;
     });
   }, [receivableLines, lineStates]);
 
   const hasAnyErrors = useMemo(() => {
-    return Object.values(lineStates).some((s) => s.error !== null);
-  }, [lineStates]);
+    return receivableLines.some((l) => {
+      const s = lineStates[l.id];
+      return s?.checked && s.error !== null;
+    });
+  }, [receivableLines, lineStates]);
 
   const hasAnyRejections = useMemo(() => {
     return Object.values(lineStates).some((s) => s.rejectedQty > 0);
   }, [lineStates]);
 
+  const selectedCount = receivableLines.filter((l) => lineStates[l.id]?.checked).length;
+  const selectedAccepted = receivableLines.reduce((sum, l) => {
+    const s = lineStates[l.id];
+    return sum + (s?.checked ? s.acceptedQty : 0);
+  }, 0);
+
   const handlePostReceipt = useCallback(() => {
     if (!hasValidLines || hasAnyErrors || receiveMut.isSubmitting) return;
+    if (!supplierDrNo.trim()) {
+      setDrError("Supplier DR number is required");
+      return;
+    }
+    setDrError(null);
 
-    // Build receipt lines — strip out rows where both accepted and rejected are 0
     const lines: ReceiptLineInput[] = receivableLines
       .filter((line) => {
         const state = lineStates[line.id];
-        return state && (state.acceptedQty > 0 || state.rejectedQty > 0);
+        return state?.checked && (state.acceptedQty > 0 || state.rejectedQty > 0);
       })
       .map((line) => {
         const state = lineStates[line.id]!;
@@ -437,18 +513,11 @@ function ReceivingGrid({
       });
 
     receiveMut.submit(po.id, {
+      supplierDrNo: supplierDrNo.trim(),
       lines,
       notes: receiptNotes.trim() || undefined,
     });
-  }, [
-    hasValidLines,
-    hasAnyErrors,
-    receiveMut,
-    receivableLines,
-    lineStates,
-    po.id,
-    receiptNotes,
-  ]);
+  }, [hasValidLines, hasAnyErrors, receiveMut, receivableLines, lineStates, po.id, receiptNotes, supplierDrNo]);
 
   // Auto-refetch on success
   useEffect(() => {
@@ -456,6 +525,8 @@ function ReceivingGrid({
       receiveMut.status === "success" ||
       receiveMut.status === "already_processed"
     ) {
+      setSupplierDrNo("");
+      setDrError(null);
       const timer = setTimeout(() => {
         receiveMut.reset();
         refetch();
@@ -472,6 +543,22 @@ function ReceivingGrid({
   return (
     <section>
       <SectionHeader>Receiving Grid</SectionHeader>
+
+      {/* ── Supplier DR Number ── */}
+      <div className="mb-3">
+        <label className="mb-1 block text-xs font-semibold text-foreground">
+          Supplier DR Number <span className="text-destructive">*</span>
+        </label>
+        <input
+          type="text"
+          value={supplierDrNo}
+          onChange={(e) => { setSupplierDrNo(e.target.value); if (drError) setDrError(null); }}
+          placeholder="e.g. DR-2024-0892"
+          disabled={receiveMut.isSubmitting}
+          className={`w-full max-w-sm rounded-md border bg-background px-3 py-2 text-sm font-medium outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50 ${drError ? "border-destructive" : "border-border"}`}
+        />
+        {drError && <p className="mt-1 text-xs text-destructive">{drError}</p>}
+      </div>
 
       {/* ── Scan Assist Field ── */}
       <div className="mb-3 flex items-center gap-2">
@@ -505,11 +592,25 @@ function ReceivingGrid({
         </kbd>
       </div>
 
+      <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+        <span>{selectedCount} of {receivableLines.length} remaining lines selected</span>
+      </div>
+
       {/* ── Dense Grid ── */}
       <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/60">
+              <th scope="col" className="w-10 px-2 py-1.5">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
+                  onChange={toggleAll}
+                  disabled={receiveMut.isSubmitting}
+                  className="h-3.5 w-3.5 rounded border-border accent-primary"
+                />
+              </th>
               <Th align="left" width="w-[180px]">Product</Th>
               <Th align="left" width="w-[100px]">Mnemonic</Th>
               <Th align="right" width="w-[70px]">Ordered</Th>
@@ -544,8 +645,21 @@ function ReceivingGrid({
                       : i % 2 === 0
                         ? "bg-background"
                         : "bg-muted/20"
-                  } ${!isReceivable ? "opacity-50" : ""}`}
+                  } ${!isReceivable ? "opacity-50" : ""} ${isReceivable && !state?.checked ? "opacity-50" : ""}`}
                 >
+                  {/* Checkbox */}
+                  <td className="px-2 py-1.5">
+                    {isReceivable && (
+                      <input
+                        type="checkbox"
+                        checked={state?.checked ?? false}
+                        onChange={() => toggleLine(line.id)}
+                        disabled={receiveMut.isSubmitting}
+                        className="h-3.5 w-3.5 rounded border-border accent-primary"
+                      />
+                    )}
+                  </td>
+
                   {/* Product Name */}
                   <td className="px-2 py-1.5">
                     <div
@@ -800,13 +914,13 @@ function ReceivingGrid({
         <button
           type="button"
           onClick={handlePostReceipt}
-          disabled={!hasValidLines || hasAnyErrors || receiveMut.isSubmitting}
+          disabled={!hasValidLines || hasAnyErrors || !supplierDrNo.trim() || receiveMut.isSubmitting}
           className="rounded-md bg-success px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-success/90 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
         >
           {receiveMut.isSubmitting ? (
-            <span className="flex items-center gap-2">
-              <Spinner /> Posting Receipt...
-            </span>
+            <span className="flex items-center gap-2"><Spinner /> Posting Receipt...</span>
+          ) : supplierDrNo.trim() ? (
+            `Post Receipt for ${supplierDrNo.trim()}`
           ) : (
             "Post Receipt"
           )}
@@ -814,9 +928,11 @@ function ReceivingGrid({
         <span className="text-xs text-muted-foreground">
           {hasAnyErrors
             ? "Fix validation errors before posting"
-            : !hasValidLines
-              ? "Enter quantities to receive or reject"
-              : "Ready to post"}
+            : !supplierDrNo.trim()
+              ? "Enter supplier DR number"
+              : !hasValidLines
+                ? "Select lines and enter quantities"
+                : `${selectedCount} lines, ${selectedAccepted} units accepted`}
         </span>
       </div>
     </section>
@@ -911,9 +1027,124 @@ function ReadOnlyGrid({
 }
 
 /* ══════════════════════════════════════════════════════════
- * RECEIPT HISTORY — Append-only audit trail
+ * RECEIPT HISTORY — Grouped by DR number, collapsible cards
  * ══════════════════════════════════════════════════════════ */
 function ReceiptHistory({ po }: { po: PODetail }) {
+  const { token, locationId } = useAuth();
+  const receiptsQuery = usePOReceipts(po.id, token, locationId);
+  const receipts = receiptsQuery.data?.data ?? [];
+
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  // Expand first receipt on initial load
+  useEffect(() => {
+    if (receipts.length > 0 && expandedIds.size === 0) {
+      setExpandedIds(new Set([receipts[0].id]));
+    }
+  }, [receipts]);
+
+  const toggleReceipt = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Fallback for pre-feature receipts
+  if (receipts.length === 0 && po.receiptEvents.length > 0) {
+    return <LegacyReceiptHistory po={po} />;
+  }
+  if (receipts.length === 0) return null;
+
+  return (
+    <section>
+      <SectionHeader>
+        Receipt History ({receipts.length} receipt{receipts.length !== 1 ? "s" : ""})
+      </SectionHeader>
+      <div className="space-y-3">
+        {receipts.map((receipt) => {
+          const isExpanded = expandedIds.has(receipt.id);
+          return (
+            <div key={receipt.id} className="overflow-hidden rounded-lg border border-border">
+              <button
+                type="button"
+                onClick={() => toggleReceipt(receipt.id)}
+                className="flex w-full items-center justify-between bg-muted/40 px-4 py-2.5 text-left transition-colors hover:bg-muted/60"
+              >
+                <div>
+                  <span className="text-sm font-bold text-foreground">{receipt.supplierDrNo}</span>
+                  <span className="ml-3 text-xs text-muted-foreground">
+                    Received by {receipt.receivedBy} &middot; {receipt.lineCount} line{receipt.lineCount !== 1 ? "s" : ""} &middot; {receipt.totalAcceptedQty} units accepted
+                    {receipt.totalRejectedQty > 0 && ` \u00b7 ${receipt.totalRejectedQty} rejected`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {new Date(receipt.createdAt).toLocaleDateString("en-US", {
+                      month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit",
+                    })}
+                  </span>
+                  <svg className={`h-4 w-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="border-t border-border">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-muted/30">
+                        <th scope="col" className="px-4 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Product</th>
+                        <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Accepted</th>
+                        <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Rejected</th>
+                        <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Unit Cost</th>
+                        <th scope="col" className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {receipt.lines.map((line, i) => (
+                        <tr key={i} className={`border-b border-border last:border-0 ${i % 2 === 0 ? "bg-background" : "bg-muted/20"}`}>
+                          <td className="px-4 py-1.5">
+                            <div className="text-xs font-medium">{line.productName}</div>
+                            <div className="flex items-center gap-1.5 mt-px">
+                              <span className="rounded bg-primary/10 px-1 py-0.5 font-mono text-[10px] font-bold tracking-wider text-primary">{line.mnemonicSku}</span>
+                              <span className="font-mono text-[10px] text-muted-foreground">{line.sku}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-success font-medium">
+                            {line.acceptedQty > 0 ? `+${line.acceptedQty}` : "\u2014"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-destructive font-medium">
+                            {line.rejectedQty > 0 ? `-${line.rejectedQty}` : "\u2014"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{line.unitCost}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[200px]">{line.notes ?? "\u2014"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {receipt.notes && (
+                    <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+                      <strong>Notes:</strong> {receipt.notes}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+ * LEGACY RECEIPT HISTORY — Flat append-only audit trail (pre-grouped receipts)
+ * ══════════════════════════════════════════════════════════ */
+function LegacyReceiptHistory({ po }: { po: PODetail }) {
   // Build a product name lookup from PO lines
   const productNames = useMemo(() => {
     const map = new Map<string, { name: string; mnemonic: string }>();
