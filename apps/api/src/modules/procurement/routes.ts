@@ -18,6 +18,7 @@ import {
   getPOByNumber,
   listPOs,
   getPOReceiptEvents,
+  getPOReceipts,
   getPOJournal,
   listSuppliers,
 } from "./service";
@@ -264,6 +265,21 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
 
       const events = await getPOReceiptEvents(id, orgId);
       return reply.send({ data: events });
+    },
+  );
+
+  // ─── GET /procurement/purchase-orders/:id/receipts ──
+  // Get receipt batch headers with nested line details
+  app.get(
+    "/purchase-orders/:id/receipts",
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const { orgId } = request.storeContext!;
+      const { role } = request.user;
+      assertProcurementRole(role);
+
+      const receipts = await getPOReceipts(id, orgId);
+      return reply.send({ data: receipts });
     },
   );
 

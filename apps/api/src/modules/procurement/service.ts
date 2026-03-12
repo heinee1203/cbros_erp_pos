@@ -3,13 +3,15 @@ import {
   purchaseOrders,
   poLines,
   poReceiptEvents,
+  poReceipts,
   inventory,
   stockJournal,
   locations,
   products,
   suppliers,
+  users,
 } from "@apex/database/schema";
-import { eq, and, sql, asc } from "drizzle-orm";
+import { eq, and, sql, asc, desc } from "drizzle-orm";
 import type { CreatePOInput, ReceivePOInput } from "@apex/types";
 import {
   PurchaseOrderStatus,
@@ -310,6 +312,25 @@ export async function receivePO(
       throw new Error(`Cannot receive against PO in ${po.status} status`);
     }
 
+    // ── Step 2b: Check DR number uniqueness ──
+    const existingDr = await tx
+      .select({ id: poReceipts.id })
+      .from(poReceipts)
+      .where(
+        and(
+          eq(poReceipts.orgId, orgId),
+          eq(poReceipts.purchaseOrderId, poId),
+          eq(poReceipts.supplierDrNo, input.supplierDrNo),
+        ),
+      )
+      .limit(1);
+
+    if (existingDr.length > 0) {
+      throw new Error(
+        `DR number "${input.supplierDrNo}" already used on this PO`,
+      );
+    }
+
     // Receiving only into the PO's destination location
     const destinationLocationId = po.destination_location_id;
 
@@ -403,6 +424,33 @@ export async function receivePO(
         unitCost: lineInput.unitCost,
         receiptEventId: receiptEvent.id,
       });
+    }
+
+    // ── Step 4b: Create receipt batch header ──
+    const totalAccepted = receiptResults.reduce((sum, r) => sum + r.acceptedQty, 0);
+    const totalRejected = receiptResults.reduce((sum, r) => sum + r.rejectedQty, 0);
+
+    const [receipt] = await tx
+      .insert(poReceipts)
+      .values({
+        orgId,
+        purchaseOrderId: poId,
+        supplierDrNo: input.supplierDrNo,
+        receivedByUserId: userId,
+        lineCount: receiptResults.length,
+        totalAcceptedQty: totalAccepted,
+        totalRejectedQty: totalRejected,
+        notes: input.notes ?? null,
+      })
+      .returning();
+
+    // Link receipt events to batch header
+    const receiptEventIds = receiptResults.map((r) => r.receiptEventId);
+    if (receiptEventIds.length > 0) {
+      await tx
+        .update(poReceiptEvents)
+        .set({ poReceiptId: receipt.id })
+        .where(sql`${poReceiptEvents.id} = ANY(${receiptEventIds}::uuid[])`);
     }
 
     // ── Step 5: Lock inventory rows in deterministic order ──
@@ -555,6 +603,13 @@ export async function receivePO(
 
     return {
       po: updatedPO,
+      receipt: {
+        id: receipt.id,
+        supplierDrNo: receipt.supplierDrNo,
+        lineCount: receipt.lineCount,
+        totalAcceptedQty: receipt.totalAcceptedQty,
+        totalRejectedQty: receipt.totalRejectedQty,
+      },
       receiptEvents: receiptResults.map((r) => ({
         receiptEventId: r.receiptEventId,
         poLineId: r.poLineId,
@@ -565,6 +620,79 @@ export async function receivePO(
       })),
     };
   });
+}
+
+/**
+ * Get all receipt batch headers for a PO, with nested line details.
+ * Returns receipts ordered by created_at DESC (most recent first),
+ * each with receiver name and line-level product info.
+ */
+export async function getPOReceipts(poId: string, orgId: string) {
+  // Fetch receipt headers for this PO
+  const receipts = await db
+    .select({
+      id: poReceipts.id,
+      supplierDrNo: poReceipts.supplierDrNo,
+      receivedByUserId: poReceipts.receivedByUserId,
+      lineCount: poReceipts.lineCount,
+      totalAcceptedQty: poReceipts.totalAcceptedQty,
+      totalRejectedQty: poReceipts.totalRejectedQty,
+      notes: poReceipts.notes,
+      createdAt: poReceipts.createdAt,
+      receivedByName: users.fullName,
+    })
+    .from(poReceipts)
+    .innerJoin(users, eq(users.id, poReceipts.receivedByUserId))
+    .where(
+      and(
+        eq(poReceipts.purchaseOrderId, poId),
+        eq(poReceipts.orgId, orgId),
+      ),
+    )
+    .orderBy(desc(poReceipts.createdAt));
+
+  if (receipts.length === 0) return [];
+
+  // Fetch all receipt events for these receipts, joined with products
+  const receiptIds = receipts.map((r) => r.id);
+
+  const events = await db
+    .select({
+      id: poReceiptEvents.id,
+      poReceiptId: poReceiptEvents.poReceiptId,
+      poLineId: poReceiptEvents.poLineId,
+      productId: poReceiptEvents.productId,
+      receivedAcceptedQty: poReceiptEvents.receivedAcceptedQty,
+      rejectedQty: poReceiptEvents.rejectedQty,
+      unitCost: poReceiptEvents.unitCost,
+      notes: poReceiptEvents.notes,
+      createdAt: poReceiptEvents.createdAt,
+      productName: products.name,
+      sku: products.sku,
+      mnemonicSku: products.mnemonicSku,
+    })
+    .from(poReceiptEvents)
+    .innerJoin(products, eq(products.id, poReceiptEvents.productId))
+    .where(
+      sql`${poReceiptEvents.poReceiptId} = ANY(${receiptIds}::uuid[])`,
+    )
+    .orderBy(asc(poReceiptEvents.createdAt));
+
+  // Group events by receipt ID
+  const eventsByReceiptId = new Map<string, typeof events>();
+  for (const event of events) {
+    const key = event.poReceiptId!;
+    if (!eventsByReceiptId.has(key)) {
+      eventsByReceiptId.set(key, []);
+    }
+    eventsByReceiptId.get(key)!.push(event);
+  }
+
+  // Assemble result
+  return receipts.map((r) => ({
+    ...r,
+    lines: eventsByReceiptId.get(r.id) ?? [],
+  }));
 }
 
 /**
