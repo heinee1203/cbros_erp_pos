@@ -105,7 +105,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
 
   // ─── POST /shifts/:shiftId/force-close ─────────────
   // Force-close a shift (ADMIN/MANAGER with PIN)
-  app.post("/:shiftId/force-close", async (request, reply) => {
+  app.post("/:shiftId/force-close", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { shiftId } = request.params as { shiftId: string };
     const { orgId } = request.storeContext!;
     const { userId, role } = request.user;

@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
 import jwt from "@fastify/jwt";
+import rateLimit from "@fastify/rate-limit";
 import { healthRoutes } from "./modules/health/routes";
 import { authRoutes } from "./modules/auth/routes";
 import { authPlugin } from "./plugins/auth";
@@ -24,6 +25,11 @@ import { syncRoutes } from "./modules/sync/routes";
 import { shiftRoutes } from "./modules/shifts/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!JWT_SECRET) {
+    throw new Error("JWT_SECRET environment variable is required");
+  }
+
   const app = Fastify({
     logger: {
       level: process.env.NODE_ENV === "production" ? "info" : "debug",
@@ -32,13 +38,18 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // ── Global plugins ──
   await app.register(cors, {
-    origin: true,
+    origin: process.env.NODE_ENV === "production"
+      ? (process.env.CORS_ORIGINS ?? "").split(",").map(s => s.trim()).filter(Boolean)
+      : true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
   await app.register(sensible);
-  await app.register(jwt, {
-    secret: process.env.JWT_SECRET || "dev-secret-change-me",
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: "1 minute",
+    keyGenerator: (request) => request.ip,
   });
+  await app.register(jwt, { secret: JWT_SECRET });
 
   // ── Custom plugins ──
   await app.register(authPlugin);

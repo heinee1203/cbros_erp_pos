@@ -3,7 +3,7 @@ import { registerSchema, loginSchema } from "@apex/types";
 import { createOrganizationWithAdmin, authenticateUser, verifyPin } from "./service";
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/register", async (request, reply) => {
+  app.post("/register", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({
@@ -43,7 +43,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // Verify a manager/admin PIN (authenticated route — JWT required)
-  app.post("/verify-pin", async (request, reply) => {
+  app.post("/verify-pin", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { pin } = request.body as { pin?: string };
     if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
       return reply.status(400).send({ error: "PIN must be exactly 4 digits" });
@@ -53,7 +53,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ valid });
   });
 
-  app.post("/login", async (request, reply) => {
+  app.post("/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({

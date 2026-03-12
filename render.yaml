@@ -38,6 +38,8 @@ services:
         value: production
       - key: PORT
         value: "3000"
+      - key: CORS_ORIGINS
+        sync: false        # Set to apex-web URL after deploy (e.g., https://apex-web.onrender.com)
 
   # ── Next.js Frontend ──
   - name: apex-web

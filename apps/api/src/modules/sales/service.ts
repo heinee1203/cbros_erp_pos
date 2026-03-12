@@ -393,6 +393,25 @@ export async function completeSale(
       throw new Error("Cannot complete a sale with no line items");
     }
 
+    // ── Payment validation ──
+    const grandTotal = parseFloat(sale.grand_total);
+    if (grandTotal > 0) {
+      if (!input.payments || input.payments.length === 0) {
+        throw new Error(
+          `No payments provided for sale with grand total ₱${grandTotal.toFixed(2)}`,
+        );
+      }
+      const paymentTotal = input.payments.reduce(
+        (sum, p) => sum + parseFloat(p.amount),
+        0,
+      );
+      if (paymentTotal < grandTotal - 0.005) {
+        throw new Error(
+          `Payment total (₱${paymentTotal.toFixed(2)}) does not cover grand total (₱${grandTotal.toFixed(2)})`,
+        );
+      }
+    }
+
     // For each line: lock inventory, validate, deduct, journal
     // POS MERGE GUARDRAIL (Phase 7): lines tagged with job_card_part_id
     // skip inventory deduction — stock was already deducted via JOB_CARD_ISSUE.

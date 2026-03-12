@@ -35,6 +35,8 @@ services:
         value: production
       - key: PORT
         value: "3000"
+      - key: CORS_ORIGINS
+        sync: false        # Set to apex-uat-web URL after deploy
 
   # ── Next.js Frontend (UAT) ──
   - name: apex-uat-web
