@@ -28,33 +28,36 @@ export async function createOrganizationWithAdmin(input: {
 
   const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
 
-  const [org] = await db
-    .insert(organizations)
-    .values({ name: input.orgName, slug })
-    .returning();
+  return db.transaction(async (tx) => {
+    const [org] = await tx
+      .insert(organizations)
+      .values({ name: input.orgName, slug })
+      .returning();
 
-  const [defaultLocation] = await db
-    .insert(locations)
-    .values({
-      orgId: org.id,
-      name: `${input.orgName} Main Warehouse`,
-      type: "WAREHOUSE",
-    })
-    .returning();
+    const [defaultLocation] = await tx
+      .insert(locations)
+      .values({
+        orgId: org.id,
+        name: `${input.orgName} Main Warehouse`,
+        type: "WAREHOUSE",
+        code: "WH01",
+      })
+      .returning();
 
-  const [user] = await db
-    .insert(users)
-    .values({
-      orgId: org.id,
-      primaryLocationId: defaultLocation.id,
-      fullName: input.fullName,
-      email: input.email,
-      passwordHash,
-      role: "ADMIN",
-    })
-    .returning();
+    const [user] = await tx
+      .insert(users)
+      .values({
+        orgId: org.id,
+        primaryLocationId: defaultLocation.id,
+        fullName: input.fullName,
+        email: input.email,
+        passwordHash,
+        role: "ADMIN",
+      })
+      .returning();
 
-  return { org, user, defaultLocation };
+    return { org, user, defaultLocation };
+  });
 }
 
 /**
@@ -62,9 +65,12 @@ export async function createOrganizationWithAdmin(input: {
  * The requesting user provides the PIN — we check all admins/managers
  * in the same org for a matching PIN.
  */
-export async function verifyPin(orgId: string, pin: string): Promise<boolean> {
+export async function verifyPin(
+  orgId: string,
+  pin: string,
+): Promise<{ valid: boolean; userId: string | null }> {
   const managers = await db
-    .select({ pinHash: users.pinHash })
+    .select({ id: users.id, pinHash: users.pinHash })
     .from(users)
     .where(
       and(
@@ -76,10 +82,10 @@ export async function verifyPin(orgId: string, pin: string): Promise<boolean> {
 
   for (const mgr of managers) {
     if (mgr.pinHash && (await bcrypt.compare(pin, mgr.pinHash))) {
-      return true;
+      return { valid: true, userId: mgr.id };
     }
   }
-  return false;
+  return { valid: false, userId: null };
 }
 
 export async function authenticateUser(email: string, password: string) {

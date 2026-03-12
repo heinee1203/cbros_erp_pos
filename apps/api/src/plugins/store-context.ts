@@ -7,6 +7,8 @@ import type { StoreContext } from "@apex/types";
 
 const SKIP_PATHS = ["/health", "/auth/login", "/auth/register", "/auth/verify-pin", "/locations"];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 declare module "fastify" {
   interface FastifyRequest {
     storeContext: StoreContext | null;
@@ -32,6 +34,11 @@ const storeContextPluginFn: FastifyPluginAsync = async (app) => {
       return reply
         .status(400)
         .send({ error: "X-Location-ID header is required" });
+    }
+    if (!UUID_RE.test(locationId)) {
+      return reply
+        .status(400)
+        .send({ error: "X-Location-ID must be a valid UUID" });
     }
 
     const [location] = await db

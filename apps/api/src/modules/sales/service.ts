@@ -23,12 +23,23 @@ async function generateSaleNo(
   orgId: string,
   locationCode: string,
 ): Promise<string> {
+  // Advisory lock scoped to this org to serialize sale number generation
+  const lockKey = Buffer.from(orgId.replace(/-/g, "").slice(0, 8), "hex").readInt32BE(0);
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
+
   const result = await tx
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ maxNo: sql<string>`max(sale_no)` })
     .from(sales)
     .where(eq(sales.orgId, orgId));
-  const seq = (result[0]?.count ?? 0) + 1;
+
   const prefix = locationCode.slice(0, 2).toUpperCase();
+  let seq = 1;
+  const maxNo = result[0]?.maxNo;
+  if (maxNo) {
+    const parts = maxNo.split("-");
+    seq = parseInt(parts[parts.length - 1], 10) + 1;
+  }
+
   return `${prefix}-${String(seq).padStart(6, "0")}`;
 }
 

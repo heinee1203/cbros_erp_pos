@@ -49,8 +49,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: "PIN must be exactly 4 digits" });
     }
 
-    const valid = await verifyPin(request.user.orgId, pin);
-    return reply.send({ valid });
+    const result = await verifyPin(request.user.orgId, pin);
+    return reply.send(result);
   });
 
   app.post("/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
