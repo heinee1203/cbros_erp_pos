@@ -16,6 +16,7 @@ export interface ProductRow {
   unitPrice: string;   // numeric string from Postgres
   costPrice: string;   // numeric string from Postgres
   barcode: string | null;
+  isVariablePrice: boolean;
   stockLevel: number;
   reorderPoint: number;
   familyId: string | null;

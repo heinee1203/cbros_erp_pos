@@ -5,6 +5,7 @@ import {
   timestamp,
   pgEnum,
   index,
+  uniqueIndex,
   numeric,
   check,
   boolean,
@@ -12,6 +13,7 @@ import {
 import { sql } from "drizzle-orm";
 import { organizations } from "./organizations";
 import { productFamilies } from "./product-families";
+import { categories } from "./categories";
 
 export const productCategoryEnum = pgEnum("product_category", [
   "TIRES",
@@ -44,10 +46,14 @@ export const products = pgTable(
       .default("0.00"),
     /** Deterministic 10-char KINGSCOBRA cipher of currentCostPrice in centavos */
     mnemonicCostCode: varchar("mnemonic_cost_code", { length: 10 }),
-    /** EAN-13 barcode — 13 digits, nullable, unique per org when set */
-    barcode: varchar("barcode", { length: 13 }),
+    /** Barcode — any format up to 50 chars, nullable, unique per org when set */
+    barcode: varchar("barcode", { length: 50 }),
     /** Soft delete — inactive products are hidden from POS and search by default */
     isActive: boolean("is_active").notNull().default(true),
+    /** Variable price flag — cashier must enter price at time of sale */
+    isVariablePrice: boolean("is_variable_price").notNull().default(false),
+    /** Granular category FK from Loyverse import (separate from the broad enum) */
+    categoryId: uuid("category_id").references(() => categories.id, { onDelete: "set null" }),
     familyId: uuid("family_id").references(() => productFamilies.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -67,8 +73,8 @@ export const products = pgTable(
     // Enforce exactly 10 characters for mnemonic SKU at DB level
     check("chk_mnemonic_sku_length", sql`char_length(mnemonic_sku) = 10`),
     index("idx_products_family_id").on(table.familyId),
-    index("idx_products_barcode").on(table.barcode),
-    check("chk_barcode_format", sql`barcode IS NULL OR barcode ~ '^\\d{13}$'`),
+    uniqueIndex("idx_products_org_barcode").on(table.orgId, table.barcode).where(sql`barcode IS NOT NULL`),
+    index("idx_products_category_id").on(table.categoryId),
     index("idx_products_is_active").on(table.isActive),
   ],
 );

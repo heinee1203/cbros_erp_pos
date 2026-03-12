@@ -13,6 +13,7 @@ interface ServerProduct {
   barcode: string | null;
   category: string;
   unitPrice: string;
+  isVariablePrice: boolean;
   familyId: string | null;
   updatedAt: string;
 }
@@ -55,6 +56,7 @@ export async function syncCatalog(): Promise<{ upserted: number }> {
             record.barcode = item.barcode;
             record.category = item.category;
             record.unitPrice = parseFloat(item.unitPrice);
+            record.isVariablePrice = item.isVariablePrice;
             record.familyId = item.familyId;
             record.serverUpdatedAt = new Date(item.updatedAt).getTime();
           }),
@@ -70,6 +72,7 @@ export async function syncCatalog(): Promise<{ upserted: number }> {
             record.barcode = item.barcode;
             record.category = item.category;
             record.unitPrice = parseFloat(item.unitPrice);
+            record.isVariablePrice = item.isVariablePrice;
             record.familyId = item.familyId;
             record.serverUpdatedAt = new Date(item.updatedAt).getTime();
           }),

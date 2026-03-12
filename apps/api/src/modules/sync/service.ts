@@ -54,6 +54,7 @@ export async function getCatalogDelta(opts: SyncOpts): Promise<SyncResult<any>> 
       barcode: products.barcode,
       category: products.category,
       unitPrice: products.unitPrice,
+      isVariablePrice: products.isVariablePrice,
       isActive: products.isActive,
       familyId: products.familyId,
       updatedAt: products.updatedAt,

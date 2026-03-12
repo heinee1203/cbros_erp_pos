@@ -14,6 +14,7 @@ export interface CatalogItem {
   barcode: string | null;
   category: string;
   unitPrice: number;
+  isVariablePrice: boolean;
   stockLevel: number;
   reservedLevel: number;
   reorderPoint: number;
@@ -89,6 +90,7 @@ export function useCatalogSearch() {
           barcode: p.barcode,
           category: p.category,
           unitPrice: p.unitPrice,
+          isVariablePrice: p.isVariablePrice,
           stockLevel: inv?.stockLevel ?? 0,
           reservedLevel: inv?.reservedLevel ?? 0,
           reorderPoint: inv?.reorderPoint ?? 10,
@@ -150,6 +152,7 @@ export function useCatalogSearch() {
       barcode: p.barcode,
       category: p.category,
       unitPrice: p.unitPrice,
+      isVariablePrice: p.isVariablePrice,
       stockLevel,
       reservedLevel,
       reorderPoint,

@@ -10,6 +10,9 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
@@ -51,6 +54,10 @@ export default function CatalogScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
 
+  // ── Variable price modal state ──
+  const [variablePriceItem, setVariablePriceItem] = useState<CatalogItem | null>(null);
+  const [enteredPrice, setEnteredPrice] = useState('');
+
   // ── Toast state ──
   const [toastVisible, setToastVisible] = useState(false);
   const [toastText, setToastText] = useState('');
@@ -73,16 +80,12 @@ export default function CatalogScreen() {
       if (result.barcode === '__OPEN_CAMERA__') return;
       const product = await searchByBarcode(result.barcode);
       if (product) {
-        addLine({
-          serverId: product.serverId,
-          name: product.name,
-          sku: product.sku,
-          mnemonicSku: product.mnemonicSku,
-          barcode: product.barcode,
-          unitPrice: product.unitPrice,
-          availableStock: product.stockLevel - product.reservedLevel,
-        });
-        showToast(`Added: ${product.name}`);
+        if (product.isVariablePrice) {
+          setVariablePriceItem(product);
+          setEnteredPrice('');
+          return;
+        }
+        addItemToCart(product);
       } else {
         Alert.alert('Not Found', `No product found for barcode ${result.barcode}`);
       }
@@ -91,7 +94,7 @@ export default function CatalogScreen() {
       scanner.stopListening();
       unsub();
     };
-  }, [scanner, searchByBarcode, addLine, showToast]);
+  }, [scanner, searchByBarcode, addItemToCart, showToast]);
 
   // Build product map for FavoritesGrid from current results
   const productMap = useMemo(() => {
@@ -108,18 +111,27 @@ export default function CatalogScreen() {
     return map;
   }, [results]);
 
-  const handleProductPress = useCallback((item: CatalogItem) => {
+  const addItemToCart = useCallback((item: CatalogItem, overridePrice?: number) => {
     addLine({
       serverId: item.serverId,
       name: item.name,
       sku: item.sku,
       mnemonicSku: item.mnemonicSku,
       barcode: item.barcode,
-      unitPrice: item.unitPrice,
+      unitPrice: overridePrice ?? item.unitPrice,
       availableStock: item.stockLevel - item.reservedLevel,
     });
     showToast(`Added: ${item.name}`);
   }, [addLine, showToast]);
+
+  const handleProductPress = useCallback((item: CatalogItem) => {
+    if (item.isVariablePrice) {
+      setVariablePriceItem(item);
+      setEnteredPrice('');
+      return;
+    }
+    addItemToCart(item);
+  }, [addItemToCart]);
 
   const handleProductLongPress = useCallback((item: CatalogItem) => {
     if (isFavorite(item.serverId)) {
@@ -134,22 +146,19 @@ export default function CatalogScreen() {
     // Find the full CatalogItem from results for sku/barcode info
     const item = results.find(r => r.serverId === product.id);
     if (item) {
-      addLine({
-        serverId: item.serverId,
-        name: item.name,
-        sku: item.sku,
-        mnemonicSku: item.mnemonicSku,
-        barcode: item.barcode,
-        unitPrice: item.unitPrice,
-        availableStock: item.stockLevel - item.reservedLevel,
-      });
+      if (item.isVariablePrice) {
+        setVariablePriceItem(item);
+        setEnteredPrice('');
+        return;
+      }
+      addItemToCart(item);
     } else {
       // Product not in current results (e.g., filtered by category) — don't add corrupt line
       Alert.alert('Product Unavailable', 'Switch to "All" category to add this item.');
       return;
     }
     showToast(`Added: ${product.name}`);
-  }, [results, addLine, showToast]);
+  }, [results, addItemToCart, showToast]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -163,21 +172,36 @@ export default function CatalogScreen() {
     if (result) {
       const product = await searchByBarcode(result.barcode);
       if (product) {
-        addLine({
-          serverId: product.serverId,
-          name: product.name,
-          sku: product.sku,
-          mnemonicSku: product.mnemonicSku,
-          barcode: product.barcode,
-          unitPrice: product.unitPrice,
-          availableStock: product.stockLevel - product.reservedLevel,
-        });
-        showToast(`Added: ${product.name}`);
+        if (product.isVariablePrice) {
+          setVariablePriceItem(product);
+          setEnteredPrice('');
+          return;
+        }
+        addItemToCart(product);
       } else {
         Alert.alert('Not Found', `No product for barcode ${result.barcode}`);
       }
     }
-  }, [scanner, searchByBarcode, addLine, showToast]);
+  }, [scanner, searchByBarcode, addItemToCart, showToast]);
+
+  const handleVariablePriceConfirm = useCallback(() => {
+    if (!variablePriceItem) return;
+    const price = parseFloat(enteredPrice);
+    if (isNaN(price) || price <= 0) return;
+    addItemToCart(variablePriceItem, price);
+    setVariablePriceItem(null);
+    setEnteredPrice('');
+  }, [variablePriceItem, enteredPrice, addItemToCart]);
+
+  const handleVariablePriceCancel = useCallback(() => {
+    setVariablePriceItem(null);
+    setEnteredPrice('');
+  }, []);
+
+  const isValidPrice = (() => {
+    const price = parseFloat(enteredPrice);
+    return !isNaN(price) && price > 0;
+  })();
 
   const renderItem = useCallback(({ item, index }: { item: CatalogItem; index: number }) => (
     <ProductListItem item={item} index={index} onPress={handleProductPress} onLongPress={handleProductLongPress} />
@@ -319,6 +343,61 @@ export default function CatalogScreen() {
         maxToRenderPerBatch={20}
         windowSize={10}
       />
+
+      {/* Variable Price Modal */}
+      <Modal
+        visible={variablePriceItem !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={handleVariablePriceCancel}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalBackdrop}
+        >
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Enter Price</Text>
+            <Text style={styles.modalProductName} numberOfLines={2}>
+              {variablePriceItem?.name}
+            </Text>
+
+            <View style={styles.modalInputRow}>
+              <Text style={styles.modalCurrency}>{'\u20B1'}</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={enteredPrice}
+                onChangeText={setEnteredPrice}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+                placeholderTextColor={colors.text.muted}
+                autoFocus
+                selectionColor={colors.accent.primary}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.modalCancelButton}
+                onPress={handleVariablePriceCancel}
+                android_ripple={{ color: colors.accent.glow }}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.modalConfirmButton,
+                  !isValidPrice && styles.modalConfirmButtonDisabled,
+                ]}
+                onPress={handleVariablePriceConfirm}
+                disabled={!isValidPrice}
+                android_ripple={{ color: colors.accent.glow }}
+              >
+                <Text style={styles.modalConfirmText}>Add to Cart</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -446,5 +525,88 @@ const styles = StyleSheet.create({
     ...textStyles.body,
     color: colors.text.secondary,
     textAlign: 'center',
+  },
+
+  // ── Variable Price Modal ──
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: '85%',
+    maxWidth: 340,
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.lg,
+    padding: spacing.xl,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+  },
+  modalTitle: {
+    ...textStyles.heading,
+    color: colors.text.primary,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+  modalProductName: {
+    ...textStyles.body,
+    color: colors.text.secondary,
+    textAlign: 'center',
+    marginBottom: spacing.lg,
+  },
+  modalInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.bg.input,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    borderRadius: radius.md,
+    marginBottom: spacing.lg,
+  },
+  modalCurrency: {
+    ...textStyles.heading,
+    color: colors.text.muted,
+    paddingLeft: spacing.md,
+  },
+  modalInput: {
+    flex: 1,
+    ...textStyles.heading,
+    color: colors.text.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  modalCancelButton: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.bg.input,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    ...textStyles.body,
+    color: colors.text.secondary,
+    fontWeight: '600',
+  },
+  modalConfirmButton: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.accent.primary,
+    alignItems: 'center',
+  },
+  modalConfirmButtonDisabled: {
+    opacity: 0.4,
+  },
+  modalConfirmText: {
+    ...textStyles.body,
+    color: colors.text.inverse,
+    fontWeight: '700',
   },
 });

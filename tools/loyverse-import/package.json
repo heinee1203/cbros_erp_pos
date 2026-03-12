@@ -1,0 +1,22 @@
+{
+  "name": "@apex/loyverse-import",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run-import": "tsx src/import.ts"
+  },
+  "dependencies": {
+    "@apex/database": "workspace:*",
+    "@apex/types": "workspace:*",
+    "csv-parse": "^5.6.0",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.45.1",
+    "postgres": "^3.4.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

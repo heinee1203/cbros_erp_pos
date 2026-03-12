@@ -11,6 +11,7 @@ export default class Product extends Model {
   @text('barcode') barcode!: string | null;
   @text('category') category!: string;
   @field('unit_price') unitPrice!: number;
+  @field('is_variable_price') isVariablePrice!: boolean;
   @text('image_url') imageUrl!: string | null;
   @text('family_id') familyId!: string | null;
   @field('server_updated_at') serverUpdatedAt!: number;

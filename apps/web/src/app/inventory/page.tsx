@@ -827,7 +827,11 @@ function FamilyRows({
                 {/* Category shown on parent — skip on child for cleanliness */}
               </td>
               <td className="px-3 py-[4px] text-right font-medium tabular-nums text-foreground">
-                {formatPrice(sell)}
+                {child.isVariablePrice ? (
+                  <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-amber-50/80 text-amber-600">Variable</span>
+                ) : (
+                  formatPrice(sell)
+                )}
               </td>
               {showFinancials && (
                 <>
@@ -921,7 +925,11 @@ function FlatProductRow({
         </span>
       </td>
       <td className="px-3 py-[5px] text-right font-medium tabular-nums text-foreground">
-        {formatPrice(sell)}
+        {p.isVariablePrice ? (
+          <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-amber-50/80 text-amber-600">Variable</span>
+        ) : (
+          formatPrice(sell)
+        )}
       </td>
       {showFinancials && (
         <>
@@ -1036,7 +1044,7 @@ function DetailDrawer({
                 <InfoRow label="Name" value={product.name} />
                 <InfoRow label="SKU" value={product.sku} mono />
                 {product.barcode && <InfoRow label="Barcode" value={product.barcode} mono />}
-                <InfoRow label="Sell Price" value={`\u20B1 ${formatPrice(sell)}`} />
+                <InfoRow label="Sell Price" value={product.isVariablePrice ? "Variable" : `\u20B1 ${formatPrice(sell)}`} />
                 {showFinancials && (
                   <>
                     <InfoRow label="Cost" value={cost > 0 ? `\u20B1 ${formatPrice(cost)}` : "\u2014"} />
