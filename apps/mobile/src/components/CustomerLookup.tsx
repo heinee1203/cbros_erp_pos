@@ -80,11 +80,11 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
     }
     setCreating(true);
     try {
-      const data = await apiFetch<{ customer: Customer }>('/customers', {
+      const customer = await apiFetch<Customer>('/customers', {
         method: 'POST',
         body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim() }),
       });
-      onSelect(data.customer);
+      onSelect(customer);
       handleClose();
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create customer');

@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useMemo } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Alert } from 'react-native';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
+import { View, Text, Pressable, ScrollView, Animated, StyleSheet, Alert } from 'react-native';
 import { v4 as uuid } from 'uuid';
-import { BottomSheet, Button, Chip, Input, Divider } from '@/components/ui';
+import { BottomSheet, Button, Input, Divider } from '@/components/ui';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import { apiFetch } from '@/services/api-client';
 
@@ -10,6 +10,7 @@ interface SaleLine {
   productName: string;
   sku: string;
   quantity: number;
+  refundedQuantity: number;
   unitPrice: number;
   lineTotal: number;
 }
@@ -21,11 +22,13 @@ interface RefundFlowProps {
   saleNo: string;
   lines: SaleLine[];
   onRefunded: () => void;
+  verifyPin: (pin: string) => Promise<boolean>;
 }
 
-type Step = 'select-items' | 'select-reason' | 'confirm';
+type Step = 'select-items' | 'select-reason' | 'confirm' | 'pin';
 
 const REASONS = ['Defective', 'Wrong Part', 'Customer Changed Mind', 'Other'] as const;
+const PIN_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
 type Reason = (typeof REASONS)[number];
 
 interface RefundItem {
@@ -38,22 +41,83 @@ interface RefundItem {
 }
 
 export function RefundFlow({
-  visible, onClose, saleId, saleNo, lines, onRefunded,
+  visible, onClose, saleId, saleNo, lines, onRefunded, verifyPin,
 }: RefundFlowProps) {
   const [step, setStep] = useState<Step>('select-items');
+  // Only show lines that still have refundable quantity
+  const refundableLines = useMemo(() =>
+    lines.filter(l => l.quantity - l.refundedQuantity > 0),
+    [lines],
+  );
+
   const [items, setItems] = useState<RefundItem[]>(() =>
-    lines.map(l => ({
-      lineId: l.id,
-      selected: true,
-      quantity: l.quantity,
-      maxQuantity: l.quantity,
-      unitPrice: l.unitPrice,
-      productName: l.productName,
-    })),
+    refundableLines.map(l => {
+      const refundable = l.quantity - l.refundedQuantity;
+      return {
+        lineId: l.id,
+        selected: true,
+        quantity: refundable,
+        maxQuantity: refundable,
+        unitPrice: l.unitPrice,
+        productName: l.productName,
+      };
+    }),
   );
   const [reason, setReason] = useState<Reason>('Defective');
   const [otherReason, setOtherReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // PIN state (inline in flow, after confirm)
+  const [pin, setPin] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [pinVerifying, setPinVerifying] = useState(false);
+  const shakeAnim = useRef(new Animated.Value(0)).current;
+
+  const shakePin = useCallback(() => {
+    Animated.sequence([
+      Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
+    ]).start();
+  }, [shakeAnim]);
+
+  // Use ref so handlePinKey can call the latest submitRefund without circular deps
+  const submitRef = useRef<() => Promise<void>>();
+
+  const handlePinKey = useCallback(async (key: string) => {
+    if (pinVerifying) return;
+    if (key === '⌫') {
+      setPin(prev => prev.slice(0, -1));
+      setPinError('');
+      return;
+    }
+    if (key === '' || pin.length >= 4) return;
+    const newPin = pin + key;
+    setPin(newPin);
+    setPinError('');
+    if (newPin.length === 4) {
+      setPinVerifying(true);
+      try {
+        const valid = await verifyPin(newPin);
+        if (valid) {
+          setPin('');
+          setPinError('');
+          // PIN verified — submit the refund
+          await submitRef.current?.();
+        } else {
+          shakePin();
+          setPin('');
+          setPinError('Invalid PIN');
+        }
+      } catch {
+        shakePin();
+        setPin('');
+        setPinError('Verification failed');
+      }
+      setPinVerifying(false);
+    }
+  }, [pin, pinVerifying, verifyPin, shakePin]);
 
   const refundTotal = useMemo(() =>
     items
@@ -78,16 +142,21 @@ export function RefundFlow({
 
   const handleClose = () => {
     setStep('select-items');
-    setItems(lines.map(l => ({
-      lineId: l.id,
-      selected: true,
-      quantity: l.quantity,
-      maxQuantity: l.quantity,
-      unitPrice: l.unitPrice,
-      productName: l.productName,
-    })));
+    setItems(refundableLines.map(l => {
+      const refundable = l.quantity - l.refundedQuantity;
+      return {
+        lineId: l.id,
+        selected: true,
+        quantity: refundable,
+        maxQuantity: refundable,
+        unitPrice: l.unitPrice,
+        productName: l.productName,
+      };
+    }));
     setReason('Defective');
     setOtherReason('');
+    setPin('');
+    setPinError('');
     onClose();
   };
 
@@ -124,6 +193,9 @@ export function RefundFlow({
     }
     setSubmitting(false);
   };
+
+  // Keep ref in sync so handlePinKey can call latest handleSubmit
+  submitRef.current = handleSubmit;
 
   const anySelected = items.some(i => i.selected);
 
@@ -193,14 +265,19 @@ export function RefundFlow({
       {step === 'select-reason' && (
         <View style={styles.stepContent}>
           <Text style={styles.stepTitle}>Reason for refund</Text>
-          <View style={styles.reasonChips}>
+          <View style={styles.reasonGrid}>
             {REASONS.map(r => (
-              <Chip
+              <Pressable
                 key={r}
-                label={r}
-                active={reason === r}
+                style={[styles.reasonButton, reason === r && styles.reasonButtonActive]}
                 onPress={() => setReason(r)}
-              />
+              >
+                <Text
+                  style={[styles.reasonButtonText, reason === r && styles.reasonButtonTextActive]}
+                >
+                  {r}
+                </Text>
+              </Pressable>
             ))}
           </View>
           {reason === 'Other' && (
@@ -215,15 +292,15 @@ export function RefundFlow({
           )}
           <View style={styles.buttonRow}>
             <Button
-              title="Back"
-              variant="ghost"
+              title="← Back"
+              variant="secondary"
               onPress={() => setStep('select-items')}
-              style={{ flex: 1 }}
+              style={styles.btnBack}
             />
             <Button
-              title="Review"
+              title="Review →"
               onPress={() => setStep('confirm')}
-              style={{ flex: 2 }}
+              style={styles.btnPrimary}
               disabled={reason === 'Other' && !otherReason.trim()}
             />
           </View>
@@ -255,17 +332,70 @@ export function RefundFlow({
           </View>
           <View style={styles.buttonRow}>
             <Button
-              title="Back"
-              variant="ghost"
+              title="← Back"
+              variant="secondary"
               onPress={() => setStep('select-reason')}
-              style={{ flex: 1 }}
+              style={styles.btnBack}
             />
             <Button
-              title="Confirm Refund"
+              title="Authorize Refund →"
               variant="danger"
-              onPress={handleSubmit}
-              loading={submitting}
-              style={{ flex: 2 }}
+              onPress={() => { setPin(''); setPinError(''); setStep('pin'); }}
+              style={styles.btnPrimary}
+            />
+          </View>
+        </View>
+      )}
+
+      {step === 'pin' && (
+        <View style={styles.stepContent}>
+          <Text style={styles.stepTitle}>Manager Authorization</Text>
+          <Text style={styles.pinSubtitle}>Enter 4-digit PIN to authorize this refund</Text>
+
+          <Animated.View style={[styles.dotsRow, { transform: [{ translateX: shakeAnim }] }]}>
+            {[0, 1, 2, 3].map(i => (
+              <View
+                key={i}
+                style={[
+                  styles.dot,
+                  i < pin.length && styles.dotFilled,
+                  pinError ? styles.dotError : undefined,
+                ]}
+              />
+            ))}
+          </Animated.View>
+
+          {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : <View style={styles.pinErrorSpacer} />}
+
+          <View style={styles.pinKeypad}>
+            {PIN_KEYS.map((key, i) => (
+              <Pressable
+                key={i}
+                style={({ pressed }) => [
+                  styles.pinKey,
+                  key === '' && styles.pinKeyEmpty,
+                  key !== '' && pressed && styles.pinKeyPressed,
+                ]}
+                onPress={() => handlePinKey(key)}
+                disabled={key === '' || pinVerifying || submitting}
+                android_ripple={key !== '' ? { color: colors.accent.glow } : undefined}
+              >
+                <Text style={[styles.pinKeyText, key === '⌫' && styles.pinKeyBackspace]}>
+                  {key}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {submitting && <Text style={styles.pinSubtitle}>Processing refund…</Text>}
+
+          <View style={styles.buttonRow}>
+            <Button
+              title="← Back"
+              variant="secondary"
+              onPress={() => setStep('confirm')}
+              style={styles.btnBack}
+              disabled={submitting}
             />
           </View>
         </View>
@@ -363,11 +493,32 @@ const styles = StyleSheet.create({
     ...textStyles.monoLg,
     color: colors.status.danger,
   },
-  reasonChips: {
+  reasonGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.xl,
+  },
+  reasonButton: {
+    width: '48%',
+    paddingVertical: spacing.md,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reasonButtonActive: {
+    borderColor: colors.accent.primary,
+    backgroundColor: colors.accent.primary,
+  },
+  reasonButtonText: {
+    ...textStyles.bodyMedium,
+    color: colors.text.secondary,
+  },
+  reasonButtonTextActive: {
+    color: colors.text.inverse,
   },
   otherInput: {
     marginBottom: spacing.lg,
@@ -375,7 +526,15 @@ const styles = StyleSheet.create({
   buttonRow: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginTop: spacing.md,
+    marginTop: spacing.lg,
+  },
+  btnBack: {
+    flex: 1,
+    minHeight: 48,
+  },
+  btnPrimary: {
+    flex: 2,
+    minHeight: 48,
   },
   confirmSummary: {
     backgroundColor: colors.bg.surface,
@@ -428,5 +587,73 @@ const styles = StyleSheet.create({
   confirmTotalAmount: {
     ...textStyles.display,
     color: colors.status.danger,
+  },
+  // ── Inline PIN step ──
+  pinSubtitle: {
+    ...textStyles.caption,
+    color: colors.text.secondary,
+    textAlign: 'center',
+    marginBottom: spacing.lg,
+  },
+  dotsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  dot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: colors.border.default,
+    backgroundColor: 'transparent',
+  },
+  dotFilled: {
+    backgroundColor: colors.accent.primary,
+    borderColor: colors.accent.primary,
+  },
+  dotError: {
+    borderColor: colors.status.danger,
+  },
+  pinErrorText: {
+    ...textStyles.captionSmall,
+    color: colors.status.danger,
+    textAlign: 'center',
+    height: 20,
+    marginBottom: spacing.md,
+  },
+  pinErrorSpacer: {
+    height: 20,
+    marginBottom: spacing.md,
+  },
+  pinKeypad: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    width: 240,
+    alignSelf: 'center',
+    gap: spacing.sm,
+  },
+  pinKey: {
+    width: 72,
+    height: 56,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pinKeyEmpty: {
+    backgroundColor: 'transparent',
+  },
+  pinKeyPressed: {
+    backgroundColor: colors.border.default,
+  },
+  pinKeyText: {
+    ...textStyles.heading,
+    color: colors.text.primary,
+  },
+  pinKeyBackspace: {
+    fontSize: 22,
   },
 });

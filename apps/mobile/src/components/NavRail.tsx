@@ -10,9 +10,9 @@ const TAB_LABELS: Record<string, string> = {
 };
 
 const TAB_ICONS: Record<string, string> = {
-  POS: '\u2637',       // ☷ trigram
-  Transactions: '\u2630', // ☰ trigram
-  Settings: '\u2699',   // ⚙ gear
+  POS: '\uD83D\uDED2',          // 🛒 shopping cart
+  Transactions: '\uD83D\uDCCB', // 📋 clipboard
+  Settings: '\u2699\uFE0F',     // ⚙️ gear
 };
 
 /** Width of the navigation rail in dp */
@@ -98,7 +98,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent.glow,
   },
   icon: {
-    fontSize: 20,
+    fontSize: 28,
     color: colors.text.muted,
     marginBottom: 2,
   },

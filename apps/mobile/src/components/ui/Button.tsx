@@ -84,11 +84,32 @@ export function Button({
 
   const vs = variantStyles[variant];
 
+  // Extract layout props (flex, margin, width) for the outer wrapper;
+  // visual props stay on the inner Pressable.
+  const { flex, flexGrow, flexShrink, flexBasis, margin, marginTop, marginBottom, marginLeft, marginRight, marginHorizontal, marginVertical, alignSelf, width, minWidth, maxWidth, ...innerStyle } = (style ?? {}) as any;
+  const outerLayout: ViewStyle = {};
+  if (flex != null) outerLayout.flex = flex;
+  if (flexGrow != null) outerLayout.flexGrow = flexGrow;
+  if (flexShrink != null) outerLayout.flexShrink = flexShrink;
+  if (flexBasis != null) outerLayout.flexBasis = flexBasis;
+  if (margin != null) outerLayout.margin = margin;
+  if (marginTop != null) outerLayout.marginTop = marginTop;
+  if (marginBottom != null) outerLayout.marginBottom = marginBottom;
+  if (marginLeft != null) outerLayout.marginLeft = marginLeft;
+  if (marginRight != null) outerLayout.marginRight = marginRight;
+  if (marginHorizontal != null) outerLayout.marginHorizontal = marginHorizontal;
+  if (marginVertical != null) outerLayout.marginVertical = marginVertical;
+  if (alignSelf != null) outerLayout.alignSelf = alignSelf;
+  if (width != null) outerLayout.width = width;
+  if (minWidth != null) outerLayout.minWidth = minWidth;
+  if (maxWidth != null) outerLayout.maxWidth = maxWidth;
+
   return (
     <Animated.View
       style={[
         { transform: [{ scale: scaleAnim }] },
         fullWidth && styles.fullWidth,
+        outerLayout,
       ]}
     >
       <Pressable
@@ -106,7 +127,7 @@ export function Button({
           vs.border ? { borderWidth: 1, borderColor: vs.border } : undefined,
           fullWidth && styles.fullWidth,
           (disabled || loading) && styles.disabled,
-          style,
+          innerStyle,
         ]}
       >
         {loading ? (

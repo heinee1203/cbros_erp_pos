@@ -13,7 +13,6 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import { useSaleDetailQuery } from '@/hooks/use-transactions';
 import { usePrinter } from '@/hardware/printer/context';
 import { useAuth } from '@/hooks/use-auth';
-import { PinPad } from '@/components/PinPad';
 import { RefundFlow } from '@/components/RefundFlow';
 import { apiFetch } from '@/services/api-client';
 import { useLayout } from '@/hooks/use-layout';
@@ -29,9 +28,14 @@ function fmtPHP(amount: string | number): string {
   return `₱${num.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function getBadgeVariant(status: string): 'success' | 'danger' {
+function getBadgeVariant(status: string): 'success' | 'warning' | 'danger' {
   if (status === 'REFUNDED' || status === 'VOIDED') return 'danger';
+  if (status === 'PARTIALLY_REFUNDED') return 'warning';
   return 'success';
+}
+
+function formatStatus(status: string): string {
+  return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\bRefunded\b/, 'Refunded');
 }
 
 export default function TransactionDetailScreen() {
@@ -43,7 +47,6 @@ export default function TransactionDetailScreen() {
   const printer = usePrinter();
   const { user } = useAuth();
 
-  const [pinVisible, setPinVisible] = useState(false);
   const [refundVisible, setRefundVisible] = useState(false);
 
   const verifyPin = useCallback(async (pin: string): Promise<boolean> => {
@@ -59,11 +62,6 @@ export default function TransactionDetailScreen() {
   }, []);
 
   const handleRefundPress = useCallback(() => {
-    setPinVisible(true);
-  }, []);
-
-  const handlePinVerified = useCallback(() => {
-    setPinVisible(false);
     setRefundVisible(true);
   }, []);
 
@@ -91,7 +89,13 @@ export default function TransactionDetailScreen() {
         subtotal: parseFloat(sale.subtotal),
         discount: parseFloat(sale.discountTotal),
         grandTotal: parseFloat(sale.grandTotal),
-        paymentMethod: sale.payments[0]?.method || 'CASH',
+        paymentMethod: sale.payments[0]?.method === 'ACCOUNT' ? 'CHARGE' : (sale.payments[0]?.method || 'CASH'),
+        payments: sale.payments.map(p => ({
+          method: p.method === 'ACCOUNT' ? 'CHARGE' : p.method,
+          amount: parseFloat(p.amount),
+          reference: p.reference || undefined,
+          installmentTerm: p.notes?.includes('Installment:') ? p.notes.replace('Installment: ', '').replace(' ', '_').toUpperCase() : undefined,
+        })),
       },
       footer: { message: '** REPRINT **' },
     };
@@ -140,7 +144,7 @@ export default function TransactionDetailScreen() {
       ]}>
         {/* Status + time */}
         <View style={styles.statusRow}>
-          <Badge label={sale.status} variant={getBadgeVariant(sale.status)} />
+          <Badge label={formatStatus(sale.status)} variant={getBadgeVariant(sale.status)} />
           <Text style={styles.dateText}>
             {sale.completedAt ? new Date(sale.completedAt).toLocaleString() : new Date(sale.createdAt).toLocaleString()}
           </Text>
@@ -207,17 +211,27 @@ export default function TransactionDetailScreen() {
         <Card style={styles.sectionCard}>
           <Text style={styles.sectionLabel}>Payment</Text>
           {sale.payments.map((p, i) => (
-            <View key={i} style={styles.paymentRow}>
-              <Text style={styles.paymentMethod}>{p.method}</Text>
-              <Text style={styles.paymentAmount}>{fmtPHP(p.amount)}</Text>
+            <View key={i} style={styles.paymentBlock}>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentMethod}>
+                  {p.method === 'ACCOUNT' ? 'CHARGE' : p.method}
+                </Text>
+                <Text style={styles.paymentAmount}>{fmtPHP(p.amount)}</Text>
+              </View>
+              {p.reference ? (
+                <Text style={styles.paymentRef}>Ref: {p.reference}</Text>
+              ) : null}
+              {p.notes ? (
+                <Text style={styles.paymentRef}>{p.notes}</Text>
+              ) : null}
             </View>
           ))}
         </Card>
 
-        {/* Refund button — only for completed sales */}
-        {sale.status === 'COMPLETED' && (
+        {/* Refund button — for completed or partially refunded sales */}
+        {(sale.status === 'COMPLETED' || sale.status === 'PARTIALLY_REFUNDED') && (
           <Button
-            title="Refund"
+            title={sale.status === 'PARTIALLY_REFUNDED' ? 'Refund Remaining Items' : 'Refund'}
             variant="danger"
             fullWidth
             onPress={handleRefundPress}
@@ -225,13 +239,6 @@ export default function TransactionDetailScreen() {
           />
         )}
       </ScrollView>
-
-      <PinPad
-        visible={pinVisible}
-        onClose={() => setPinVisible(false)}
-        onVerified={handlePinVerified}
-        verifyPin={verifyPin}
-      />
 
       {sale && (
         <RefundFlow
@@ -244,10 +251,12 @@ export default function TransactionDetailScreen() {
             productName: l.productName,
             sku: l.mnemonicSku,
             quantity: l.quantity,
+            refundedQuantity: l.refundedQuantity ?? 0,
             unitPrice: parseFloat(l.unitPrice),
             lineTotal: parseFloat(l.lineTotal),
           }))}
           onRefunded={handleRefunded}
+          verifyPin={verifyPin}
         />
       )}
     </SafeAreaView>
@@ -380,10 +389,12 @@ const styles = StyleSheet.create({
     ...textStyles.monoLg,
     color: colors.accent.primary,
   },
+  paymentBlock: {
+    marginBottom: spacing.sm,
+  },
   paymentRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: spacing.xs,
   },
   paymentMethod: {
     ...textStyles.body,
@@ -392,6 +403,11 @@ const styles = StyleSheet.create({
   paymentAmount: {
     ...textStyles.monoMd,
     color: colors.text.primary,
+  },
+  paymentRef: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
   },
   refundButton: {
     marginTop: spacing.md,

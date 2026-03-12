@@ -35,10 +35,10 @@ export function useCustomerSearch() {
     setLoading(true);
     debounceRef.current = setTimeout(async () => {
       try {
-        const data = await apiFetch<{ customers: Customer[] }>(
+        const data = await apiFetch<{ data: Customer[] }>(
           `/customers/search?q=${encodeURIComponent(q)}`,
         );
-        setResults(data.customers ?? []);
+        setResults(data.data ?? []);
       } catch {
         setResults([]);
       }
@@ -49,10 +49,10 @@ export function useCustomerSearch() {
   const fetchVehicles = useCallback(async (customerId: string): Promise<Vehicle[]> => {
     if (vehicles[customerId]) return vehicles[customerId];
     try {
-      const data = await apiFetch<{ vehicles: Vehicle[] }>(
+      const data = await apiFetch<{ data: Vehicle[] }>(
         `/customers/${customerId}/vehicles`,
       );
-      const v = data.vehicles ?? [];
+      const v = data.data ?? [];
       setVehicles(prev => ({ ...prev, [customerId]: v }));
       return v;
     } catch {

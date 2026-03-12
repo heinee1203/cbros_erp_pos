@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import { Animated, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 
 type ToastVariant = 'success' | 'error' | 'info';
@@ -20,6 +21,7 @@ const variantColors: Record<ToastVariant, { bg: string; text: string }> = {
 };
 
 export function Toast({ message, variant, visible, onDismiss }: ToastProps) {
+  const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(-100)).current;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -65,7 +67,11 @@ export function Toast({ message, variant, visible, onDismiss }: ToastProps) {
       pointerEvents={visible ? 'auto' : 'none'}
       style={[
         styles.container,
-        { backgroundColor: vc.bg, transform: [{ translateY }] },
+        {
+          top: insets.top + spacing.sm,
+          backgroundColor: vc.bg,
+          transform: [{ translateY }],
+        },
       ]}
     >
       <Text style={[styles.message, { color: vc.text }]}>{message}</Text>
@@ -76,7 +82,6 @@ export function Toast({ message, variant, visible, onDismiss }: ToastProps) {
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: 50,
     left: layout.screenPadding,
     right: layout.screenPadding,
     borderRadius: radius.md,

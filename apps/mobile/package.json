@@ -1,0 +1,42 @@
+{
+  "name": "@apex/mobile",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "start": "react-native start",
+    "clean": "cd android && ./gradlew clean && cd .."
+  },
+  "dependencies": {
+    "@nozbe/watermelondb": "^0.27.0",
+    "@react-native-community/netinfo": "^11.0.0",
+    "@react-navigation/bottom-tabs": "^7.15.5",
+    "@react-navigation/native": "^7.1.33",
+    "@react-navigation/stack": "^7.8.4",
+    "@tanstack/react-query": "^5.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-native": "^0.79.0",
+    "react-native-ble-plx": "^3.0.0",
+    "react-native-gesture-handler": "^2.30.0",
+    "react-native-mmkv": "^3.0.0",
+    "react-native-safe-area-context": "^5.7.0",
+    "react-native-screens": "^4.18.0",
+    "react-native-svg": "^15.0.0",
+    "react-native-vision-camera": "^4.0.0",
+    "uuid": "^11.0.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-decorators": "^7.0.0",
+    "@react-native-community/cli": "^20.1.2",
+    "@react-native-community/cli-platform-android": "^20.1.2",
+    "@react-native/babel-preset": "^0.79.0",
+    "@react-native/metro-config": "^0.84.1",
+    "@react-native/typescript-config": "^0.79.0",
+    "@types/uuid": "^10.0.0",
+    "babel-plugin-module-resolver": "^5.0.0",
+    "typescript": "^5.0.0"
+  }
+}

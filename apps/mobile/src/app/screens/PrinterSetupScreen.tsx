@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
+  Pressable,
   FlatList,
   StyleSheet,
   ActivityIndicator,
@@ -74,9 +74,9 @@ export default function PrinterSetupScreen() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <Pressable onPress={() => navigation.goBack()} android_ripple={{ color: colors.accent.glow }} hitSlop={8}>
           <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
+        </Pressable>
         <Text style={styles.headerTitle}>Printer Setup</Text>
         <View style={{ width: 60 }} />
       </View>
@@ -155,7 +155,7 @@ export default function PrinterSetupScreen() {
             <Card style={styles.card}>
               <Text style={styles.sectionLabel}>AVAILABLE PRINTERS</Text>
               <Button
-                title="Scan for Printers"
+                title={scanning ? `Scanning... ${devices.length} device(s) found` : 'Scan for Printers'}
                 onPress={handleDiscover}
                 variant="secondary"
                 disabled={scanning}
@@ -170,10 +170,11 @@ export default function PrinterSetupScreen() {
           </>
         }
         renderItem={({ item }) => (
-          <TouchableOpacity
+          <Pressable
             style={styles.deviceRow}
             onPress={() => handleConnect(item)}
             disabled={connecting === item.id}
+            android_ripple={{ color: colors.accent.glow }}
           >
             <View>
               <Text style={styles.deviceName}>{item.name}</Text>
@@ -184,7 +185,7 @@ export default function PrinterSetupScreen() {
             ) : (
               <Text style={styles.connectText}>Connect</Text>
             )}
-          </TouchableOpacity>
+          </Pressable>
         )}
       />
     </SafeAreaView>

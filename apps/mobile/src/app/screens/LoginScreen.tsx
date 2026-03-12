@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -18,6 +19,7 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const passwordRef = useRef<TextInput>(null);
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -51,17 +53,22 @@ export default function LoginScreen() {
         <Input
           value={email}
           onChangeText={setEmail}
-          placeholder="admin@apex.com"
+          placeholder="your.email@company.com"
           keyboardType="email-address"
+          returnKeyType="next"
+          onSubmitEditing={() => passwordRef.current?.focus()}
           style={styles.inputSpacing}
         />
 
         <Text style={styles.label}>Password</Text>
         <Input
+          ref={passwordRef}
           value={password}
           onChangeText={setPassword}
           placeholder="Enter password"
           secureTextEntry
+          returnKeyType="go"
+          onSubmitEditing={handleLogin}
           style={styles.inputSpacing}
         />
 

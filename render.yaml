@@ -1,16 +1,32 @@
+# ═══════════════════════════════════════════════
+# APEX POS — Production Render Blueprint
+# Region: Singapore (Asia-Pacific)
+# Branch: main (manual deploy only)
+# ═══════════════════════════════════════════════
+
 databases:
   - name: apex-db
-    plan: starter
+    region: singapore
+    plan: pro-4gb          # 1 CPU, 4 GB RAM, 100 connections
     databaseName: apex_prod
     user: apex
+    postgresMajorVersion: "16"
+    highAvailability:
+      enabled: true
+    ipAllowList: []        # Allow all (Render internal networking handles isolation)
 
 services:
+  # ── Fastify API ──
   - name: apex-api
-    plan: starter
+    region: singapore
+    plan: standard         # 1 CPU, 2 GB RAM
     type: web
     runtime: node
+    branch: main
+    autoDeploy: false      # Manual deploy only — never auto-deploy to production
     buildCommand: pnpm install --frozen-lockfile && pnpm build
     startCommand: node apps/api/dist/server.js
+    healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -21,4 +37,21 @@ services:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 3000
+        value: "3000"
+
+  # ── Next.js Frontend ──
+  - name: apex-web
+    region: singapore
+    plan: standard         # 1 CPU, 2 GB RAM
+    type: web
+    runtime: node
+    branch: main
+    autoDeploy: false      # Manual deploy only
+    buildCommand: pnpm install --frozen-lockfile && pnpm web:build
+    startCommand: npx next start apps/web --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false        # Set manually in Render Dashboard after API deploys
+      - key: NODE_ENV
+        value: production

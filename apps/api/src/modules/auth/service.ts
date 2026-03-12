@@ -1,6 +1,6 @@
 import { db } from "@apex/database";
 import { organizations, users, locations } from "@apex/database/schema";
-import { eq } from "drizzle-orm";
+import { eq, and, inArray, isNotNull } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
 const SALT_ROUNDS = 12;
@@ -55,6 +55,31 @@ export async function createOrganizationWithAdmin(input: {
     .returning();
 
   return { org, user, defaultLocation };
+}
+
+/**
+ * Verify a 4-digit PIN for a user with ADMIN or MANAGER role.
+ * The requesting user provides the PIN — we check all admins/managers
+ * in the same org for a matching PIN.
+ */
+export async function verifyPin(orgId: string, pin: string): Promise<boolean> {
+  const managers = await db
+    .select({ pinHash: users.pinHash })
+    .from(users)
+    .where(
+      and(
+        eq(users.orgId, orgId),
+        inArray(users.role, ["ADMIN", "MANAGER"]),
+        isNotNull(users.pinHash),
+      ),
+    );
+
+  for (const mgr of managers) {
+    if (mgr.pinHash && (await bcrypt.compare(pin, mgr.pinHash))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function authenticateUser(email: string, password: string) {

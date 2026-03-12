@@ -1,0 +1,54 @@
+# ═══════════════════════════════════════════════
+# APEX POS — UAT Sandbox Render Blueprint
+# Region: Singapore (Asia-Pacific)
+# Branch: staging (auto-deploy on push)
+# ═══════════════════════════════════════════════
+
+databases:
+  - name: apex-uat-db
+    region: singapore
+    plan: basic-1gb        # 0.5 CPU, 1 GB RAM, 100 connections
+    databaseName: apex_uat
+    user: apex
+    postgresMajorVersion: "16"
+
+services:
+  # ── Fastify API (UAT) ──
+  - name: apex-uat-api
+    region: singapore
+    plan: starter          # 0.5 CPU, 512 MB RAM
+    type: web
+    runtime: node
+    branch: staging
+    autoDeploy: true       # Auto-deploy every push to staging
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: node apps/api/dist/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: apex-uat-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+
+  # ── Next.js Frontend (UAT) ──
+  - name: apex-uat-web
+    region: singapore
+    plan: starter          # 0.5 CPU, 512 MB RAM
+    type: web
+    runtime: node
+    branch: staging
+    autoDeploy: true       # Auto-deploy every push to staging
+    buildCommand: pnpm install --frozen-lockfile && pnpm web:build
+    startCommand: npx next start apps/web --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false        # Set manually in Render Dashboard after UAT API deploys
+      - key: NODE_ENV
+        value: production

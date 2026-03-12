@@ -157,20 +157,34 @@ async function seed() {
   console.log("  Creating locations...");
   const [warehouse] = await db
     .insert(schema.locations)
-    .values({ orgId: org.id, name: "Central Warehouse", type: "WAREHOUSE", address: "123 Industrial Ave" })
+    .values({ orgId: org.id, name: "Central Warehouse", code: "WAREHOUSE", type: "WAREHOUSE", address: "123 Industrial Ave" })
     .returning();
 
   const [store1] = await db
     .insert(schema.locations)
-    .values({ orgId: org.id, name: "Downtown Retail Store", type: "RETAIL_STORE", address: "456 Main St" })
+    .values({ orgId: org.id, name: "Downtown Retail Store", code: "DOWNTOWN", type: "RETAIL_STORE", address: "456 Main St" })
     .returning();
 
   const [store2] = await db
     .insert(schema.locations)
-    .values({ orgId: org.id, name: "Uptown Retail Store", type: "RETAIL_STORE", address: "789 Commerce Blvd" })
+    .values({ orgId: org.id, name: "Uptown Retail Store", code: "UPTOWN", type: "RETAIL_STORE", address: "789 Commerce Blvd" })
+    .returning();
+
+  // TRANSIT_BUFFER — system location for in-transit stock
+  const [transitBuffer] = await db
+    .insert(schema.locations)
+    .values({
+      orgId: org.id,
+      name: "In Transit Buffer",
+      code: "TRANSIT",
+      type: "TRANSIT_BUFFER",
+      isSystem: true,
+      isActive: true,
+    })
     .returning();
 
   const allLocations = [warehouse, store1, store2];
+  // Note: TRANSIT_BUFFER is NOT in allLocations — no inventory seeded for it
 
   // ── 3. Create Admin User ──
   console.log("  Creating admin user...");
@@ -248,11 +262,13 @@ async function seed() {
       for (const loc of allLocations) {
         const isWarehouse = loc.id === warehouse.id;
         inventoryBatch.push({
+          orgId: org.id,
           productId: product.id,
           locationId: loc.id,
           stockLevel: isWarehouse
             ? Math.floor(Math.random() * 500) + 50
             : Math.floor(Math.random() * 50) + 5,
+          reservedLevel: 0,
           reorderPoint: isWarehouse ? 20 : 5,
           leadTimeDays: isWarehouse ? 14 : 3,
         });
@@ -274,6 +290,7 @@ async function seed() {
   console.log(`   Warehouse: ${warehouse.name} (${warehouse.id})`);
   console.log(`   Store 1: ${store1.name} (${store1.id})`);
   console.log(`   Store 2: ${store2.name} (${store2.id})`);
+  console.log(`   Transit Buffer: ${transitBuffer.name} (${transitBuffer.id})`);
   console.log(`   Admin: admin@apex.com / admin12345`);
   console.log(`   Products: ${TOTAL_PRODUCTS.toLocaleString()}`);
   console.log(`   Inventory rows: ${(TOTAL_PRODUCTS * 3).toLocaleString()}`);

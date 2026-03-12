@@ -9,23 +9,31 @@ import {
   RefreshControl,
   Alert,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useCatalogSearch, type CatalogItem } from '@/hooks/use-catalog-search';
 import ProductListItem from '@/components/ProductListItem';
-import SyncStatusBar from '@/components/SyncStatusBar';
 import { FavoritesGrid } from '@/components/FavoritesGrid';
 import { useScanner } from '@/hardware/scanner/context';
 import { useCartStore, selectLineCount } from '@/stores/cart-store';
 import { runFullSync } from '@/sync/sync-manager';
 import { addFavorite, isFavorite } from '@/storage/favorites';
-import { Chip, Toast } from '@/components/ui';
+import { Button, Chip, Toast } from '@/components/ui';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import type { POSStackParamList } from '@/app/MainTabs';
 
 const CATEGORIES = ['TIRES', 'LUBRICANTS', 'HARD_PARTS', 'ACCESSORIES', 'LABOR_SERVICES'];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  TIRES: 'Tires',
+  LUBRICANTS: 'Lubricants',
+  HARD_PARTS: 'Hard Parts',
+  ACCESSORIES: 'Accessories',
+  LABOR_SERVICES: 'Services',
+};
 
 type Nav = StackNavigationProp<POSStackParamList, 'Catalog'>;
 
@@ -72,6 +80,7 @@ export default function CatalogScreen() {
           mnemonicSku: product.mnemonicSku,
           barcode: product.barcode,
           unitPrice: product.unitPrice,
+          availableStock: product.stockLevel - product.reservedLevel,
         });
         showToast(`Added: ${product.name}`);
       } else {
@@ -107,6 +116,7 @@ export default function CatalogScreen() {
       mnemonicSku: item.mnemonicSku,
       barcode: item.barcode,
       unitPrice: item.unitPrice,
+      availableStock: item.stockLevel - item.reservedLevel,
     });
     showToast(`Added: ${item.name}`);
   }, [addLine, showToast]);
@@ -131,17 +141,12 @@ export default function CatalogScreen() {
         mnemonicSku: item.mnemonicSku,
         barcode: item.barcode,
         unitPrice: item.unitPrice,
+        availableStock: item.stockLevel - item.reservedLevel,
       });
     } else {
-      // Fallback if item not in current results (e.g., filtered by category)
-      addLine({
-        serverId: product.id,
-        name: product.name,
-        sku: '',
-        mnemonicSku: '',
-        barcode: null,
-        unitPrice: product.retailPrice,
-      });
+      // Product not in current results (e.g., filtered by category) — don't add corrupt line
+      Alert.alert('Product Unavailable', 'Switch to "All" category to add this item.');
+      return;
     }
     showToast(`Added: ${product.name}`);
   }, [results, addLine, showToast]);
@@ -165,6 +170,7 @@ export default function CatalogScreen() {
           mnemonicSku: product.mnemonicSku,
           barcode: product.barcode,
           unitPrice: product.unitPrice,
+          availableStock: product.stockLevel - product.reservedLevel,
         });
         showToast(`Added: ${product.name}`);
       } else {
@@ -197,9 +203,6 @@ export default function CatalogScreen() {
           </Pressable>
         )}
       </View>
-
-      {/* Sync status bar */}
-      <SyncStatusBar />
 
       {/* Toast */}
       <Toast
@@ -255,7 +258,7 @@ export default function CatalogScreen() {
         {CATEGORIES.map(cat => (
           <Chip
             key={cat}
-            label={cat.replace('_', ' ')}
+            label={CATEGORY_LABELS[cat] ?? cat}
             active={category === cat}
             onPress={() => setCategory(category === cat ? null : cat)}
           />
@@ -280,12 +283,37 @@ export default function CatalogScreen() {
           />
         }
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>
-              {isSearching ? 'Searching...' :
-               query ? 'No products found' : 'Pull to sync catalog'}
-            </Text>
-          </View>
+          isSearching ? (
+            <View style={styles.empty}>
+              <ActivityIndicator size="large" color={colors.accent.primary} />
+            </View>
+          ) : query ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyText}>No products match &apos;{query}&apos;</Text>
+              <Button
+                title="Clear Search"
+                variant="secondary"
+                onPress={() => setQuery('')}
+                style={{ marginTop: spacing.md }}
+              />
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyIcon}>{'\uD83D\uDCE6'}</Text>
+              <Text style={styles.emptyTitle}>Catalog Not Loaded</Text>
+              <Text style={styles.emptySubtitle}>
+                Sync your product catalog to start ringing up sales
+              </Text>
+              <Button
+                title="Sync Now"
+                variant="primary"
+                fullWidth
+                onPress={handleRefresh}
+                loading={refreshing}
+                style={{ marginTop: spacing.lg, maxWidth: 280 }}
+              />
+            </View>
+          )
         }
         initialNumToRender={30}
         maxToRenderPerBatch={20}
@@ -395,6 +423,28 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     ...textStyles.body,
-    color: colors.text.muted,
+    color: colors.text.secondary,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: spacing['4xl'],
+    paddingHorizontal: spacing['2xl'],
+  },
+  emptyIcon: {
+    fontSize: 48,
+    marginBottom: spacing.lg,
+  },
+  emptyTitle: {
+    ...textStyles.heading,
+    color: colors.text.primary,
+    marginBottom: spacing.sm,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    ...textStyles.body,
+    color: colors.text.secondary,
+    textAlign: 'center',
   },
 });

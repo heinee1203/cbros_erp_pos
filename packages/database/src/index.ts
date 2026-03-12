@@ -20,3 +20,11 @@ export function createMigrationClient() {
 
 export { schema };
 export type Database = typeof db;
+
+/**
+ * Transaction-compatible DB client type.
+ * Drizzle's PgTransaction generic is complex; this alias ensures
+ * helper functions work with both `db` and `tx` inside db.transaction().
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type DbOrTx = any;

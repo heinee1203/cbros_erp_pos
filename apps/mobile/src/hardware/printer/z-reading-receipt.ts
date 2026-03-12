@@ -1,0 +1,151 @@
+import { ESCPOSBuilder, fmtPHP } from './escpos-builder';
+import type { ZReadingData } from '@/hooks/use-shift';
+
+/**
+ * Build an ESC/POS Z-reading or X-reading receipt.
+ * mode: 'close' = Z-READING / END OF DAY REPORT
+ * mode: 'view'  = X-READING / MID-DAY SUMMARY
+ */
+export function buildZReadingReceipt(
+  data: ZReadingData,
+  mode: 'view' | 'close',
+  paperWidth: '58mm' | '80mm' = '80mm',
+): Uint8Array {
+  const b = new ESCPOSBuilder(paperWidth);
+
+  const title = mode === 'close'
+    ? 'Z-READING / END OF DAY'
+    : 'X-READING / MID-DAY SUMMARY';
+
+  // Header
+  b.initialize()
+    .alignCenter()
+    .bold(true)
+    .fontSize(2)
+    .text(title)
+    .fontSize(1)
+    .bold(false)
+    .newline()
+    .text(data.locationName)
+    .text(data.cashierName)
+    .text(formatDateTime(data.openedAt))
+    .alignLeft()
+    .separator('=');
+
+  // 1. Sales Summary
+  b.bold(true).text('SALES SUMMARY').bold(false)
+    .separator('-')
+    .columns('Gross Sales', fmtPHP(parseFloat(data.salesSummary.grossSales)))
+    .columns('Refunds', `-${fmtPHP(parseFloat(data.salesSummary.refundsTotal))}`)
+    .separator('-')
+    .bold(true)
+    .columns('NET SALES', fmtPHP(parseFloat(data.salesSummary.netSales)))
+    .bold(false)
+    .separator('-')
+    .columns('Transactions', String(data.salesSummary.transactionCount))
+    .columns('Avg Ticket', fmtPHP(parseFloat(data.salesSummary.avgTicket)))
+    .columns('Voids', String(data.salesSummary.voidCount))
+    .separator('=');
+
+  // 2. Payment Breakdown
+  b.bold(true).text('PAYMENT BREAKDOWN').bold(false)
+    .separator('-');
+  if (data.paymentBreakdown.length === 0) {
+    b.text('  No payments');
+  } else {
+    for (const p of data.paymentBreakdown) {
+      b.columns(`${formatMethod(p.method)} (${p.count})`, fmtPHP(parseFloat(p.total)));
+    }
+  }
+  b.separator('=');
+
+  // 3. Cash Reconciliation
+  b.bold(true).text('CASH RECONCILIATION').bold(false)
+    .separator('-')
+    .columns('Opening Float', fmtPHP(parseFloat(data.openingFloat)))
+    .columns('Expected Cash', fmtPHP(parseFloat(data.cashReconciliation.expectedCash)));
+
+  if (data.cashReconciliation.actualCash !== null) {
+    b.columns('Actual Cash', fmtPHP(parseFloat(data.cashReconciliation.actualCash)));
+  }
+  if (data.cashReconciliation.variance !== null) {
+    const v = parseFloat(data.cashReconciliation.variance);
+    b.columns('Variance', `${v >= 0 ? '+' : ''}${fmtPHP(v)}`);
+  }
+  b.separator('=');
+
+  // 4. Top Items
+  b.bold(true).text('TOP ITEMS').bold(false)
+    .separator('-');
+  if (data.topItems.length === 0) {
+    b.text('  No items sold');
+  } else {
+    for (let i = 0; i < data.topItems.length; i++) {
+      const item = data.topItems[i];
+      b.text(`${i + 1}. ${item.productName}`)
+        .columns(`   ${item.mnemonicSku} x${item.unitsSold}`, fmtPHP(parseFloat(item.totalRevenue)));
+    }
+  }
+  b.separator('=');
+
+  // 5. Accountability
+  b.bold(true).text('ACCOUNTABILITY').bold(false)
+    .separator('-');
+
+  b.text(`Voids (${data.accountability.voids.length})`);
+  if (data.accountability.voids.length === 0) {
+    b.text('  None');
+  } else {
+    for (const v of data.accountability.voids) {
+      b.columns(`  ${v.saleNo}`, fmtPHP(parseFloat(v.amount)));
+    }
+  }
+
+  b.newline()
+    .text(`Refunds (${data.accountability.refunds.length})`);
+  if (data.accountability.refunds.length === 0) {
+    b.text('  None');
+  } else {
+    for (const r of data.accountability.refunds) {
+      b.columns(`  ${r.saleNo}`, fmtPHP(parseFloat(r.amount)));
+    }
+  }
+
+  // Footer
+  b.separator('=')
+    .alignCenter()
+    .text(mode === 'close' ? '*** END OF Z-READING ***' : '*** END OF X-READING ***')
+    .text(formatDateTime(new Date().toISOString()))
+    .newline()
+    .cut();
+
+  return b.build();
+}
+
+function formatDateTime(dateStr: string): string {
+  const d = new Date(dateStr);
+  return d.toLocaleString('en-PH', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatMethod(method: string): string {
+  const map: Record<string, string> = {
+    CASH: 'Cash',
+    CREDIT_CARD: 'Credit Card',
+    DEBIT_CARD: 'Debit Card',
+    QRPH: 'QRPH',
+    GCASH: 'GCash',
+    MAYA: 'Maya',
+    BANK_TRANSFER: 'Bank Xfer',
+    ACCOUNT: 'Charge',
+    EFT: 'EFT',
+    CARD: 'Card',
+    OTHER: 'Other',
+  };
+  return map[method] || method;
+}

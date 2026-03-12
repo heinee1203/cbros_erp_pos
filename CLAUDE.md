@@ -54,3 +54,36 @@ pnpm monorepo with 3 packages:
 - `GET /health`
 - `POST /auth/login`
 - `POST /auth/register`
+
+
+# Screenshot & Image Rules
+
+## CRITICAL: Avoid Image Dimension Errors
+
+When testing or interacting with the Android emulator, UI, or any visual interface:
+
+1. **Do NOT take screenshots unless explicitly asked.** Always prefer text-based validation:
+   - Read logs, DOM elements, or terminal output instead of capturing screenshots
+   - Use `adb shell dumpsys activity` or `adb shell uiautomator dump` to inspect UI state
+   - Parse XML/HTML output to verify element presence and content
+
+2. **If a screenshot is absolutely necessary:**
+   - Capture ONLY the relevant portion, not the full screen
+   - Resize any captured image to a maximum of 1500px on the longest side before viewing
+   - Use: `adb exec-out screencap -p | convert - -resize 1500x1500\> resized_screenshot.png`
+   - Never accumulate more than 2 screenshots in a single session
+
+3. **Between test flows:**
+   - Do not carry over screenshots from previous test steps
+   - Summarize visual results in text rather than re-viewing images
+   - If context is getting heavy with images, notify the user to start a fresh session
+
+4. **For UI testing validation, prefer these methods (in order):**
+   - `adb shell uiautomator dump /dev/tty` → parse XML for element verification
+   - `adb logcat -d -s TAG` → check app logs for success/error states
+   - `adb shell am broadcast` → trigger and verify app state via intents
+   - Screenshot as absolute last resort, resized before viewing
+
+## How to Apply
+
+## Paste this into your project's `CLAUDE.md` file so these rules are automatically loaded every session. Or paste it at the start of any Claude Code session as your first message.

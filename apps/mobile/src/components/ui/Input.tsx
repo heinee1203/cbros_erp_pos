@@ -1,10 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, forwardRef } from 'react';
 import {
   TextInput,
   View,
   StyleSheet,
   ViewStyle,
   KeyboardTypeOptions,
+  ReturnKeyTypeOptions,
 } from 'react-native';
 import { colors, textStyles, spacing, radius, touchTarget } from '@/theme';
 
@@ -19,9 +20,11 @@ interface InputProps {
   autoFocus?: boolean;
   style?: ViewStyle;
   multiline?: boolean;
+  returnKeyType?: ReturnKeyTypeOptions;
+  onSubmitEditing?: () => void;
 }
 
-export function Input({
+export const Input = forwardRef<TextInput, InputProps>(function Input({
   value,
   onChangeText,
   placeholder,
@@ -32,7 +35,9 @@ export function Input({
   autoFocus,
   style,
   multiline,
-}: InputProps) {
+  returnKeyType,
+  onSubmitEditing,
+}, ref) {
   const [focused, setFocused] = useState(false);
 
   const handleFocus = useCallback(() => setFocused(true), []);
@@ -48,6 +53,7 @@ export function Input({
     >
       {leftIcon && <View style={styles.iconLeft}>{leftIcon}</View>}
       <TextInput
+        ref={ref}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -56,6 +62,8 @@ export function Input({
         keyboardType={keyboardType}
         autoFocus={autoFocus}
         multiline={multiline}
+        returnKeyType={returnKeyType}
+        onSubmitEditing={onSubmitEditing}
         onFocus={handleFocus}
         onBlur={handleBlur}
         style={[
@@ -70,7 +78,7 @@ export function Input({
       {rightIcon && <View style={styles.iconRight}>{rightIcon}</View>}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

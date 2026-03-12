@@ -62,8 +62,17 @@ export const colors = {
     offlineText: '#FFB300',
     reconnectBg: 'rgba(0,184,255,0.15)',
     reconnectText: '#00B8FF',
-    staleBg: 'rgba(90,90,110,0.12)',
-    staleText: '#5A5A6E',
+    staleBg: 'rgba(255,179,0,0.10)',
+    staleText: '#B0A070',
+  },
+
+  // Shift banner
+  shift: {
+    bannerBg: '#3B2800',
+    bannerBorder: '#5C4000',
+    bannerText: '#FFB020',
+    bannerBtnBg: '#FFB020',
+    bannerBtnText: '#1A1000',
   },
 
   // Toast notifications

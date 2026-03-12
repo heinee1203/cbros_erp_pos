@@ -1,68 +1,53 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
   FlatList,
   Pressable,
-  TextInput,
   StyleSheet,
   Alert,
   SafeAreaView,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
 import {
   useCartStore,
   selectSubtotal,
   selectCartDiscount,
   selectGrandTotal,
-  selectChange,
   selectLineCount,
   type CartLine,
 } from '@/stores/cart-store';
-import { useCheckout } from '@/hooks/use-checkout';
-import { usePrinter } from '@/hardware/printer/context';
-import type { ReceiptData } from '@/hardware/printer/types';
-import { useAuth } from '@/hooks/use-auth';
 import { CustomerLookup } from '@/components/CustomerLookup';
 import type { Customer, Vehicle } from '@/hooks/use-customer-search';
 import { useLayout } from '@/hooks/use-layout';
-import { colors, textStyles, spacing, radius, layout, fonts, fontSize } from '@/theme';
-import { Button, Card, Chip } from '@/components/ui';
+import { colors, textStyles, spacing, radius, layout, fonts, fontSize, touchTarget } from '@/theme';
+import { Button, Card } from '@/components/ui';
 
 function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-const PAYMENT_METHODS = [
-  { key: 'CASH' as const, label: 'Cash' },
-  { key: 'CARD' as const, label: 'Card' },
-  { key: 'QRPH' as const, label: 'QRPH' },
-  { key: 'GCASH' as const, label: 'GCash' },
-  { key: 'MAYA' as const, label: 'Maya' },
-];
+interface CartScreenProps {
+  onProceedToPayment?: () => void; // tablet: callback to swap panel to PaymentScreen
+}
 
-export default function CartScreen() {
+export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const navigation = useNavigation();
   const { isTablet, screenPadding } = useLayout();
-  const { user, locations, locationId } = useAuth();
-  const printer = usePrinter();
 
   const lines = useCartStore(s => s.lines);
-  const paymentMethod = useCartStore(s => s.paymentMethod);
-  const cashTendered = useCartStore(s => s.cashTendered);
   const customerId = useCartStore(s => s.customerId);
   const customerName = useCartStore(s => s.customerName);
   const vehicleId = useCartStore(s => s.vehicleId);
   const updateQuantity = useCartStore(s => s.updateQuantity);
   const removeLine = useCartStore(s => s.removeLine);
-  const setPaymentMethod = useCartStore(s => s.setPaymentMethod);
-  const setCashTendered = useCartStore(s => s.setCashTendered);
+  const setAllowNegativeStock = useCartStore(s => s.setAllowNegativeStock);
   const clear = useCartStore(s => s.clear);
 
   const subtotal = useCartStore(selectSubtotal);
   const discount = useCartStore(selectCartDiscount);
   const grandTotal = useCartStore(selectGrandTotal);
-  const change = useCartStore(selectChange);
   const lineCount = useCartStore(selectLineCount);
 
   const attachCustomer = useCartStore(s => s.attachCustomer);
@@ -74,171 +59,142 @@ export default function CartScreen() {
     attachCustomer(customer.id, customer.name, vehicle?.id);
   }, [attachCustomer]);
 
-  const { status, error, result, checkout, reset } = useCheckout();
-
-  const handleCheckout = useCallback(async () => {
-    const res = await checkout();
-    if (res) {
-      // Print receipt (non-blocking — failure doesn't affect sale)
-      const location = locations.find(l => l.id === locationId);
-      const receiptData: ReceiptData = {
-        header: {
-          storeName: location?.name || 'APEX AUTO PARTS',
-          address: location?.address || undefined,
-        },
-        transaction: {
-          receiptNumber: res.saleNo,
-          date: new Date().toLocaleString(),
-          cashier: user?.fullName || 'Cashier',
-          lines: lines.map(l => ({
-            name: l.name,
-            qty: l.quantity,
-            unitPrice: l.unitPrice,
-            total: l.lineTotal,
-          })),
-          subtotal,
-          discount,
-          grandTotal,
-          paymentMethod,
-          cashTendered: paymentMethod === 'CASH' ? cashTendered : undefined,
-          change: paymentMethod === 'CASH' ? change : undefined,
-        },
-        footer: { message: 'Thank you for your purchase!' },
-      };
-
-      printer.printReceipt(receiptData).catch(() => {
-        // Print failure is non-blocking
-        Alert.alert('Print Notice', 'Receipt could not be printed. You can reprint from Transactions.');
-      });
+  const proceedToPayment = useCallback(() => {
+    if (onProceedToPayment) {
+      onProceedToPayment();
+    } else {
+      navigation.navigate('Payment' as never);
     }
-  }, [checkout, lines, subtotal, discount, grandTotal, paymentMethod, cashTendered, change, printer, user, locations, locationId]);
+  }, [onProceedToPayment, navigation]);
 
-  const handleNewSale = useCallback(() => {
-    clear();
-    reset();
-    if (!isTablet) navigation.goBack();
-  }, [clear, reset, navigation, isTablet]);
-
-  const handlePrintReceipt = useCallback(() => {
-    if (!result) return;
-    const location = locations.find(l => l.id === locationId);
-    const receiptData: ReceiptData = {
-      header: {
-        storeName: location?.name || 'APEX AUTO PARTS',
-        address: location?.address || undefined,
-      },
-      transaction: {
-        receiptNumber: result.saleNo,
-        date: new Date().toLocaleString(),
-        cashier: user?.fullName || 'Cashier',
-        lines: lines.map(l => ({
-          name: l.name,
-          qty: l.quantity,
-          unitPrice: l.unitPrice,
-          total: l.lineTotal,
-        })),
-        subtotal,
-        discount,
-        grandTotal,
-        paymentMethod,
-        cashTendered: paymentMethod === 'CASH' ? cashTendered : undefined,
-        change: paymentMethod === 'CASH' ? change : undefined,
-      },
-      footer: { message: 'Thank you for your purchase!' },
-    };
-
-    printer.printReceipt(receiptData).catch(() => {
-      Alert.alert('Print Notice', 'Receipt could not be printed.');
-    });
-  }, [result, lines, subtotal, discount, grandTotal, paymentMethod, cashTendered, change, printer, user, locations, locationId]);
-
-  // ── Success state ──
-  if (status === 'success' && result) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.successContainer}>
-          <Text style={styles.successIcon}>{'\u2713'}</Text>
-          <Text style={styles.successTitle}>Sale Complete</Text>
-          <Text style={styles.successReceipt}>{result.saleNo}</Text>
-          <Text style={styles.successTotal}>{fmtPHP(parseFloat(result.grandTotal))}</Text>
-          <View style={styles.successActions}>
-            <Button
-              title="Print Receipt"
-              variant="secondary"
-              fullWidth
-              onPress={handlePrintReceipt}
-              style={styles.successButton}
-            />
-            <Button
-              title="New Sale"
-              variant="primary"
-              fullWidth
-              onPress={handleNewSale}
-              style={styles.successButton}
-            />
-          </View>
-        </View>
-      </SafeAreaView>
+  const handleProceedToPayment = useCallback(() => {
+    const lowStockLines = lines.filter(
+      l => l.availableStock !== null && l.availableStock < l.quantity,
     );
-  }
 
-  // ── Pending offline state ──
-  if (status === 'pending_offline') {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.successContainer}>
-          <Text style={styles.pendingIcon}>{'\u23F3'}</Text>
-          <Text style={styles.pendingTitle}>Sale Pending</Text>
-          <Text style={styles.pendingText}>
-            Sale saved locally. It will be completed when the device is back online.
-          </Text>
-          <Button
-            title="New Sale"
-            variant="primary"
-            fullWidth
-            onPress={handleNewSale}
-            style={styles.successButton}
-          />
-        </View>
-      </SafeAreaView>
-    );
-  }
+    if (lowStockLines.length > 0) {
+      const itemList = lowStockLines
+        .map(l => {
+          const avail = l.availableStock ?? 0;
+          const deficit = l.quantity - avail;
+          return avail <= 0
+            ? `• ${l.name} — OUT OF STOCK (qty ${l.quantity})`
+            : `• ${l.name} — need ${l.quantity}, only ${avail} avail (−${deficit})`;
+        })
+        .join('\n');
 
-  const renderLine = ({ item }: { item: CartLine }) => (
-    <Card style={styles.lineCard} padded={false}>
-      <View style={styles.lineContent}>
-        <View style={styles.lineInfo}>
-          <Text style={styles.lineName} numberOfLines={1}>{item.name}</Text>
-          <Text style={styles.lineSku}>{item.mnemonicSku}</Text>
-        </View>
-        <View style={styles.qtyControls}>
-          <Pressable
-            style={styles.qtyBtn}
-            onPress={() => updateQuantity(item.id, item.quantity - 1)}
-          >
-            <Text style={styles.qtyBtnText}>{'\u2212'}</Text>
-          </Pressable>
-          <Text style={styles.qtyText}>{item.quantity}</Text>
-          <Pressable
-            style={styles.qtyBtn}
-            onPress={() => updateQuantity(item.id, item.quantity + 1)}
-          >
-            <Text style={styles.qtyBtnText}>+</Text>
-          </Pressable>
-        </View>
-        <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
-      </View>
-    </Card>
+      Alert.alert(
+        'Insufficient Stock',
+        `The following items will go into negative inventory:\n\n${itemList}\n\nProceed anyway?`,
+        [
+          { text: 'Go Back', style: 'cancel' },
+          { text: 'Proceed', style: 'destructive', onPress: () => {
+            setAllowNegativeStock(true);
+            proceedToPayment();
+          }},
+        ],
+      );
+      return;
+    }
+
+    setAllowNegativeStock(false);
+    proceedToPayment();
+  }, [lines, proceedToPayment, setAllowNegativeStock]);
+
+  // Check for stock warnings
+  const hasStockWarnings = lines.some(
+    l => l.availableStock !== null && l.availableStock < l.quantity,
   );
 
-  const isProcessing = status === 'creating' || status === 'completing';
+  const swipeableRefs = useRef<Map<string, Swipeable>>(new Map());
+
+  const handleMinusPress = useCallback((item: CartLine) => {
+    if (item.quantity <= 1) {
+      Alert.alert('Remove Item', `Remove ${item.name} from cart?`, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => removeLine(item.id) },
+      ]);
+    } else {
+      updateQuantity(item.id, item.quantity - 1);
+    }
+  }, [updateQuantity, removeLine]);
+
+  const renderRightActions = useCallback((lineId: string, lineName: string) => (
+    <Pressable
+      style={styles.swipeDelete}
+      onPress={() => {
+        Alert.alert('Remove Item', `Remove ${lineName}?`, [
+          { text: 'Cancel', style: 'cancel', onPress: () => swipeableRefs.current.get(lineId)?.close() },
+          { text: 'Remove', style: 'destructive', onPress: () => removeLine(lineId) },
+        ]);
+      }}
+    >
+      <Text style={styles.swipeDeleteText}>Delete</Text>
+    </Pressable>
+  ), [removeLine]);
+
+  const renderLine = ({ item }: { item: CartLine }) => {
+    const isLowStock = item.availableStock !== null && item.availableStock < item.quantity;
+    const isOutOfStock = item.availableStock !== null && item.availableStock <= 0;
+    return (
+      <Swipeable
+        ref={(ref) => { if (ref) swipeableRefs.current.set(item.id, ref); }}
+        renderRightActions={() => renderRightActions(item.id, item.name)}
+        overshootRight={false}
+      >
+        <Card style={styles.lineCard} padded={false}>
+          <View style={styles.lineContent}>
+            <View style={styles.lineInfo}>
+              <Text style={styles.lineName} numberOfLines={1}>{item.name}</Text>
+              <View style={styles.lineMetaRow}>
+                <Text style={styles.lineSku}>{item.mnemonicSku}</Text>
+                {isOutOfStock && (
+                  <View style={styles.stockBadgeOut}>
+                    <Text style={styles.stockBadgeOutText}>OUT OF STOCK</Text>
+                  </View>
+                )}
+                {!isOutOfStock && isLowStock && (
+                  <View style={styles.stockBadgeLow}>
+                    <Text style={styles.stockBadgeLowText}>Only {item.availableStock} avail.</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} x {item.quantity}</Text>
+            </View>
+            <View style={styles.qtyControls}>
+              <Pressable
+                style={[styles.qtyBtn, item.quantity <= 1 && styles.qtyBtnDanger]}
+                onPress={() => handleMinusPress(item)}
+                hitSlop={8}
+              >
+                <Text style={styles.qtyBtnText}>{item.quantity <= 1 ? '\uD83D\uDDD1' : '\u2212'}</Text>
+              </Pressable>
+              <Text style={styles.qtyText}>{item.quantity}</Text>
+              <Pressable
+                style={styles.qtyBtn}
+                onPress={() => updateQuantity(item.id, item.quantity + 1)}
+                hitSlop={8}
+              >
+                <Text style={styles.qtyBtnText}>+</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
+          </View>
+        </Card>
+      </Swipeable>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       {/* Header — tablet: no Back button (persistent panel) */}
       <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
         {!isTablet ? (
-          <Pressable onPress={() => navigation.goBack()} hitSlop={8}>
+          <Pressable
+            onPress={() => navigation.goBack()}
+            hitSlop={8}
+            style={styles.headerTouchTarget}
+          >
             <Text style={styles.backText}>{'\u2190'} Back</Text>
           </Pressable>
         ) : (
@@ -257,6 +213,7 @@ export default function CartScreen() {
             }
           }}
           hitSlop={8}
+          style={styles.headerTouchTarget}
         >
           <Text style={styles.clearText}>Clear</Text>
         </Pressable>
@@ -303,7 +260,7 @@ export default function CartScreen() {
         ]}
       />
 
-      {/* Footer — totals + checkout */}
+      {/* Footer — totals + proceed to payment */}
       {lines.length > 0 && (
         <View style={styles.footer}>
           {/* Totals */}
@@ -322,48 +279,21 @@ export default function CartScreen() {
             <Text style={styles.grandTotalValue}>{fmtPHP(grandTotal)}</Text>
           </View>
 
-          {/* Payment method chips */}
-          <View style={styles.paymentRow}>
-            {PAYMENT_METHODS.map(pm => (
-              <Chip
-                key={pm.key}
-                label={pm.label}
-                active={paymentMethod === pm.key}
-                onPress={() => setPaymentMethod(pm.key)}
-                style={styles.paymentChip}
-              />
-            ))}
-          </View>
-
-          {/* Cash tendered (only for cash) */}
-          {paymentMethod === 'CASH' && (
-            <View style={styles.cashRow}>
-              <TextInput
-                style={styles.cashInput}
-                placeholder="Cash tendered"
-                placeholderTextColor={colors.text.muted}
-                keyboardType="numeric"
-                value={cashTendered > 0 ? String(cashTendered) : ''}
-                onChangeText={v => setCashTendered(parseFloat(v) || 0)}
-              />
-              {cashTendered >= grandTotal && (
-                <Text style={styles.changeText}>Change: {fmtPHP(change)}</Text>
-              )}
-            </View>
+          {/* Stock warnings summary */}
+          {hasStockWarnings && (
+            <Text style={styles.stockWarning}>
+              ⚠ Some items have insufficient stock
+            </Text>
           )}
 
-          {error && <Text style={styles.errorText}>{error}</Text>}
-
-          {/* Charge button */}
+          {/* Proceed to Payment button */}
           <Button
-            title={isProcessing ? 'Processing...' : `Charge ${fmtPHP(grandTotal)}`}
+            title={`Proceed to Payment  \u2192`}
             variant="primary"
             fullWidth
-            onPress={handleCheckout}
-            disabled={isProcessing || (paymentMethod === 'CASH' && cashTendered < grandTotal)}
-            loading={isProcessing}
-            style={styles.chargeButton}
-            textStyle={styles.chargeButtonText}
+            onPress={handleProceedToPayment}
+            style={styles.proceedButton}
+            textStyle={styles.proceedButtonText}
           />
         </View>
       )}
@@ -390,9 +320,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: layout.screenPadding,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.lg,
     borderBottomWidth: 1,
     borderBottomColor: colors.border.default,
+    minHeight: 56,
+  },
+  headerTouchTarget: {
+    minWidth: 52,
+    minHeight: 52,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   backText: {
     ...textStyles.bodyMedium,
@@ -478,8 +415,41 @@ const styles = StyleSheet.create({
     ...textStyles.bodyMedium,
     color: colors.text.primary,
   },
+  lineMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+    gap: spacing.sm,
+  },
   lineSku: {
     ...textStyles.monoSm,
+    color: colors.text.muted,
+  },
+  stockBadgeOut: {
+    backgroundColor: colors.status.dangerBg,
+    borderRadius: radius.xs,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+  },
+  stockBadgeOutText: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xs,
+    color: colors.status.danger,
+    letterSpacing: 0.5,
+  },
+  stockBadgeLow: {
+    backgroundColor: colors.status.warningBg,
+    borderRadius: radius.xs,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+  },
+  stockBadgeLowText: {
+    fontFamily: fonts.display.medium,
+    fontSize: fontSize.xs,
+    color: colors.status.warning,
+  },
+  lineUnitPrice: {
+    ...textStyles.captionSmall,
     color: colors.text.muted,
     marginTop: spacing.xs,
   },
@@ -489,12 +459,15 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.md,
   },
   qtyBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.sm,
+    minWidth: touchTarget.min,
+    minHeight: touchTarget.min,
+    borderRadius: radius.md,
     backgroundColor: colors.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  qtyBtnDanger: {
+    backgroundColor: colors.status.danger,
   },
   qtyBtnText: {
     fontFamily: fonts.display.bold,
@@ -564,106 +537,35 @@ const styles = StyleSheet.create({
     color: colors.accent.primary,
   },
 
-  // ── Payment chips ──
-  paymentRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-    flexWrap: 'wrap',
+  // ── Swipe to delete ──
+  swipeDelete: {
+    backgroundColor: colors.status.danger,
+    width: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderTopRightRadius: radius.md,
+    borderBottomRightRadius: radius.md,
   },
-  paymentChip: {
-    minWidth: 56,
-  },
-
-  // ── Cash tendered ──
-  cashRow: {
-    marginTop: spacing.sm,
-  },
-  cashInput: {
-    backgroundColor: colors.bg.input,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    ...textStyles.monoMd,
-    color: colors.text.primary,
-  },
-  changeText: {
+  swipeDeleteText: {
     ...textStyles.bodyMedium,
-    color: colors.status.success,
-    marginTop: spacing.xs,
+    color: colors.white,
   },
 
-  // ── Error ──
-  errorText: {
+  // ── Stock warning ──
+  stockWarning: {
     ...textStyles.caption,
-    color: colors.status.danger,
-    marginTop: spacing.sm,
+    color: colors.status.warning,
+    marginTop: spacing.md,
+    textAlign: 'center',
   },
 
-  // ── Charge button ──
-  chargeButton: {
+  // ── Proceed to Payment button ──
+  proceedButton: {
     marginTop: spacing.md,
     minHeight: 56,
   },
-  chargeButtonText: {
+  proceedButtonText: {
     fontFamily: fonts.display.bold,
     fontSize: fontSize['2xl'],
-  },
-
-  // ── Success state ──
-  successContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing['3xl'],
-    backgroundColor: colors.bg.primary,
-  },
-  successIcon: {
-    fontSize: 72,
-    color: colors.status.success,
-    marginBottom: spacing.lg,
-  },
-  successTitle: {
-    ...textStyles.heading,
-    color: colors.text.primary,
-    marginBottom: spacing.sm,
-  },
-  successReceipt: {
-    ...textStyles.monoMd,
-    color: colors.text.secondary,
-    marginBottom: spacing.xs,
-  },
-  successTotal: {
-    ...textStyles.monoLg,
-    color: colors.accent.primary,
-    fontSize: fontSize['6xl'],
-    marginBottom: spacing['3xl'],
-  },
-  successActions: {
-    width: '100%',
-    gap: spacing.sm,
-  },
-  successButton: {
-    marginBottom: 0,
-  },
-
-  // ── Pending offline state ──
-  pendingIcon: {
-    fontSize: 72,
-    color: colors.accent.primary,
-    marginBottom: spacing.lg,
-  },
-  pendingTitle: {
-    ...textStyles.heading,
-    color: colors.text.primary,
-    marginBottom: spacing.sm,
-  },
-  pendingText: {
-    ...textStyles.body,
-    color: colors.text.secondary,
-    textAlign: 'center',
-    marginBottom: spacing['3xl'],
   },
 });

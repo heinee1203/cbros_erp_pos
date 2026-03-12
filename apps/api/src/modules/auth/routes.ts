@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { registerSchema, loginSchema } from "@apex/types";
-import { createOrganizationWithAdmin, authenticateUser } from "./service";
+import { createOrganizationWithAdmin, authenticateUser, verifyPin } from "./service";
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/register", async (request, reply) => {
@@ -40,6 +40,17 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       }
       throw err;
     }
+  });
+
+  // Verify a manager/admin PIN (authenticated route — JWT required)
+  app.post("/verify-pin", async (request, reply) => {
+    const { pin } = request.body as { pin?: string };
+    if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+      return reply.status(400).send({ error: "PIN must be exactly 4 digits" });
+    }
+
+    const valid = await verifyPin(request.user.orgId, pin);
+    return reply.send({ valid });
   });
 
   app.post("/login", async (request, reply) => {

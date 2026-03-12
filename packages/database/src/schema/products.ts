@@ -37,6 +37,14 @@ export const products = pgTable(
     costPrice: numeric("cost_price", { precision: 12, scale: 2 })
       .notNull()
       .default("0.00"),
+    /** Last received cost price from PO receipt, updated on each accepted delivery */
+    currentCostPrice: numeric("current_cost_price", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    /** Deterministic 10-char KINGSCOBRA cipher of currentCostPrice in centavos */
+    mnemonicCostCode: varchar("mnemonic_cost_code", { length: 10 }),
+    /** EAN-13 barcode — 13 digits, nullable, unique per org when set */
+    barcode: varchar("barcode", { length: 13 }),
     familyId: uuid("family_id").references(() => productFamilies.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -56,5 +64,7 @@ export const products = pgTable(
     // Enforce exactly 10 characters for mnemonic SKU at DB level
     check("chk_mnemonic_sku_length", sql`char_length(mnemonic_sku) = 10`),
     index("idx_products_family_id").on(table.familyId),
+    index("idx_products_barcode").on(table.barcode),
+    check("chk_barcode_format", sql`barcode IS NULL OR barcode ~ '^\\d{13}$'`),
   ],
 );

@@ -19,6 +19,8 @@ export const suppliers = pgTable(
     contactEmail: varchar("contact_email", { length: 255 }),
     contactPhone: varchar("contact_phone", { length: 50 }),
     address: varchar("address", { length: 500 }),
+    /** Two-letter user-nominated mnemonic code for this supplier (e.g. "PP" for PhilParts) */
+    mnemonicCode: varchar("mnemonic_code", { length: 2 }),
     avgLeadTimeDays: integer("avg_lead_time_days").notNull().default(7),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

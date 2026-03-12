@@ -5,7 +5,7 @@ import { locations } from "@apex/database/schema";
 import { eq, and } from "drizzle-orm";
 import type { StoreContext } from "@apex/types";
 
-const SKIP_PATHS = ["/health", "/auth/login", "/auth/register"];
+const SKIP_PATHS = ["/health", "/auth/login", "/auth/register", "/auth/verify-pin", "/locations"];
 
 declare module "fastify" {
   interface FastifyRequest {

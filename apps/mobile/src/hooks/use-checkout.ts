@@ -4,6 +4,8 @@ import { apiFetch, ApiError } from '@/services/api-client';
 import { useCartStore, selectGrandTotal, selectSubtotal, selectCartDiscount } from '@/stores/cart-store';
 import { addPendingSale, removePendingSale, updatePendingSale, getPendingSales } from '@/storage/pending-sales';
 import { getActiveLocation } from '@/services/auth';
+import { storage } from '@/storage/mmkv';
+import { KEYS } from '@/storage/keys';
 
 export type CheckoutStatus =
   | 'idle'
@@ -28,7 +30,7 @@ export function useCheckout() {
   const cart = useCartStore();
   const grandTotal = useCartStore(selectGrandTotal);
 
-  const checkout = useCallback(async () => {
+  const checkout = useCallback(async (opts?: { allowNegativeStock?: boolean }) => {
     if (cart.lines.length === 0) {
       setError('Cart is empty');
       return null;
@@ -50,7 +52,8 @@ export function useCheckout() {
       locationId,
       customerId: cart.customerId ?? undefined,
       customerVehicleId: cart.vehicleId ?? undefined,
-      notes: cart.note || undefined,
+      receiptNumber: cart.receiptNumber?.trim() || undefined,
+      notes: cart.note?.trim() || undefined,
       lines: cart.lines.map(l => ({
         productId: l.productId,
         quantity: l.quantity,
@@ -62,10 +65,15 @@ export function useCheckout() {
 
     const completePayload = {
       idempotencyKey,
-      payments: [{
-        method: cart.paymentMethod,
-        amount: String(grandTotal.toFixed(2)),
-      }],
+      allowNegativeStock: opts?.allowNegativeStock || undefined,
+      payments: cart.payments.map(p => ({
+        method: p.method === 'CHARGE' ? 'ACCOUNT' : p.method,
+        amount: String(p.amount.toFixed(2)),
+        reference: p.reference || undefined,
+        notes: p.installmentTerm && p.installmentTerm !== 'STRAIGHT'
+          ? `Installment: ${p.installmentTerm.replace('_', ' ')}`
+          : undefined,
+      })),
     };
 
     try {
@@ -99,6 +107,11 @@ export function useCheckout() {
 
       // Success — remove from pending queue
       removePendingSale(idempotencyKey);
+
+      // Save receipt number for auto-increment
+      if (cart.receiptNumber?.trim()) {
+        storage.set(KEYS.LAST_RECEIPT_NUMBER, cart.receiptNumber.trim());
+      }
 
       const checkoutResult: CheckoutResult = {
         saleId: completed.id || saleId,

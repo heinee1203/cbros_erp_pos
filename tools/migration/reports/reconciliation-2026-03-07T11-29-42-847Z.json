@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-03-07T11:29:42.847Z",
+  "batches": [],
+  "overallSummary": {
+    "totalStaged": 0,
+    "totalPromoted": 0,
+    "totalRejected": 0,
+    "promotionRate": "0%"
+  },
+  "rejections": []
+}

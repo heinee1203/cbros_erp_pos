@@ -8,6 +8,7 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { organizations } from "./organizations";
 import { products } from "./products";
 import { locations } from "./locations";
 
@@ -15,6 +16,9 @@ export const inventory = pgTable(
   "inventory",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
@@ -22,6 +26,7 @@ export const inventory = pgTable(
       .notNull()
       .references(() => locations.id, { onDelete: "cascade" }),
     stockLevel: integer("stock_level").notNull().default(0),
+    reservedLevel: integer("reserved_level").notNull().default(0),
     reorderPoint: integer("reorder_point").notNull().default(10),
     leadTimeDays: integer("lead_time_days").notNull().default(7),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -37,8 +42,8 @@ export const inventory = pgTable(
       table.productId,
       table.locationId,
     ),
-    // B-Tree on location_id for fast per-store inventory queries
     index("idx_inventory_location_id").on(table.locationId),
-    check("chk_stock_level_non_negative", sql`stock_level >= 0`),
+    index("idx_inventory_org_id").on(table.orgId),
+    check("chk_reserved_level_non_negative", sql`reserved_level >= 0`),
   ],
 );

@@ -2,7 +2,7 @@ import React from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
+  Pressable,
   StyleSheet,
   ScrollView,
   Alert,
@@ -139,13 +139,14 @@ export default function SettingsScreen() {
         {/* Hardware */}
         <Card style={styles.card}>
           <Text style={styles.sectionLabel}>HARDWARE</Text>
-          <TouchableOpacity
+          <Pressable
             style={styles.navRow}
             onPress={() => navigation.navigate('PrinterSetup')}
+            android_ripple={{ color: colors.accent.glow }}
           >
             <Text style={styles.navRowText}>Printer Setup</Text>
             <Text style={styles.navArrow}>→</Text>
-          </TouchableOpacity>
+          </Pressable>
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Scanner mode</Text>
             <Text style={styles.rowValue}>{scannerMode.toUpperCase()}</Text>

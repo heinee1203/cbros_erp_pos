@@ -1,0 +1,157 @@
+import {
+  pgTable,
+  uuid,
+  varchar,
+  integer,
+  numeric,
+  timestamp,
+  pgEnum,
+  index,
+  uniqueIndex,
+  check,
+} from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { organizations } from "./organizations";
+import { locations } from "./locations";
+import { users } from "./users";
+import { products } from "./products";
+import { customers } from "./customers";
+import { customerVehicles } from "./customer-vehicles";
+import { jobCardParts } from "./job-cards";
+import { serviceOperations } from "./service-operations";
+import { shifts } from "./shifts";
+
+export const saleStatusEnum = pgEnum("sale_status", [
+  "QUOTE",
+  "OPEN",
+  "PARKED",
+  "COMPLETED",
+  "VOIDED",
+  "PARTIALLY_REFUNDED",
+  "REFUNDED",
+]);
+
+export const sales = pgTable(
+  "sales",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    saleNo: varchar("sale_no", { length: 50 }).notNull(),
+    receiptNumber: varchar("receipt_number", { length: 50 }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id),
+    status: saleStatusEnum("status").notNull().default("OPEN"),
+    customerId: uuid("customer_id").references(() => customers.id, {
+      onDelete: "set null",
+    }),
+    customerVehicleId: uuid("customer_vehicle_id").references(
+      () => customerVehicles.id,
+      { onDelete: "set null" },
+    ),
+    subtotal: numeric("subtotal", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    discountTotal: numeric("discount_total", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    taxTotal: numeric("tax_total", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    grandTotal: numeric("grand_total", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    notes: varchar("notes", { length: 1000 }),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "set null" }),
+    completedByUserId: uuid("completed_by_user_id").references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    voidedByUserId: uuid("voided_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    refundedByUserId: uuid("refunded_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    refundedAt: timestamp("refunded_at", { withTimezone: true }),
+    shiftId: uuid("shift_id").references(() => shifts.id, {
+      onDelete: "restrict",
+    }),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("idx_sales_org_id").on(table.orgId),
+    index("idx_sales_status").on(table.status),
+    index("idx_sales_location_id").on(table.locationId),
+    index("idx_sales_customer_id").on(table.customerId),
+    uniqueIndex("idx_sales_org_sale_no").on(table.orgId, table.saleNo),
+    index("idx_sales_receipt_number").on(table.receiptNumber),
+    index("idx_sales_shift_id").on(table.shiftId),
+    uniqueIndex("idx_sales_idempotency_key").on(table.idempotencyKey),
+  ],
+);
+
+export const saleLines = pgTable(
+  "sale_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    saleId: uuid("sale_id")
+      .notNull()
+      .references(() => sales.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => locations.id),
+    quantity: integer("quantity").notNull(),
+    refundedQuantity: integer("refunded_quantity").notNull().default(0),
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    overridePrice: numeric("override_price", { precision: 12, scale: 2 }),
+    discountAmount: numeric("discount_amount", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    lineTotal: numeric("line_total", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    notes: varchar("notes", { length: 500 }),
+    // ── POS Merge Guardrail (Phase 7) ──
+    // If set, completeSale() skips inventory deduction for this line
+    jobCardPartId: uuid("job_card_part_id").references(
+      () => jobCardParts.id,
+      { onDelete: "set null" },
+    ),
+    serviceOperationId: uuid("service_operation_id").references(
+      () => serviceOperations.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("idx_sale_lines_sale_id").on(table.saleId),
+    index("idx_sale_lines_job_card_part_id").on(table.jobCardPartId),
+    check("chk_sale_line_qty_positive", sql`quantity > 0`),
+  ],
+);

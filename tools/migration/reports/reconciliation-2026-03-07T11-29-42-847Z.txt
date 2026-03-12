@@ -1,0 +1,27 @@
+═══════════════════════════════════════════════════
+  APEX POS — Data Migration Reconciliation Report
+  Generated: 2026-03-07T11:29:42.847Z
+═══════════════════════════════════════════════════
+
+OVERALL SUMMARY
+  Total Staged:   0
+  Total Promoted: 0
+  Total Rejected: 0
+  Promotion Rate: 0%
+
+─── BATCH DETAILS ───
+─── NO REJECTIONS ───
+  All staged rows were promoted successfully.
+
+─── LIVE TABLE COUNTS (post-migration) ───
+  organizations                       1
+  locations                           3
+  suppliers                           1
+  product_families                    0
+  products                            50000
+  customers                           0
+  customer_vehicles                   0
+  inventory                           150000
+  stock_journal (OPENING_BALANCE)     0
+
+═══════════════════════════════════════════════════

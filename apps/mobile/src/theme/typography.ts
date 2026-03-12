@@ -1,17 +1,13 @@
-import { Platform } from 'react-native';
-
 /**
  * Typography system — Industrial Premium.
  * Outfit (display), DM Sans (body), JetBrains Mono (data).
+ *
+ * Font filenames match across Android (TTF filename) and iOS (PostScript name).
  */
 
-// Android uses TTF filename without extension, iOS uses PostScript name
-const outfit = (weight: string) =>
-  Platform.OS === 'android' ? `Outfit-${weight}` : `Outfit-${weight}`;
-const dmSans = (weight: string) =>
-  Platform.OS === 'android' ? `DMSans-${weight}` : `DMSans-${weight}`;
-const jetBrainsMono = (weight: string) =>
-  Platform.OS === 'android' ? `JetBrainsMono-${weight}` : `JetBrainsMono-${weight}`;
+const outfit = (weight: string) => `Outfit-${weight}`;
+const dmSans = (weight: string) => `DMSans-${weight}`;
+const jetBrainsMono = (weight: string) => `JetBrainsMono-${weight}`;
 
 export const fonts = {
   display: {

@@ -4,6 +4,7 @@ import {
   Pressable,
   View,
   Text,
+  ScrollView,
   StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -61,7 +62,13 @@ export function BottomSheet({
               )}
             </View>
           )}
-          <View style={styles.content}>{children}</View>
+          <ScrollView
+            bounces={false}
+            keyboardShouldPersistTaps="handled"
+            style={styles.content}
+          >
+            {children}
+          </ScrollView>
         </View>
       </View>
     </Modal>

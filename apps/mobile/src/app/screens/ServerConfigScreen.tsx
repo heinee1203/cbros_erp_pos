@@ -21,6 +21,7 @@ export default function ServerConfigScreen() {
   const existing = storage.getString(KEYS.API_BASE_URL);
   const [url, setUrl] = useState(existing || 'http://10.0.2.2:3000');
   const [error, setError] = useState('');
+  const [testing, setTesting] = useState(false);
 
   // If already configured, skip directly to login
   React.useEffect(() => {
@@ -29,14 +30,43 @@ export default function ServerConfigScreen() {
     }
   }, [existing, navigation]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const trimmed = url.trim();
     if (!trimmed) {
-      setError('API URL is required');
+      setError('Server URL is required');
       return;
     }
-    storage.set(KEYS.API_BASE_URL, trimmed);
-    navigation.replace('Login');
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      setError('URL must start with http:// or https://');
+      return;
+    }
+
+    // Test connectivity
+    setTesting(true);
+    setError('');
+    try {
+      const response = await fetch(`${trimmed}/health`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) {
+        setError(`Server responded with ${response.status}. Check the URL.`);
+        setTesting(false);
+        return;
+      }
+      // Success — save and navigate
+      storage.set(KEYS.API_BASE_URL, trimmed);
+      navigation.replace('Login');
+    } catch (err: any) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        setError('Connection timed out. Check the URL and network.');
+      } else {
+        setError(`Cannot reach server: ${err.message}`);
+      }
+    } finally {
+      setTesting(false);
+    }
   };
 
   return (
@@ -63,9 +93,11 @@ export default function ServerConfigScreen() {
 
         <View style={styles.buttonContainer}>
           <Button
-            title="Save & Continue"
+            title={testing ? 'Testing...' : 'Save & Connect'}
             onPress={handleSave}
             variant="primary"
+            disabled={testing}
+            loading={testing}
             fullWidth
           />
         </View>

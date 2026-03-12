@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -10,8 +10,10 @@ import { startNetworkMonitor } from '@/services/network-monitor';
 import { colors, textStyles, layout } from '@/theme';
 import CatalogScreen from './screens/CatalogScreen';
 import CartScreen from './screens/CartScreen';
+import PaymentScreen from './screens/PaymentScreen';
 import TransactionListScreen from './screens/TransactionListScreen';
 import TransactionDetailScreen from './screens/TransactionDetailScreen';
+import ZReadingScreen from './screens/ZReadingScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import PrinterSetupScreen from './screens/PrinterSetupScreen';
 
@@ -32,16 +34,33 @@ function TabletOffset({ children }: { children: React.ReactNode }) {
 export type POSStackParamList = {
   Catalog: undefined;
   Cart: undefined;
+  Payment: undefined;
 };
 
 const POSStack = createStackNavigator<POSStackParamList>();
 
-/** Tablet: Catalog + Cart rendered side-by-side */
+/** Tablet: Catalog + Cart/Payment rendered side-by-side */
 function POSSplitScreen() {
+  const [showPayment, setShowPayment] = useState(false);
+
+  const handleProceedToPayment = useCallback(() => {
+    setShowPayment(true);
+  }, []);
+
+  const handleBackToCart = useCallback(() => {
+    setShowPayment(false);
+  }, []);
+
   return (
     <SplitView
       primary={<CatalogScreen />}
-      secondary={<CartScreen />}
+      secondary={
+        showPayment ? (
+          <PaymentScreen onBack={handleBackToCart} />
+        ) : (
+          <CartScreen onProceedToPayment={handleProceedToPayment} />
+        )
+      }
       primaryRatio={0.6}
     />
   );
@@ -64,6 +83,7 @@ function POSNavigator() {
     <POSStack.Navigator screenOptions={{ headerShown: false }}>
       <POSStack.Screen name="Catalog" component={CatalogScreen} />
       <POSStack.Screen name="Cart" component={CartScreen} />
+      <POSStack.Screen name="Payment" component={PaymentScreen} />
     </POSStack.Navigator>
   );
 }
@@ -72,6 +92,7 @@ function POSNavigator() {
 export type TransactionsStackParamList = {
   TransactionList: undefined;
   TransactionDetail: { saleId: string };
+  ZReading: { shiftId: string; mode: 'view' | 'close' };
 };
 
 const TxStack = createStackNavigator<TransactionsStackParamList>();
@@ -82,6 +103,7 @@ function TransactionsNavigator() {
       <TxStack.Navigator screenOptions={{ headerShown: false }}>
         <TxStack.Screen name="TransactionList" component={TransactionListScreen} />
         <TxStack.Screen name="TransactionDetail" component={TransactionDetailScreen} />
+        <TxStack.Screen name="ZReading" component={ZReadingScreen} />
       </TxStack.Navigator>
     </TabletOffset>
   );

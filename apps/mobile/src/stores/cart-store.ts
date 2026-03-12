@@ -30,6 +30,15 @@ export interface CartLine {
   discountType: 'none' | 'percentage' | 'fixed';
   discountValue: number;
   lineTotal: number;
+  availableStock: number | null; // local stock snapshot at time of add
+}
+
+export interface PaymentEntry {
+  id: string;
+  method: string;
+  amount: number;
+  reference: string;
+  installmentTerm: string; // 'STRAIGHT' | '3_MONTHS' | '6_MONTHS' | '12_MONTHS'
 }
 
 interface CartStateData {
@@ -39,9 +48,10 @@ interface CartStateData {
   vehicleId: string | null;
   discountType: 'none' | 'percentage' | 'fixed';
   discountValue: number;
-  paymentMethod: 'CASH' | 'CARD' | 'QRPH' | 'GCASH' | 'MAYA';
-  cashTendered: number;
+  payments: PaymentEntry[];
+  receiptNumber: string;
   note: string;
+  allowNegativeStock: boolean;
 }
 
 interface CartActions {
@@ -52,6 +62,7 @@ interface CartActions {
     mnemonicSku: string;
     barcode: string | null;
     unitPrice: number;
+    availableStock?: number | null;
   }, qty?: number) => void;
   updateQuantity: (lineId: string, qty: number) => void;
   removeLine: (lineId: string) => void;
@@ -59,13 +70,27 @@ interface CartActions {
   setCartDiscount: (type: 'none' | 'percentage' | 'fixed', value: number) => void;
   attachCustomer: (customerId: string, customerName: string, vehicleId?: string) => void;
   detachCustomer: () => void;
-  setPaymentMethod: (method: 'CASH' | 'CARD' | 'QRPH' | 'GCASH' | 'MAYA') => void;
-  setCashTendered: (amount: number) => void;
+  addPayment: (entry: Omit<PaymentEntry, 'id'>) => void;
+  updatePayment: (id: string, updates: Partial<PaymentEntry>) => void;
+  removePayment: (id: string) => void;
+  clearPayments: () => void;
+  setReceiptNumber: (num: string) => void;
   setNote: (note: string) => void;
+  setAllowNegativeStock: (allow: boolean) => void;
   clear: () => void;
 }
 
 type CartState = CartStateData & CartActions;
+
+/**
+ * Generate next sequential receipt number from MMKV.
+ * Format: simple incrementing integer. Cashier can override in PaymentScreen.
+ */
+function getNextReceiptNumber(): string {
+  const last = storage.getString(KEYS.LAST_RECEIPT_NUMBER) ?? '0';
+  const next = parseInt(last, 10) + 1;
+  return String(next);
+}
 
 function computeLineTotal(line: Pick<CartLine, 'unitPrice' | 'quantity' | 'discountType' | 'discountValue'>): number {
   const gross = line.unitPrice * line.quantity;
@@ -86,8 +111,8 @@ function persist(state: CartStateData): void {
     vehicleId: state.vehicleId,
     discountType: state.discountType,
     discountValue: state.discountValue,
-    paymentMethod: state.paymentMethod,
-    cashTendered: state.cashTendered,
+    payments: state.payments,
+    receiptNumber: state.receiptNumber,
     note: state.note,
   });
 }
@@ -95,10 +120,28 @@ function persist(state: CartStateData): void {
 /**
  * Load persisted cart from MMKV on app startup.
  * Returns empty cart if no persisted state found.
+ * Handles migration from old single-payment format.
  */
 function loadPersistedCart(): CartStateData {
-  const saved = getJSON<CartStateData>(storage, cartKey());
-  if (saved && saved.lines && saved.lines.length > 0) return saved;
+  const saved = getJSON<any>(storage, cartKey());
+  if (saved && saved.lines && saved.lines.length > 0) {
+    // Migrate from old format (paymentMethod/cashTendered/referenceNumber)
+    if (!Array.isArray(saved.payments)) {
+      saved.payments = [];
+    }
+    return {
+      lines: saved.lines,
+      customerId: saved.customerId ?? null,
+      customerName: saved.customerName ?? null,
+      vehicleId: saved.vehicleId ?? null,
+      discountType: saved.discountType ?? 'none',
+      discountValue: saved.discountValue ?? 0,
+      payments: saved.payments,
+      receiptNumber: saved.receiptNumber ?? '',
+      note: saved.note ?? '',
+      allowNegativeStock: false,
+    };
+  }
   return {
     lines: [],
     customerId: null,
@@ -106,9 +149,10 @@ function loadPersistedCart(): CartStateData {
     vehicleId: null,
     discountType: 'none',
     discountValue: 0,
-    paymentMethod: 'CASH',
-    cashTendered: 0,
+    payments: [],
+    receiptNumber: '',
     note: '',
+    allowNegativeStock: false,
   };
 }
 
@@ -145,6 +189,7 @@ export const useCartStore = create<CartState>((set, get) => ({
           discountType: 'none',
           discountValue: 0,
           lineTotal: product.unitPrice * qty,
+          availableStock: product.availableStock ?? null,
         };
         newLines = [...state.lines, newLine];
       }
@@ -225,19 +270,49 @@ export const useCartStore = create<CartState>((set, get) => ({
     });
   },
 
-  setPaymentMethod: (method) => {
+  addPayment: (entry) => {
     set(state => {
-      const newState = { ...state, paymentMethod: method };
+      const newPayment: PaymentEntry = { ...entry, id: uuid() };
+      const payments = [...state.payments, newPayment];
+      const newState = { ...state, payments };
       persist(newState);
-      return { paymentMethod: method };
+      return { payments };
     });
   },
 
-  setCashTendered: (amount) => {
+  updatePayment: (id, updates) => {
     set(state => {
-      const newState = { ...state, cashTendered: amount };
+      const payments = state.payments.map(p =>
+        p.id === id ? { ...p, ...updates } : p,
+      );
+      const newState = { ...state, payments };
       persist(newState);
-      return { cashTendered: amount };
+      return { payments };
+    });
+  },
+
+  removePayment: (id) => {
+    set(state => {
+      const payments = state.payments.filter(p => p.id !== id);
+      const newState = { ...state, payments };
+      persist(newState);
+      return { payments };
+    });
+  },
+
+  clearPayments: () => {
+    set(state => {
+      const newState = { ...state, payments: [] };
+      persist(newState);
+      return { payments: [] };
+    });
+  },
+
+  setReceiptNumber: (num) => {
+    set(state => {
+      const newState = { ...state, receiptNumber: num };
+      persist(newState);
+      return { receiptNumber: num };
     });
   },
 
@@ -249,7 +324,12 @@ export const useCartStore = create<CartState>((set, get) => ({
     });
   },
 
+  setAllowNegativeStock: (allow) => {
+    set({ allowNegativeStock: allow });
+  },
+
   clear: () => {
+    const nextReceipt = getNextReceiptNumber();
     const empty: CartStateData = {
       lines: [],
       customerId: null,
@@ -257,9 +337,10 @@ export const useCartStore = create<CartState>((set, get) => ({
       vehicleId: null,
       discountType: 'none',
       discountValue: 0,
-      paymentMethod: 'CASH',
-      cashTendered: 0,
+      payments: [],
+      receiptNumber: nextReceipt,
       note: '',
+      allowNegativeStock: false,
     };
     persist(empty);
     set(empty);
@@ -281,8 +362,11 @@ export const selectCartDiscount = (state: CartState): number => {
 export const selectGrandTotal = (state: CartState): number =>
   selectSubtotal(state) - selectCartDiscount(state);
 
-export const selectChange = (state: CartState): number =>
-  state.cashTendered - selectGrandTotal(state);
+export const selectPaidTotal = (state: CartState): number =>
+  state.payments.reduce((sum, p) => sum + p.amount, 0);
+
+export const selectRemainingBalance = (state: CartState): number =>
+  selectGrandTotal(state) - selectPaidTotal(state);
 
 export const selectLineCount = (state: CartState): number =>
   state.lines.reduce((sum, l) => sum + l.quantity, 0);
