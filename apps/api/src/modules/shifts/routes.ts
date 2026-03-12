@@ -8,6 +8,7 @@ import {
   getShift,
   listShifts,
 } from "./service";
+import { parseQuery, shiftsQuerySchema } from "../../lib/validate-query";
 
 export const shiftRoutes: FastifyPluginAsync = async (app) => {
   // ─── GET /shifts/active ────────────────────────────
@@ -23,9 +24,11 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
   // ─── GET /shifts ────────────────────────────────────
   // List shifts with filters and pagination
   app.get("/", async (request, reply) => {
+    const q = parseQuery(shiftsQuerySchema, request.query, reply);
+    if (!q) return;
+
     const { orgId, locationId } = request.storeContext!;
     const { role } = request.user;
-    const q = request.query as Record<string, string | undefined>;
 
     const allLocations = q.allLocations === "true";
     if (allLocations && !SHIFT_FORCE_CLOSE_ROLES.includes(role as any)) {
@@ -41,7 +44,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
       from: q.from,
       to: q.to,
       cursor: q.cursor,
-      limit: Math.min(parseInt(q.limit ?? "50", 10) || 50, 100),
+      limit: q.limit,
     });
 
     return reply.send(result);

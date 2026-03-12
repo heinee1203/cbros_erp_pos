@@ -19,6 +19,7 @@ import {
   getSaleJournal,
   listSales,
 } from "./service";
+import { parseQuery, salesQuerySchema } from "../../lib/validate-query";
 
 function assertPosRole(role: string) {
   if (!POS_ROLES.includes(role as any)) {
@@ -178,9 +179,11 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
   // ─── GET /sales ────────────────────────────────────
   // List sales with filters, pagination, joined display fields
   app.get("/", async (request, reply) => {
+    const q = parseQuery(salesQuerySchema, request.query, reply);
+    if (!q) return;
+
     const { orgId, locationId } = request.storeContext!;
     const { role } = request.user;
-    const q = request.query as Record<string, string | undefined>;
 
     const allLocations = q.allLocations === "true";
     if (allLocations && !["ADMIN", "MANAGER"].includes(role)) {
@@ -196,7 +199,7 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
       to: q.to,
       q: q.q,
       cursor: q.cursor,
-      limit: Math.min(parseInt(q.limit ?? "50", 10) || 50, 100),
+      limit: q.limit,
     });
 
     return reply.send(result);
