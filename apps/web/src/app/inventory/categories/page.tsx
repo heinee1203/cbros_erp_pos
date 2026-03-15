@@ -5,18 +5,17 @@ import {
   Grid3x3,
   Search,
   Plus,
-  Hash,
   Pencil,
   Trash2,
   X,
   Check,
   Loader2,
-  ArrowUpDown,
-  Eye,
-  EyeOff,
+  ChevronRight,
+  ChevronDown,
   AlertTriangle,
   Package,
-  GripVertical,
+  Layers,
+  FolderTree,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -27,37 +26,30 @@ import {
   useDeleteCategory,
   type CategoryRow,
 } from "@/hooks/use-categories";
+import {
+  useProductFamilies,
+  type ProductFamily,
+} from "@/hooks/use-products";
+import {
+  useSubcategories,
+  useCreateSubcategory,
+  useUpdateSubcategory,
+  useDeleteSubcategory,
+  type SubcategoryRow,
+} from "@/hooks/use-subcategories";
 
 /* ═══════════════════════════════════════════════════════
- * TYPES
+ * CONSTANTS
  * ═══════════════════════════════════════════════════════ */
-
-type SortKey = "name" | "productCount" | "sortOrder";
-type SortDir = "asc" | "desc";
-
-interface CategoryFormData {
-  name: string;
-  slug: string;
-  description: string;
-  color: string;
-  sortOrder: number;
-  isActive: boolean;
-}
-
-const DEFAULT_FORM: CategoryFormData = {
-  name: "",
-  slug: "",
-  description: "",
-  color: "#2563EB",
-  sortOrder: 0,
-  isActive: true,
-};
 
 const PRESET_COLORS = [
   "#2563EB", "#DC2626", "#D97706", "#059669",
   "#7C3AED", "#DB2777", "#0891B2", "#4F46E5",
   "#CA8A04", "#16A34A", "#9333EA", "#E11D48",
 ];
+
+const INITIAL_VISIBLE = 10;
+const EMPTY_CATEGORIES: CategoryRow[] = [];
 
 /* ═══════════════════════════════════════════════════════
  * MAIN PAGE
@@ -66,19 +58,24 @@ const PRESET_COLORS = [
 export default function CategoriesPage() {
   const { token, locationId, loading: authLoading } = useAuth();
 
-  // ── Filters & sort ──
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [showInactive, setShowInactive] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("sortOrder");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(new Set());
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [showAllCategories, setShowAllCategories] = useState<Set<string>>(new Set());
+  const [showAllSubcategories, setShowAllSubcategories] = useState<Set<string>>(new Set());
 
-  // ── Modals ──
+  // Modals
   const [modalMode, setModalMode] = useState<"closed" | "create" | "edit">("closed");
   const [editingCategory, setEditingCategory] = useState<CategoryRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CategoryRow | null>(null);
 
-  // ── Debounce search ──
+  // Inline subcategory editing
+  const [addingSubcategoryFor, setAddingSubcategoryFor] = useState<string | null>(null);
+  const [editingSubcategory, setEditingSubcategory] = useState<SubcategoryRow | null>(null);
+  const [deleteSubTarget, setDeleteSubTarget] = useState<SubcategoryRow | null>(null);
+
+  // Debounce
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
@@ -86,61 +83,130 @@ export default function CategoriesPage() {
     searchTimerRef.current = setTimeout(() => setDebouncedSearch(value), 300);
   };
 
-  // ── Queries & mutations ──
-  const { data, isLoading, isError } = useCategories(token, locationId, {
+  // Data
+  const { data: familiesData, isLoading: familiesLoading } = useProductFamilies(token, locationId);
+  const { data: categoriesData, isLoading: categoriesLoading, isError } = useCategories(token, locationId, {
     search: debouncedSearch || undefined,
-    activeOnly: !showInactive ? undefined : false,
   });
+  const { data: subcategoriesData, isLoading: subcategoriesLoading } = useSubcategories(token, locationId);
 
-  const createMut = useCreateCategory(token, locationId);
-  const updateMut = useUpdateCategory(token, locationId);
-  const deleteMut = useDeleteCategory(token, locationId);
+  const createCatMut = useCreateCategory(token, locationId);
+  const updateCatMut = useUpdateCategory(token, locationId);
+  const deleteCatMut = useDeleteCategory(token, locationId);
+  const createSubMut = useCreateSubcategory(token, locationId);
+  const updateSubMut = useUpdateSubcategory(token, locationId);
+  const deleteSubMut = useDeleteSubcategory(token, locationId);
 
-  // ── Computed data ──
-  const categories = useMemo(() => {
-    let list = data?.data ?? [];
+  const families = familiesData?.data ?? [];
+  const allCategories = categoriesData?.data ?? EMPTY_CATEGORIES;
+  const allSubcategories = subcategoriesData?.data ?? [];
 
-    // Client-side filter: hide inactive unless toggled
-    if (!showInactive) {
-      // (API doesn't have a strict "include inactive" toggle — filter client-side)
+  const isLoading = familiesLoading || categoriesLoading || subcategoriesLoading;
+
+  // Build tree: families -> categories (by familyId) -> subcategories (by categoryId)
+  const { categoriesByFamily, ungroupedCategories, subcategoriesByCategory } = useMemo(() => {
+    const catMap = new Map<string, CategoryRow[]>();
+    const ungrouped: CategoryRow[] = [];
+
+    for (const cat of allCategories) {
+      if (cat.familyId) {
+        const list = catMap.get(cat.familyId) ?? [];
+        list.push(cat);
+        catMap.set(cat.familyId, list);
+      } else {
+        ungrouped.push(cat);
+      }
     }
 
-    // Client-side sort
-    list = [...list].sort((a, b) => {
-      let cmp = 0;
-      switch (sortKey) {
-        case "name":
-          cmp = a.name.localeCompare(b.name);
-          break;
-        case "productCount":
-          cmp = a.productCount - b.productCount;
-          break;
-        case "sortOrder":
-          cmp = a.sortOrder - b.sortOrder || a.name.localeCompare(b.name);
-          break;
+    // Sort categories by name within each group
+    for (const [, list] of catMap) {
+      list.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    ungrouped.sort((a, b) => a.name.localeCompare(b.name));
+
+    // Build subcategories map
+    const subMap = new Map<string, SubcategoryRow[]>();
+    for (const sub of allSubcategories) {
+      const list = subMap.get(sub.categoryId) ?? [];
+      list.push(sub);
+      subMap.set(sub.categoryId, list);
+    }
+    for (const [, list] of subMap) {
+      list.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+    }
+
+    return {
+      categoriesByFamily: catMap,
+      ungroupedCategories: ungrouped,
+      subcategoriesByCategory: subMap,
+    };
+  }, [allCategories, allSubcategories]);
+
+  // When searching, auto-expand families/categories that have matching items
+  const searchExpandedFamilyIds = useMemo(() => {
+    if (!debouncedSearch) return null;
+    const ids = new Set<string>();
+    for (const family of families) {
+      const cats = categoriesByFamily.get(family.id) ?? [];
+      if (cats.length > 0 || family.name.toLowerCase().includes(debouncedSearch.toLowerCase())) {
+        ids.add(family.id);
       }
-      return sortDir === "asc" ? cmp : -cmp;
+    }
+    if (ungroupedCategories.length > 0) ids.add("__ungrouped__");
+    return ids;
+  }, [debouncedSearch, families, categoriesByFamily, ungroupedCategories]);
+
+  const searchExpandedCategoryIds = useMemo(() => {
+    if (!debouncedSearch) return null;
+    const ids = new Set<string>();
+    for (const cat of allCategories) {
+      const subs = subcategoriesByCategory.get(cat.id) ?? [];
+      if (subs.length > 0) {
+        ids.add(cat.id);
+      }
+    }
+    return ids;
+  }, [debouncedSearch, allCategories, subcategoriesByCategory]);
+
+  const effectiveExpandedFamilies = searchExpandedFamilyIds ?? expandedFamilies;
+  const effectiveExpandedCategories = searchExpandedCategoryIds ?? expandedCategories;
+
+  function toggleFamily(id: string) {
+    setExpandedFamilies((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
-
-    return list;
-  }, [data, showInactive, sortKey, sortDir]);
-
-  const totalProducts = useMemo(
-    () => categories.reduce((sum, c) => sum + c.productCount, 0),
-    [categories],
-  );
-
-  const activeCount = useMemo(
-    () => categories.filter((c) => c.isActive).length,
-    [categories],
-  );
-
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("asc"); }
   }
 
-  // ── Handlers ──
+  function toggleCategory(id: string) {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleShowAllCategories(familyId: string) {
+    setShowAllCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(familyId)) next.delete(familyId);
+      else next.add(familyId);
+      return next;
+    });
+  }
+
+  function toggleShowAllSubcategories(categoryId: string) {
+    setShowAllSubcategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(categoryId)) next.delete(categoryId);
+      else next.add(categoryId);
+      return next;
+    });
+  }
+
   function openCreate() {
     setEditingCategory(null);
     setModalMode("create");
@@ -158,12 +224,24 @@ export default function CategoriesPage() {
 
   function handleDeleteConfirm() {
     if (!deleteTarget) return;
-    deleteMut.mutate(deleteTarget.id, {
+    deleteCatMut.mutate(deleteTarget.id, {
       onSuccess: () => setDeleteTarget(null),
     });
   }
 
-  // ── Loading state ──
+  function handleDeleteSubConfirm() {
+    if (!deleteSubTarget) return;
+    deleteSubMut.mutate(deleteSubTarget.id, {
+      onSuccess: () => setDeleteSubTarget(null),
+    });
+  }
+
+  // Summary stats
+  const totalFamilies = families.length;
+  const totalCategories = allCategories.length;
+  const totalSubcategories = allSubcategories.length;
+  const totalItems = allCategories.reduce((sum, c) => sum + c.productCount, 0);
+
   if (authLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -174,7 +252,7 @@ export default function CategoriesPage() {
 
   return (
     <div className="mx-auto flex h-full max-w-5xl flex-col px-2 sm:px-0">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="mb-5">
         <div className="flex items-start justify-between">
           <div>
@@ -187,8 +265,7 @@ export default function CategoriesPage() {
               </h1>
             </div>
             <p className="mt-1.5 text-[13px] leading-5 text-muted-foreground">
-              Organize your catalog into product categories for browsing, filtering,
-              and reporting.
+              Manage product families, categories, and sub-categories
             </p>
           </div>
           <button
@@ -196,56 +273,55 @@ export default function CategoriesPage() {
             className="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98]"
           >
             <Plus size={14} strokeWidth={2.5} />
-            New Category
+            Add Category
           </button>
         </div>
 
-        {/* ── Summary chips ── */}
+        {/* Summary */}
         <div className="mt-4 flex gap-5">
+          <div className="flex items-center gap-2 text-[13px]">
+            <div className="flex h-5 w-5 items-center justify-center rounded bg-muted">
+              <Layers size={11} className="text-muted-foreground" />
+            </div>
+            <span className="text-muted-foreground">Families</span>
+            <span className="font-semibold tabular-nums text-foreground">{totalFamilies}</span>
+          </div>
+          <div className="h-4 w-px bg-border" />
           <div className="flex items-center gap-2 text-[13px]">
             <div className="flex h-5 w-5 items-center justify-center rounded bg-muted">
               <Grid3x3 size={11} className="text-muted-foreground" />
             </div>
             <span className="text-muted-foreground">Categories</span>
-            <span className="font-semibold tabular-nums text-foreground">
-              {categories.length}
-            </span>
+            <span className="font-semibold tabular-nums text-foreground">{totalCategories}</span>
           </div>
           <div className="h-4 w-px bg-border" />
           <div className="flex items-center gap-2 text-[13px]">
             <div className="flex h-5 w-5 items-center justify-center rounded bg-muted">
-              <Check size={11} className="text-muted-foreground" />
+              <FolderTree size={11} className="text-muted-foreground" />
             </div>
-            <span className="text-muted-foreground">Active</span>
-            <span className="font-semibold tabular-nums text-foreground">
-              {activeCount}
-            </span>
+            <span className="text-muted-foreground">Sub-categories</span>
+            <span className="font-semibold tabular-nums text-foreground">{totalSubcategories}</span>
           </div>
           <div className="h-4 w-px bg-border" />
           <div className="flex items-center gap-2 text-[13px]">
             <div className="flex h-5 w-5 items-center justify-center rounded bg-muted">
-              <Hash size={11} className="text-muted-foreground" />
+              <Package size={11} className="text-muted-foreground" />
             </div>
-            <span className="text-muted-foreground">Total Products</span>
-            <span className="font-semibold tabular-nums text-foreground">
-              {totalProducts.toLocaleString()}
-            </span>
+            <span className="text-muted-foreground">Items</span>
+            <span className="font-semibold tabular-nums text-foreground">{totalItems.toLocaleString()}</span>
           </div>
         </div>
       </div>
 
-      {/* ── Toolbar ── */}
-      <div className="mb-3 flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search
-            size={14}
-            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-          />
+      {/* Search */}
+      <div className="mb-4">
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder="Search categories by name or slug…"
+            placeholder="Search families, categories, and sub-categories..."
             className="h-9 w-full rounded-lg border border-border bg-background pr-3 text-[13px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none placeholder:text-muted-foreground/60 transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
             style={{ paddingLeft: "2.125rem" }}
           />
@@ -258,122 +334,100 @@ export default function CategoriesPage() {
             </button>
           )}
         </div>
-
-        {/* Show inactive toggle */}
-        <button
-          onClick={() => setShowInactive((v) => !v)}
-          className={cn(
-            "flex h-9 items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors",
-            showInactive
-              ? "border-primary/20 bg-primary/[0.04] text-foreground"
-              : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
-          )}
-        >
-          {showInactive ? <Eye size={12} /> : <EyeOff size={12} />}
-          {showInactive ? "All" : "Active"}
-        </button>
-
-        {/* Sort buttons */}
-        <SortButton
-          label="Order"
-          active={sortKey === "sortOrder"}
-          dir={sortDir}
-          onClick={() => toggleSort("sortOrder")}
-          hint={sortKey === "sortOrder" ? (sortDir === "asc" ? "1→9" : "9→1") : undefined}
-        />
-        <SortButton
-          label="Name"
-          active={sortKey === "name"}
-          dir={sortDir}
-          onClick={() => toggleSort("name")}
-          hint={sortKey === "name" ? (sortDir === "asc" ? "A-Z" : "Z-A") : undefined}
-        />
-        <SortButton
-          label="Products"
-          active={sortKey === "productCount"}
-          dir={sortDir}
-          onClick={() => toggleSort("productCount")}
-          hint={sortKey === "productCount" ? (sortDir === "asc" ? "Low" : "High") : undefined}
-        />
       </div>
 
-      {/* ── Table ── */}
+      {/* Content */}
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
-        {/* Header */}
-        <div className="flex items-center border-b border-border bg-muted/40 px-4 py-2">
-          <div className="w-5 shrink-0" />
-          <div className="ml-3 flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Category
-          </div>
-          <div className="w-56 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Description
-          </div>
-          <div className="w-24 text-center text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Products
-          </div>
-          <div className="w-20 text-center text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Status
-          </div>
-          <div className="w-20 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Actions
-          </div>
-        </div>
-
-        {/* Body */}
         {isLoading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 size={18} className="animate-spin text-muted-foreground" />
-            <span className="ml-2 text-[13px] text-muted-foreground">Loading categories…</span>
+            <span className="ml-2 text-[13px] text-muted-foreground">Loading categories...</span>
           </div>
         ) : isError ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <AlertTriangle size={20} className="text-destructive" />
             <p className="mt-2 text-[13px] text-destructive">Failed to load categories</p>
           </div>
-        ) : categories.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-              <Search size={16} className="text-muted-foreground" />
-            </div>
-            <p className="mt-3 text-[13px] font-medium text-foreground">No categories found</p>
-            <p className="mt-1 text-[12px] text-muted-foreground">
-              {searchQuery ? "Try adjusting your search" : "Create your first category to get started"}
-            </p>
-          </div>
         ) : (
           <div className="divide-y divide-border">
-            {categories.map((cat, idx) => (
-              <CategoryTableRow
-                key={cat.id}
-                category={cat}
-                odd={idx % 2 === 1}
-                onEdit={() => openEdit(cat)}
-                onDelete={() => setDeleteTarget(cat)}
+            {/* Family groups */}
+            {families.map((family) => {
+              const familyCats = categoriesByFamily.get(family.id) ?? [];
+              const familyItemCount = familyCats.reduce((s, c) => s + c.productCount, 0);
+
+              return (
+                <FamilyGroup
+                  key={family.id}
+                  family={family}
+                  categories={familyCats}
+                  familyItemCount={familyItemCount}
+                  subcategoriesByCategory={subcategoriesByCategory}
+                  isExpanded={effectiveExpandedFamilies.has(family.id)}
+                  showAllCats={showAllCategories.has(family.id)}
+                  expandedCategories={effectiveExpandedCategories}
+                  showAllSubcategories={showAllSubcategories}
+                  onToggleFamily={() => toggleFamily(family.id)}
+                  onToggleShowAllCats={() => toggleShowAllCategories(family.id)}
+                  onToggleCategory={toggleCategory}
+                  onToggleShowAllSubs={toggleShowAllSubcategories}
+                  onEditCategory={openEdit}
+                  onDeleteCategory={(cat) => setDeleteTarget(cat)}
+                  onAddSubcategory={(catId) => setAddingSubcategoryFor(catId)}
+                  onEditSubcategory={(sub) => setEditingSubcategory(sub)}
+                  onDeleteSubcategory={(sub) => setDeleteSubTarget(sub)}
+                />
+              );
+            })}
+
+            {/* Ungrouped categories (familyId === null) */}
+            {ungroupedCategories.length > 0 && (
+              <FamilyGroup
+                key="__ungrouped__"
+                family={{
+                  id: "__ungrouped__",
+                  name: debouncedSearch ? "Search Results" : "Ungrouped",
+                  slug: "ungrouped",
+                  productCount: ungroupedCategories.reduce((s, c) => s + c.productCount, 0),
+                }}
+                categories={ungroupedCategories}
+                familyItemCount={ungroupedCategories.reduce((s, c) => s + c.productCount, 0)}
+                subcategoriesByCategory={subcategoriesByCategory}
+                isExpanded={effectiveExpandedFamilies.has("__ungrouped__") || (!!debouncedSearch && families.length === 0)}
+                showAllCats={showAllCategories.has("__ungrouped__")}
+                expandedCategories={effectiveExpandedCategories}
+                showAllSubcategories={showAllSubcategories}
+                onToggleFamily={() => toggleFamily("__ungrouped__")}
+                onToggleShowAllCats={() => toggleShowAllCategories("__ungrouped__")}
+                onToggleCategory={toggleCategory}
+                onToggleShowAllSubs={toggleShowAllSubcategories}
+                onEditCategory={openEdit}
+                onDeleteCategory={(cat) => setDeleteTarget(cat)}
+                onAddSubcategory={(catId) => setAddingSubcategoryFor(catId)}
+                onEditSubcategory={(sub) => setEditingSubcategory(sub)}
+                onDeleteSubcategory={(sub) => setDeleteSubTarget(sub)}
               />
-            ))}
+            )}
+
+            {/* Empty state */}
+            {families.length === 0 && ungroupedCategories.length === 0 && (
+              <div className="py-16 text-center text-[13px] text-muted-foreground">
+                {debouncedSearch ? "No categories match your search" : "No categories found"}
+              </div>
+            )}
           </div>
         )}
-
-        {/* Footer */}
-        <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-2">
-          <span className="text-[11px] text-muted-foreground">
-            Showing {categories.length} {categories.length === 1 ? "category" : "categories"}
-          </span>
-          <span className="text-[11px] text-muted-foreground tabular-nums">
-            {totalProducts.toLocaleString()} products total
-          </span>
-        </div>
       </div>
 
-      {/* ── Create / Edit Modal ── */}
+      {/* Create / Edit Category Modal */}
       {modalMode !== "closed" && (
         <CategoryModal
           mode={modalMode}
           initial={editingCategory}
+          families={families}
           onClose={closeModal}
           onSubmit={(form) => {
             if (modalMode === "create") {
-              createMut.mutate(
+              createCatMut.mutate(
                 {
                   name: form.name,
                   slug: form.slug,
@@ -381,11 +435,12 @@ export default function CategoriesPage() {
                   color: form.color || undefined,
                   sortOrder: form.sortOrder,
                   isActive: form.isActive,
-                },
+                  parentId: form.familyId || undefined,
+                } as any,
                 { onSuccess: closeModal },
               );
             } else if (editingCategory) {
-              updateMut.mutate(
+              updateCatMut.mutate(
                 {
                   categoryId: editingCategory.id,
                   name: form.name,
@@ -394,24 +449,88 @@ export default function CategoriesPage() {
                   color: form.color || undefined,
                   sortOrder: form.sortOrder,
                   isActive: form.isActive,
-                },
+                  parentId: form.familyId ?? null,
+                } as any,
                 { onSuccess: closeModal },
               );
             }
           }}
-          submitting={createMut.isPending || updateMut.isPending}
-          error={createMut.error?.message || updateMut.error?.message || null}
+          submitting={createCatMut.isPending || updateCatMut.isPending}
+          error={createCatMut.error?.message || updateCatMut.error?.message || null}
         />
       )}
 
-      {/* ── Delete Confirmation ── */}
+      {/* Inline Add Subcategory Modal */}
+      {addingSubcategoryFor && (
+        <SubcategoryModal
+          mode="create"
+          categoryId={addingSubcategoryFor}
+          initial={null}
+          onClose={() => setAddingSubcategoryFor(null)}
+          onSubmit={(form) => {
+            createSubMut.mutate(
+              {
+                categoryId: addingSubcategoryFor,
+                name: form.name,
+                slug: form.slug,
+                sortOrder: form.sortOrder,
+                isActive: form.isActive,
+              },
+              { onSuccess: () => setAddingSubcategoryFor(null) },
+            );
+          }}
+          submitting={createSubMut.isPending}
+          error={createSubMut.error?.message || null}
+        />
+      )}
+
+      {/* Edit Subcategory Modal */}
+      {editingSubcategory && (
+        <SubcategoryModal
+          mode="edit"
+          categoryId={editingSubcategory.categoryId}
+          initial={editingSubcategory}
+          onClose={() => setEditingSubcategory(null)}
+          onSubmit={(form) => {
+            updateSubMut.mutate(
+              {
+                id: editingSubcategory.id,
+                name: form.name,
+                slug: form.slug,
+                sortOrder: form.sortOrder,
+                isActive: form.isActive,
+              },
+              { onSuccess: () => setEditingSubcategory(null) },
+            );
+          }}
+          submitting={updateSubMut.isPending}
+          error={updateSubMut.error?.message || null}
+        />
+      )}
+
+      {/* Delete Category Confirmation */}
       {deleteTarget && (
         <DeleteConfirmModal
-          category={deleteTarget}
+          title="Delete Category"
+          itemName={deleteTarget.name}
+          itemCount={deleteTarget.productCount}
           onClose={() => setDeleteTarget(null)}
           onConfirm={handleDeleteConfirm}
-          submitting={deleteMut.isPending}
-          error={deleteMut.error?.message || null}
+          submitting={deleteCatMut.isPending}
+          error={deleteCatMut.error?.message || null}
+        />
+      )}
+
+      {/* Delete Subcategory Confirmation */}
+      {deleteSubTarget && (
+        <DeleteConfirmModal
+          title="Delete Sub-category"
+          itemName={deleteSubTarget.name}
+          itemCount={deleteSubTarget.productCount}
+          onClose={() => setDeleteSubTarget(null)}
+          onConfirm={handleDeleteSubConfirm}
+          submitting={deleteSubMut.isPending}
+          error={deleteSubMut.error?.message || null}
         />
       )}
     </div>
@@ -419,96 +538,323 @@ export default function CategoriesPage() {
 }
 
 /* ═══════════════════════════════════════════════════════
- * TABLE ROW
+ * LEVEL 1 — FAMILY GROUP (collapsible)
  * ═══════════════════════════════════════════════════════ */
 
-function CategoryTableRow({
+function FamilyGroup({
+  family,
+  categories,
+  familyItemCount,
+  subcategoriesByCategory,
+  isExpanded,
+  showAllCats,
+  expandedCategories,
+  showAllSubcategories,
+  onToggleFamily,
+  onToggleShowAllCats,
+  onToggleCategory,
+  onToggleShowAllSubs,
+  onEditCategory,
+  onDeleteCategory,
+  onAddSubcategory,
+  onEditSubcategory,
+  onDeleteSubcategory,
+}: {
+  family: ProductFamily;
+  categories: CategoryRow[];
+  familyItemCount: number;
+  subcategoriesByCategory: Map<string, SubcategoryRow[]>;
+  isExpanded: boolean;
+  showAllCats: boolean;
+  expandedCategories: Set<string>;
+  showAllSubcategories: Set<string>;
+  onToggleFamily: () => void;
+  onToggleShowAllCats: () => void;
+  onToggleCategory: (id: string) => void;
+  onToggleShowAllSubs: (id: string) => void;
+  onEditCategory: (cat: CategoryRow) => void;
+  onDeleteCategory: (cat: CategoryRow) => void;
+  onAddSubcategory: (categoryId: string) => void;
+  onEditSubcategory: (sub: SubcategoryRow) => void;
+  onDeleteSubcategory: (sub: SubcategoryRow) => void;
+}) {
+  const visibleCats = showAllCats ? categories : categories.slice(0, INITIAL_VISIBLE);
+  const hasMoreCats = categories.length > INITIAL_VISIBLE && !showAllCats;
+
+  return (
+    <div>
+      {/* Family row */}
+      <button
+        onClick={onToggleFamily}
+        className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
+      >
+        {/* Chevron */}
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center">
+          {isExpanded ? (
+            <ChevronDown size={14} className="text-muted-foreground" />
+          ) : (
+            <ChevronRight size={14} className="text-muted-foreground" />
+          )}
+        </div>
+
+        {/* Icon */}
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary/[0.08]">
+          <Layers size={13} className="text-primary" />
+        </div>
+
+        {/* Name */}
+        <span className="flex-1 text-[14px] font-semibold text-foreground">
+          {family.name}
+        </span>
+
+        {/* Stats */}
+        <span className="text-[12px] tabular-nums text-muted-foreground">
+          {familyItemCount.toLocaleString()} items
+        </span>
+        <span className="text-[11px] text-muted-foreground/60">&middot;</span>
+        <span className="text-[12px] tabular-nums text-muted-foreground">
+          {categories.length} {categories.length === 1 ? "category" : "categories"}
+        </span>
+      </button>
+
+      {/* Categories (expandable) */}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: isExpanded ? "1fr" : "0fr" }}
+      >
+        <div className="overflow-hidden">
+          {visibleCats.length > 0 ? (
+            <div className="border-t border-border/50 bg-muted/20">
+              {visibleCats.map((cat) => (
+                <CategoryGroup
+                  key={cat.id}
+                  category={cat}
+                  subcategories={subcategoriesByCategory.get(cat.id) ?? []}
+                  isExpanded={expandedCategories.has(cat.id)}
+                  showAllSubs={showAllSubcategories.has(cat.id)}
+                  onToggleExpand={() => onToggleCategory(cat.id)}
+                  onToggleShowAllSubs={() => onToggleShowAllSubs(cat.id)}
+                  onEdit={() => onEditCategory(cat)}
+                  onDelete={() => onDeleteCategory(cat)}
+                  onAddSubcategory={() => onAddSubcategory(cat.id)}
+                  onEditSubcategory={onEditSubcategory}
+                  onDeleteSubcategory={onDeleteSubcategory}
+                />
+              ))}
+
+              {hasMoreCats && (
+                <button
+                  onClick={onToggleShowAllCats}
+                  className="w-full py-2.5 text-center text-[12px] font-medium text-primary hover:bg-accent/40 transition-colors"
+                >
+                  Show all {categories.length} categories
+                </button>
+              )}
+            </div>
+          ) : isExpanded ? (
+            <div className="border-t border-border/50 bg-muted/20 py-6 text-center text-[12px] text-muted-foreground">
+              No categories in this family
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * LEVEL 2 — CATEGORY GROUP (nested, collapsible)
+ * ═══════════════════════════════════════════════════════ */
+
+function CategoryGroup({
   category: cat,
-  odd,
+  subcategories,
+  isExpanded,
+  showAllSubs,
+  onToggleExpand,
+  onToggleShowAllSubs,
+  onEdit,
+  onDelete,
+  onAddSubcategory,
+  onEditSubcategory,
+  onDeleteSubcategory,
+}: {
+  category: CategoryRow;
+  subcategories: SubcategoryRow[];
+  isExpanded: boolean;
+  showAllSubs: boolean;
+  onToggleExpand: () => void;
+  onToggleShowAllSubs: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onAddSubcategory: () => void;
+  onEditSubcategory: (sub: SubcategoryRow) => void;
+  onDeleteSubcategory: (sub: SubcategoryRow) => void;
+}) {
+  const visibleSubs = showAllSubs ? subcategories : subcategories.slice(0, INITIAL_VISIBLE);
+  const hasMoreSubs = subcategories.length > INITIAL_VISIBLE && !showAllSubs;
+
+  return (
+    <div>
+      {/* Category row */}
+      <div className="group flex items-center gap-3 py-2.5 pl-8 pr-4 transition-colors hover:bg-accent/40">
+        {/* Expand chevron */}
+        <button
+          onClick={onToggleExpand}
+          className="flex h-5 w-5 shrink-0 items-center justify-center"
+        >
+          {subcategories.length > 0 ? (
+            isExpanded ? (
+              <ChevronDown size={12} className="text-muted-foreground" />
+            ) : (
+              <ChevronRight size={12} className="text-muted-foreground" />
+            )
+          ) : (
+            <div className="h-1 w-1 rounded-full bg-muted-foreground/30" />
+          )}
+        </button>
+
+        {/* Color dot */}
+        <div
+          className="h-3 w-3 shrink-0 rounded-full border border-white shadow-sm"
+          style={{ backgroundColor: cat.color || "#94A3B8" }}
+        />
+
+        {/* Name - clickable to expand */}
+        <button
+          onClick={onToggleExpand}
+          className="flex-1 min-w-0 truncate text-left text-[13px] font-medium text-foreground"
+        >
+          {cat.name}
+        </button>
+
+        {/* Stats */}
+        <span className="shrink-0 inline-flex items-center justify-center rounded-md bg-primary/[0.06] px-2 py-0.5 text-[11px] font-semibold tabular-nums text-foreground">
+          {cat.productCount.toLocaleString()} items
+        </span>
+        {subcategories.length > 0 && (
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {subcategories.length} sub
+          </span>
+        )}
+
+        {/* Actions */}
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            onClick={onEdit}
+            className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted hover:text-foreground group-hover:opacity-100"
+            title="Edit category"
+          >
+            <Pencil size={12} />
+          </button>
+          <button
+            onClick={onDelete}
+            className={cn(
+              "rounded p-1.5 transition-all group-hover:opacity-100",
+              cat.productCount > 0
+                ? "text-muted-foreground/30 cursor-not-allowed opacity-0"
+                : "text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive",
+            )}
+            title={cat.productCount > 0 ? `${cat.productCount} items assigned` : "Delete category"}
+            disabled={cat.productCount > 0}
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+
+      {/* Subcategories (expandable) */}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: isExpanded ? "1fr" : "0fr" }}
+      >
+        <div className="overflow-hidden">
+          {isExpanded && (
+            <div className="bg-muted/10">
+              {visibleSubs.map((sub) => (
+                <SubcategoryRow
+                  key={sub.id}
+                  subcategory={sub}
+                  onEdit={() => onEditSubcategory(sub)}
+                  onDelete={() => onDeleteSubcategory(sub)}
+                />
+              ))}
+
+              {hasMoreSubs && (
+                <button
+                  onClick={onToggleShowAllSubs}
+                  className="w-full py-2 text-center text-[11px] font-medium text-primary hover:bg-accent/40 transition-colors"
+                >
+                  Show all {subcategories.length} sub-categories
+                </button>
+              )}
+
+              {subcategories.length === 0 && (
+                <div className="py-3 pl-14 pr-4 text-[12px] text-muted-foreground">
+                  No sub-categories
+                </div>
+              )}
+
+              {/* Add sub-category button */}
+              <button
+                onClick={onAddSubcategory}
+                className="flex w-full items-center gap-1.5 py-2 pl-14 pr-4 text-[12px] font-medium text-primary/80 transition-colors hover:bg-accent/40 hover:text-primary"
+              >
+                <Plus size={11} strokeWidth={2.5} />
+                Add Sub-category
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * LEVEL 3 — SUBCATEGORY ROW
+ * ═══════════════════════════════════════════════════════ */
+
+function SubcategoryRow({
+  subcategory: sub,
   onEdit,
   onDelete,
 }: {
-  category: CategoryRow;
-  odd: boolean;
+  subcategory: SubcategoryRow;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   return (
-    <div
-      className={cn(
-        "group flex items-center px-4 py-2.5 transition-colors duration-100 hover:bg-accent/60",
-        odd && "bg-muted/20",
-      )}
-    >
-      {/* Color dot */}
-      <div className="w-5 shrink-0 flex items-center justify-center">
-        <div
-          className="h-3.5 w-3.5 rounded-full border border-white shadow-sm"
-          style={{ backgroundColor: cat.color || "#94A3B8" }}
-        />
-      </div>
+    <div className="group flex items-center gap-3 py-2 pl-14 pr-4 transition-colors hover:bg-accent/40">
+      <div className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+      <span className="flex-1 min-w-0 truncate text-[12px] text-foreground">
+        {sub.name}
+      </span>
 
-      {/* Name + slug */}
-      <div className="ml-3 flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium leading-tight text-foreground truncate">
-            {cat.name}
-          </span>
-          {cat.code && (
-            <span className="hidden sm:inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-              {cat.code}
-            </span>
-          )}
-        </div>
-        <div className="mt-0.5 font-mono text-[11px] leading-tight text-muted-foreground truncate">
-          {cat.slug}
-        </div>
-      </div>
+      <span className="shrink-0 inline-flex items-center justify-center rounded-md bg-primary/[0.04] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
+        {sub.productCount.toLocaleString()} items
+      </span>
 
-      {/* Description */}
-      <div className="w-56 pr-2">
-        <span className="text-[12px] leading-tight text-muted-foreground line-clamp-2">
-          {cat.description || "—"}
-        </span>
-      </div>
-
-      {/* Product count */}
-      <div className="w-24 text-center">
-        <span className="inline-flex items-center justify-center rounded-md bg-primary/[0.06] px-2.5 py-1 text-[12px] font-semibold tabular-nums text-foreground">
-          {cat.productCount.toLocaleString()}
-        </span>
-      </div>
-
-      {/* Status */}
-      <div className="w-20 text-center">
-        <span
-          className={cn(
-            "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
-            cat.isActive
-              ? "bg-success/10 text-success"
-              : "bg-muted text-muted-foreground",
-          )}
-        >
-          {cat.isActive ? "Active" : "Inactive"}
-        </span>
-      </div>
-
-      {/* Actions */}
-      <div className="w-20 flex items-center justify-end gap-1">
+      <div className="flex shrink-0 items-center gap-0.5">
         <button
           onClick={onEdit}
-          className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted hover:text-foreground group-hover:opacity-100"
-          title="Edit category"
+          className="rounded p-1 text-muted-foreground opacity-0 transition-all hover:bg-muted hover:text-foreground group-hover:opacity-100"
+          title="Edit sub-category"
         >
-          <Pencil size={13} />
+          <Pencil size={11} />
         </button>
         <button
           onClick={onDelete}
-          className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-          title={cat.productCount > 0 ? `Cannot delete \u2014 ${cat.productCount} products assigned` : "Delete category"}
-          disabled={cat.productCount > 0}
+          className={cn(
+            "rounded p-1 transition-all group-hover:opacity-100",
+            sub.productCount > 0
+              ? "text-muted-foreground/30 cursor-not-allowed opacity-0"
+              : "text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive",
+          )}
+          title={sub.productCount > 0 ? `${sub.productCount} items assigned` : "Delete sub-category"}
+          disabled={sub.productCount > 0}
         >
-          <Trash2 size={13} className={cat.productCount > 0 ? "opacity-30" : ""} />
+          <Trash2 size={11} />
         </button>
       </div>
     </div>
@@ -516,46 +862,23 @@ function CategoryTableRow({
 }
 
 /* ═══════════════════════════════════════════════════════
- * SORT BUTTON
+ * CATEGORY CREATE / EDIT MODAL
  * ═══════════════════════════════════════════════════════ */
 
-function SortButton({
-  label,
-  active,
-  dir,
-  onClick,
-  hint,
-}: {
-  label: string;
-  active: boolean;
-  dir: SortDir;
-  onClick: () => void;
-  hint?: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex h-9 items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors",
-        active
-          ? "border-primary/20 bg-primary/[0.04] text-foreground"
-          : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
-      )}
-    >
-      <ArrowUpDown size={12} />
-      {label}
-      {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
-    </button>
-  );
+interface CategoryFormData {
+  name: string;
+  slug: string;
+  description: string;
+  color: string;
+  sortOrder: number;
+  isActive: boolean;
+  familyId: string | null;
 }
-
-/* ═══════════════════════════════════════════════════════
- * CREATE / EDIT MODAL
- * ═══════════════════════════════════════════════════════ */
 
 function CategoryModal({
   mode,
   initial,
+  families,
   onClose,
   onSubmit,
   submitting,
@@ -563,6 +886,7 @@ function CategoryModal({
 }: {
   mode: "create" | "edit";
   initial: CategoryRow | null;
+  families: ProductFamily[];
   onClose: () => void;
   onSubmit: (form: CategoryFormData) => void;
   submitting: boolean;
@@ -577,23 +901,27 @@ function CategoryModal({
         color: initial.color || "#2563EB",
         sortOrder: initial.sortOrder,
         isActive: initial.isActive,
+        familyId: initial.familyId,
       };
     }
-    return { ...DEFAULT_FORM };
+    return {
+      name: "",
+      slug: "",
+      description: "",
+      color: "#2563EB",
+      sortOrder: 0,
+      isActive: true,
+      familyId: families[0]?.id ?? null,
+    };
   });
 
   const [autoSlug, setAutoSlug] = useState(mode === "create");
   const nameRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    nameRef.current?.focus();
-  }, []);
+  useEffect(() => { nameRef.current?.focus(); }, []);
 
   function slugify(text: string) {
-    return text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "");
+    return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   }
 
   function handleNameChange(value: string) {
@@ -617,74 +945,72 @@ function CategoryModal({
         className="w-full max-w-lg rounded-xl border border-border bg-background shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Modal header */}
         <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
           <h2 className="text-[15px] font-semibold text-foreground">
             {mode === "create" ? "New Category" : "Edit Category"}
           </h2>
-          <button
-            onClick={onClose}
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
+          <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
             <X size={16} />
           </button>
         </div>
 
-        {/* Modal body */}
         <div className="space-y-4 px-5 py-4">
           {/* Name */}
           <div>
-            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">
-              Category Name *
-            </label>
+            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Name *</label>
             <input
               ref={nameRef}
               type="text"
               value={form.name}
               onChange={(e) => handleNameChange(e.target.value)}
-              placeholder="e.g. Brake Systems"
+              placeholder="e.g. Brake Parts"
               className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
             />
           </div>
 
           {/* Slug */}
           <div>
-            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">
-              Slug *
-            </label>
+            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Slug *</label>
             <input
               type="text"
               value={form.slug}
               onChange={(e) => handleSlugChange(e.target.value)}
-              placeholder="brake-systems"
+              placeholder="brake-parts"
               className="h-9 w-full rounded-lg border border-border bg-background px-3 font-mono text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              URL-safe identifier. Lowercase letters, numbers, and hyphens only.
-            </p>
+          </div>
+
+          {/* Family dropdown */}
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Family</label>
+            <select
+              value={form.familyId ?? ""}
+              onChange={(e) => setForm((f) => ({ ...f, familyId: e.target.value || null }))}
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px] text-foreground outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+            >
+              <option value="">None (Ungrouped)</option>
+              {families.map((f) => (
+                <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </select>
           </div>
 
           {/* Description */}
           <div>
-            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">
-              Description
-            </label>
+            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Description</label>
             <textarea
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="Brief description of this category…"
+              placeholder="Brief description..."
               rows={2}
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60 resize-none focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
             />
           </div>
 
-          {/* Color + Sort Order row */}
+          {/* Color + Active toggle */}
           <div className="flex gap-4">
-            {/* Color */}
             <div className="flex-1">
-              <label className="mb-1 block text-[12px] font-medium text-muted-foreground">
-                Color
-              </label>
+              <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Color</label>
               <div className="flex flex-wrap gap-1.5">
                 {PRESET_COLORS.map((c) => (
                   <button
@@ -693,9 +1019,7 @@ function CategoryModal({
                     onClick={() => setForm((f) => ({ ...f, color: c }))}
                     className={cn(
                       "h-6 w-6 rounded-full border-2 transition-all",
-                      form.color === c
-                        ? "border-foreground scale-110"
-                        : "border-transparent hover:scale-105",
+                      form.color === c ? "border-foreground scale-110" : "border-transparent hover:scale-105",
                     )}
                     style={{ backgroundColor: c }}
                   />
@@ -703,24 +1027,163 @@ function CategoryModal({
               </div>
             </div>
 
-            {/* Sort Order */}
-            <div className="w-24">
-              <label className="mb-1 block text-[12px] font-medium text-muted-foreground">
-                Sort Order
-              </label>
-              <input
-                type="number"
-                value={form.sortOrder}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    sortOrder: parseInt(e.target.value) || 0,
-                  }))
-                }
-                min={0}
-                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px] text-foreground outline-none tabular-nums focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
-              />
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, isActive: !f.isActive }))}
+                className={cn(
+                  "relative h-5 w-9 rounded-full transition-colors",
+                  form.isActive ? "bg-primary" : "bg-muted-foreground/30",
+                )}
+              >
+                <div
+                  className={cn(
+                    "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
+                    form.isActive ? "translate-x-4" : "translate-x-0.5",
+                  )}
+                />
+              </button>
+              <span className="text-[13px] text-foreground">{form.isActive ? "Active" : "Inactive"}</span>
             </div>
+          </div>
+
+          {error && (
+            <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-lg border border-border px-3.5 py-2 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(form)}
+            disabled={!isValid || submitting}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50"
+          >
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} strokeWidth={2.5} />}
+            {mode === "create" ? "Create" : "Save Changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * SUBCATEGORY CREATE / EDIT MODAL
+ * ═══════════════════════════════════════════════════════ */
+
+interface SubcategoryFormData {
+  name: string;
+  slug: string;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+function SubcategoryModal({
+  mode,
+  categoryId: _categoryId,
+  initial,
+  onClose,
+  onSubmit,
+  submitting,
+  error,
+}: {
+  mode: "create" | "edit";
+  categoryId: string;
+  initial: SubcategoryRow | null;
+  onClose: () => void;
+  onSubmit: (form: SubcategoryFormData) => void;
+  submitting: boolean;
+  error: string | null;
+}) {
+  const [form, setForm] = useState<SubcategoryFormData>(() => {
+    if (initial) {
+      return {
+        name: initial.name,
+        slug: initial.slug,
+        sortOrder: initial.sortOrder,
+        isActive: initial.isActive,
+      };
+    }
+    return {
+      name: "",
+      slug: "",
+      sortOrder: 0,
+      isActive: true,
+    };
+  });
+
+  const [autoSlug, setAutoSlug] = useState(mode === "create");
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { nameRef.current?.focus(); }, []);
+
+  function slugify(text: string) {
+    return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  function handleNameChange(value: string) {
+    setForm((f) => ({
+      ...f,
+      name: value,
+      ...(autoSlug ? { slug: slugify(value) } : {}),
+    }));
+  }
+
+  function handleSlugChange(value: string) {
+    setAutoSlug(false);
+    setForm((f) => ({ ...f, slug: value }));
+  }
+
+  const isValid = form.name.trim().length > 0 && form.slug.trim().length > 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[10vh]">
+      <div
+        className="w-full max-w-md rounded-xl border border-border bg-background shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+          <h2 className="text-[15px] font-semibold text-foreground">
+            {mode === "create" ? "New Sub-category" : "Edit Sub-category"}
+          </h2>
+          <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="space-y-4 px-5 py-4">
+          {/* Name */}
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Name *</label>
+            <input
+              ref={nameRef}
+              type="text"
+              value={form.name}
+              onChange={(e) => handleNameChange(e.target.value)}
+              placeholder="e.g. Brake Pads"
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+            />
+          </div>
+
+          {/* Slug */}
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Slug *</label>
+            <input
+              type="text"
+              value={form.slug}
+              onChange={(e) => handleSlugChange(e.target.value)}
+              placeholder="brake-pads"
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 font-mono text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+            />
           </div>
 
           {/* Active toggle */}
@@ -740,12 +1203,9 @@ function CategoryModal({
                 )}
               />
             </button>
-            <span className="text-[13px] text-foreground">
-              {form.isActive ? "Active" : "Inactive"}
-            </span>
+            <span className="text-[13px] text-foreground">{form.isActive ? "Active" : "Inactive"}</span>
           </div>
 
-          {/* Error */}
           {error && (
             <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
               {error}
@@ -753,7 +1213,6 @@ function CategoryModal({
           )}
         </div>
 
-        {/* Modal footer */}
         <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
           <button
             onClick={onClose}
@@ -767,12 +1226,8 @@ function CategoryModal({
             disabled={!isValid || submitting}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50"
           >
-            {submitting ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Check size={14} strokeWidth={2.5} />
-            )}
-            {mode === "create" ? "Create Category" : "Save Changes"}
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} strokeWidth={2.5} />}
+            {mode === "create" ? "Create" : "Save Changes"}
           </button>
         </div>
       </div>
@@ -781,17 +1236,21 @@ function CategoryModal({
 }
 
 /* ═══════════════════════════════════════════════════════
- * DELETE CONFIRMATION MODAL
+ * DELETE CONFIRMATION (shared for categories & subcategories)
  * ═══════════════════════════════════════════════════════ */
 
 function DeleteConfirmModal({
-  category,
+  title,
+  itemName,
+  itemCount,
   onClose,
   onConfirm,
   submitting,
   error,
 }: {
-  category: CategoryRow;
+  title: string;
+  itemName: string;
+  itemCount: number;
   onClose: () => void;
   onConfirm: () => void;
   submitting: boolean;
@@ -806,22 +1265,18 @@ function DeleteConfirmModal({
               <AlertTriangle size={18} className="text-destructive" />
             </div>
             <div>
-              <h3 className="text-[14px] font-semibold text-foreground">Delete Category</h3>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
-                This action cannot be undone.
-              </p>
+              <h3 className="text-[14px] font-semibold text-foreground">{title}</h3>
+              <p className="mt-0.5 text-[12px] text-muted-foreground">This action cannot be undone.</p>
             </div>
           </div>
 
           <p className="mt-4 text-[13px] text-foreground">
-            Are you sure you want to delete{" "}
-            <span className="font-semibold">{category.name}</span>?
+            Are you sure you want to delete <span className="font-semibold">{itemName}</span>?
           </p>
 
-          {category.productCount > 0 && (
+          {itemCount > 0 && (
             <div className="mt-3 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-[12px] text-warning">
-              This category has {category.productCount.toLocaleString()} products
-              assigned. Reassign them before deleting.
+              This item has {itemCount.toLocaleString()} products assigned. Reassign them before deleting.
             </div>
           )}
 
@@ -842,14 +1297,10 @@ function DeleteConfirmModal({
           </button>
           <button
             onClick={onConfirm}
-            disabled={submitting || category.productCount > 0}
+            disabled={submitting || itemCount > 0}
             className="flex items-center gap-1.5 rounded-lg bg-destructive px-3.5 py-2 text-[13px] font-medium text-destructive-foreground shadow-sm transition-all hover:bg-destructive/90 active:scale-[0.98] disabled:opacity-50"
           >
-            {submitting ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Trash2 size={14} />
-            )}
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
             Delete
           </button>
         </div>
