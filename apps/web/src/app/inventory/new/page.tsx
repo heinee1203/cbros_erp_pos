@@ -18,9 +18,12 @@ import {
   AlertCircle,
   Check,
   Info,
+  Settings,
 } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { useCreateProduct, useProductFamilies } from "@/hooks/use-products";
+import { useCreateOptionType } from "@/hooks/use-product-options";
+import { useCreateVariantBatch } from "@/hooks/use-variants";
 import { cn } from "@/lib/utils";
 
 /* ─────────────────────────────────────────────
@@ -75,6 +78,12 @@ interface AttributeEntry {
   values: string;
 }
 
+interface OptionTypeEntry {
+  id: string;
+  name: string;
+  values: string; // comma-separated
+}
+
 /* ─────────────────────────────────────────────
  * Page
  * ───────────────────────────────────────────── */
@@ -83,6 +92,8 @@ export default function AddItemPage() {
   const router = useRouter();
   const { token, locationId, user, locations } = useAuth();
   const createMutation = useCreateProduct(token, locationId);
+  const createOptionTypeMutation = useCreateOptionType(token, locationId);
+  const createVariantBatchMutation = useCreateVariantBatch(token, locationId);
   const familiesQuery = useProductFamilies(token, locationId);
   const families = familiesQuery.data?.data ?? [];
 
@@ -125,6 +136,11 @@ export default function AddItemPage() {
 
   // ── Section 5: Attributes / Variants ──
   const [attributes, setAttributes] = useState<AttributeEntry[]>([]);
+
+  // ── Section 5b: Variant Setup ──
+  const [hasVariants, setHasVariants] = useState(false);
+  const [optionTypes, setOptionTypes] = useState<OptionTypeEntry[]>([]);
+  const [variantPrices, setVariantPrices] = useState<Record<string, string>>({});
 
   // ── Section 6: Vehicle Compatibility ──
   const [vehicles, setVehicles] = useState<VehicleEntry[]>([]);
@@ -169,17 +185,23 @@ export default function AddItemPage() {
     sku.trim() !== "" &&
     category !== "";
 
+  const [savingStep, setSavingStep] = useState<string | null>(null);
+  const isSaving = createMutation.isPending || !!savingStep;
+
   const handleSave = async (addAnother = false) => {
     if (!isValid) return;
     setError(null);
     setSuccessMessage(null);
+    setSavingStep(null);
 
     const mnemonic = mnemonicSku.length === 10 && /^[A-Z]{10}$/.test(mnemonicSku)
       ? mnemonicSku
       : generateMnemonic(name);
 
     try {
-      await createMutation.mutateAsync({
+      // Step 1: Create the parent product
+      setSavingStep(hasVariants ? "Creating parent product..." : null);
+      const parentResult: any = await createMutation.mutateAsync({
         name: name.trim(),
         sku: sku.trim(),
         mnemonicSku: mnemonic,
@@ -194,6 +216,7 @@ export default function AddItemPage() {
         leadTimeDays: parseInt(leadTimeDays, 10) || 7,
         initialStock: trackInventory ? parseInt(initialStock, 10) || 0 : 0,
         locationIds: Array.from(selectedLocations),
+        isParent: hasVariants || undefined,
         vehicleCompatibility:
           vehicles.length > 0
             ? vehicles
@@ -209,8 +232,70 @@ export default function AddItemPage() {
             : undefined,
       });
 
+      // Step 2 & 3: Create option types + variants if hasVariants
+      if (hasVariants && generatedVariants.length > 0) {
+        const parentId = parentResult?.data?.id ?? parentResult?.id;
+        if (!parentId) throw new Error("Failed to get parent product ID");
+
+        const validOpts = optionTypes.filter((o) => o.name.trim() && o.values.trim());
+
+        // Step 2: Create each option type and collect returned value IDs
+        setSavingStep("Creating option types...");
+        const createdOptionTypes: Array<{
+          name: string;
+          values: Array<{ id: string; value: string }>;
+        }> = [];
+
+        for (const opt of validOpts) {
+          const values = opt.values.split(",").map((v) => v.trim()).filter(Boolean);
+          const result: any = await createOptionTypeMutation.mutateAsync({
+            productId: parentId,
+            name: opt.name.trim(),
+            values,
+          });
+          const created = result?.data ?? result;
+          createdOptionTypes.push({
+            name: opt.name.trim(),
+            values: (created.values ?? []).map((v: any) => ({ id: v.id, value: v.value })),
+          });
+        }
+
+        // Step 3: Map generated variants to option value IDs and create batch
+        setSavingStep("Creating variants...");
+        const variantPayloads = generatedVariants.map((v) => {
+          const optionValueIds: string[] = [];
+          v.optionValues.forEach((val, idx) => {
+            const optType = createdOptionTypes[idx];
+            if (optType) {
+              const matched = optType.values.find(
+                (ov) => ov.value.toLowerCase() === val.toLowerCase(),
+              );
+              if (matched) optionValueIds.push(matched.id);
+            }
+          });
+
+          const variantMnemonic = generateMnemonic(v.sku);
+          const variantPrice = variantPrices[v.key];
+
+          return {
+            sku: v.sku,
+            mnemonicSku: variantMnemonic,
+            unitPrice: variantPrice || unitPrice || "0.00",
+            costPrice: showCost ? (costPrice || "0.00") : "0.00",
+            optionValueIds,
+          };
+        });
+
+        await createVariantBatchMutation.mutateAsync({
+          parentId,
+          variants: variantPayloads,
+        });
+      }
+
+      setSavingStep(null);
+
       if (addAnother) {
-        setSuccessMessage(`"${name}" created successfully`);
+        setSuccessMessage(`"${name}" created successfully${hasVariants ? ` with ${generatedVariants.length} variants` : ""}`);
         setName("");
         setSku("");
         setMnemonicSku("");
@@ -220,11 +305,15 @@ export default function AddItemPage() {
         setInitialStock("0");
         setVehicles([]);
         setAttributes([]);
+        setHasVariants(false);
+        setOptionTypes([]);
+        setVariantPrices({});
       } else {
         router.push("/inventory");
       }
     } catch (err: any) {
-      setError(err?.message || "Failed to create product");
+      setSavingStep(null);
+      setError(err?.message || "Failed to create item");
     }
   };
 
@@ -256,7 +345,52 @@ export default function AddItemPage() {
     setAttributes((prev) => prev.filter((a) => a.id !== id));
   };
 
-  // Variant preview
+  // ── Option type helpers (for variant setup) ──
+  const addOptionType = () => {
+    setOptionTypes((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), name: "", values: "" },
+    ]);
+  };
+  const updateOptionType = (id: string, field: keyof OptionTypeEntry, value: string) => {
+    setOptionTypes((prev) => prev.map((o) => (o.id === id ? { ...o, [field]: value } : o)));
+  };
+  const removeOptionType = (id: string) => {
+    setOptionTypes((prev) => prev.filter((o) => o.id !== id));
+  };
+
+  // Generated variant rows from option types
+  const generatedVariants = useMemo(() => {
+    const validOpts = optionTypes.filter((o) => o.name.trim() && o.values.trim());
+    if (validOpts.length === 0) return [];
+    const valueSets = validOpts.map((o) =>
+      o.values.split(",").map((v) => v.trim()).filter(Boolean),
+    );
+    const combine = (sets: string[][]): string[][] => {
+      if (sets.length === 0) return [[]];
+      const [first, ...rest] = sets;
+      const sub = combine(rest);
+      return first.flatMap((val) => sub.map((s) => [val, ...s]));
+    };
+    const combos = combine(valueSets);
+    const baseSku = sku.trim() || "ITEM";
+    return combos.map((combo) => {
+      const suffix = combo
+        .map((v) => v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 2))
+        .join("-");
+      const variantSku = `${baseSku}-${suffix}`;
+      const key = combo.join("|");
+      return {
+        key,
+        sku: variantSku,
+        optionValues: combo,
+        optionNames: validOpts.map((o) => o.name),
+        price: variantPrices[key] ?? "",
+      };
+    });
+  }, [optionTypes, sku, variantPrices]);
+
+  // Variant preview (existing attributes section)
   const variantCombinations = useMemo(() => {
     const validAttrs = attributes.filter(
       (a) => a.name.trim() && a.values.trim(),
@@ -375,9 +509,9 @@ export default function AddItemPage() {
 
             {/* Family */}
             <div>
-              <FieldLabel>Family</FieldLabel>
+              <FieldLabel>Group</FieldLabel>
               <select value={familyId} onChange={(e) => setFamilyId(e.target.value)} className={fieldClass}>
-                <option value="">No family (standalone)</option>
+                <option value="">No group (standalone)</option>
                 {families.map((f) => (
                   <option key={f.id} value={f.id}>{f.name}</option>
                 ))}
@@ -541,77 +675,183 @@ export default function AddItemPage() {
         </FormSection>
 
         {/* ══════════════════════════════════════════
-         *  SECTION 5 — Attributes / Variants
+         *  SECTION 5 — Variants
          * ══════════════════════════════════════════ */}
         <FormSection
-          id="attributes"
-          icon={Layers}
-          title="Attributes / Variants"
-          collapsed={collapsedSections.has("attributes")}
-          onToggle={() => toggleSection("attributes")}
-          badge={attributes.length > 0 ? `${attributes.length} attr` : undefined}
+          id="variants"
+          icon={Settings}
+          title="Variants"
+          collapsed={collapsedSections.has("variants")}
+          onToggle={() => toggleSection("variants")}
+          badge={hasVariants && generatedVariants.length > 0 ? `${generatedVariants.length} variants` : undefined}
         >
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
-              <Info size={13} />
-              <span>Define attributes (e.g. Pack Size, Viscosity, Tire Size) to generate variant SKUs. Variant SKUs will be created as separate products sharing a family.</span>
+          <div className="space-y-4">
+            {/* Toggle */}
+            <div className="flex items-center gap-2">
+              <ToggleSwitch checked={hasVariants} onChange={setHasVariants} />
+              <span className="text-[13px] text-foreground">This item has variants</span>
             </div>
 
-            {attributes.map((attr) => (
-              <div key={attr.id} className="flex items-start gap-2">
-                <div className="flex-1 grid grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    value={attr.name}
-                    onChange={(e) => updateAttribute(attr.id, "name", e.target.value)}
-                    placeholder="Attribute (e.g. Pack Size)"
-                    className={fieldClass}
-                  />
-                  <input
-                    type="text"
-                    value={attr.values}
-                    onChange={(e) => updateAttribute(attr.id, "values", e.target.value)}
-                    placeholder="Values (comma-separated: 1L, 4L, 5L)"
-                    className={fieldClass}
-                  />
+            {hasVariants && (
+              <>
+                {/* Info */}
+                <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
+                  <Info size={13} />
+                  <span>Define option types (e.g. Size, Color) and their values. Variants will be auto-generated as the cartesian product of all values.</span>
                 </div>
-                <button onClick={() => removeAttribute(attr.id)} className="mt-1.5 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
-                  <Trash2 size={14} />
+
+                {/* Option Types List */}
+                {optionTypes.map((opt) => (
+                  <div key={opt.id} className="rounded-lg border border-border bg-muted/10 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Option Type</span>
+                      <button onClick={() => removeOptionType(opt.id)} className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <FieldLabel>Name</FieldLabel>
+                        <input
+                          type="text"
+                          value={opt.name}
+                          onChange={(e) => updateOptionType(opt.id, "name", e.target.value)}
+                          placeholder="e.g. Size"
+                          className={fieldClass}
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Values</FieldLabel>
+                        <input
+                          type="text"
+                          value={opt.values}
+                          onChange={(e) => updateOptionType(opt.id, "values", e.target.value)}
+                          placeholder="Small, Medium, Large"
+                          className={fieldClass}
+                        />
+                        <p className="mt-0.5 text-[10px] text-muted-foreground">Comma-separated</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  onClick={addOptionType}
+                  className="flex items-center gap-1.5 text-[12px] font-medium text-primary hover:text-primary/80"
+                >
+                  <Plus size={13} />
+                  Add Option Type
                 </button>
-              </div>
-            ))}
 
-            <button
-              onClick={addAttribute}
-              className="flex items-center gap-1.5 text-[12px] font-medium text-primary hover:text-primary/80"
-            >
-              <Plus size={13} />
-              Add Attribute
-            </button>
-
-            {/* Variant Preview */}
-            {variantCombinations.length > 0 && (
-              <div className="mt-2 rounded-lg border border-border bg-muted/20 p-3">
-                <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Variant Preview ({variantCombinations.length} combinations)
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {variantCombinations.map((combo, i) => (
-                    <span
-                      key={i}
-                      className="rounded-md bg-background border border-border px-2 py-0.5 text-[11px] font-medium text-foreground"
-                    >
-                      {combo.join(" / ")}
-                    </span>
-                  ))}
-                </div>
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  These will be created as individual SKUs under the selected family when variant creation is enabled.
-                </p>
-              </div>
+                {/* Variant Preview Table */}
+                {generatedVariants.length > 0 && (
+                  <div className="mt-2 rounded-lg border border-border overflow-hidden">
+                    <div className="bg-muted/40 px-3 py-2 border-b border-border">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Variant Preview — {generatedVariants.length} variant{generatedVariants.length !== 1 ? "s" : ""} will be created
+                      </p>
+                    </div>
+                    <table className="w-full text-[13px]">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/20">
+                          <th scope="col" className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground">SKU</th>
+                          {generatedVariants[0]?.optionNames.map((n) => (
+                            <th key={n} scope="col" className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{n}</th>
+                          ))}
+                          <th scope="col" className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Price Override</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {generatedVariants.slice(0, 50).map((v) => (
+                          <tr key={v.key} className="border-b border-border last:border-0">
+                            <td className="px-3 py-1.5 font-mono text-[12px] text-foreground">{v.sku}</td>
+                            {v.optionValues.map((val, i) => (
+                              <td key={i} className="px-3 py-1.5 text-foreground">{val}</td>
+                            ))}
+                            <td className="px-3 py-1.5">
+                              <div className="relative w-28">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">₱</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={variantPrices[v.key] ?? ""}
+                                  onChange={(e) =>
+                                    setVariantPrices((prev) => ({ ...prev, [v.key]: e.target.value }))
+                                  }
+                                  placeholder={unitPrice || "0.00"}
+                                  className="h-7 w-full rounded border border-border bg-background pl-6 pr-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground/50 focus:border-primary/40 focus:ring-1 focus:ring-primary/[0.08]"
+                                />
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {generatedVariants.length > 50 && (
+                      <div className="bg-muted/20 px-3 py-2 border-t border-border text-[11px] text-muted-foreground">
+                        Showing first 50 of {generatedVariants.length} variants
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </FormSection>
+
+        {/* ══════════════════════════════════════════
+         *  SECTION 5b — Attributes (non-variant)
+         * ══════════════════════════════════════════ */}
+        {!hasVariants && (
+          <FormSection
+            id="attributes"
+            icon={Layers}
+            title="Attributes"
+            collapsed={collapsedSections.has("attributes")}
+            onToggle={() => toggleSection("attributes")}
+            badge={attributes.length > 0 ? `${attributes.length} attr` : undefined}
+          >
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
+                <Info size={13} />
+                <span>Define attributes (e.g. Pack Size, Viscosity, Tire Size) as metadata for this product.</span>
+              </div>
+
+              {attributes.map((attr) => (
+                <div key={attr.id} className="flex items-start gap-2">
+                  <div className="flex-1 grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={attr.name}
+                      onChange={(e) => updateAttribute(attr.id, "name", e.target.value)}
+                      placeholder="Attribute (e.g. Pack Size)"
+                      className={fieldClass}
+                    />
+                    <input
+                      type="text"
+                      value={attr.values}
+                      onChange={(e) => updateAttribute(attr.id, "values", e.target.value)}
+                      placeholder="Values (comma-separated: 1L, 4L, 5L)"
+                      className={fieldClass}
+                    />
+                  </div>
+                  <button onClick={() => removeAttribute(attr.id)} className="mt-1.5 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+
+              <button
+                onClick={addAttribute}
+                className="flex items-center gap-1.5 text-[12px] font-medium text-primary hover:text-primary/80"
+              >
+                <Plus size={13} />
+                Add Attribute
+              </button>
+            </div>
+          </FormSection>
+        )}
 
         {/* ══════════════════════════════════════════
          *  SECTION 6 — Vehicle Compatibility
@@ -702,22 +942,22 @@ export default function AddItemPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleSave(true)}
-              disabled={!isValid || createMutation.isPending}
+              disabled={!isValid || isSaving}
               className="rounded-lg border border-border bg-background px-4 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
             >
               Save & Add Another
             </button>
             <button
               onClick={() => handleSave(false)}
-              disabled={!isValid || createMutation.isPending}
+              disabled={!isValid || isSaving}
               className="flex items-center gap-1.5 rounded-lg bg-primary px-5 py-2 text-[13px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {createMutation.isPending ? (
+              {isSaving ? (
                 <Loader2 size={14} className="animate-spin" />
               ) : (
                 <Check size={14} />
               )}
-              {createMutation.isPending ? "Saving…" : "Save Item"}
+              {savingStep ? savingStep : isSaving ? "Saving..." : "Save Item"}
             </button>
           </div>
         </div>
