@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { db } from "@apex/database";
-import { products, inventory, productFamilies, vehicleCompatibility } from "@apex/database/schema";
+import { products, inventory, productFamilies, vehicleCompatibility, categories, productSubcategories } from "@apex/database/schema";
 import { eq, and, ilike, sql, asc, desc, type SQL } from "drizzle-orm";
 import { createProductSchema, generateEan13, isValidEan13 } from "@apex/types";
 
@@ -69,6 +69,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         q.search,
         q.category,
         q.stockStatus,
+        q.subCategoryId,
+        q.familyId,
+        q.subcategoryId,
       );
     }
 
@@ -85,8 +88,33 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       conditions.push(eq(products.isActive, true));
     }
 
+    // parentOnly mode: hide variant children, show only parent + standalone
+    const parentOnly = q.parentOnly === "true";
+    if (parentOnly) {
+      conditions.push(sql`${products.parentProductId} IS NULL`);
+    }
+
+    // Filter by specific parent (show variants of a parent)
+    if (q.parentProductId) {
+      conditions.push(eq(products.parentProductId, q.parentProductId));
+    }
+
     if (q.search && q.search.length >= 2) {
-      conditions.push(ilike(products.name, `%${q.search}%`));
+      conditions.push(
+        sql`(${products.name} ILIKE ${"%" + q.search + "%"} OR ${categories.name} ILIKE ${"%" + q.search + "%"})`,
+      );
+    }
+
+    if (q.familyId) {
+      conditions.push(eq(products.familyId, q.familyId));
+    }
+
+    if (q.subCategoryId) {
+      conditions.push(eq(products.categoryId, q.subCategoryId));
+    }
+
+    if (q.subcategoryId) {
+      conditions.push(eq(products.subcategoryId, q.subcategoryId));
     }
 
     if (q.category) {
@@ -108,6 +136,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       .select({ count: sql<number>`count(*)::int` })
       .from(inventory)
       .innerJoin(products, eq(inventory.productId, products.id))
+      .leftJoin(categories, eq(products.categoryId, categories.id))
       .where(where);
 
     // Build ORDER BY — always add products.id as tie-breaker for stable pagination
@@ -135,10 +164,18 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         reorderPoint: inventory.reorderPoint,
         familyId: products.familyId,
         familyName: productFamilies.name,
+        subCategoryId: products.categoryId,
+        subCategoryName: categories.name,
+        subcategoryId: products.subcategoryId,
+        subcategoryName: productSubcategories.name,
+        parentProductId: products.parentProductId,
+        isParent: products.isParent,
       })
       .from(inventory)
       .innerJoin(products, eq(inventory.productId, products.id))
       .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .leftJoin(productSubcategories, eq(products.subcategoryId, productSubcategories.id))
       .where(where)
       .orderBy(...orderClauses)
       .limit(limit)
@@ -183,6 +220,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         barcode: products.barcode,
         stockLevel: inventory.stockLevel,
         reorderPoint: inventory.reorderPoint,
+        parentProductId: products.parentProductId,
+        isParent: products.isParent,
       })
       .from(inventory)
       .innerJoin(products, eq(inventory.productId, products.id))
@@ -585,10 +624,21 @@ async function handleGroupedQuery(
   search?: string,
   category?: string,
   stockStatus?: string,
+  subCategoryId?: string,
+  familyId?: string,
+  subcategoryId?: string,
 ) {
   // Build filter fragments
+  const subcategoryFilter = subcategoryId
+    ? sql`AND p.subcategory_id = ${subcategoryId}::uuid`
+    : sql``;
+
+  const familyFilter = familyId
+    ? sql`AND p.family_id = ${familyId}::uuid`
+    : sql``;
+
   const searchFilter = search && search.length >= 2
-    ? sql`AND p.name ILIKE ${"%" + search + "%"}`
+    ? sql`AND (p.name ILIKE ${"%" + search + "%"} OR cat.name ILIKE ${"%" + search + "%"})`
     : sql``;
 
   const categoryFilter = category
@@ -600,6 +650,10 @@ async function handleGroupedQuery(
     : stockStatus === "low"
       ? sql`AND i.stock_level > 0 AND i.stock_level <= i.reorder_point`
       : sql``;
+
+  const subCategoryFilter = subCategoryId
+    ? sql`AND p.category_id = ${subCategoryId}::uuid`
+    : sql``;
 
   // When search matches a family product, expand to include ALL variants in that family.
   // This lets the frontend show the complete family context around matching children.
@@ -649,14 +703,23 @@ async function handleGroupedQuery(
         MAX(i.reorder_point)::int AS reorder_point,
         p.family_id AS family_id,
         pf.name AS family_name,
+        (array_agg(p.category_id ORDER BY p.sku))[1] AS sub_category_id,
+        (array_agg(cat.name ORDER BY p.sku))[1] AS sub_category_name,
+        (array_agg(p.subcategory_id ORDER BY p.sku))[1] AS subcategory_id,
+        (array_agg(psub.name ORDER BY p.sku))[1] AS subcategory_name,
         COALESCE(pf.name, p.name) AS sort_key
       FROM inventory i
       INNER JOIN products p ON i.product_id = p.id
       INNER JOIN product_families pf ON p.family_id = pf.id
+      LEFT JOIN categories cat ON p.category_id = cat.id
+      LEFT JOIN product_subcategories psub ON p.subcategory_id = psub.id
       WHERE i.location_id = ${locationId}
         AND p.org_id = ${orgId}
+        ${familyFilter}
         ${categoryFilter}
         ${stockFilter}
+        ${subCategoryFilter}
+        ${subcategoryFilter}
         AND (TRUE ${searchFilter} ${familySearchExpansion})
       GROUP BY p.family_id, pf.name, p.name, p.category
 
@@ -677,15 +740,24 @@ async function handleGroupedQuery(
         i.reorder_point,
         NULL::uuid AS family_id,
         NULL::text AS family_name,
+        p.category_id AS sub_category_id,
+        cat.name AS sub_category_name,
+        p.subcategory_id AS subcategory_id,
+        psub.name AS subcategory_name,
         p.name AS sort_key
       FROM inventory i
       INNER JOIN products p ON i.product_id = p.id
+      LEFT JOIN categories cat ON p.category_id = cat.id
+      LEFT JOIN product_subcategories psub ON p.subcategory_id = psub.id
       WHERE i.location_id = ${locationId}
         AND p.org_id = ${orgId}
         AND p.family_id IS NULL
+        ${familyFilter}
         ${searchFilter}
         ${categoryFilter}
         ${stockFilter}
+        ${subCategoryFilter}
+        ${subcategoryFilter}
     )
     SELECT *, count(*) OVER() AS _total_count
     FROM grouped_data
@@ -711,6 +783,10 @@ async function handleGroupedQuery(
     reorderPoint: row.reorder_point,
     familyId: row.family_id,
     familyName: row.family_name,
+    subCategoryId: row.sub_category_id,
+    subCategoryName: row.sub_category_name,
+    subcategoryId: row.subcategory_id,
+    subcategoryName: row.subcategory_name,
   }));
 
   return reply.send({

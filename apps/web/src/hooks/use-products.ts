@@ -21,6 +21,12 @@ export interface ProductRow {
   reorderPoint: number;
   familyId: string | null;
   familyName: string | null;
+  subCategoryId: string | null;
+  subCategoryName: string | null;
+  subcategoryId: string | null;
+  subcategoryName: string | null;
+  parentProductId: string | null;
+  isParent: boolean;
 }
 
 export interface ProductsResponse {
@@ -44,8 +50,11 @@ export type SortDir = "asc" | "desc";
 
 export interface ProductListFilters {
   search?: string;
+  familyId?: string;
   category?: string;
   stockStatus?: string;  // "low" | "out" | ""
+  subCategoryId?: string;
+  subcategoryId?: string;
   sortBy?: SortField;
   sortDir?: SortDir;
   page?: number;
@@ -64,8 +73,11 @@ export function useProducts(
 ) {
   const {
     search,
+    familyId,
     category,
     stockStatus,
+    subCategoryId,
+    subcategoryId,
     sortBy = "name",
     sortDir = "asc",
     page = 1,
@@ -78,8 +90,11 @@ export function useProducts(
       "products",
       locationId,
       search,
+      familyId,
       category,
       stockStatus,
+      subCategoryId,
+      subcategoryId,
       sortBy,
       sortDir,
       page,
@@ -94,8 +109,11 @@ export function useProducts(
       params.set("sortDir", sortDir);
 
       if (search && search.length >= 2) params.set("search", search);
+      if (familyId) params.set("familyId", familyId);
       if (category) params.set("category", category);
       if (stockStatus) params.set("stockStatus", stockStatus);
+      if (subCategoryId) params.set("subCategoryId", subCategoryId);
+      if (subcategoryId) params.set("subcategoryId", subcategoryId);
       if (grouped) params.set("grouped", "true");
 
       return apiFetch<ProductsResponse>(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Search,
   Plus,
@@ -16,6 +16,9 @@ import {
   ChevronRight,
   Loader2,
   Layers,
+  Store,
+  Minus,
+  Check,
 } from "lucide-react";
 import {
   AdjustmentReasonCode,
@@ -25,7 +28,11 @@ import {
 } from "@apex/types";
 import { useAdjustmentMutation, type AdjustmentMutationStatus } from "@/hooks/use-adjustment-mutation";
 import { useProducts, useCreateProduct, useProductFamilies, type ProductRow, type SortField, type SortDir } from "@/hooks/use-products";
+import { useCategories } from "@/hooks/use-categories";
+import { useSubcategories } from "@/hooks/use-subcategories";
 import { useAuth } from "@/app/auth-context";
+import { useProductLocations, useToggleAvailability } from "@/hooks/use-product-locations";
+import { useConfirm } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 
 /* ─────────────────────────────────────────────
@@ -206,7 +213,9 @@ export default function InventoryPage() {
   /* State */
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [familyFilter, setFamilyFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [subCategoryFilter, setSubCategoryFilter] = useState("");
   const [stockStatusFilter, setStockStatusFilter] = useState("");
   const [sortBy, setSortBy] = useState<SortField>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -251,10 +260,33 @@ export default function InventoryPage() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  /* Fetch product families for Group filter */
+  const familiesQuery = useProductFamilies(token, locationId);
+  const families = useMemo(() => {
+    const fams = familiesQuery.data?.data ?? [];
+    return [...fams].sort((a, b) => a.name.localeCompare(b.name));
+  }, [familiesQuery.data]);
+
+  /* Fetch categories for Category filter — cascaded by selected family */
+  const categoriesQuery = useCategories(token, locationId);
+  const filteredCategories = useMemo(() => {
+    const cats = categoriesQuery.data?.data ?? [];
+    const sorted = [...cats].sort((a, b) => a.name.localeCompare(b.name));
+    if (!familyFilter) return sorted;
+    return sorted.filter((c) => c.familyId === familyFilter);
+  }, [categoriesQuery.data, familyFilter]);
+
+  /* Fetch sub-categories for Sub-cat filter — cascaded by selected category */
+  const subcategoriesQuery = useSubcategories(token, locationId, categoryFilter || undefined);
+  const filteredSubcategories = useMemo(() => {
+    const subs = subcategoriesQuery.data?.data ?? [];
+    return [...subs].sort((a, b) => a.name.localeCompare(b.name));
+  }, [subcategoriesQuery.data]);
+
   /* Reset page when filters / sort / location / pageSize change */
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, categoryFilter, stockStatusFilter, sortBy, sortDir, locationId, pageSize, isGroupedMode]);
+  }, [debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, stockStatusFilter, sortBy, sortDir, locationId, pageSize, isGroupedMode]);
 
   /* Reset expanded families when leaving grouped mode or changing page */
   useEffect(() => {
@@ -264,7 +296,9 @@ export default function InventoryPage() {
   /* Fetch real data */
   const { data, isLoading, isFetching } = useProducts(token, locationId, {
     search: debouncedSearch,
-    category: categoryFilter,
+    familyId: familyFilter || undefined,
+    subCategoryId: categoryFilter || undefined,
+    subcategoryId: subCategoryFilter || undefined,
     stockStatus: stockStatusFilter,
     sortBy,
     sortDir,
@@ -303,10 +337,12 @@ export default function InventoryPage() {
   );
 
   const hasActiveFilters =
-    categoryFilter !== "" || stockStatusFilter !== "" || searchQuery.trim() !== "";
+    familyFilter !== "" || categoryFilter !== "" || subCategoryFilter !== "" || stockStatusFilter !== "" || searchQuery.trim() !== "";
 
   const clearAllFilters = useCallback(() => {
+    setFamilyFilter("");
     setCategoryFilter("");
+    setSubCategoryFilter("");
     setStockStatusFilter("");
     setSearchQuery("");
     setDebouncedSearch("");
@@ -362,7 +398,7 @@ export default function InventoryPage() {
     : null;
 
   /* Column count for colSpan calculations */
-  const colCount = showFinancials ? 8 : 6;
+  const colCount = showFinancials ? 11 : 9;
 
   return (
     <div className="flex h-full flex-col">
@@ -418,17 +454,40 @@ export default function InventoryPage() {
       {/* -- Filter Bar -- */}
       <div className="mb-2 flex items-center gap-2">
         <select
+          value={familyFilter}
+          onChange={(e) => {
+            setFamilyFilter(e.target.value);
+            setCategoryFilter("");
+            setSubCategoryFilter("");
+          }}
+          className="h-8 rounded-lg border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+        >
+          <option value="">All Groups</option>
+          {families.map((f) => (
+            <option key={f.id} value={f.id}>{f.name}</option>
+          ))}
+        </select>
+
+        <select
           value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
+          onChange={(e) => {
+            setCategoryFilter(e.target.value);
+            setSubCategoryFilter("");
+          }}
           className="h-8 rounded-lg border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
         >
           <option value="">All Categories</option>
-          <option value="TIRES">Tires</option>
-          <option value="LUBRICANTS">Lubricants</option>
-          <option value="HARD_PARTS">Hard Parts</option>
-          <option value="ACCESSORIES">Accessories</option>
-          <option value="LABOR_SERVICES">Services</option>
+          {filteredCategories.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
         </select>
+
+        <SearchableSelect
+          value={subCategoryFilter}
+          onChange={setSubCategoryFilter}
+          options={filteredSubcategories.map((sc) => ({ value: sc.id, label: sc.name }))}
+          placeholder="All Sub-categories"
+        />
 
         <select
           value={stockStatusFilter}
@@ -538,8 +597,14 @@ export default function InventoryPage() {
                   <th scope="col" className="w-[110px] px-3 py-[7px] text-left">
                     <SortableHeader label="SKU" field="sku" activeField={sortBy} activeDir={sortDir} onSort={handleSort} />
                   </th>
-                  <th scope="col" className="w-[100px] px-3 py-[7px] text-left">
-                    <SortableHeader label="Category" field="category" activeField={sortBy} activeDir={sortDir} onSort={handleSort} />
+                  <th scope="col" className="w-[120px] px-3 py-[7px] text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Group
+                  </th>
+                  <th scope="col" className="w-[130px] px-3 py-[7px] text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Category
+                  </th>
+                  <th scope="col" className="w-[120px] px-3 py-[7px] text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Sub-cat
                   </th>
                   <th scope="col" className="w-[95px] px-3 py-[7px] text-right">
                     <SortableHeader label="Sell" field="unitPrice" activeField={sortBy} activeDir={sortDir} onSort={handleSort} align="right" />
@@ -698,7 +763,7 @@ function FamilyRows({
   onSelectProduct: (id: string) => void;
   searchQuery: string;
 }) {
-  const colCount = showFinancials ? 8 : 6;
+  const colCount = showFinancials ? 11 : 9;
   const allChildrenSelected = group.children.every((c) => selectedIds.has(c.id));
   const someChildrenSelected = group.children.some((c) => selectedIds.has(c.id));
 
@@ -749,12 +814,15 @@ function FamilyRows({
           {/* No SKU for parent — it's a group header */}
         </td>
         <td className="px-3 py-[6px]">
-          <span className={cn(
-            "inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal",
-            CATEGORY_COLORS[group.category] ?? "bg-muted text-muted-foreground",
-          )}>
-            {CATEGORY_LABELS[group.category] ?? group.category.replace(/_/g, " ")}
+          <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={group.familyName}>
+            {group.familyName}
           </span>
+        </td>
+        <td className="px-3 py-[6px] text-[11px] text-muted-foreground/50">
+          {/* Category varies across children */}
+        </td>
+        <td className="px-3 py-[6px] text-[11px] text-muted-foreground/50">
+          {/* Sub-cat varies across children */}
         </td>
         <td className="px-3 py-[6px] text-right text-[11px] text-muted-foreground/50">
           {/* Price varies across children — don't show on parent */}
@@ -824,7 +892,26 @@ function FamilyRows({
                 {child.sku}
               </td>
               <td className="px-3 py-[4px]">
-                {/* Category shown on parent — skip on child for cleanliness */}
+                {/* Group shown on parent — skip on child for cleanliness */}
+              </td>
+              <td className="px-3 py-[4px]">
+                {child.subCategoryName ? (
+                  <span className="text-[11px] text-muted-foreground truncate block max-w-[120px]" title={child.subCategoryName}>{child.subCategoryName}</span>
+                ) : (
+                  <span className={cn(
+                    "inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal",
+                    CATEGORY_COLORS[child.category] ?? "bg-muted text-muted-foreground",
+                  )}>
+                    {CATEGORY_LABELS[child.category] ?? child.category.replace(/_/g, " ")}
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-[4px]">
+                {child.subcategoryName ? (
+                  <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={child.subcategoryName}>{child.subcategoryName}</span>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+                )}
               </td>
               <td className="px-3 py-[4px] text-right font-medium tabular-nums text-foreground">
                 {child.isVariablePrice ? (
@@ -917,12 +1004,30 @@ function FlatProductRow({
         {p.sku}
       </td>
       <td className="px-3 py-[5px]">
-        <span className={cn(
-          "inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal",
-          CATEGORY_COLORS[p.category] ?? "bg-muted text-muted-foreground",
-        )}>
-          {CATEGORY_LABELS[p.category] ?? p.category.replace(/_/g, " ")}
-        </span>
+        {p.familyName ? (
+          <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={p.familyName}>{p.familyName}</span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+        )}
+      </td>
+      <td className="px-3 py-[5px]">
+        {p.subCategoryName ? (
+          <span className="text-[11px] text-muted-foreground truncate block max-w-[120px]" title={p.subCategoryName}>{p.subCategoryName}</span>
+        ) : (
+          <span className={cn(
+            "inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal",
+            CATEGORY_COLORS[p.category] ?? "bg-muted text-muted-foreground",
+          )}>
+            {CATEGORY_LABELS[p.category] ?? p.category.replace(/_/g, " ")}
+          </span>
+        )}
+      </td>
+      <td className="px-3 py-[5px]">
+        {p.subcategoryName ? (
+          <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={p.subcategoryName}>{p.subcategoryName}</span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+        )}
       </td>
       <td className="px-3 py-[5px] text-right font-medium tabular-nums text-foreground">
         {p.isVariablePrice ? (
@@ -981,7 +1086,7 @@ function EmptyState({ query, hasFilters, onClearFilters }: { query: string; hasF
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
       </svg>
       <p className="text-sm font-medium text-muted-foreground">No items found</p>
-      {query.trim() && <p className="mt-1 text-xs text-muted-foreground/70">No products match &ldquo;{query.trim()}&rdquo;</p>}
+      {query.trim() && <p className="mt-1 text-xs text-muted-foreground/70">No items match &ldquo;{query.trim()}&rdquo;</p>}
       {hasFilters && <button onClick={onClearFilters} className="mt-3 text-xs font-medium text-primary hover:underline">Clear all filters</button>}
     </div>
   );
@@ -1005,15 +1110,108 @@ function DetailDrawer({
 }) {
   const sell = parseFloat(product.unitPrice) || 0;
   const cost = parseFloat(product.costPrice) || 0;
+  const { token, locationId } = useAuth();
+  const confirm = useConfirm();
+
+  // ── Stores / availability ──
+  const { data: locData, isLoading: locLoading } = useProductLocations(token, locationId, product.id);
+  const toggleMutation = useToggleAvailability(token, locationId);
+  const locationRows = locData?.data ?? [];
+
+  // ── Batch save: local state tracking ──
+  const [originalAvailability, setOriginalAvailability] = useState<Record<string, boolean>>({});
+  const [localAvailability, setLocalAvailability] = useState<Record<string, boolean>>({});
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Build a stable fingerprint from location data to detect real changes
+  const locFingerprint = useMemo(
+    () => locationRows.map((r) => `${r.locationId}:${r.availableForSale}`).join(","),
+    [locationRows],
+  );
+
+  // Sync local state when server data loads (keyed on stable fingerprint)
+  useEffect(() => {
+    if (locationRows.length === 0) return;
+    const map: Record<string, boolean> = {};
+    for (const row of locationRows) {
+      map[row.locationId] = row.availableForSale;
+    }
+    setOriginalAvailability(map);
+    setLocalAvailability(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locFingerprint]);
+
+  // Dirty check
+  const isDirty = useMemo(() => {
+    return Object.keys(localAvailability).some(
+      (locId) => localAvailability[locId] !== originalAvailability[locId],
+    );
+  }, [localAvailability, originalAvailability]);
+
+  // Derived checkbox states from local state
+  const allChecked = locationRows.length > 0 && locationRows.every((r) => localAvailability[r.locationId]);
+  const noneChecked = locationRows.length > 0 && locationRows.every((r) => !localAvailability[r.locationId]);
+  const isMasterIndeterminate = !allChecked && !noneChecked;
+
+  // Toggle updates local state only
+  const handleToggle = useCallback((locId: string) => {
+    setLocalAvailability((prev) => ({ ...prev, [locId]: !prev[locId] }));
+  }, []);
+
+  const handleMasterToggle = useCallback(() => {
+    const newValue = !allChecked;
+    setLocalAvailability((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) next[key] = newValue;
+      return next;
+    });
+  }, [allChecked]);
+
+  // Save — single batch PATCH with only the diff
+  const handleSave = useCallback(async () => {
+    const updates = Object.entries(localAvailability)
+      .filter(([locId, val]) => val !== originalAvailability[locId])
+      .map(([lid, availableForSale]) => ({ locationId: lid, availableForSale }));
+    if (updates.length === 0) return;
+
+    setIsSaving(true);
+    try {
+      await toggleMutation.mutateAsync({ productId: product.id, updates });
+      setOriginalAvailability({ ...localAvailability });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [localAvailability, originalAvailability, toggleMutation, product.id]);
+
+  // Discard — revert to original
+  const handleDiscard = useCallback(() => {
+    setLocalAvailability({ ...originalAvailability });
+  }, [originalAvailability]);
+
+  // Close with unsaved changes warning
+  const handleClose = useCallback(async () => {
+    if (isDirty) {
+      const confirmed = await confirm({
+        title: "Unsaved Changes",
+        message: "You have unsaved availability changes. Discard them?",
+        confirmLabel: "Discard",
+        cancelLabel: "Keep Editing",
+        variant: "warning",
+      });
+      if (!confirmed) return;
+      handleDiscard();
+    }
+    onClose();
+  }, [isDirty, confirm, handleDiscard, onClose]);
 
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-foreground/20 backdrop-blur-[2px] transition-opacity" onClick={onClose} />
+      <div className="fixed inset-0 z-40 bg-foreground/20 backdrop-blur-[2px] transition-opacity" onClick={handleClose} />
       <div className="fixed inset-y-0 right-0 z-50 w-[400px] max-w-full border-l border-border bg-background shadow-2xl animate-in slide-in-from-right duration-200">
         <div className="flex h-full flex-col">
           <div className="flex items-center justify-between border-b border-border px-5 py-3">
-            <h3 className="text-sm font-semibold">Product Details</h3>
-            <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close drawer"><X size={16} /></button>
+            <h3 className="text-sm font-semibold">Item Details</h3>
+            <button onClick={handleClose} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close drawer"><X size={16} /></button>
           </div>
           <div className="flex-1 overflow-y-auto px-5 py-4">
             {/* Identifiers */}
@@ -1029,11 +1227,27 @@ function DetailDrawer({
               </span>
             </div>
 
-            {/* Family badge */}
+            {/* Group badge */}
             {product.familyName && (
               <div className="mb-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <Layers size={12} />
-                <span>Family: <span className="font-medium text-foreground">{product.familyName}</span></span>
+                <span>Group: <span className="font-medium text-foreground">{product.familyName}</span></span>
+              </div>
+            )}
+
+            {/* Category badge */}
+            {product.subCategoryName && (
+              <div className="mb-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="inline-block h-3 w-3 rounded bg-muted" />
+                <span>Category: <span className="font-medium text-foreground">{product.subCategoryName}</span></span>
+              </div>
+            )}
+
+            {/* Sub-category badge */}
+            {product.subcategoryName && (
+              <div className="mb-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="inline-block h-3 w-3 rounded bg-muted/60" />
+                <span>Sub-category: <span className="font-medium text-foreground">{product.subcategoryName}</span></span>
               </div>
             )}
 
@@ -1079,7 +1293,109 @@ function DetailDrawer({
                 />
               </div>
             </section>
+
+            {/* Stores — per-location availability */}
+            <section className="mb-5">
+              <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Store size={10} className="mb-px mr-1 inline" />
+                Stores
+              </h4>
+
+              {locLoading ? (
+                <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+                  <Loader2 size={14} className="animate-spin" /> Loading locations…
+                </div>
+              ) : locationRows.length === 0 ? (
+                <p className="py-2 text-xs text-muted-foreground">No locations found.</p>
+              ) : (
+                <div className="space-y-0">
+                  {/* Master toggle */}
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-md px-1 py-1.5 hover:bg-accent/50">
+                    <span
+                      role="checkbox"
+                      aria-checked={allChecked ? "true" : isMasterIndeterminate ? "mixed" : "false"}
+                      onClick={handleMasterToggle}
+                      className={cn(
+                        "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                        allChecked
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : isMasterIndeterminate
+                            ? "border-primary bg-primary/20 text-primary"
+                            : "border-muted-foreground/40",
+                      )}
+                    >
+                      {allChecked && <Check size={12} strokeWidth={3} />}
+                      {isMasterIndeterminate && <Minus size={12} strokeWidth={3} />}
+                    </span>
+                    <span className="text-xs font-medium">Available for sale in all stores</span>
+                  </label>
+
+                  {/* Header row */}
+                  <div className="mt-1 grid grid-cols-[20px_1fr_60px_60px] items-center gap-x-2 px-1 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                    <span />
+                    <span>Store</span>
+                    <span className="text-right">Stock</span>
+                    <span className="text-right">Reorder</span>
+                  </div>
+
+                  {/* Per-location rows */}
+                  {locationRows.map((row) => {
+                    const isChecked = localAvailability[row.locationId] ?? row.availableForSale;
+                    const isChanged = localAvailability[row.locationId] !== originalAvailability[row.locationId];
+                    return (
+                      <label
+                        key={row.locationId}
+                        className={cn(
+                          "grid cursor-pointer grid-cols-[20px_1fr_60px_60px] items-center gap-x-2 rounded-md px-1 py-1 hover:bg-accent/50",
+                          isChanged && "bg-amber-50 ring-1 ring-amber-200 dark:bg-amber-950/30 dark:ring-amber-800",
+                        )}
+                      >
+                        <span
+                          role="checkbox"
+                          aria-checked={isChecked}
+                          onClick={() => handleToggle(row.locationId)}
+                          className={cn(
+                            "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                            isChecked
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-muted-foreground/40",
+                          )}
+                        >
+                          {isChecked && <Check size={12} strokeWidth={3} />}
+                        </span>
+                        <span className="truncate text-xs">{row.locationName}</span>
+                        <span className="text-right font-mono text-xs tabular-nums">{row.stockLevel}</span>
+                        <span className="text-right font-mono text-xs tabular-nums text-muted-foreground">{row.reorderPoint}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </div>
+
+          {/* Sticky save bar — shown when availability has unsaved changes */}
+          {isDirty && (
+            <div className="flex items-center justify-between gap-3 border-t border-border bg-background px-4 py-3 shadow-[0_-2px_8px_rgba(0,0,0,0.06)]">
+              <span className="text-xs text-muted-foreground">Unsaved changes</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDiscard}
+                  className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
+                >
+                  Discard
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="rounded-lg bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {isSaving ? "Saving\u2026" : "Save Changes"}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2 border-t border-border p-4">
             <button onClick={onTransfer} className="flex-1 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">Transfer Stock</button>
             <button onClick={onAdjust} className="flex-1 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent">Adjust Stock</button>
@@ -1241,6 +1557,191 @@ function Spinner() {
   );
 }
 
+/* ─────────────────────────────────────────────
+ * Searchable Select Dropdown
+ * ───────────────────────────────────────────── */
+function SearchableSelect({
+  value,
+  onChange,
+  options,
+  placeholder = "Select…",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [highlightIdx, setHighlightIdx] = useState(0);
+
+  const selectedLabel = options.find((o) => o.value === value)?.label ?? "";
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options;
+    const q = query.toLowerCase();
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, query]);
+
+  // Reset highlight when filtered list changes
+  useEffect(() => { setHighlightIdx(0); }, [filtered.length]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  // Scroll highlighted item into view
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    const el = listRef.current.children[highlightIdx] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlightIdx, open]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "Enter") { setOpen(true); e.preventDefault(); }
+      return;
+    }
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setHighlightIdx((i) => Math.min(i + 1, filtered.length - 1));
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setHighlightIdx((i) => Math.max(i - 1, 0));
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (filtered[highlightIdx]) {
+          onChange(filtered[highlightIdx].value);
+          setOpen(false);
+          setQuery("");
+        }
+        break;
+      case "Escape":
+        e.preventDefault();
+        setOpen(false);
+        setQuery("");
+        break;
+    }
+  };
+
+  const handleSelect = (val: string) => {
+    onChange(val);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((v) => !v);
+          if (!open) setTimeout(() => inputRef.current?.focus(), 0);
+        }}
+        className={cn(
+          "flex h-8 items-center gap-1 rounded-lg border bg-background px-2.5 text-[12px] shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors",
+          open
+            ? "border-primary/40 ring-2 ring-primary/[0.08]"
+            : "border-border hover:border-border/80",
+          value ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        <span className="max-w-[150px] truncate">
+          {value ? selectedLabel : placeholder}
+        </span>
+        {value ? (
+          <span
+            role="button"
+            onClick={(e) => { e.stopPropagation(); onChange(""); }}
+            className="ml-0.5 rounded p-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <X size={10} />
+          </span>
+        ) : (
+          <ChevronsUpDown size={11} className="shrink-0 text-muted-foreground/50" />
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-[260px] rounded-lg border border-border bg-background shadow-lg animate-in fade-in slide-in-from-top-1 duration-100">
+          <div className="border-b border-border px-2 py-1.5">
+            <div className="relative">
+              <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Search sub-categories…"
+                className="h-7 w-full rounded-md bg-muted/50 pl-7 pr-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground/50"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <div ref={listRef} className="max-h-[240px] overflow-y-auto py-1" role="listbox">
+            {/* "All" option */}
+            <div
+              role="option"
+              aria-selected={value === ""}
+              onClick={() => handleSelect("")}
+              className={cn(
+                "flex cursor-pointer items-center px-3 py-1.5 text-[12px] transition-colors",
+                !value ? "bg-primary/[0.06] font-medium text-foreground" : "text-muted-foreground hover:bg-accent/60",
+                highlightIdx === 0 && !query.trim() && "bg-accent/60",
+              )}
+            >
+              {placeholder}
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+                No sub-categories match &ldquo;{query}&rdquo;
+              </div>
+            ) : (
+              filtered.map((opt, idx) => (
+                <div
+                  key={opt.value}
+                  role="option"
+                  aria-selected={opt.value === value}
+                  onClick={() => handleSelect(opt.value)}
+                  className={cn(
+                    "flex cursor-pointer items-center px-3 py-1.5 text-[12px] transition-colors",
+                    opt.value === value
+                      ? "bg-primary/[0.06] font-medium text-foreground"
+                      : "text-foreground hover:bg-accent/60",
+                    idx === highlightIdx && "bg-accent/60",
+                  )}
+                >
+                  <span className="truncate">{opt.label}</span>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="border-t border-border px-3 py-1 text-[10px] text-muted-foreground/60 tabular-nums">
+            {filtered.length} of {options.length} sub-categories
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ModalShell({ title, onClose, children }: { title: string; onClose?: () => void; children: React.ReactNode }) {
   return (
     <>
@@ -1325,7 +1826,7 @@ function QuickAddDrawer({
         onClose();
       }
     } catch (err: any) {
-      setError(err?.message || "Failed to create product");
+      setError(err?.message || "Failed to create item");
     }
   };
 
