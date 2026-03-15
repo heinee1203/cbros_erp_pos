@@ -19,6 +19,8 @@ import {
   Store,
   Minus,
   Check,
+  Settings,
+  Zap,
 } from "lucide-react";
 import {
   AdjustmentReasonCode,
@@ -32,6 +34,15 @@ import { useCategories } from "@/hooks/use-categories";
 import { useSubcategories } from "@/hooks/use-subcategories";
 import { useAuth } from "@/app/auth-context";
 import { useProductLocations, useToggleAvailability } from "@/hooks/use-product-locations";
+import { useVariants, useCreateVariantBatch, useDeleteVariant, type VariantRow } from "@/hooks/use-variants";
+import {
+  useProductOptions,
+  useCreateOptionType,
+  useDeleteOptionType,
+  useAddOptionValue,
+  useDeleteOptionValue,
+  type OptionTypeRow,
+} from "@/hooks/use-product-options";
 import { useConfirm } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 
@@ -234,6 +245,9 @@ export default function InventoryPage() {
   /* Expand/collapse state for family groups */
   const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(new Set());
 
+  /* Expand/collapse state for parent products (variants) */
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+
   const toggleFamily = useCallback((familyId: string) => {
     setExpandedFamilies((prev) => {
       const next = new Set(prev);
@@ -305,6 +319,7 @@ export default function InventoryPage() {
     page,
     limit: pageSize,
     grouped: isGroupedMode,
+    parentOnly: true,
   });
 
   const products = data?.data ?? [];
@@ -650,6 +665,9 @@ export default function InventoryPage() {
                           isSelected={selectedIds.has(item.product.id)}
                           onToggleSelect={() => toggleOne(item.product.id)}
                           onSelectProduct={() => setSelectedProductId(item.product.id)}
+                          isParentExpanded={expandedParents.has(item.product.id)}
+                          onToggleParent={() => setExpandedParents((prev) => { const next = new Set(prev); if (next.has(item.product.id)) next.delete(item.product.id); else next.add(item.product.id); return next; })}
+                          colCount={colCount}
                         />
                       );
                     })
@@ -661,6 +679,9 @@ export default function InventoryPage() {
                         isSelected={selectedIds.has(p.id)}
                         onToggleSelect={() => toggleOne(p.id)}
                         onSelectProduct={() => setSelectedProductId(p.id)}
+                        isParentExpanded={expandedParents.has(p.id)}
+                        onToggleParent={() => setExpandedParents((prev) => { const next = new Set(prev); if (next.has(p.id)) next.delete(p.id); else next.add(p.id); return next; })}
+                        colCount={colCount}
                       />
                     ))
                 }
@@ -972,107 +993,259 @@ function FlatProductRow({
   isSelected,
   onToggleSelect,
   onSelectProduct,
+  isParentExpanded,
+  onToggleParent,
+  colCount,
 }: {
   product: ProductRow;
   showFinancials: boolean;
   isSelected: boolean;
   onToggleSelect: () => void;
   onSelectProduct: () => void;
+  isParentExpanded: boolean;
+  onToggleParent: () => void;
+  colCount: number;
 }) {
   const sell = parseFloat(p.unitPrice) || 0;
   const cost = parseFloat(p.costPrice) || 0;
   const margin = getMarginPercent(sell, cost);
   const status = getStockStatus(p.stockLevel, p.reorderPoint);
+  const { token, locationId } = useAuth();
 
   return (
-    <tr
-      onClick={onSelectProduct}
-      className={cn(
-        "cursor-pointer transition-colors duration-75",
-        isSelected
-          ? "bg-primary/[0.05]"
-          : "hover:bg-accent/70",
-      )}
-    >
-      <td className="w-9 px-2 py-[5px] text-center" onClick={(e) => e.stopPropagation()}>
-        <input type="checkbox" checked={isSelected} onChange={onToggleSelect} className="h-3.5 w-3.5 rounded border-border accent-primary cursor-pointer" />
-      </td>
-      <td className="px-3 py-[5px]">
-        <span className="block truncate text-[12px] font-medium leading-snug text-foreground">{p.name}</span>
-      </td>
-      <td className="px-3 py-[5px] font-mono text-[11px] tracking-tight text-muted-foreground">
-        {p.sku}
-      </td>
-      <td className="px-3 py-[5px]">
-        {p.familyName ? (
-          <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={p.familyName}>{p.familyName}</span>
-        ) : (
-          <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+    <>
+      <tr
+        onClick={p.isParent ? onToggleParent : onSelectProduct}
+        className={cn(
+          "cursor-pointer transition-colors duration-75",
+          p.isParent && "bg-muted/30 hover:bg-muted/50",
+          !p.isParent && isSelected && "bg-primary/[0.05]",
+          !p.isParent && !isSelected && "hover:bg-accent/70",
         )}
-      </td>
-      <td className="px-3 py-[5px]">
-        {p.subCategoryName ? (
-          <span className="text-[11px] text-muted-foreground truncate block max-w-[120px]" title={p.subCategoryName}>{p.subCategoryName}</span>
-        ) : (
-          <span className={cn(
-            "inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal",
-            CATEGORY_COLORS[p.category] ?? "bg-muted text-muted-foreground",
-          )}>
-            {CATEGORY_LABELS[p.category] ?? p.category.replace(/_/g, " ")}
-          </span>
-        )}
-      </td>
-      <td className="px-3 py-[5px]">
-        {p.subcategoryName ? (
-          <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={p.subcategoryName}>{p.subcategoryName}</span>
-        ) : (
-          <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
-        )}
-      </td>
-      <td className="px-3 py-[5px] text-right font-medium tabular-nums text-foreground">
-        {p.isVariablePrice ? (
-          <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-amber-50/80 text-amber-600">Variable</span>
-        ) : (
-          formatPrice(sell)
-        )}
-      </td>
-      {showFinancials && (
-        <>
-          <td className="px-3 py-[5px] text-right tabular-nums text-muted-foreground">
-            {cost > 0 ? formatPrice(cost) : "\u2014"}
-          </td>
-          <td className={cn(
-            "px-3 py-[5px] text-right font-medium tabular-nums",
-            margin.value > 0 && margin.value < 20
-              ? "text-destructive"
-              : "text-muted-foreground",
-          )}>
-            {margin.display}
-          </td>
-        </>
-      )}
-      <td className="px-3 py-[5px] text-right">
-        <span className={cn(
-          "tabular-nums font-medium",
-          status === "out"
-            ? "text-destructive"
-            : status === "low"
-              ? "text-warning"
-              : "text-foreground",
-        )}>
-          {p.stockLevel.toLocaleString()}
-        </span>
-        {status !== "in-stock" && (
-          <AlertTriangle
-            size={11}
-            className={cn(
-              "ml-1 inline-block -translate-y-px",
-              status === "out" ? "text-destructive" : "text-warning/70",
+      >
+        <td className="w-9 px-2 py-[5px] text-center" onClick={(e) => e.stopPropagation()}>
+          {!p.isParent && (
+            <input type="checkbox" checked={isSelected} onChange={onToggleSelect} className="h-3.5 w-3.5 rounded border-border accent-primary cursor-pointer" />
+          )}
+        </td>
+        <td className="px-3 py-[5px]">
+          <div className="flex items-center gap-1.5">
+            {p.isParent && (
+              <ChevronRight
+                size={14}
+                className={cn(
+                  "shrink-0 text-muted-foreground transition-transform duration-150",
+                  isParentExpanded && "rotate-90",
+                )}
+              />
             )}
-          />
+            <span className={cn("block truncate text-[12px] leading-snug text-foreground", p.isParent ? "font-semibold" : "font-medium")}>
+              {p.name}
+            </span>
+            {p.isParent && (
+              <Settings size={11} className="shrink-0 text-muted-foreground/50" />
+            )}
+          </div>
+        </td>
+        <td className="px-3 py-[5px] font-mono text-[11px] tracking-tight text-muted-foreground">
+          {p.isParent ? <span className="text-muted-foreground/40">{"\u2014"}</span> : p.sku}
+        </td>
+        <td className="px-3 py-[5px]">
+          {p.familyName ? (
+            <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={p.familyName}>{p.familyName}</span>
+          ) : (
+            <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+          )}
+        </td>
+        <td className="px-3 py-[5px]">
+          {p.subCategoryName ? (
+            <span className="text-[11px] text-muted-foreground truncate block max-w-[120px]" title={p.subCategoryName}>{p.subCategoryName}</span>
+          ) : (
+            <span className={cn(
+              "inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal",
+              CATEGORY_COLORS[p.category] ?? "bg-muted text-muted-foreground",
+            )}>
+              {CATEGORY_LABELS[p.category] ?? p.category.replace(/_/g, " ")}
+            </span>
+          )}
+        </td>
+        <td className="px-3 py-[5px]">
+          {p.isParent ? (
+            <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+          ) : p.subcategoryName ? (
+            <span className="text-[11px] text-muted-foreground truncate block max-w-[110px]" title={p.subcategoryName}>{p.subcategoryName}</span>
+          ) : (
+            <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+          )}
+        </td>
+        <td className="px-3 py-[5px] text-right font-medium tabular-nums text-foreground">
+          {p.isParent ? (
+            <span className="text-muted-foreground/40">{"\u2014"}</span>
+          ) : p.isVariablePrice ? (
+            <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-amber-50/80 text-amber-600">Variable</span>
+          ) : (
+            formatPrice(sell)
+          )}
+        </td>
+        {showFinancials && (
+          <>
+            <td className="px-3 py-[5px] text-right tabular-nums text-muted-foreground">
+              {p.isParent ? <span className="text-muted-foreground/40">{"\u2014"}</span> : cost > 0 ? formatPrice(cost) : "\u2014"}
+            </td>
+            <td className={cn(
+              "px-3 py-[5px] text-right font-medium tabular-nums",
+              !p.isParent && margin.value > 0 && margin.value < 20
+                ? "text-destructive"
+                : "text-muted-foreground",
+            )}>
+              {p.isParent ? <span className="text-muted-foreground/40">{"\u2014"}</span> : margin.display}
+            </td>
+          </>
         )}
-      </td>
-    </tr>
+        <td className="px-3 py-[5px] text-right">
+          {p.isParent ? (
+            <span className="text-muted-foreground/40">{"\u2014"}</span>
+          ) : (
+            <>
+              <span className={cn(
+                "tabular-nums font-medium",
+                status === "out"
+                  ? "text-destructive"
+                  : status === "low"
+                    ? "text-warning"
+                    : "text-foreground",
+              )}>
+                {p.stockLevel.toLocaleString()}
+              </span>
+              {status !== "in-stock" && (
+                <AlertTriangle
+                  size={11}
+                  className={cn(
+                    "ml-1 inline-block -translate-y-px",
+                    status === "out" ? "text-destructive" : "text-warning/70",
+                  )}
+                />
+              )}
+            </>
+          )}
+        </td>
+      </tr>
+      {p.isParent && isParentExpanded && (
+        <VariantSubRows
+          parentId={p.id}
+          token={token}
+          locationId={locationId}
+          showFinancials={showFinancials}
+          colCount={colCount}
+          onSelectProduct={onSelectProduct}
+        />
+      )}
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────────
+ * Variant Sub-Rows (expanded under parent)
+ * ───────────────────────────────────────────── */
+function VariantSubRows({
+  parentId,
+  token,
+  locationId,
+  showFinancials,
+  colCount,
+  onSelectProduct,
+}: {
+  parentId: string;
+  token: string;
+  locationId: string;
+  showFinancials: boolean;
+  colCount: number;
+  onSelectProduct: () => void;
+}) {
+  const { data, isLoading } = useVariants(token, locationId, parentId);
+  const variants = data?.data ?? [];
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={colCount} className="py-3 text-center">
+          <div className="flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
+            <Loader2 size={12} className="animate-spin" /> Loading variants...
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  if (variants.length === 0) {
+    return (
+      <tr>
+        <td colSpan={colCount} className="py-3 text-center text-[11px] text-muted-foreground">
+          No variants created yet
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <>
+      {variants.map((v) => {
+        const sell = parseFloat(v.unitPrice) || 0;
+        const cost = parseFloat(v.costPrice) || 0;
+        const margin = getMarginPercent(sell, cost);
+        const status = getStockStatus(v.stockLevel, 0);
+        const optionLabel = v.options.map((o) => o.value).join(" \u00B7 ");
+
+        return (
+          <tr
+            key={v.id}
+            onClick={onSelectProduct}
+            className="cursor-pointer border-l-2 border-l-primary/20 bg-background transition-colors duration-75 hover:bg-accent/50"
+          >
+            <td className="w-9 px-2 py-[4px]" />
+            <td className="py-[4px] pl-10 pr-3">
+              <span className="block truncate text-[12px] font-medium leading-snug text-foreground">
+                {optionLabel || v.sku}
+              </span>
+            </td>
+            <td className="px-3 py-[4px] font-mono text-[11px] tracking-tight text-muted-foreground">
+              {v.sku}
+            </td>
+            <td className="px-3 py-[4px]" />
+            <td className="px-3 py-[4px]" />
+            <td className="px-3 py-[4px]" />
+            <td className="px-3 py-[4px] text-right font-medium tabular-nums text-foreground">
+              {v.isVariablePrice ? (
+                <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-amber-50/80 text-amber-600">Variable</span>
+              ) : (
+                formatPrice(sell)
+              )}
+            </td>
+            {showFinancials && (
+              <>
+                <td className="px-3 py-[4px] text-right tabular-nums text-muted-foreground">
+                  {cost > 0 ? formatPrice(cost) : "\u2014"}
+                </td>
+                <td className={cn(
+                  "px-3 py-[4px] text-right font-medium tabular-nums",
+                  margin.value > 0 && margin.value < 20 ? "text-destructive" : "text-muted-foreground",
+                )}>
+                  {margin.display}
+                </td>
+              </>
+            )}
+            <td className="px-3 py-[4px] text-right">
+              <span className={cn(
+                "tabular-nums font-medium",
+                status === "out" ? "text-destructive" : status === "low" ? "text-warning" : "text-foreground",
+              )}>
+                {v.stockLevel.toLocaleString()}
+              </span>
+            </td>
+          </tr>
+        );
+      })}
+    </>
   );
 }
 
@@ -1372,6 +1545,11 @@ function DetailDrawer({
                 </div>
               )}
             </section>
+
+            {/* Option Types & Variants — only for parent products */}
+            {product.isParent && (
+              <OptionTypesAndVariants product={product} token={token} locationId={locationId} showFinancials={showFinancials} />
+            )}
           </div>
 
           {/* Sticky save bar — shown when availability has unsaved changes */}
@@ -1403,6 +1581,373 @@ function DetailDrawer({
         </div>
       </div>
     </>
+  );
+}
+
+/* ─────────────────────────────────────────────
+ * Option Types & Variants (inside Detail Drawer)
+ * ───────────────────────────────────────────── */
+function OptionTypesAndVariants({
+  product,
+  token,
+  locationId,
+  showFinancials,
+}: {
+  product: ProductRow;
+  token: string;
+  locationId: string;
+  showFinancials: boolean;
+}) {
+  const confirm = useConfirm();
+  const [showAddOption, setShowAddOption] = useState(false);
+  const [addingValueForType, setAddingValueForType] = useState<string | null>(null);
+  const [newValueInput, setNewValueInput] = useState("");
+  const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
+
+  // Hooks
+  const optionsQuery = useProductOptions(token, locationId, product.id);
+  const optionTypes = optionsQuery.data?.data ?? [];
+  const variantsQuery = useVariants(token, locationId, product.id);
+  const variants = variantsQuery.data?.data ?? [];
+  const createOptionType = useCreateOptionType(token, locationId);
+  const deleteOptionType = useDeleteOptionType(token, locationId);
+  const addOptionValue = useAddOptionValue(token, locationId);
+  const deleteOptionValue = useDeleteOptionValue(token, locationId);
+  const createVariantBatch = useCreateVariantBatch(token, locationId);
+  const deleteVariant = useDeleteVariant(token, locationId);
+
+  const handleDeleteOptionType = async (typeId: string, typeName: string) => {
+    const ok = await confirm({
+      title: "Delete Option Type",
+      message: `Delete "${typeName}" and all its values? This cannot be undone.`,
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) deleteOptionType.mutate({ productId: product.id, typeId });
+  };
+
+  const handleDeleteOptionValue = async (typeId: string, valueId: string, valueName: string) => {
+    const ok = await confirm({
+      title: "Delete Option Value",
+      message: `Delete "${valueName}"?`,
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) deleteOptionValue.mutate({ productId: product.id, typeId, valueId });
+  };
+
+  const handleAddValue = (typeId: string) => {
+    const val = newValueInput.trim();
+    if (!val) return;
+    addOptionValue.mutate(
+      { productId: product.id, typeId, value: val },
+      { onSuccess: () => { setNewValueInput(""); setAddingValueForType(null); } },
+    );
+  };
+
+  const handleDeleteVariant = async (variantId: string, label: string) => {
+    const ok = await confirm({
+      title: "Delete Variant",
+      message: `Delete variant "${label}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+    if (ok) deleteVariant.mutate({ parentId: product.id, variantId });
+  };
+
+  // Generate all combinations
+  const cartesianProduct = (arrays: string[][]): string[][] => {
+    if (arrays.length === 0) return [[]];
+    return arrays.reduce<string[][]>(
+      (acc, arr) => acc.flatMap((combo) => arr.map((val) => [...combo, val])),
+      [[]],
+    );
+  };
+
+  const generateVariants = () => {
+    if (optionTypes.length === 0) return;
+    const valueArrays = optionTypes.map((ot) => ot.values.map((v) => v.id));
+    const labelArrays = optionTypes.map((ot) => ot.values.map((v) => v.value));
+    const idCombinations = cartesianProduct(valueArrays);
+    const labelCombinations = cartesianProduct(labelArrays);
+
+    const parentSku = product.sku || "ITEM";
+    const newVariants = idCombinations.map((ids, i) => {
+      const labels = labelCombinations[i];
+      const suffix = labels.map((l) => l.slice(0, 2).toUpperCase()).join("-");
+      return {
+        sku: `${parentSku}-${suffix}`,
+        optionValueIds: ids,
+      };
+    });
+
+    createVariantBatch.mutate(
+      { parentId: product.id, variants: newVariants },
+      { onSuccess: () => setShowGenerateConfirm(false) },
+    );
+  };
+
+  const totalCombinations = optionTypes.length > 0
+    ? optionTypes.reduce((acc, ot) => acc * Math.max(ot.values.length, 1), 1)
+    : 0;
+
+  return (
+    <>
+      {/* ── Option Types ── */}
+      <section className="mb-5">
+        <div className="mb-2 flex items-center justify-between">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <Settings size={10} className="mb-px mr-1 inline" />
+            Option Types
+          </h4>
+          <button
+            onClick={() => setShowAddOption(true)}
+            className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/[0.06]"
+          >
+            <Plus size={11} /> Add Option
+          </button>
+        </div>
+
+        {optionsQuery.isLoading ? (
+          <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+            <Loader2 size={14} className="animate-spin" /> Loading options...
+          </div>
+        ) : optionTypes.length === 0 && !showAddOption ? (
+          <p className="py-2 text-xs text-muted-foreground">No option types defined. Add options like Size, Color, etc.</p>
+        ) : (
+          <div className="space-y-3">
+            {optionTypes.map((ot) => (
+              <div key={ot.id} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-semibold text-foreground">{ot.name}</span>
+                  <button
+                    onClick={() => handleDeleteOptionType(ot.id, ot.name)}
+                    className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {ot.values.map((v) => (
+                    <span key={v.id} className="inline-flex items-center gap-1 rounded-full bg-background px-2 py-0.5 text-[11px] font-medium text-foreground border border-border">
+                      {v.value}
+                      <button
+                        onClick={() => handleDeleteOptionValue(ot.id, v.id, v.value)}
+                        className="rounded-full p-px text-muted-foreground/60 hover:text-destructive"
+                      >
+                        <X size={9} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                {addingValueForType === ot.id ? (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={newValueInput}
+                      onChange={(e) => setNewValueInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddValue(ot.id); } if (e.key === "Escape") { setAddingValueForType(null); setNewValueInput(""); } }}
+                      placeholder="Value..."
+                      autoFocus
+                      className="h-7 flex-1 rounded-md border border-border bg-background px-2 text-[11px] outline-none focus:border-primary/40"
+                    />
+                    <button
+                      onClick={() => handleAddValue(ot.id)}
+                      disabled={!newValueInput.trim()}
+                      className="rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-primary-foreground disabled:opacity-40"
+                    >
+                      Add
+                    </button>
+                    <button
+                      onClick={() => { setAddingValueForType(null); setNewValueInput(""); }}
+                      className="text-[10px] text-muted-foreground hover:text-foreground"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setAddingValueForType(ot.id); setNewValueInput(""); }}
+                    className="mt-1.5 text-[10px] font-medium text-primary hover:underline"
+                  >
+                    + Add Value
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showAddOption && (
+          <AddOptionTypeForm
+            productId={product.id}
+            token={token}
+            locationId={locationId}
+            onClose={() => setShowAddOption(false)}
+          />
+        )}
+      </section>
+
+      {/* ── Variants ── */}
+      <section className="mb-5">
+        <div className="mb-2 flex items-center justify-between">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Variants
+            {variants.length > 0 && (
+              <span className="ml-1.5 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium tabular-nums">
+                {variants.length}
+              </span>
+            )}
+          </h4>
+          {optionTypes.length > 0 && totalCombinations > 0 && (
+            <button
+              onClick={() => setShowGenerateConfirm(true)}
+              className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/[0.06]"
+            >
+              <Zap size={11} /> Generate All
+            </button>
+          )}
+        </div>
+
+        {variantsQuery.isLoading ? (
+          <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+            <Loader2 size={14} className="animate-spin" /> Loading variants...
+          </div>
+        ) : variants.length === 0 ? (
+          <p className="py-2 text-xs text-muted-foreground">No variants yet. Add option types and generate combinations.</p>
+        ) : (
+          <div className="space-y-1">
+            {variants.map((v) => {
+              const optLabel = v.options.map((o) => o.value).join(" \u00B7 ");
+              return (
+                <div key={v.id} className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap gap-1 mb-0.5">
+                      {v.options.map((o, i) => (
+                        <span key={i} className="rounded-full bg-primary/[0.06] px-1.5 py-px text-[10px] font-medium text-primary">
+                          {o.value}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                      <span className="font-mono tracking-tight">{v.sku}</span>
+                      <span className="tabular-nums">{formatPrice(parseFloat(v.unitPrice) || 0)}</span>
+                      <span className="tabular-nums">Stock: {v.stockLevel}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteVariant(v.id, optLabel || v.sku)}
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Generate confirmation */}
+        {showGenerateConfirm && (
+          <div className="mt-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+            <p className="text-[12px] font-medium text-foreground">
+              Generate {totalCombinations} variant SKU{totalCombinations !== 1 ? "s" : ""}?
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              This will create variants from all combinations of your option values.
+            </p>
+            <div className="mt-2.5 flex items-center gap-2">
+              <button
+                onClick={generateVariants}
+                disabled={createVariantBatch.isPending}
+                className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {createVariantBatch.isPending ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                {createVariantBatch.isPending ? "Generating..." : "Generate"}
+              </button>
+              <button
+                onClick={() => setShowGenerateConfirm(false)}
+                className="rounded-md px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────────
+ * Add Option Type Form (inline)
+ * ───────────────────────────────────────────── */
+function AddOptionTypeForm({
+  productId,
+  token,
+  locationId,
+  onClose,
+}: {
+  productId: string;
+  token: string;
+  locationId: string;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [valuesStr, setValuesStr] = useState("");
+  const createOptionType = useCreateOptionType(token, locationId);
+
+  const handleSave = () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+    const values = valuesStr
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (values.length === 0) return;
+    createOptionType.mutate(
+      { productId, name: trimmedName, values },
+      { onSuccess: () => onClose() },
+    );
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-primary/20 bg-primary/[0.04] p-3 space-y-2">
+      <div>
+        <label className="mb-0.5 block text-[11px] font-medium text-muted-foreground">Option Name</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Size, Color"
+          autoFocus
+          className="h-7 w-full rounded-md border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40"
+        />
+      </div>
+      <div>
+        <label className="mb-0.5 block text-[11px] font-medium text-muted-foreground">Values (comma-separated)</label>
+        <input
+          type="text"
+          value={valuesStr}
+          onChange={(e) => setValuesStr(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
+          placeholder="e.g. Small, Medium, Large"
+          className="h-7 w-full rounded-md border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40"
+        />
+      </div>
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={handleSave}
+          disabled={!name.trim() || !valuesStr.trim() || createOptionType.isPending}
+          className="rounded-md bg-primary px-3 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+        >
+          {createOptionType.isPending ? "Saving..." : "Save"}
+        </button>
+        <button onClick={onClose} className="text-[11px] text-muted-foreground hover:text-foreground">
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
