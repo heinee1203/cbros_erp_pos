@@ -133,6 +133,43 @@ export const poLines = pgTable(
   ],
 );
 
+// ── PO Receipt Batch Headers ──
+// Groups po_receipt_events by supplier Delivery Receipt (DR) number.
+// One row per physical delivery/shipment against a PO.
+
+export const poReceipts = pgTable(
+  "po_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    purchaseOrderId: uuid("purchase_order_id")
+      .notNull()
+      .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    supplierDrNo: varchar("supplier_dr_no", { length: 100 }).notNull(),
+    receivedByUserId: uuid("received_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "set null" }),
+    lineCount: integer("line_count").notNull(),
+    totalAcceptedQty: integer("total_accepted_qty").notNull(),
+    totalRejectedQty: integer("total_rejected_qty").notNull().default(0),
+    notes: varchar("notes", { length: 1000 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_po_receipts_po_id").on(table.orgId, table.purchaseOrderId),
+    index("idx_po_receipts_dr_no").on(table.orgId, table.supplierDrNo),
+    uniqueIndex("idx_po_receipts_unique_dr").on(
+      table.orgId,
+      table.purchaseOrderId,
+      table.supplierDrNo,
+    ),
+  ],
+);
+
 // ── PO Receipt Events (Append-Only Immutable Ledger) ──
 
 export const poReceiptEvents = pgTable(
@@ -165,6 +202,10 @@ export const poReceiptEvents = pgTable(
     idempotencyKey: varchar("idempotency_key", { length: 255 })
       .notNull()
       .unique(),
+    /** Links to the receipt batch header (NULL for legacy events before this feature) */
+    poReceiptId: uuid("po_receipt_id").references(() => poReceipts.id, {
+      onDelete: "cascade",
+    }),
     // Immutable ledger — no updated_at
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -174,6 +215,7 @@ export const poReceiptEvents = pgTable(
     index("idx_po_receipt_events_po_id").on(table.purchaseOrderId),
     index("idx_po_receipt_events_po_line_id").on(table.poLineId),
     index("idx_po_receipt_events_product_id").on(table.productId),
+    index("idx_po_receipt_events_receipt_id").on(table.poReceiptId),
     // Each receipt line must have accepted + rejected > 0
     check(
       "chk_receipt_qty_positive",

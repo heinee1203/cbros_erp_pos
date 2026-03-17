@@ -21,6 +21,9 @@ import ProductListItem from '@/components/ProductListItem';
 import { FavoritesGrid } from '@/components/FavoritesGrid';
 import { useScanner } from '@/hardware/scanner/context';
 import { useCartStore, selectLineCount } from '@/stores/cart-store';
+import { database } from '@/db/database';
+import { Product } from '@/db/models';
+import { Q } from '@nozbe/watermelondb';
 import { runFullSync } from '@/sync/sync-manager';
 import { addFavorite, isFavorite } from '@/storage/favorites';
 import { Button, Chip, Toast } from '@/components/ui';
@@ -58,6 +61,11 @@ export default function CatalogScreen() {
   const [variablePriceItem, setVariablePriceItem] = useState<CatalogItem | null>(null);
   const [enteredPrice, setEnteredPrice] = useState('');
 
+  // ── Variant picker modal state ──
+  const [variantParent, setVariantParent] = useState<CatalogItem | null>(null);
+  const [variantChildren, setVariantChildren] = useState<CatalogItem[]>([]);
+  const [loadingVariants, setLoadingVariants] = useState(false);
+
   // ── Toast state ──
   const [toastVisible, setToastVisible] = useState(false);
   const [toastText, setToastText] = useState('');
@@ -80,6 +88,10 @@ export default function CatalogScreen() {
       if (result.barcode === '__OPEN_CAMERA__') return;
       const product = await searchByBarcode(result.barcode);
       if (product) {
+        if (product.isParent) {
+          loadVariants(product);
+          return;
+        }
         if (product.isVariablePrice) {
           setVariablePriceItem(product);
           setEnteredPrice('');
@@ -94,7 +106,7 @@ export default function CatalogScreen() {
       scanner.stopListening();
       unsub();
     };
-  }, [scanner, searchByBarcode, addItemToCart, showToast]);
+  }, [scanner, searchByBarcode, addItemToCart, loadVariants, showToast]);
 
   // Build product map for FavoritesGrid from current results
   const productMap = useMemo(() => {
@@ -124,14 +136,70 @@ export default function CatalogScreen() {
     showToast(`Added: ${item.name}`);
   }, [addLine, showToast]);
 
+  const loadVariants = useCallback(async (parent: CatalogItem) => {
+    setVariantParent(parent);
+    setLoadingVariants(true);
+    try {
+      const productCollection = database.get<Product>('products');
+      const children = await productCollection
+        .query(Q.where('parent_product_id', parent.serverId))
+        .fetch();
+
+      const items: CatalogItem[] = children.map(p => ({
+        id: p.id,
+        serverId: p.serverId,
+        name: p.name,
+        sku: p.sku,
+        mnemonicSku: p.mnemonicSku,
+        barcode: p.barcode,
+        category: p.category,
+        unitPrice: p.unitPrice,
+        isVariablePrice: p.isVariablePrice,
+        isParent: false,
+        parentProductId: p.parentProductId,
+        stockLevel: 0,
+        reservedLevel: 0,
+        reorderPoint: 0,
+        availableForSale: true,
+      }));
+      setVariantChildren(items);
+    } catch (err) {
+      console.error('[CatalogScreen] Error loading variants:', err);
+      setVariantChildren([]);
+    } finally {
+      setLoadingVariants(false);
+    }
+  }, []);
+
+  const handleVariantSelect = useCallback((variant: CatalogItem) => {
+    if (variant.isVariablePrice) {
+      setVariantParent(null);
+      setVariablePriceItem(variant);
+      setEnteredPrice('');
+      return;
+    }
+    addItemToCart(variant);
+    setVariantParent(null);
+    setVariantChildren([]);
+  }, [addItemToCart]);
+
+  const handleVariantPickerClose = useCallback(() => {
+    setVariantParent(null);
+    setVariantChildren([]);
+  }, []);
+
   const handleProductPress = useCallback((item: CatalogItem) => {
+    if (item.isParent) {
+      loadVariants(item);
+      return;
+    }
     if (item.isVariablePrice) {
       setVariablePriceItem(item);
       setEnteredPrice('');
       return;
     }
     addItemToCart(item);
-  }, [addItemToCart]);
+  }, [addItemToCart, loadVariants]);
 
   const handleProductLongPress = useCallback((item: CatalogItem) => {
     if (isFavorite(item.serverId)) {
@@ -172,6 +240,10 @@ export default function CatalogScreen() {
     if (result) {
       const product = await searchByBarcode(result.barcode);
       if (product) {
+        if (product.isParent) {
+          loadVariants(product);
+          return;
+        }
         if (product.isVariablePrice) {
           setVariablePriceItem(product);
           setEnteredPrice('');
@@ -182,7 +254,7 @@ export default function CatalogScreen() {
         Alert.alert('Not Found', `No product for barcode ${result.barcode}`);
       }
     }
-  }, [scanner, searchByBarcode, addItemToCart, showToast]);
+  }, [scanner, searchByBarcode, addItemToCart, loadVariants, showToast]);
 
   const handleVariablePriceConfirm = useCallback(() => {
     if (!variablePriceItem) return;
@@ -398,6 +470,67 @@ export default function CatalogScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Variant Picker Modal */}
+      <Modal
+        visible={variantParent !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={handleVariantPickerClose}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.variantPickerContainer}>
+            <View style={styles.variantPickerHeader}>
+              <Text style={styles.modalTitle}>Select Variant</Text>
+              <Pressable onPress={handleVariantPickerClose}>
+                <Text style={styles.variantCloseText}>Close</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.modalProductName} numberOfLines={2}>
+              {variantParent?.name}
+            </Text>
+
+            {loadingVariants ? (
+              <ActivityIndicator
+                size="large"
+                color={colors.accent.primary}
+                style={{ paddingVertical: spacing.xl }}
+              />
+            ) : variantChildren.length === 0 ? (
+              <View style={{ paddingVertical: spacing.xl, alignItems: 'center' }}>
+                <Text style={styles.emptyText}>No variants found</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={variantChildren}
+                keyExtractor={item => item.id}
+                style={{ maxHeight: 400 }}
+                renderItem={({ item }) => {
+                  // Strip parent name prefix for cleaner display
+                  const label = item.name.startsWith(variantParent?.name ?? '')
+                    ? item.name.slice((variantParent?.name ?? '').length).replace(/^\s*[-–—]\s*/, '').trim() || item.name
+                    : item.name;
+                  return (
+                    <Pressable
+                      style={styles.variantRow}
+                      onPress={() => handleVariantSelect(item)}
+                      android_ripple={{ color: colors.accent.glow }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.variantName} numberOfLines={1}>{label}</Text>
+                        <Text style={styles.variantSku}>{item.sku}</Text>
+                      </View>
+                      <Text style={styles.variantPrice}>
+                        {item.isVariablePrice ? 'Variable' : `\u20B1${item.unitPrice.toFixed(2)}`}
+                      </Text>
+                    </Pressable>
+                  );
+                }}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -608,5 +741,52 @@ const styles = StyleSheet.create({
     ...textStyles.body,
     color: colors.text.inverse,
     fontWeight: '700',
+  },
+
+  // ── Variant Picker Modal ──
+  variantPickerContainer: {
+    width: '90%',
+    maxWidth: 420,
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.lg,
+    padding: spacing.xl,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    maxHeight: '70%',
+  },
+  variantPickerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  variantCloseText: {
+    ...textStyles.body,
+    color: colors.accent.primary,
+    fontWeight: '600',
+  },
+  variantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle,
+  },
+  variantName: {
+    ...textStyles.body,
+    color: colors.text.primary,
+    fontWeight: '500',
+  },
+  variantSku: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
+  },
+  variantPrice: {
+    ...textStyles.body,
+    color: colors.accent.primary,
+    fontWeight: '700',
+    marginLeft: spacing.md,
   },
 });

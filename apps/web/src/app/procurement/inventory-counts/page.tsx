@@ -56,7 +56,7 @@ const STATUS_COLORS: Record<string, string> = {
 const SCOPE_LABELS: Record<string, string> = {
   FULL_LOCATION: "Full Location",
   CATEGORY: "Category",
-  FAMILY: "Family",
+  FAMILY: "Group",
   SELECTED_SKUS: "Selected SKUs",
 };
 
@@ -663,7 +663,7 @@ function CountDetailView({
         <table className="w-full border-collapse text-left">
           <thead className="sticky top-0 z-10 border-b border-border bg-muted/60">
             <tr className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              <th scope="col" className="whitespace-nowrap px-3 py-2">Product</th>
+              <th scope="col" className="whitespace-nowrap px-3 py-2">Item</th>
               <th scope="col" className="whitespace-nowrap px-3 py-2">SKU</th>
               <th scope="col" className="whitespace-nowrap px-3 py-2">Category</th>
               <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">System Qty</th>
@@ -972,7 +972,7 @@ function CreateCountModal({
               >
                 <option value="FULL_LOCATION">Full Location (all items)</option>
                 <option value="CATEGORY">By Category</option>
-                <option value="FAMILY">By Product Family</option>
+                <option value="FAMILY">By Item Group</option>
               </select>
               <ChevronDown
                 size={12}
@@ -1012,7 +1012,7 @@ function CreateCountModal({
           {scope === "FAMILY" && (
             <div>
               <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
-                Family Slug
+                Group Slug
               </label>
               <input
                 type="text"

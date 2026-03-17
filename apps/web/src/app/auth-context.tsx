@@ -40,8 +40,10 @@ interface AuthState {
 interface AuthContextValue {
   /** JWT token for API calls */
   token: string;
-  /** Currently selected location ID */
+  /** Currently selected location ID (may be "ALL") */
   locationId: string;
+  /** Resolved location ID for API calls — always a real UUID (falls back to first location when "ALL") */
+  apiLocationId: string;
   /** User profile */
   user: UserInfo | null;
   /** All accessible locations */
@@ -56,6 +58,8 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   /** Clear session and logout */
   logout: () => void;
+  /** Re-fetch locations from API (e.g. after CRUD on locations) */
+  refreshLocations: () => Promise<void>;
 }
 
 /* ─────────────────────────────────────────────
@@ -65,6 +69,9 @@ interface AuthContextValue {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 const AUTH_STORAGE_KEY = "apex-dev-auth";
 const LOCATION_STORAGE_KEY = "apex-active-location";
+
+/** Sentinel value for "All Locations" aggregate view */
+export const ALL_LOCATIONS = "ALL";
 
 /* ─────────────────────────────────────────────
  * Safe JWT decode (handles non-ASCII / base64url)
@@ -121,9 +128,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               setAuth(parsed);
               await fetchLocations(parsed);
 
-              // Restore persisted active location or use primary
+              // Restore persisted active location, default to "All Locations"
               const savedLoc = localStorage.getItem(LOCATION_STORAGE_KEY);
-              setActiveLocationId(savedLoc || parsed.locationId);
+              setActiveLocationId(savedLoc || ALL_LOCATIONS);
             }
           } catch {
             sessionStorage.removeItem(AUTH_STORAGE_KEY);
@@ -162,7 +169,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authData));
       setAuth(authData);
-      setActiveLocationId(authData.locationId);
+      // Default to "All Locations" on fresh login
+      const savedLoc = localStorage.getItem(LOCATION_STORAGE_KEY);
+      setActiveLocationId(savedLoc || ALL_LOCATIONS);
       await fetchLocations(authData);
     },
     [fetchLocations]
@@ -191,14 +200,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Resolve active locationId: prefer explicit selection, fallback to primary
+  // ── Refresh locations (for use after CRUD operations) ──
+  const refreshLocations = useCallback(async () => {
+    if (auth) {
+      await fetchLocations(auth);
+    }
+  }, [auth, fetchLocations]);
+
+  // Resolve active locationId: prefer explicit selection, fallback to ALL
   const resolvedLocationId = activeLocationId || auth?.locationId || "";
+
+  // For API calls: always resolve to a real UUID (store-context requires valid location ID)
+  const apiLocationId = resolvedLocationId === ALL_LOCATIONS
+    ? (locations[0]?.id ?? auth?.locationId ?? "")
+    : resolvedLocationId;
 
   return (
     <AuthContext.Provider
       value={{
         token: auth?.token ?? "",
         locationId: resolvedLocationId,
+        apiLocationId,
         user: auth?.user ?? null,
         locations,
         loading,
@@ -206,6 +228,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLocationId,
         login,
         logout,
+        refreshLocations,
       }}
     >
       {children}

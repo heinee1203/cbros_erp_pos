@@ -157,7 +157,7 @@ export const jobCardRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: "Invalid pagination params" });
     }
 
-    const result = await listJobCards(orgId, locationId, parsed.data.cursor, parsed.data.limit);
+    const result = await listJobCards(orgId, locationId || undefined, parsed.data.cursor, parsed.data.limit);
     return reply.send(result);
   });
 

@@ -37,6 +37,7 @@ import {
   useDeleteSubcategory,
   type SubcategoryRow,
 } from "@/hooks/use-subcategories";
+import { useUpdateFamily, useDeleteFamily } from "@/hooks/use-families";
 
 /* ═══════════════════════════════════════════════════════
  * CONSTANTS
@@ -70,6 +71,11 @@ export default function CategoriesPage() {
   const [editingCategory, setEditingCategory] = useState<CategoryRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CategoryRow | null>(null);
 
+  // Family inline editing
+  const [editingFamily, setEditingFamily] = useState<ProductFamily | null>(null);
+  const [deleteFamilyTarget, setDeleteFamilyTarget] = useState<ProductFamily | null>(null);
+  const [createCategoryForFamily, setCreateCategoryForFamily] = useState<ProductFamily | null>(null);
+
   // Inline subcategory editing
   const [addingSubcategoryFor, setAddingSubcategoryFor] = useState<string | null>(null);
   const [editingSubcategory, setEditingSubcategory] = useState<SubcategoryRow | null>(null);
@@ -96,6 +102,8 @@ export default function CategoriesPage() {
   const createSubMut = useCreateSubcategory(token, locationId);
   const updateSubMut = useUpdateSubcategory(token, locationId);
   const deleteSubMut = useDeleteSubcategory(token, locationId);
+  const updateFamilyMut = useUpdateFamily(token, locationId);
+  const deleteFamilyMut = useDeleteFamily(token, locationId);
 
   const families = familiesData?.data ?? [];
   const allCategories = categoriesData?.data ?? EMPTY_CATEGORIES;
@@ -375,6 +383,9 @@ export default function CategoriesPage() {
                   onAddSubcategory={(catId) => setAddingSubcategoryFor(catId)}
                   onEditSubcategory={(sub) => setEditingSubcategory(sub)}
                   onDeleteSubcategory={(sub) => setDeleteSubTarget(sub)}
+                  onAddCategory={() => setCreateCategoryForFamily(family)}
+                  onEditFamily={() => setEditingFamily(family)}
+                  onDeleteFamily={() => setDeleteFamilyTarget(family)}
                 />
               );
             })}
@@ -405,6 +416,9 @@ export default function CategoriesPage() {
                 onAddSubcategory={(catId) => setAddingSubcategoryFor(catId)}
                 onEditSubcategory={(sub) => setEditingSubcategory(sub)}
                 onDeleteSubcategory={(sub) => setDeleteSubTarget(sub)}
+                onAddCategory={() => openCreate()}
+                onEditFamily={() => {}}
+                onDeleteFamily={() => {}}
               />
             )}
 
@@ -419,14 +433,16 @@ export default function CategoriesPage() {
       </div>
 
       {/* Create / Edit Category Modal */}
-      {modalMode !== "closed" && (
+      {(modalMode !== "closed" || createCategoryForFamily) && (
         <CategoryModal
-          mode={modalMode}
+          mode={createCategoryForFamily ? "create" : modalMode as "create" | "edit"}
           initial={editingCategory}
           families={families}
-          onClose={closeModal}
+          lockedFamilyId={createCategoryForFamily?.id}
+          lockedFamilyName={createCategoryForFamily?.name}
+          onClose={() => { closeModal(); setCreateCategoryForFamily(null); }}
           onSubmit={(form) => {
-            if (modalMode === "create") {
+            if (createCategoryForFamily || modalMode === "create") {
               createCatMut.mutate(
                 {
                   name: form.name,
@@ -435,9 +451,9 @@ export default function CategoriesPage() {
                   color: form.color || undefined,
                   sortOrder: form.sortOrder,
                   isActive: form.isActive,
-                  parentId: form.familyId || undefined,
+                  familyId: createCategoryForFamily?.id || form.familyId || undefined,
                 } as any,
-                { onSuccess: closeModal },
+                { onSuccess: () => { closeModal(); setCreateCategoryForFamily(null); } },
               );
             } else if (editingCategory) {
               updateCatMut.mutate(
@@ -449,7 +465,7 @@ export default function CategoriesPage() {
                   color: form.color || undefined,
                   sortOrder: form.sortOrder,
                   isActive: form.isActive,
-                  parentId: form.familyId ?? null,
+                  familyId: form.familyId ?? null,
                 } as any,
                 { onSuccess: closeModal },
               );
@@ -457,6 +473,44 @@ export default function CategoriesPage() {
           }}
           submitting={createCatMut.isPending || updateCatMut.isPending}
           error={createCatMut.error?.message || updateCatMut.error?.message || null}
+        />
+      )}
+
+      {/* Edit Family Modal */}
+      {editingFamily && (
+        <FamilyEditModal
+          family={editingFamily}
+          onClose={() => setEditingFamily(null)}
+          onSubmit={(name) => {
+            updateFamilyMut.mutate(
+              { id: editingFamily.id, name },
+              { onSuccess: () => setEditingFamily(null) },
+            );
+          }}
+          submitting={updateFamilyMut.isPending}
+          error={updateFamilyMut.error?.message || null}
+        />
+      )}
+
+      {/* Delete Family Confirmation */}
+      {deleteFamilyTarget && (
+        <DeleteConfirmModal
+          title="Delete Family"
+          itemName={deleteFamilyTarget.name}
+          itemCount={categoriesByFamily.get(deleteFamilyTarget.id)?.length ?? 0}
+          warningMessage={
+            (categoriesByFamily.get(deleteFamilyTarget.id)?.length ?? 0) > 0
+              ? `This family has ${categoriesByFamily.get(deleteFamilyTarget.id)!.length} categories assigned. Move or delete them first.`
+              : undefined
+          }
+          onClose={() => setDeleteFamilyTarget(null)}
+          onConfirm={() => {
+            deleteFamilyMut.mutate(deleteFamilyTarget.id, {
+              onSuccess: () => setDeleteFamilyTarget(null),
+            });
+          }}
+          submitting={deleteFamilyMut.isPending}
+          error={deleteFamilyMut.error?.message || null}
         />
       )}
 
@@ -559,6 +613,9 @@ function FamilyGroup({
   onAddSubcategory,
   onEditSubcategory,
   onDeleteSubcategory,
+  onAddCategory,
+  onEditFamily,
+  onDeleteFamily,
 }: {
   family: ProductFamily;
   categories: CategoryRow[];
@@ -577,16 +634,20 @@ function FamilyGroup({
   onAddSubcategory: (categoryId: string) => void;
   onEditSubcategory: (sub: SubcategoryRow) => void;
   onDeleteSubcategory: (sub: SubcategoryRow) => void;
+  onAddCategory: () => void;
+  onEditFamily: () => void;
+  onDeleteFamily: () => void;
 }) {
   const visibleCats = showAllCats ? categories : categories.slice(0, INITIAL_VISIBLE);
   const hasMoreCats = categories.length > INITIAL_VISIBLE && !showAllCats;
+  const isUngrouped = family.id === "__ungrouped__";
 
   return (
     <div>
       {/* Family row */}
-      <button
+      <div
         onClick={onToggleFamily}
-        className="group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
+        className="group flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
       >
         {/* Chevron */}
         <div className="flex h-5 w-5 shrink-0 items-center justify-center">
@@ -615,7 +676,41 @@ function FamilyGroup({
         <span className="text-[12px] tabular-nums text-muted-foreground">
           {categories.length} {categories.length === 1 ? "category" : "categories"}
         </span>
-      </button>
+
+        {/* Family actions */}
+        {!isUngrouped && (
+          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            <button
+              onClick={(e) => { e.stopPropagation(); onAddCategory(); }}
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+              title="Add category under this family"
+            >
+              <Plus size={12} />
+              Category
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onEditFamily(); }}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Edit family"
+            >
+              <Pencil size={13} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDeleteFamily(); }}
+              disabled={categories.length > 0}
+              className={cn(
+                "rounded-md p-1.5 transition-all",
+                categories.length > 0
+                  ? "text-muted-foreground/30 cursor-not-allowed"
+                  : "text-muted-foreground hover:bg-destructive/10 hover:text-destructive",
+              )}
+              title={categories.length > 0 ? `Cannot delete — ${categories.length} categories assigned` : "Delete family"}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Categories (expandable) */}
       <div
@@ -740,6 +835,13 @@ function CategoryGroup({
 
         {/* Actions */}
         <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            onClick={onAddSubcategory}
+            className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted hover:text-foreground group-hover:opacity-100"
+            title="Add sub-category"
+          >
+            <Plus size={12} />
+          </button>
           <button
             onClick={onEdit}
             className="rounded p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted hover:text-foreground group-hover:opacity-100"
@@ -879,6 +981,8 @@ function CategoryModal({
   mode,
   initial,
   families,
+  lockedFamilyId,
+  lockedFamilyName,
   onClose,
   onSubmit,
   submitting,
@@ -887,6 +991,8 @@ function CategoryModal({
   mode: "create" | "edit";
   initial: CategoryRow | null;
   families: ProductFamily[];
+  lockedFamilyId?: string;
+  lockedFamilyName?: string;
   onClose: () => void;
   onSubmit: (form: CategoryFormData) => void;
   submitting: boolean;
@@ -911,7 +1017,7 @@ function CategoryModal({
       color: "#2563EB",
       sortOrder: 0,
       isActive: true,
-      familyId: families[0]?.id ?? null,
+      familyId: lockedFamilyId ?? families[0]?.id ?? null,
     };
   });
 
@@ -983,16 +1089,22 @@ function CategoryModal({
           {/* Family dropdown */}
           <div>
             <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Family</label>
-            <select
-              value={form.familyId ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, familyId: e.target.value || null }))}
-              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px] text-foreground outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
-            >
-              <option value="">None (Ungrouped)</option>
-              {families.map((f) => (
-                <option key={f.id} value={f.id}>{f.name}</option>
-              ))}
-            </select>
+            {lockedFamilyName ? (
+              <div className="flex h-9 w-full items-center rounded-lg border border-border bg-muted/50 px-3 text-[13px] text-foreground">
+                {lockedFamilyName}
+              </div>
+            ) : (
+              <select
+                value={form.familyId ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, familyId: e.target.value || null }))}
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px] text-foreground outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+              >
+                <option value="">None (Ungrouped)</option>
+                {families.map((f) => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Description */}
@@ -1243,6 +1355,7 @@ function DeleteConfirmModal({
   title,
   itemName,
   itemCount,
+  warningMessage,
   onClose,
   onConfirm,
   submitting,
@@ -1251,6 +1364,7 @@ function DeleteConfirmModal({
   title: string;
   itemName: string;
   itemCount: number;
+  warningMessage?: string;
   onClose: () => void;
   onConfirm: () => void;
   submitting: boolean;
@@ -1276,7 +1390,7 @@ function DeleteConfirmModal({
 
           {itemCount > 0 && (
             <div className="mt-3 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-[12px] text-warning">
-              This item has {itemCount.toLocaleString()} products assigned. Reassign them before deleting.
+              {warningMessage || `This item has ${itemCount.toLocaleString()} products assigned. Reassign them before deleting.`}
             </div>
           )}
 
@@ -1302,6 +1416,86 @@ function DeleteConfirmModal({
           >
             {submitting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
             Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * FAMILY EDIT MODAL
+ * ═══════════════════════════════════════════════════════ */
+
+function FamilyEditModal({
+  family,
+  onClose,
+  onSubmit,
+  submitting,
+  error,
+}: {
+  family: ProductFamily;
+  onClose: () => void;
+  onSubmit: (name: string) => void;
+  submitting: boolean;
+  error: string | null;
+}) {
+  const [name, setName] = useState(family.name);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    nameRef.current?.focus();
+    nameRef.current?.select();
+  }, []);
+
+  const isValid = name.trim().length > 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]">
+      <div className="w-full max-w-sm rounded-xl border border-border bg-background shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+          <h2 className="text-[14px] font-semibold text-foreground">Edit Family</h2>
+          <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="space-y-4 px-5 py-4">
+          <div>
+            <label className="mb-1 block text-[12px] font-medium text-muted-foreground">Name *</label>
+            <input
+              ref={nameRef}
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Engine Parts"
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+              onKeyDown={(e) => { if (e.key === "Enter" && isValid && !submitting) onSubmit(name.trim()); }}
+            />
+          </div>
+
+          {error && (
+            <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-lg border border-border px-3.5 py-2 text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(name.trim())}
+            disabled={!isValid || submitting}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50"
+          >
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} strokeWidth={2.5} />}
+            Save Changes
           </button>
         </div>
       </div>

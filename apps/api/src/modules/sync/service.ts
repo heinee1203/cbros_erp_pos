@@ -52,11 +52,15 @@ export async function getCatalogDelta(opts: SyncOpts): Promise<SyncResult<any>> 
       sku: products.sku,
       mnemonicSku: products.mnemonicSku,
       barcode: products.barcode,
+      oemNumber: products.oemNumber,
       category: products.category,
       unitPrice: products.unitPrice,
       isVariablePrice: products.isVariablePrice,
       isActive: products.isActive,
       familyId: products.familyId,
+      brandId: products.brandId,
+      parentProductId: products.parentProductId,
+      isParent: products.isParent,
       updatedAt: products.updatedAt,
     })
     .from(products)
@@ -110,6 +114,8 @@ export async function getInventoryDelta(opts: SyncOpts): Promise<SyncResult<any>
       stockLevel: inventory.stockLevel,
       reservedLevel: inventory.reservedLevel,
       reorderPoint: inventory.reorderPoint,
+      optimalStock: inventory.optimalStock,
+      availableForSale: inventory.availableForSale,
       updatedAt: inventory.updatedAt,
     })
     .from(inventory)

@@ -15,6 +15,9 @@ interface ServerProduct {
   unitPrice: string;
   isVariablePrice: boolean;
   familyId: string | null;
+  brandId: string | null;
+  parentProductId: string | null;
+  isParent: boolean;
   updatedAt: string;
 }
 
@@ -54,10 +57,14 @@ export async function syncCatalog(): Promise<{ upserted: number }> {
             record.sku = item.sku;
             record.mnemonicSku = item.mnemonicSku;
             record.barcode = item.barcode;
+            record.oemNumber = item.oemNumber;
             record.category = item.category;
             record.unitPrice = parseFloat(item.unitPrice);
             record.isVariablePrice = item.isVariablePrice;
             record.familyId = item.familyId;
+            record.brandId = item.brandId;
+            record.parentProductId = item.parentProductId;
+            record.isParent = item.isParent;
             record.serverUpdatedAt = new Date(item.updatedAt).getTime();
           }),
         );
@@ -70,10 +77,14 @@ export async function syncCatalog(): Promise<{ upserted: number }> {
             record.sku = item.sku;
             record.mnemonicSku = item.mnemonicSku;
             record.barcode = item.barcode;
+            record.oemNumber = item.oemNumber;
             record.category = item.category;
             record.unitPrice = parseFloat(item.unitPrice);
             record.isVariablePrice = item.isVariablePrice;
             record.familyId = item.familyId;
+            record.brandId = item.brandId;
+            record.parentProductId = item.parentProductId;
+            record.isParent = item.isParent;
             record.serverUpdatedAt = new Date(item.updatedAt).getTime();
           }),
         );

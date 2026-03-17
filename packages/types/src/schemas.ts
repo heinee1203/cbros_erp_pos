@@ -46,9 +46,9 @@ export interface JwtPayload {
 
 // ── Store Context ──
 export interface StoreContext {
-  locationId: string;
+  locationId: string | null;
   orgId: string;
-  locationType: string;
+  locationType: string | null;
 }
 
 // ── Stock Journal ──
@@ -75,13 +75,30 @@ const PRODUCT_CATEGORIES = [
   "LABOR_SERVICES",
 ] as const;
 
+// Variant definition for inline variant creation
+const variantItemSchema = z.object({
+  suffix: z.string().min(1, "Variant name is required").max(100),
+  sku: z.string().min(1, "SKU is required").max(50),
+  unitPrice: z.string().default("0.00").refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val),
+    { message: "Unit price must be a valid decimal" },
+  ),
+  costPrice: z.string().default("0.00").refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val),
+    { message: "Cost price must be a valid decimal" },
+  ),
+  barcode: z.string().max(50).optional(),
+});
+export type VariantItem = z.infer<typeof variantItemSchema>;
+
 export const createProductSchema = z.object({
   name: z.string().min(1, "Name is required").max(500),
-  sku: z.string().min(1, "SKU is required").max(50),
+  sku: z.string().max(50).optional().default(""), // optional when hasVariants=true (parent has no SKU)
   mnemonicSku: z
     .string()
     .length(10, "Mnemonic SKU must be exactly 10 characters")
-    .regex(/^[A-Z]{10}$/, "Mnemonic SKU must be 10 uppercase letters"),
+    .regex(/^[A-Z]{10}$/, "Mnemonic SKU must be 10 uppercase letters")
+    .optional(),
   category: z.enum(PRODUCT_CATEGORIES, { required_error: "Category is required" }),
   unitPrice: z.string().default("0.00").refine(
     (val) => /^\d+(\.\d{1,2})?$/.test(val),
@@ -91,8 +108,14 @@ export const createProductSchema = z.object({
     (val) => /^\d+(\.\d{1,2})?$/.test(val),
     { message: "Cost price must be a non-negative decimal (e.g. '5.00')" },
   ),
-  barcode: z.string().regex(/^\d{13}$/, "Barcode must be exactly 13 digits").optional(),
+  barcode: z.string().min(1).max(50).optional(),
+  oemNumber: z.string().max(100).nullable().optional(),
   familyId: z.string().uuid().nullable().optional(),
+  categoryId: z.string().uuid().nullable().optional(),
+  subcategoryId: z.string().uuid().nullable().optional(),
+  brandId: z.string().uuid().nullable().optional(),
+  isParent: z.boolean().default(false),
+  parentProductId: z.string().uuid().nullable().optional(),
   description: z.string().max(2000).optional(),
   trackInventory: z.boolean().default(true),
   reorderPoint: z.number().int().min(0).default(10),
@@ -111,8 +134,35 @@ export const createProductSchema = z.object({
       }),
     )
     .optional(),
+  // Inline variant creation — when present, product becomes a parent
+  variants: z.array(variantItemSchema).optional(),
 });
 export type CreateProductInput = z.infer<typeof createProductSchema>;
+
+// ── Product: Update ──
+export const updateProductSchema = z.object({
+  name: z.string().min(1).max(500).optional(),
+  unitPrice: z.string().refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val),
+    { message: "Unit price must be a non-negative decimal (e.g. '10.00')" },
+  ).optional(),
+  costPrice: z.string().refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val),
+    { message: "Cost price must be a non-negative decimal (e.g. '5.00')" },
+  ).optional(),
+  barcode: z.string().min(1).max(50).optional(),
+  oemNumber: z.string().max(100).nullable().optional(),
+  familyId: z.string().uuid().nullable().optional(),
+  categoryId: z.string().uuid().nullable().optional(),
+  subcategoryId: z.string().uuid().nullable().optional(),
+  brandId: z.string().uuid().nullable().optional(),
+  isParent: z.boolean().optional(),
+  parentProductId: z.string().uuid().nullable().optional(),
+  reorderPoint: z.number().int().min(0).optional(),
+  // Add new variants to an existing parent product
+  newVariants: z.array(variantItemSchema).optional(),
+});
+export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
 // ── Product Family ──
 export const productFamilySchema = z.object({
@@ -126,12 +176,25 @@ export const vehicleCompatibilitySchema = z.object({
   productId: z.string().uuid(),
   make: z.string().min(1).max(100),
   model: z.string().min(1).max(100),
-  yearStart: z.number().int().min(1900).max(2100),
-  yearEnd: z.number().int().min(1900).max(2100),
+  yearStart: z.number().int().min(1900).max(2100).optional(),
+  yearEnd: z.number().int().min(1900).max(2100).optional(),
   engine: z.string().max(100).optional(),
   notes: z.string().max(255).optional(),
 });
 export type VehicleCompatibilityInput = z.infer<typeof vehicleCompatibilitySchema>;
+
+export const addVehicleSchema = z.object({
+  make: z.string().min(1).max(100),
+  model: z.string().min(1).max(100),
+  yearStart: z.number().int().min(1900).max(2100).optional(),
+  yearEnd: z.number().int().min(1900).max(2100).optional(),
+  engine: z.string().max(100).optional(),
+  notes: z.string().max(255).optional(),
+});
+export type AddVehicleInput = z.infer<typeof addVehicleSchema>;
+
+export const updateVehicleSchema = addVehicleSchema.partial();
+export type UpdateVehicleInput = z.infer<typeof updateVehicleSchema>;
 
 // ══════════════════════════════════════════════
 // Phase 3: Transfer & Adjustment Schemas
@@ -358,6 +421,7 @@ export type SubmitPOInput = z.infer<typeof submitPOSchema>;
 // ── PO: Receive (the critical path) ──
 export const receivePOSchema = z.object({
   idempotencyKey: z.string().min(1).max(255),
+  supplierDrNo: z.string().min(1).max(100),
   lines: z
     .array(
       z.object({
@@ -583,6 +647,25 @@ export const postCountSchema = z.object({
 export type PostCountInput = z.infer<typeof postCountSchema>;
 
 // ══════════════════════════════════════════════
+// Brands
+// ══════════════════════════════════════════════
+
+// ── Brand: Create ──
+export const createBrandSchema = z.object({
+  name: z.string().min(1).max(255),
+  slug: z.string().min(1).max(255).regex(/^[a-z0-9-]+$/),
+});
+
+export const updateBrandSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  slug: z.string().min(1).max(255).regex(/^[a-z0-9-]+$/).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export type CreateBrandInput = z.infer<typeof createBrandSchema>;
+export type UpdateBrandInput = z.infer<typeof updateBrandSchema>;
+
+// ══════════════════════════════════════════════
 // Phase 11: Categories
 // ══════════════════════════════════════════════
 
@@ -596,6 +679,7 @@ export const createCategorySchema = z.object({
   sortOrder: z.number().int().min(0).default(0),
   isActive: z.boolean().default(true),
   parentId: z.string().uuid().optional(),
+  familyId: z.string().uuid().nullable().optional(),
 });
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
@@ -608,8 +692,91 @@ export const updateCategorySchema = z.object({
   sortOrder: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
   parentId: z.string().uuid().nullable().optional(),
+  familyId: z.string().uuid().nullable().optional(),
 });
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
+
+// ══════════════════════════════════════════════
+// Sub-categories
+// ══════════════════════════════════════════════
+
+export const createSubcategorySchema = z.object({
+  categoryId: z.string().uuid(),
+  name: z.string().min(1).max(255),
+  slug: z.string().min(1).max(255).regex(/^[a-z0-9-]+$/, "Slug must be lowercase alphanumeric with hyphens"),
+  sortOrder: z.number().int().min(0).default(0),
+  isActive: z.boolean().default(true),
+});
+export type CreateSubcategoryInput = z.infer<typeof createSubcategorySchema>;
+
+export const updateSubcategorySchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  slug: z.string().min(1).max(255).regex(/^[a-z0-9-]+$/).optional(),
+  categoryId: z.string().uuid().optional(),
+  sortOrder: z.number().int().min(0).optional(),
+  isActive: z.boolean().optional(),
+});
+export type UpdateSubcategoryInput = z.infer<typeof updateSubcategorySchema>;
+
+// ══════════════════════════════════════════════
+// Product Option Types & Variants
+// ══════════════════════════════════════════════
+
+export const createOptionTypeSchema = z.object({
+  name: z.string().min(1).max(100),
+  values: z.array(z.string().min(1).max(255)).min(1, "At least one value required"),
+});
+export type CreateOptionTypeInput = z.infer<typeof createOptionTypeSchema>;
+
+export const updateOptionTypeSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+});
+export type UpdateOptionTypeInput = z.infer<typeof updateOptionTypeSchema>;
+
+export const createVariantSchema = z.object({
+  sku: z.string().min(1).max(50),
+  name: z.string().min(1).max(255).optional(),
+  mnemonicSku: z.string().length(10).regex(/^[A-Z]{10}$/).optional(),
+  unitPrice: z.string().default("0.00"),
+  costPrice: z.string().default("0.00"),
+  barcode: z.string().max(50).optional(),
+  isVariablePrice: z.boolean().default(false),
+  optionValueIds: z.array(z.string().uuid()).min(1, "At least one option value required"),
+});
+export type CreateVariantInput = z.infer<typeof createVariantSchema>;
+
+export const createVariantBatchSchema = z.object({
+  variants: z.array(createVariantSchema).min(1).max(500),
+});
+export type CreateVariantBatchInput = z.infer<typeof createVariantBatchSchema>;
+
+// ══════════════════════════════════════════════
+// Location Management
+// ══════════════════════════════════════════════
+
+const LOCATION_TYPES = [
+  "WAREHOUSE",
+  "RETAIL_STORE",
+  "SHOWROOM",
+  "STORE",
+  "TRANSIT_BUFFER",
+] as const;
+
+export const createLocationSchema = z.object({
+  name: z.string().min(1, "Name is required").max(255),
+  code: z.string().min(1, "Code is required").max(50),
+  type: z.enum(LOCATION_TYPES, { required_error: "Type is required" }),
+  address: z.string().max(500).optional(),
+});
+export type CreateLocationInput = z.infer<typeof createLocationSchema>;
+
+export const updateLocationSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  code: z.string().min(1).max(50).optional(),
+  type: z.enum(LOCATION_TYPES).optional(),
+  address: z.string().max(500).nullable().optional(),
+});
+export type UpdateLocationInput = z.infer<typeof updateLocationSchema>;
 
 // ── Customer: Create ──
 export const createCustomerSchema = z.object({
@@ -628,3 +795,19 @@ export const createCustomerVehicleSchema = z.object({
   notes: z.string().max(500).optional(),
 });
 export type CreateCustomerVehicleInput = z.infer<typeof createCustomerVehicleSchema>;
+
+// ══════════════════════════════════════════════
+// Organization Settings
+// ══════════════════════════════════════════════
+
+export const updateCompanySettingsSchema = z.object({
+  legalName: z.string().max(200).optional(),
+  tin: z.string().max(50).optional(),
+  phone: z.string().max(50).optional(),
+  email: z.string().email().max(200).optional(),
+  address: z.string().max(500).optional(),
+  logoUrl: z.string().url().max(500).optional(),
+  invoiceTerms: z.string().max(2000).optional(),
+  invoiceFooter: z.string().max(500).optional(),
+});
+export type UpdateCompanySettingsInput = z.infer<typeof updateCompanySettingsSchema>;

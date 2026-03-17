@@ -32,6 +32,9 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
   // Create a new sale in OPEN status
   app.post("/", async (request, reply) => {
     const { orgId, locationId } = request.storeContext!;
+    if (!locationId) {
+      return reply.status(400).send({ error: "A specific location must be selected for this operation" });
+    }
     const { userId, role } = request.user;
     assertPosRole(role);
 
@@ -185,7 +188,7 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
     const { orgId, locationId } = request.storeContext!;
     const { role } = request.user;
 
-    const allLocations = q.allLocations === "true";
+    const allLocations = q.allLocations === "true" || !locationId;
     if (allLocations && !["ADMIN", "MANAGER"].includes(role)) {
       return reply
         .status(403)

@@ -37,7 +37,7 @@ export async function apiFetch<T>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  if (locationId) {
+  if (locationId && locationId !== "ALL") {
     headers["X-Location-ID"] = locationId;
   }
 
@@ -69,5 +69,10 @@ export async function apiFetch<T>(
     return undefined as unknown as T;
   }
 
-  return res.json();
+  // Safety: handle empty response bodies gracefully
+  const text = await res.text();
+  if (!text) {
+    return undefined as unknown as T;
+  }
+  return JSON.parse(text);
 }

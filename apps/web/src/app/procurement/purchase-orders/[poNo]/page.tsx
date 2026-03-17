@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { Printer } from "lucide-react";
+import { Printer, Pencil, Trash2, Plus, Search, X, Save, Loader2 } from "lucide-react";
 import {
   usePOQuery,
   usePOReceipts,
@@ -20,6 +20,10 @@ import {
   type ReceiptLineInput,
 } from "@/hooks/use-po-mutations";
 import { useAuth } from "@/app/auth-context";
+import { useSuppliers } from "@/hooks/use-suppliers";
+import { useLocations } from "@/hooks/use-locations";
+import { useProducts, type ProductRow } from "@/hooks/use-products";
+import { apiFetch } from "@/lib/api";
 
 // ── Status badge styling ──
 const STATUS_STYLES: Record<string, string> = {
@@ -49,6 +53,9 @@ const TERMINAL_STATES = new Set([
 
 /** States that allow receiving */
 const RECEIVABLE_STATES = new Set(["SUBMITTED", "PARTIALLY_RECEIVED"]);
+
+/** States that allow editing header + lines */
+const EDITABLE_STATES = new Set(["DRAFT", "SUBMITTED", "PARTIALLY_RECEIVED"]);
 
 /* ══════════════════════════════════════════════════════════
  * Purchase Order Detail Page — /procurement/purchase-orders/[poNo]
@@ -110,8 +117,10 @@ function PODetailView({
   po: PODetail;
   refetch: () => void;
 }) {
+  const { token, locationId } = useAuth();
   const isTerminal = TERMINAL_STATES.has(po.status);
   const canReceive = RECEIVABLE_STATES.has(po.status);
+  const canEdit = EDITABLE_STATES.has(po.status);
   const isDraft = po.status === "DRAFT";
 
   const totalOrdered = po.lines.reduce((sum, l) => sum + l.orderedQty, 0);
@@ -119,6 +128,189 @@ function PODetailView({
   const totalRejected = po.lines.reduce((sum, l) => sum + l.rejectedQty, 0);
   const totalRemaining = totalOrdered - totalReceived - totalRejected;
   const pctReceived = totalOrdered > 0 ? Math.round((totalReceived / totalOrdered) * 100) : 0;
+
+  // ── Edit Mode State ──
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Header edit form
+  const [editSupplierId, setEditSupplierId] = useState(po.supplierId);
+  const [editDestinationId, setEditDestinationId] = useState(po.destinationLocationId);
+  const [editExpectedDate, setEditExpectedDate] = useState(
+    po.expectedDeliveryDate ? po.expectedDeliveryDate.split("T")[0] : "",
+  );
+  const [editNotes, setEditNotes] = useState(po.notes ?? "");
+
+  // Lines edit state
+  interface EditLine {
+    id: string;
+    productId: string;
+    productName: string;
+    sku: string;
+    orderedQty: number;
+    unitCost: string;
+    receivedAcceptedQty: number;
+    rejectedQty: number;
+    isNew?: boolean;
+  }
+  const [editLines, setEditLines] = useState<EditLine[]>([]);
+  const [deletedLineIds, setDeletedLineIds] = useState<string[]>([]);
+
+  // Initialize edit state when entering edit mode
+  const enterEditMode = useCallback(() => {
+    setEditSupplierId(po.supplierId);
+    setEditDestinationId(po.destinationLocationId);
+    setEditExpectedDate(po.expectedDeliveryDate ? po.expectedDeliveryDate.split("T")[0] : "");
+    setEditNotes(po.notes ?? "");
+    setEditLines(
+      po.lines.map((l) => ({
+        id: l.id,
+        productId: l.productId,
+        productName: l.productName,
+        sku: l.sku,
+        orderedQty: l.orderedQty,
+        unitCost: l.unitCost,
+        receivedAcceptedQty: l.receivedAcceptedQty,
+        rejectedQty: l.rejectedQty,
+      })),
+    );
+    setDeletedLineIds([]);
+    setEditError(null);
+    setIsEditing(true);
+  }, [po]);
+
+  const cancelEdit = useCallback(() => {
+    setIsEditing(false);
+    setEditError(null);
+  }, []);
+
+  // Fetch suppliers and locations for dropdowns
+  const suppliersQuery = useSuppliers(token, locationId);
+  const locationsQuery = useLocations(token);
+  const suppliers = suppliersQuery.data?.data ?? [];
+  const locations = locationsQuery.data?.data ?? [];
+
+  // Update a line field
+  const updateLine = useCallback((lineId: string, field: keyof EditLine, value: any) => {
+    setEditLines((prev) =>
+      prev.map((l) => (l.id === lineId ? { ...l, [field]: value } : l)),
+    );
+  }, []);
+
+  // Remove a line
+  const removeLine = useCallback((lineId: string, isNew?: boolean) => {
+    setEditLines((prev) => prev.filter((l) => l.id !== lineId));
+    if (!isNew) {
+      setDeletedLineIds((prev) => [...prev, lineId]);
+    }
+  }, []);
+
+  // Add a new line from product search
+  const addLine = useCallback((product: ProductRow) => {
+    const tempId = `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setEditLines((prev) => [
+      ...prev,
+      {
+        id: tempId,
+        productId: product.id,
+        productName: product.name,
+        sku: product.sku,
+        orderedQty: 1,
+        unitCost: product.costPrice || "0",
+        receivedAcceptedQty: 0,
+        rejectedQty: 0,
+        isNew: true,
+      },
+    ]);
+  }, []);
+
+  // Save all edits
+  const handleSave = useCallback(async () => {
+    setIsSaving(true);
+    setEditError(null);
+    try {
+      // 1. PATCH header
+      await apiFetch(`/procurement/purchase-orders/${po.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          supplierId: editSupplierId,
+          destinationLocationId: editDestinationId,
+          expectedDeliveryDate: editExpectedDate || null,
+          notes: editNotes || null,
+        }),
+        token,
+        locationId,
+      });
+
+      // 2. Delete removed lines
+      for (const lineId of deletedLineIds) {
+        await apiFetch(
+          `/procurement/purchase-orders/${po.id}/lines/${lineId}`,
+          { method: "DELETE", token, locationId },
+        );
+      }
+
+      // 3. Update/add lines
+      for (const line of editLines) {
+        if (line.isNew) {
+          await apiFetch(`/procurement/purchase-orders/${po.id}/lines`, {
+            method: "POST",
+            body: JSON.stringify({
+              productId: line.productId,
+              orderedQty: line.orderedQty,
+              unitCost: line.unitCost,
+            }),
+            token,
+            locationId,
+          });
+        } else {
+          // Check if line was modified
+          const original = po.lines.find((l) => l.id === line.id);
+          if (
+            original &&
+            (original.orderedQty !== line.orderedQty ||
+              original.unitCost !== line.unitCost)
+          ) {
+            await apiFetch(
+              `/procurement/purchase-orders/${po.id}/lines/${line.id}`,
+              {
+                method: "PATCH",
+                body: JSON.stringify({
+                  orderedQty: line.orderedQty,
+                  unitCost: line.unitCost,
+                }),
+                token,
+                locationId,
+              },
+            );
+          }
+        }
+      }
+
+      setIsEditing(false);
+      refetch();
+    } catch (err: any) {
+      setEditError(err.message || "Failed to save changes");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [
+    po, editSupplierId, editDestinationId, editExpectedDate, editNotes,
+    editLines, deletedLineIds, token, locationId, refetch,
+  ]);
+
+  // Grand total for edit mode
+  const editGrandTotal = useMemo(
+    () =>
+      editLines.reduce(
+        (sum, l) => sum + l.orderedQty * (parseFloat(l.unitCost) || 0),
+        0,
+      ),
+    [editLines],
+  );
+
+  const isPartiallyReceived = po.status === "PARTIALLY_RECEIVED";
 
   return (
     <div className="mx-auto max-w-7xl space-y-5">
@@ -142,69 +334,186 @@ function PODetailView({
             >
               {STATUS_LABELS[po.status] ?? po.status}
             </span>
-            <span className="text-xs text-muted-foreground">
-              Supplier: <strong>{po.supplier.name}</strong>
-            </span>
+            {!isEditing && (
+              <span className="text-xs text-muted-foreground">
+                Supplier: <strong>{po.supplier.name}</strong>
+              </span>
+            )}
+            {isEditing && (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                EDITING
+              </span>
+            )}
           </div>
         </div>
         {/* Action buttons — contextual */}
         <div className="flex items-center gap-2">
-          {po.status !== "CANCELLED" && (
-            <Link
-              href={`/inventory/barcode-printing?poNo=${encodeURIComponent(po.poNo)}`}
-              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Printer size={14} />
-              Print Barcodes
-            </Link>
-          )}
-          {isDraft && (
-            <SubmitPOButton po={po} />
-          )}
-          {(isDraft || po.status === "SUBMITTED") && (
-            <CancelPOButton po={po} />
-          )}
-          {po.status === "PARTIALLY_RECEIVED" && (
-            <CloseVarianceButton po={po} />
+          {isEditing ? (
+            <>
+              <button
+                onClick={cancelEdit}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+              >
+                <X size={14} />
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={isSaving || editLines.length === 0}
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50"
+              >
+                {isSaving ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Save size={14} />
+                )}
+                {isSaving ? "Saving…" : "Save Changes"}
+              </button>
+            </>
+          ) : (
+            <>
+              {po.status !== "CANCELLED" && (
+                <Link
+                  href={`/inventory/barcode-printing?poNo=${encodeURIComponent(po.poNo)}`}
+                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Printer size={14} />
+                  Print Barcodes
+                </Link>
+              )}
+              {canEdit && (
+                <button
+                  onClick={enterEditMode}
+                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Pencil size={14} />
+                  Edit PO
+                </button>
+              )}
+              {isDraft && (
+                <SubmitPOButton po={po} />
+              )}
+              {(isDraft || po.status === "SUBMITTED") && (
+                <CancelPOButton po={po} />
+              )}
+              {po.status === "PARTIALLY_RECEIVED" && (
+                <CloseVarianceButton po={po} />
+              )}
+            </>
           )}
         </div>
       </div>
 
+      {/* ── Edit Error Banner ── */}
+      {editError && (
+        <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs font-medium text-destructive">
+          {editError}
+        </div>
+      )}
+
       {/* ── Route: Supplier → Destination ── */}
-      <div className="flex items-center gap-3 rounded-lg border border-border p-3">
-        <InfoChip
-          label="Supplier"
-          primary={po.supplier.name}
-          secondary={po.supplier.contactPhone ?? po.supplier.contactEmail ?? undefined}
-        />
-        <svg
-          className="h-5 w-5 shrink-0 text-muted-foreground"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M17 8l4 4m0 0l-4 4m4-4H3"
-          />
-        </svg>
-        <InfoChip
-          label="Destination"
-          primary={po.destination.name}
-          secondary={po.destination.code}
-        />
-        {po.expectedDeliveryDate && (
+      {isEditing ? (
+        <div className="rounded-lg border border-primary/20 bg-primary/[0.02] p-4 space-y-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Header Details
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Supplier
+              </label>
+              <select
+                value={editSupplierId}
+                onChange={(e) => setEditSupplierId(e.target.value)}
+                disabled={isPartiallyReceived}
+                className="h-8 w-full rounded-lg border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-50"
+              >
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Destination
+              </label>
+              <select
+                value={editDestinationId}
+                onChange={(e) => setEditDestinationId(e.target.value)}
+                disabled={isPartiallyReceived}
+                className="h-8 w-full rounded-lg border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-50"
+              >
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Expected Delivery
+              </label>
+              <input
+                type="date"
+                value={editExpectedDate}
+                onChange={(e) => setEditExpectedDate(e.target.value)}
+                className="h-8 w-full rounded-lg border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+                Notes
+              </label>
+              <input
+                type="text"
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+                placeholder="Optional notes..."
+                className="h-8 w-full rounded-lg border border-border bg-background px-2 text-[12px] outline-none placeholder:text-muted-foreground/50 focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+              />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 rounded-lg border border-border p-3">
           <InfoChip
-            label="Expected Delivery"
-            primary={new Date(po.expectedDeliveryDate).toLocaleDateString(
-              "en-US",
-              { month: "short", day: "numeric", year: "numeric" },
-            )}
+            label="Supplier"
+            primary={po.supplier.name}
+            secondary={po.supplier.contactPhone ?? po.supplier.contactEmail ?? undefined}
           />
-        )}
-      </div>
+          <svg
+            className="h-5 w-5 shrink-0 text-muted-foreground"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M17 8l4 4m0 0l-4 4m4-4H3"
+            />
+          </svg>
+          <InfoChip
+            label="Destination"
+            primary={po.destination.name}
+            secondary={po.destination.code}
+          />
+          {po.expectedDeliveryDate && (
+            <InfoChip
+              label="Expected Delivery"
+              primary={new Date(po.expectedDeliveryDate).toLocaleDateString(
+                "en-US",
+                { month: "short", day: "numeric", year: "numeric" },
+              )}
+            />
+          )}
+        </div>
+      )}
 
       {/* ── Timeline ── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -237,8 +546,17 @@ function PODetailView({
         </div>
       )}
 
-      {/* ── Receiving Grid (the core of this page) ── */}
-      {canReceive ? (
+      {/* ── Grid: Edit / Receiving / Read-only ── */}
+      {isEditing ? (
+        <EditableGrid
+          lines={editLines}
+          isPartiallyReceived={isPartiallyReceived}
+          onUpdateLine={updateLine}
+          onRemoveLine={removeLine}
+          onAddLine={addLine}
+          grandTotal={editGrandTotal}
+        />
+      ) : canReceive ? (
         <ReceivingGrid po={po} refetch={refetch} />
       ) : (
         <ReadOnlyGrid po={po} isTerminal={isTerminal} />
@@ -250,7 +568,7 @@ function PODetailView({
       )}
 
       {/* ── Notes ── */}
-      {po.notes && (
+      {po.notes && !isEditing && (
         <section>
           <SectionHeader>Notes</SectionHeader>
           <p className="whitespace-pre-wrap rounded-md bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
@@ -611,7 +929,7 @@ function ReceivingGrid({
                   className="h-3.5 w-3.5 rounded border-border accent-primary"
                 />
               </th>
-              <Th align="left" width="w-[180px]">Product</Th>
+              <Th align="left" width="w-[180px]">Item</Th>
               <Th align="left" width="w-[100px]">Mnemonic</Th>
               <Th align="right" width="w-[70px]">Ordered</Th>
               <Th align="right" width="w-[80px]">Accepted</Th>
@@ -942,6 +1260,231 @@ function ReceivingGrid({
 /* ══════════════════════════════════════════════════════════
  * READ-ONLY GRID — For DRAFT, terminal states (FULLY_RECEIVED, etc.)
  * ══════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════
+ * EDITABLE GRID — Inline editing of PO lines
+ * ══════════════════════════════════════════════════════════ */
+function EditableGrid({
+  lines,
+  isPartiallyReceived,
+  onUpdateLine,
+  onRemoveLine,
+  onAddLine,
+  grandTotal,
+}: {
+  lines: Array<{
+    id: string;
+    productId: string;
+    productName: string;
+    sku: string;
+    orderedQty: number;
+    unitCost: string;
+    receivedAcceptedQty: number;
+    rejectedQty: number;
+    isNew?: boolean;
+  }>;
+  isPartiallyReceived: boolean;
+  onUpdateLine: (lineId: string, field: any, value: any) => void;
+  onRemoveLine: (lineId: string, isNew?: boolean) => void;
+  onAddLine: (product: ProductRow) => void;
+  grandTotal: number;
+}) {
+  return (
+    <section>
+      <SectionHeader>
+        Line Items
+        <span className="ml-2 text-[10px] font-normal text-amber-600">
+          (editing — {lines.length} line{lines.length !== 1 ? "s" : ""})
+        </span>
+      </SectionHeader>
+      <div className="overflow-x-auto rounded-lg border border-primary/20">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/50">
+              <Th align="left">Item</Th>
+              <Th align="right">Qty</Th>
+              <Th align="right">Unit Cost</Th>
+              <Th align="right">Total</Th>
+              <th className="w-10 px-2 py-1.5" />
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((line, i) => {
+              const lineTotal = line.orderedQty * (parseFloat(line.unitCost) || 0);
+              const isReceived = line.receivedAcceptedQty > 0 || line.rejectedQty > 0;
+              const isLocked = isPartiallyReceived && isReceived;
+
+              return (
+                <tr
+                  key={line.id}
+                  className={`border-b border-border ${
+                    i % 2 === 0 ? "bg-background" : "bg-muted/20"
+                  } ${isLocked ? "opacity-60" : ""}`}
+                >
+                  <td className="px-3 py-1.5">
+                    <div className="text-sm font-medium">{line.productName}</div>
+                    <div className="text-[10px] text-muted-foreground font-mono">
+                      {line.sku}
+                    </div>
+                    {isLocked && (
+                      <div className="text-[10px] text-amber-600 font-medium mt-0.5">
+                        Received — locked
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    {isLocked ? (
+                      <span className="tabular-nums font-medium">
+                        {line.orderedQty}
+                      </span>
+                    ) : (
+                      <input
+                        type="number"
+                        min={1}
+                        value={line.orderedQty}
+                        onChange={(e) =>
+                          onUpdateLine(line.id, "orderedQty", parseInt(e.target.value) || 1)
+                        }
+                        className="h-7 w-20 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+                      />
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 text-right">
+                    {isLocked ? (
+                      <span className="tabular-nums text-muted-foreground">
+                        {line.unitCost}
+                      </span>
+                    ) : (
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={line.unitCost}
+                        onChange={(e) =>
+                          onUpdateLine(line.id, "unitCost", e.target.value)
+                        }
+                        className="h-7 w-24 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+                      />
+                    )}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
+                    {lineTotal.toLocaleString("en-PH", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    {!isLocked && (
+                      <button
+                        onClick={() => onRemoveLine(line.id, line.isNew)}
+                        className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                        title="Remove line"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-border bg-muted/30">
+              <td colSpan={3} className="px-3 py-2">
+                {!isPartiallyReceived && (
+                  <ProductSearchInline onSelect={onAddLine} />
+                )}
+              </td>
+              <td className="px-3 py-2 text-right text-sm font-bold tabular-nums">
+                {grandTotal.toLocaleString("en-PH", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </td>
+              <td />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/* ── Product Search (inline in editable grid footer) ── */
+function ProductSearchInline({ onSelect }: { onSelect: (product: ProductRow) => void }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const { token, locationId } = useAuth();
+
+  const { data } = useProducts(token, locationId, {
+    search: query,
+    limit: 8,
+    allLocations: true,
+  });
+  const results = data?.data ?? [];
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative inline-flex items-center gap-2">
+      <div className="relative">
+        <Search
+          size={12}
+          className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+        />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(e.target.value.length >= 2);
+          }}
+          onFocus={() => query.length >= 2 && setOpen(true)}
+          placeholder="Search product to add..."
+          className="h-7 w-64 rounded border border-border bg-background pl-7 pr-2 text-[12px] outline-none placeholder:text-muted-foreground/50 focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+        />
+      </div>
+      {open && query.length >= 2 && results.length > 0 && (
+        <div className="absolute left-0 top-full z-30 mt-1 w-96 rounded-lg border border-border bg-background shadow-lg max-h-60 overflow-y-auto">
+          {results.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => {
+                onSelect(p);
+                setQuery("");
+                setOpen(false);
+              }}
+              className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-accent transition-colors"
+            >
+              <div>
+                <div className="font-medium text-foreground">{p.name}</div>
+                <div className="text-[10px] text-muted-foreground font-mono">
+                  {p.sku}
+                </div>
+              </div>
+              <span className="text-[10px] text-muted-foreground">
+                Cost: {p.costPrice || "—"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {open && query.length >= 2 && results.length === 0 && (
+        <div className="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground shadow-lg">
+          No products found
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReadOnlyGrid({
   po,
   isTerminal,
@@ -963,7 +1506,7 @@ function ReadOnlyGrid({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/50">
-              <Th align="left">Product</Th>
+              <Th align="left">Item</Th>
               <Th align="left">Mnemonic</Th>
               <Th align="right">Ordered</Th>
               <Th align="right">Accepted</Th>
@@ -1097,7 +1640,7 @@ function ReceiptHistory({ po }: { po: PODetail }) {
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-muted/30">
-                        <th scope="col" className="px-4 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Product</th>
+                        <th scope="col" className="px-4 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Item</th>
                         <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Accepted</th>
                         <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Rejected</th>
                         <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Unit Cost</th>
@@ -1168,7 +1711,7 @@ function LegacyReceiptHistory({ po }: { po: PODetail }) {
                 Date
               </th>
               <th scope="col" className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Product
+                Item
               </th>
               <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Accepted

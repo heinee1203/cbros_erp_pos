@@ -33,9 +33,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await getDashboardSummary(
       orgId,
-      locationId,
+      locationId ?? "",
       userRole,
-      allLocations,
+      allLocations || !locationId,
     );
 
     return reply.send(result);

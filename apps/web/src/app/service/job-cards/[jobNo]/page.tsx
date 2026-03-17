@@ -23,6 +23,7 @@ import {
   type JCMutationStatus,
 } from "@/hooks/use-job-card-mutations";
 import { useAuth } from "@/app/auth-context";
+import { Printer } from "lucide-react";
 
 // ── Status configuration ──
 
@@ -661,7 +662,7 @@ function EstimateTab({ jc }: { jc: JobCardDetail }) {
               <thead className="bg-muted/50">
                 <tr>
                   <th scope="col" className="px-3 py-2 text-left font-medium text-muted-foreground">SKU</th>
-                  <th scope="col" className="px-3 py-2 text-left font-medium text-muted-foreground">Product</th>
+                  <th scope="col" className="px-3 py-2 text-left font-medium text-muted-foreground">Item</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Planned</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">Reserved</th>
                   <th scope="col" className="px-3 py-2 text-center font-medium text-muted-foreground">Availability</th>
@@ -1001,7 +1002,7 @@ function AddPartsModal({
     <ModalOverlay onClose={onClose} title="Add Part Line">
       <div className="space-y-3">
         <label className="block space-y-1">
-          <span className="text-xs text-muted-foreground">Product ID / SKU</span>
+          <span className="text-xs text-muted-foreground">Item ID / SKU</span>
           <input
             type="text"
             value={productId}
@@ -1078,7 +1079,7 @@ function PartsUsageTab({ jc }: { jc: JobCardDetail }) {
           <thead className="bg-muted/50">
             <tr>
               <th scope="col" className="px-3 py-2 text-left font-medium text-muted-foreground">SKU</th>
-              <th scope="col" className="px-3 py-2 text-left font-medium text-muted-foreground">Product</th>
+              <th scope="col" className="px-3 py-2 text-left font-medium text-muted-foreground">Item</th>
               <th scope="col" className="px-3 py-2 text-right font-medium text-muted-foreground">
                 Reserved
               </th>
@@ -1542,6 +1543,15 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
           <span className="text-xl font-bold font-mono">${grandTotal.toFixed(2)}</span>
         </div>
       </div>
+
+      {/* Print Invoice */}
+      <button
+        onClick={() => window.open(`/print/invoice/${jc.jobNo}`, "_blank")}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+      >
+        <Printer size={15} />
+        Print Invoice
+      </button>
     </div>
   );
 }

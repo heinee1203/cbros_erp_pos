@@ -11,6 +11,9 @@ export const syncRoutes: FastifyPluginAsync = async (app) => {
     if (!q) return;
 
     const { orgId, locationId } = request.storeContext!;
+    if (!locationId) {
+      return reply.status(400).send({ error: "A specific location must be selected for sync" });
+    }
 
     const result = await getCatalogDelta({
       orgId,
@@ -31,6 +34,9 @@ export const syncRoutes: FastifyPluginAsync = async (app) => {
     if (!q) return;
 
     const { orgId, locationId } = request.storeContext!;
+    if (!locationId) {
+      return reply.status(400).send({ error: "A specific location must be selected for sync" });
+    }
 
     const result = await getInventoryDelta({
       orgId,

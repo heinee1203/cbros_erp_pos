@@ -268,7 +268,7 @@ export default function StockAdjustmentsPage() {
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
                 <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Date / Time</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Product</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Item</th>
                 <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">SKU</th>
                 <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Location</th>
                 <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Direction</th>
@@ -679,7 +679,7 @@ function NewAdjustmentDrawer({
             {/* Product Search */}
             <div className="relative">
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                Product <span className="text-destructive">*</span>
+                Item <span className="text-destructive">*</span>
               </label>
               {selectedProduct ? (
                 <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">

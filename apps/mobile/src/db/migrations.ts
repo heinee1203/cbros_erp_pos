@@ -11,5 +11,35 @@ export const migrations = schemaMigrations({
         }),
       ],
     },
+    {
+      toVersion: 3,
+      steps: [
+        addColumns({
+          table: 'inventory',
+          columns: [{ name: 'available_for_sale', type: 'boolean' }],
+        }),
+      ],
+    },
+    {
+      toVersion: 4,
+      steps: [
+        addColumns({
+          table: 'products',
+          columns: [
+            { name: 'parent_product_id', type: 'string', isOptional: true },
+            { name: 'is_parent', type: 'boolean' },
+          ],
+        }),
+      ],
+    },
+    {
+      toVersion: 5,
+      steps: [
+        addColumns({
+          table: 'products',
+          columns: [{ name: 'brand_id', type: 'string', isOptional: true }],
+        }),
+      ],
+    },
   ],
 });

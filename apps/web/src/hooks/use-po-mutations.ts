@@ -92,6 +92,7 @@ function usePOMutation<TInput>(
 
       // Zero optimistic UI: invalidate and refetch
       queryClient.invalidateQueries({ queryKey: ["po", poNo] });
+      queryClient.invalidateQueries({ queryKey: ["po-receipts"] });
       queryClient.invalidateQueries({ queryKey: ["inventory"] });
 
       idempotencyKeyRef.current = null;
@@ -218,19 +219,19 @@ export function useReceivePOMutation(
   locationId: string,
   poNo: string,
 ) {
-  return usePOMutation<{ lines: ReceiptLineInput[]; notes?: string }>(
-    token,
-    locationId,
-    poNo,
-    {
-      buildPath: (id) => `/procurement/purchase-orders/${id}/receive`,
-      buildBody: (input, key) => ({
-        idempotencyKey: key,
-        lines: input.lines,
-        notes: input.notes,
-      }),
-    },
-  );
+  return usePOMutation<{
+    supplierDrNo: string;
+    lines: ReceiptLineInput[];
+    notes?: string;
+  }>(token, locationId, poNo, {
+    buildPath: (id) => `/procurement/purchase-orders/${id}/receive`,
+    buildBody: (input, key) => ({
+      idempotencyKey: key,
+      supplierDrNo: input.supplierDrNo,
+      lines: input.lines,
+      notes: input.notes,
+    }),
+  });
 }
 
 /** Close PO with variance (PARTIALLY_RECEIVED -> CLOSED_WITH_VARIANCE) */

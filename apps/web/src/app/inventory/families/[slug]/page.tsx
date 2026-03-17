@@ -194,7 +194,7 @@ export default function FamilyDetailPage() {
           className="mb-4 flex w-fit items-center gap-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground"
         >
           <ArrowLeft size={14} />
-          Product Families
+          Item Families
         </Link>
         <div className="flex flex-col items-center justify-center rounded-xl border border-red-200 bg-red-50 py-12 text-center dark:border-red-900/40 dark:bg-red-950/20">
           <p className="text-[13px] font-medium text-red-600 dark:text-red-400">
@@ -230,7 +230,7 @@ export default function FamilyDetailPage() {
         className="mb-4 flex w-fit items-center gap-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft size={14} />
-        Product Families
+        Item Families
       </Link>
 
       {/* ── Header Section ── */}
@@ -318,7 +318,7 @@ export default function FamilyDetailPage() {
               <div className="flex h-5 w-5 items-center justify-center rounded bg-muted">
                 <Package size={11} className="text-muted-foreground" />
               </div>
-              <span className="text-muted-foreground">Products</span>
+              <span className="text-muted-foreground">Items</span>
               <span className="font-semibold tabular-nums text-foreground">
                 {family.productCount}
               </span>

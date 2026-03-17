@@ -35,7 +35,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const result = await getJobCardMargins(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
       cursor: query.cursor,
@@ -72,7 +72,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const result = await getTechnicianEfficiency(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
     });
@@ -116,7 +116,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const result = await getKPISummary(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
     });
@@ -138,7 +138,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const data = await getSalesByItem(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
     });
@@ -156,7 +156,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const data = await getSalesByCategory(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
     });
@@ -174,7 +174,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const data = await getSalesByEmployee(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
     });
@@ -192,7 +192,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const data = await getSalesSummary(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
     });
@@ -215,7 +215,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const data = await getDailySalesSummary(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
       employeeId: query.employeeId,
@@ -235,7 +235,7 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const data = await getSalesKPIs(orgId, {
-      locationId: query.allLocations === "true" ? undefined : locationId,
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
       from: query.from,
       to: query.to,
       employeeId: query.employeeId,

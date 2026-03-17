@@ -101,3 +101,47 @@ export function usePOQuery(
     staleTime: 15_000,
   });
 }
+
+// ── Receipt Batch Types ──
+
+export interface POReceiptLine {
+  productName: string;
+  sku: string;
+  mnemonicSku: string;
+  acceptedQty: number;
+  rejectedQty: number;
+  unitCost: string;
+  notes: string | null;
+}
+
+export interface POReceipt {
+  id: string;
+  supplierDrNo: string;
+  lineCount: number;
+  totalAcceptedQty: number;
+  totalRejectedQty: number;
+  receivedBy: string;
+  notes: string | null;
+  createdAt: string;
+  lines: POReceiptLine[];
+}
+
+/**
+ * Fetch receipt batches for a PO, grouped by DR number.
+ */
+export function usePOReceipts(
+  poId: string,
+  token: string,
+  locationId: string,
+) {
+  return useQuery<{ data: POReceipt[] }>({
+    queryKey: ["po-receipts", poId],
+    queryFn: () =>
+      apiFetch<{ data: POReceipt[] }>(
+        `/procurement/purchase-orders/${poId}/receipts`,
+        { token, locationId },
+      ),
+    enabled: !!poId && !!token && !!locationId,
+    staleTime: 15_000,
+  });
+}

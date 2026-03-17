@@ -7,8 +7,8 @@ export default function PosSettingsPage() {
       icon={ShoppingCart}
       title="POS Settings"
       description="Configure point of sale behavior — default tax rates, rounding rules, payment methods, and receipt options."
-      relatedHref="/pos"
-      relatedLabel="Go to POS"
+      relatedHref="/sales/receipts"
+      relatedLabel="Go to Sales"
     />
   );
 }

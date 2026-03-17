@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "../../auth-context";
 import { apiFetch } from "@/lib/api";
 import type { ProductRow } from "@/hooks/use-products";
-import { generateCostCode } from "@apex/types";
+import { generateCostCode, detectBarcodeFormat } from "@apex/types";
 
 /* ─────────────────────────────────────────────
  * Label Templates
@@ -59,7 +59,7 @@ const TEMPLATES: LabelTemplate[] = [
     id: "barcode-name",
     name: "Barcode + Name",
     icon: Tag,
-    description: "Product name above barcode",
+    description: "Item name above barcode",
     showName: true,
     showSku: false,
     showPrice: false,
@@ -532,7 +532,7 @@ function BarcodePrintingContent() {
                           #
                         </th>
                         <th scope="col" className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Product
+                          Item
                         </th>
                         <th scope="col" className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                           Barcode
@@ -866,7 +866,7 @@ function LabelPreview({
     if (svgRef.current && product.barcode) {
       try {
         JsBarcode(svgRef.current, product.barcode, {
-          format: "EAN13",
+          format: detectBarcodeFormat(product.barcode),
           width: isLargeLabel ? 2.2 : 1.5,
           height: isLargeLabel ? 55 : template.showEmployeeInfo ? 32 : 40,
           displayValue: true,
@@ -941,7 +941,7 @@ function PrintLabel({
     if (svgRef.current && product.barcode) {
       try {
         JsBarcode(svgRef.current, product.barcode, {
-          format: "EAN13",
+          format: detectBarcodeFormat(product.barcode),
           width: isLargeLabel ? 2 : 1.2,
           height: isLargeLabel ? 45 : template.showEmployeeInfo ? 22 : 30,
           displayValue: true,

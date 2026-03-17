@@ -17,8 +17,8 @@ export const vehicleCompatibility = pgTable(
       .references(() => products.id, { onDelete: "cascade" }),
     make: varchar("make", { length: 100 }).notNull(),
     model: varchar("model", { length: 100 }).notNull(),
-    yearStart: integer("year_start").notNull(),
-    yearEnd: integer("year_end").notNull(),
+    yearStart: integer("year_start"),
+    yearEnd: integer("year_end"),
     engine: varchar("engine", { length: 100 }),
     notes: varchar("notes", { length: 255 }),
     createdAt: timestamp("created_at", { withTimezone: true })

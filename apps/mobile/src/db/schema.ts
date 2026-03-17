@@ -1,7 +1,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 2,
+  version: 5,
   tables: [
     tableSchema({
       name: 'products',
@@ -11,11 +11,15 @@ export const schema = appSchema({
         { name: 'sku', type: 'string', isIndexed: true },
         { name: 'mnemonic_sku', type: 'string', isIndexed: true },
         { name: 'barcode', type: 'string', isOptional: true, isIndexed: true },
+        { name: 'oem_number', type: 'string', isOptional: true },
         { name: 'category', type: 'string' },
         { name: 'unit_price', type: 'number' },
         { name: 'image_url', type: 'string', isOptional: true },
         { name: 'is_variable_price', type: 'boolean' },
         { name: 'family_id', type: 'string', isOptional: true },
+        { name: 'brand_id', type: 'string', isOptional: true },
+        { name: 'parent_product_id', type: 'string', isOptional: true },
+        { name: 'is_parent', type: 'boolean' },
         { name: 'server_updated_at', type: 'number' },
       ],
     }),
@@ -28,6 +32,7 @@ export const schema = appSchema({
         { name: 'stock_level', type: 'number' },
         { name: 'reserved_level', type: 'number' },
         { name: 'reorder_point', type: 'number' },
+        { name: 'available_for_sale', type: 'boolean' },
         { name: 'server_updated_at', type: 'number' },
       ],
     }),

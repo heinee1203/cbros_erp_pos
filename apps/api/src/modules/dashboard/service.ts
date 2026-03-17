@@ -3,6 +3,7 @@ import {
   inventory,
   products,
   locations,
+  categories,
 } from "@apex/database/schema";
 import { eq, and, lte, sql, type SQL } from "drizzle-orm";
 
@@ -54,6 +55,7 @@ export interface LowStockItem {
   productName: string;
   sku: string;
   category: string;
+  categoryName: string | null;
   stockLevel: number;
   reservedLevel: number;
   available: number;
@@ -104,7 +106,36 @@ function canSeeFinancial(role: string): boolean {
 async function getInventorySummary(
   orgId: string,
   locationConditions: SQL[],
+  isAllLocations: boolean,
 ): Promise<InventorySummary> {
+  if (isAllLocations) {
+    // Aggregate per-product across all locations to avoid counting duplicates
+    const [row] = await db.execute(sql`
+      SELECT
+        count(*)::int AS "totalSkus",
+        count(*) FILTER (WHERE total_stock > max_reorder)::int AS "inStock",
+        count(*) FILTER (WHERE total_stock > 0 AND total_stock <= max_reorder)::int AS "lowStock",
+        count(*) FILTER (WHERE total_stock = 0)::int AS "outOfStock",
+        count(*) FILTER (WHERE total_stock <= max_reorder)::int AS "belowReorder",
+        COALESCE(SUM(total_reserved), 0)::int AS "totalReserved"
+      FROM (
+        SELECT
+          p.id,
+          COALESCE(SUM(i.stock_level), 0) AS total_stock,
+          COALESCE(MAX(i.reorder_point), 0) AS max_reorder,
+          COALESCE(SUM(i.reserved_level), 0) AS total_reserved
+        FROM products p
+        INNER JOIN inventory i ON i.product_id = p.id
+        INNER JOIN locations loc ON i.location_id = loc.id AND loc.is_active = true
+        WHERE p.org_id = ${orgId}
+        GROUP BY p.id
+      ) agg
+    `) as any;
+
+    return row ?? { totalSkus: 0, inStock: 0, lowStock: 0, outOfStock: 0, belowReorder: 0, totalReserved: 0 };
+  }
+
+  // Single location — no aggregation needed
   const conditions: SQL[] = [
     eq(products.orgId, orgId),
     ...locationConditions,
@@ -274,8 +305,38 @@ async function getFinancialKPI(
 async function getLowStockItems(
   orgId: string,
   locationConditions: SQL[],
+  isAllLocations: boolean,
   limit = 10,
 ): Promise<LowStockItem[]> {
+  if (isAllLocations) {
+    // Aggregate per-product across all locations — no duplicates
+    const rows = await db.execute(sql`
+      SELECT
+        p.id AS "productId",
+        p.name AS "productName",
+        p.sku,
+        p.category::text,
+        cat.name AS "categoryName",
+        COALESCE(SUM(i.stock_level), 0)::int AS "stockLevel",
+        COALESCE(SUM(i.reserved_level), 0)::int AS "reservedLevel",
+        (COALESCE(SUM(i.stock_level), 0) - COALESCE(SUM(i.reserved_level), 0))::int AS "available",
+        COALESCE(MAX(i.reorder_point), 0)::int AS "reorderPoint",
+        'All Locations' AS "locationName"
+      FROM products p
+      INNER JOIN inventory i ON i.product_id = p.id
+      INNER JOIN locations loc ON i.location_id = loc.id AND loc.is_active = true
+      LEFT JOIN categories cat ON p.category_id = cat.id
+      WHERE p.org_id = ${orgId}
+      GROUP BY p.id, p.name, p.sku, p.category, cat.name
+      HAVING COALESCE(SUM(i.stock_level), 0) <= COALESCE(MAX(i.reorder_point), 0)
+      ORDER BY (COALESCE(SUM(i.stock_level), 0) - COALESCE(SUM(i.reserved_level), 0)) ASC, p.name
+      LIMIT ${limit}
+    `);
+
+    return rows as any as LowStockItem[];
+  }
+
+  // Single location — per-row, no aggregation
   const conditions: SQL[] = [
     eq(products.orgId, orgId),
     ...locationConditions,
@@ -288,6 +349,7 @@ async function getLowStockItems(
       productName: products.name,
       sku: products.sku,
       category: products.category,
+      categoryName: categories.name,
       stockLevel: inventory.stockLevel,
       reservedLevel: inventory.reservedLevel,
       available: sql<number>`(${inventory.stockLevel} - ${inventory.reservedLevel})`.as("available"),
@@ -297,9 +359,9 @@ async function getLowStockItems(
     .from(inventory)
     .innerJoin(products, eq(inventory.productId, products.id))
     .innerJoin(locations, eq(inventory.locationId, locations.id))
+    .leftJoin(categories, eq(products.categoryId, categories.id))
     .where(and(...conditions))
     .orderBy(
-      // Most urgent first: lowest available stock relative to reorder point
       sql`(${inventory.stockLevel} - ${inventory.reservedLevel}) ASC`,
       products.name,
     )
@@ -400,7 +462,7 @@ export async function getDashboardSummary(
     recentActivity,
   ] = await Promise.all([
     // Always fetch inventory summary
-    getInventorySummary(orgId, inventoryLocationConditions),
+    getInventorySummary(orgId, inventoryLocationConditions, allLocations),
 
     // Procurement: only for operational roles
     canSeeOperational(role)
@@ -423,7 +485,7 @@ export async function getDashboardSummary(
       : Promise.resolve(null),
 
     // Low stock items: for all roles (inventory awareness)
-    getLowStockItems(orgId, inventoryLocationConditions, 10),
+    getLowStockItems(orgId, inventoryLocationConditions, allLocations, 10),
 
     // Recent activity: for all roles
     getRecentActivity(orgId, effectiveLocationId, 15),

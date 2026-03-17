@@ -15,6 +15,9 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
   // Get the current user's active (OPEN) shift at the current location
   app.get("/active", async (request, reply) => {
     const { orgId, locationId } = request.storeContext!;
+    if (!locationId) {
+      return reply.status(400).send({ error: "A specific location must be selected for this operation" });
+    }
     const { userId } = request.user;
 
     const shift = await getActiveShift(orgId, locationId, userId);
@@ -30,7 +33,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
     const { orgId, locationId } = request.storeContext!;
     const { role } = request.user;
 
-    const allLocations = q.allLocations === "true";
+    const allLocations = q.allLocations === "true" || !locationId;
     if (allLocations && !SHIFT_FORCE_CLOSE_ROLES.includes(role as any)) {
       return reply
         .status(403)

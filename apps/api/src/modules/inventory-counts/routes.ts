@@ -46,7 +46,7 @@ export const inventoryCountRoutes: FastifyPluginAsync = async (app) => {
     const { orgId, locationId } = request.storeContext!;
     const q = request.query as Record<string, string | undefined>;
 
-    const allLocations = q.allLocations === "true";
+    const allLocations = q.allLocations === "true" || !locationId;
     if (allLocations) {
       const userRole = (request.user as any)?.role;
       if (userRole !== "ADMIN" && userRole !== "MANAGER") {
@@ -62,7 +62,7 @@ export const inventoryCountRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await listCountSessions({
       orgId,
-      locationId,
+      locationId: locationId ?? "",
       allLocations,
       overrideLocationId: q.locationId,
       status: q.status,

@@ -43,7 +43,9 @@ function ProductListItem({ item, index, onPress, onLongPress }: Props) {
         <Text style={styles.fullSku}>{item.sku}</Text>
       </View>
       <View style={styles.right}>
-        <Text style={styles.price}>{fmtPrice(item.unitPrice)}</Text>
+        <Text style={styles.price}>
+          {item.isParent ? 'Variants' : item.isVariablePrice ? 'Variable' : fmtPrice(item.unitPrice)}
+        </Text>
         <View style={styles.stockRow}>
           <StockBadge stockLevel={available} reorderPoint={item.reorderPoint} />
           <Text style={[styles.stockText, { color: stockColor }]}>{available}</Text>

@@ -19,24 +19,38 @@ import {
   Check,
   Info,
   Settings,
+  Copy,
+  Search,
+  X,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/app/auth-context";
 import { useCreateProduct, useProductFamilies } from "@/hooks/use-products";
+import { useCategories } from "@/hooks/use-categories";
+import { useSubcategories } from "@/hooks/use-subcategories";
 import { useCreateOptionType } from "@/hooks/use-product-options";
 import { useCreateVariantBatch } from "@/hooks/use-variants";
+import { useBrands, useCreateBrand } from "@/hooks/use-brands";
+import { useCreateCategory } from "@/hooks/use-categories";
+import { useCreateSubcategory } from "@/hooks/use-subcategories";
+import { useVehicleMakes, useVehicleModels } from "@/hooks/use-vehicles";
+import { mergeVehicleMakes } from "@/lib/vehicle-makes";
+import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { SelectWithQuickAdd } from "@/components/select-with-quick-add";
 
 /* ─────────────────────────────────────────────
  * Constants
  * ───────────────────────────────────────────── */
 
-const CATEGORIES = [
-  { value: "TIRES", label: "Tires" },
-  { value: "LUBRICANTS", label: "Lubricants" },
-  { value: "HARD_PARTS", label: "Hard Parts" },
-  { value: "ACCESSORIES", label: "Accessories" },
-  { value: "LABOR_SERVICES", label: "Labor / Services" },
-];
+const familyToEnum = (familyName: string): string => {
+  const n = familyName.toUpperCase();
+  if (n.includes("TIRE")) return "TIRES";
+  if (n.includes("LUBRIC") || n.includes("OIL") || n.includes("FLUID")) return "LUBRICANTS";
+  if (n.includes("ACCESSOR")) return "ACCESSORIES";
+  if (n.includes("LABOR") || n.includes("SERVICE")) return "LABOR_SERVICES";
+  return "HARD_PARTS";
+};
 
 const UNITS_OF_MEASURE = [
   "Each",
@@ -51,12 +65,6 @@ const UNITS_OF_MEASURE = [
   "Kilogram",
 ];
 
-const AUTO_MAKES = [
-  "Acura", "Audi", "BMW", "Cadillac", "Chevrolet", "Chrysler", "Dodge",
-  "Ford", "GMC", "Honda", "Hyundai", "Infiniti", "Jeep", "Kia",
-  "Lexus", "Lincoln", "Mazda", "Mercedes-Benz", "Mitsubishi", "Nissan",
-  "Ram", "Subaru", "Toyota", "Volkswagen", "Volvo",
-];
 
 /* ─────────────────────────────────────────────
  * Types
@@ -96,6 +104,15 @@ export default function AddItemPage() {
   const createVariantBatchMutation = useCreateVariantBatch(token, locationId);
   const familiesQuery = useProductFamilies(token, locationId);
   const families = familiesQuery.data?.data ?? [];
+  const categoriesQuery = useCategories(token, locationId, { activeOnly: true });
+  const allCategories = categoriesQuery.data?.data ?? [];
+  const brandsQuery = useBrands(token, locationId);
+  const brandsList = brandsQuery.data?.data ?? [];
+  const createBrandMut = useCreateBrand(token, locationId);
+  const createCategoryMut = useCreateCategory(token, locationId);
+  const createSubcategoryMut = useCreateSubcategory(token, locationId);
+  const { data: dbMakesData } = useVehicleMakes(token, locationId);
+  const allMakes = useMemo(() => mergeVehicleMakes(dbMakesData?.data ?? []), [dbMakesData]);
 
   const showCost = ["ADMIN", "MANAGER"].includes(user?.role ?? "");
 
@@ -113,11 +130,48 @@ export default function AddItemPage() {
   // ── Section 1: Basic Info ──
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
-  const [mnemonicSku, setMnemonicSku] = useState("");
-  const [category, setCategory] = useState("");
   const [familyId, setFamilyId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [subcategoryId, setSubcategoryId] = useState("");
+  const [brandId, setBrandId] = useState("");
+  // ── Inline Variants ──
+  interface InlineVariant { id: string; suffix: string; sku: string; unitPrice: string; costPrice: string; }
+  const [inlineVariants, setInlineVariants] = useState<InlineVariant[]>([]);
+  const hasInlineVariants = inlineVariants.length > 0;
+
+  const addInlineVariant = () => {
+    setInlineVariants((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), suffix: "", sku: "", unitPrice: unitPrice || "", costPrice: costPrice || "" },
+    ]);
+  };
+  const updateInlineVariant = (id: string, field: keyof InlineVariant, value: string) => {
+    setInlineVariants((prev) => prev.map((v) => (v.id === id ? { ...v, [field]: value } : v)));
+  };
+  const removeInlineVariant = (id: string) => {
+    setInlineVariants((prev) => prev.filter((v) => v.id !== id));
+  };
+
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
+
+  // Cascading taxonomy
+  const filteredCategories = familyId
+    ? allCategories.filter((c) => c.familyId === familyId)
+    : [];
+  const subcategoriesQuery = useSubcategories(token, locationId, categoryId || undefined);
+  const subcategories = (subcategoriesQuery.data?.data ?? []).filter((s) => !categoryId || s.categoryId === categoryId);
+  const selectedFamily = families.find((f) => f.id === familyId);
+
+  const handleFamilyChange = (id: string) => {
+    setFamilyId(id);
+    setCategoryId("");
+    setSubcategoryId("");
+  };
+  const handleCategoryChange = (id: string) => {
+    setCategoryId(id);
+    setSubcategoryId("");
+  };
 
   // ── Section 2: Pricing ──
   const [unitPrice, setUnitPrice] = useState("");
@@ -129,10 +183,16 @@ export default function AddItemPage() {
   const [reorderPoint, setReorderPoint] = useState("10");
   const [leadTimeDays, setLeadTimeDays] = useState("7");
   const [barcode, setBarcode] = useState("");
+  const [oemNumber, setOemNumber] = useState("");
   const [initialStock, setInitialStock] = useState("0");
 
   // ── Section 4: Location Availability ──
-  const [selectedLocations, setSelectedLocations] = useState<Set<string>>(new Set([locationId]));
+  const [selectedLocations, setSelectedLocations] = useState<Set<string>>(() => {
+    if (locationId === "ALL" && locations.length > 0) {
+      return new Set(locations.map((l: any) => l.id));
+    }
+    return new Set([locationId]);
+  });
 
   // ── Section 5: Attributes / Variants ──
   const [attributes, setAttributes] = useState<AttributeEntry[]>([]);
@@ -144,13 +204,27 @@ export default function AddItemPage() {
 
   // ── Section 6: Vehicle Compatibility ──
   const [vehicles, setVehicles] = useState<VehicleEntry[]>([]);
+  const [copyModalOpen, setCopyModalOpen] = useState(false);
+  const handleCopyFitments = (copiedEntries: VehicleEntry[]) => {
+    setVehicles((prev) => {
+      const existing = new Set(prev.map((v) => `${v.make}|${v.model}|${v.yearStart}|${v.yearEnd}`));
+      const deduplicated = copiedEntries.filter(
+        (v) => !existing.has(`${v.make}|${v.model}|${v.yearStart}|${v.yearEnd}`),
+      );
+      const skipped = copiedEntries.length - deduplicated.length;
+      if (skipped > 0) {
+        alert(`Copied ${deduplicated.length} entries (${skipped} duplicates skipped)`);
+      }
+      return [...prev, ...deduplicated];
+    });
+  };
 
   // ── Validation & Error ──
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // ── Unsaved changes warning ──
-  const isDirty = !!(name || sku || category || unitPrice || costPrice || description || barcode);
+  const isDirty = !!(name || sku || familyId || unitPrice || costPrice || description || barcode);
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (isDirty) {
@@ -162,17 +236,6 @@ export default function AddItemPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [isDirty]);
 
-  // Auto-generate mnemonic SKU from name
-  const generateMnemonic = (n: string): string => {
-    const clean = n.toUpperCase().replace(/[^A-Z]/g, "");
-    const base = clean.slice(0, 10);
-    if (base.length >= 10) return base;
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let result = base;
-    while (result.length < 10) result += chars[Math.floor(Math.random() * 26)];
-    return result;
-  };
-
   const margin = useMemo(() => {
     const sell = parseFloat(unitPrice) || 0;
     const cost = parseFloat(costPrice) || 0;
@@ -182,8 +245,9 @@ export default function AddItemPage() {
 
   const isValid =
     name.trim() !== "" &&
-    sku.trim() !== "" &&
-    category !== "";
+    (hasInlineVariants || sku.trim() !== "") &&
+    familyId !== "" &&
+    (!hasInlineVariants || inlineVariants.every((v) => v.suffix.trim() && v.sku.trim()));
 
   const [savingStep, setSavingStep] = useState<string | null>(null);
   const isSaving = createMutation.isPending || !!savingStep;
@@ -194,111 +258,63 @@ export default function AddItemPage() {
     setSuccessMessage(null);
     setSavingStep(null);
 
-    const mnemonic = mnemonicSku.length === 10 && /^[A-Z]{10}$/.test(mnemonicSku)
-      ? mnemonicSku
-      : generateMnemonic(name);
-
     try {
-      // Step 1: Create the parent product
-      setSavingStep(hasVariants ? "Creating parent product..." : null);
+      // Create the product (with inline variants if any)
+      setSavingStep(hasInlineVariants ? "Creating parent + variants..." : null);
       const parentResult: any = await createMutation.mutateAsync({
         name: name.trim(),
-        sku: sku.trim(),
-        mnemonicSku: mnemonic,
-        category,
+        sku: hasInlineVariants ? "" : sku.trim(),
+        category: familyToEnum(selectedFamily?.name ?? ""),
         unitPrice: unitPrice || "0.00",
         costPrice: showCost ? (costPrice || "0.00") : "0.00",
-        barcode: barcode.trim() || undefined,
+        barcode: hasInlineVariants ? undefined : (barcode.trim() || undefined),
+        oemNumber: oemNumber.trim() || undefined,
         familyId: familyId || null,
+        categoryId: categoryId || null,
+        subcategoryId: subcategoryId || null,
+        brandId: brandId || undefined,
+        isParent: hasInlineVariants || undefined,
         description: description || undefined,
         trackInventory,
         reorderPoint: parseInt(reorderPoint, 10) || 10,
         leadTimeDays: parseInt(leadTimeDays, 10) || 7,
-        initialStock: trackInventory ? parseInt(initialStock, 10) || 0 : 0,
+        initialStock: hasInlineVariants ? 0 : (trackInventory ? parseInt(initialStock, 10) || 0 : 0),
         locationIds: Array.from(selectedLocations),
-        isParent: hasVariants || undefined,
         vehicleCompatibility:
           vehicles.length > 0
             ? vehicles
-                .filter((v) => v.make && v.model && v.yearStart && v.yearEnd)
+                .filter((v) => v.make && v.model)
                 .map((v) => ({
                   make: v.make,
                   model: v.model,
-                  yearStart: parseInt(v.yearStart, 10),
-                  yearEnd: parseInt(v.yearEnd, 10),
+                  yearStart: v.yearStart ? parseInt(v.yearStart, 10) : undefined,
+                  yearEnd: v.yearEnd ? parseInt(v.yearEnd, 10) : undefined,
                   engine: v.engine || undefined,
                   notes: v.notes || undefined,
                 }))
             : undefined,
+        // Inline variants — API creates parent + children in one transaction
+        variants: hasInlineVariants
+          ? inlineVariants.map((v) => ({
+              suffix: v.suffix.trim(),
+              sku: v.sku.trim(),
+              unitPrice: v.unitPrice || unitPrice || "0.00",
+              costPrice: showCost ? (v.costPrice || costPrice || "0.00") : "0.00",
+            }))
+          : undefined,
       });
-
-      // Step 2 & 3: Create option types + variants if hasVariants
-      if (hasVariants && generatedVariants.length > 0) {
-        const parentId = parentResult?.data?.id ?? parentResult?.id;
-        if (!parentId) throw new Error("Failed to get parent product ID");
-
-        const validOpts = optionTypes.filter((o) => o.name.trim() && o.values.trim());
-
-        // Step 2: Create each option type and collect returned value IDs
-        setSavingStep("Creating option types...");
-        const createdOptionTypes: Array<{
-          name: string;
-          values: Array<{ id: string; value: string }>;
-        }> = [];
-
-        for (const opt of validOpts) {
-          const values = opt.values.split(",").map((v) => v.trim()).filter(Boolean);
-          const result: any = await createOptionTypeMutation.mutateAsync({
-            productId: parentId,
-            name: opt.name.trim(),
-            values,
-          });
-          const created = result?.data ?? result;
-          createdOptionTypes.push({
-            name: opt.name.trim(),
-            values: (created.values ?? []).map((v: any) => ({ id: v.id, value: v.value })),
-          });
-        }
-
-        // Step 3: Map generated variants to option value IDs and create batch
-        setSavingStep("Creating variants...");
-        const variantPayloads = generatedVariants.map((v) => {
-          const optionValueIds: string[] = [];
-          v.optionValues.forEach((val, idx) => {
-            const optType = createdOptionTypes[idx];
-            if (optType) {
-              const matched = optType.values.find(
-                (ov) => ov.value.toLowerCase() === val.toLowerCase(),
-              );
-              if (matched) optionValueIds.push(matched.id);
-            }
-          });
-
-          const variantMnemonic = generateMnemonic(v.sku);
-          const variantPrice = variantPrices[v.key];
-
-          return {
-            sku: v.sku,
-            mnemonicSku: variantMnemonic,
-            unitPrice: variantPrice || unitPrice || "0.00",
-            costPrice: showCost ? (costPrice || "0.00") : "0.00",
-            optionValueIds,
-          };
-        });
-
-        await createVariantBatchMutation.mutateAsync({
-          parentId,
-          variants: variantPayloads,
-        });
-      }
 
       setSavingStep(null);
 
       if (addAnother) {
-        setSuccessMessage(`"${name}" created successfully${hasVariants ? ` with ${generatedVariants.length} variants` : ""}`);
+        setSuccessMessage(`"${name}" created successfully${hasInlineVariants ? ` with ${inlineVariants.length} variants` : ""}`);
         setName("");
         setSku("");
         setMnemonicSku("");
+        setFamilyId("");
+        setCategoryId("");
+        setSubcategoryId("");
+        setBrandId("");
         setUnitPrice("");
         setCostPrice("");
         setDescription("");
@@ -308,6 +324,7 @@ export default function AddItemPage() {
         setHasVariants(false);
         setOptionTypes([]);
         setVariantPrices({});
+        setInlineVariants([]);
       } else {
         router.push("/inventory");
       }
@@ -470,52 +487,186 @@ export default function AddItemPage() {
               />
             </div>
 
-            {/* SKU */}
-            <div>
-              <FieldLabel required>SKU</FieldLabel>
-              <input
-                type="text"
-                value={sku}
-                onChange={(e) => setSku(e.target.value.toUpperCase())}
-                placeholder="e.g. HAR-050001"
-                className={cn(fieldClass, "font-mono")}
-              />
-            </div>
-
-            {/* Mnemonic SKU */}
-            <div>
-              <FieldLabel>Mnemonic Code</FieldLabel>
-              <input
-                type="text"
-                value={mnemonicSku}
-                onChange={(e) => setMnemonicSku(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 10))}
-                placeholder="Auto-generated"
-                maxLength={10}
-                className={cn(fieldClass, "font-mono tracking-wider")}
-              />
-              <p className="mt-0.5 text-[10px] text-muted-foreground">10 uppercase letters · auto-generated if blank</p>
-            </div>
-
-            {/* Category */}
-            <div>
-              <FieldLabel required>Category</FieldLabel>
-              <select value={category} onChange={(e) => setCategory(e.target.value)} className={fieldClass}>
-                <option value="">Select category…</option>
-                {CATEGORIES.map((c) => (
-                  <option key={c.value} value={c.value}>{c.label}</option>
-                ))}
-              </select>
-            </div>
+            {/* SKU — hidden when item has variants (parent has no SKU) */}
+            {!hasInlineVariants && (
+              <div>
+                <FieldLabel required>SKU</FieldLabel>
+                <input
+                  type="text"
+                  value={sku}
+                  onChange={(e) => setSku(e.target.value.toUpperCase())}
+                  placeholder="e.g. HAR-050001"
+                  className={cn(fieldClass, "font-mono")}
+                />
+              </div>
+            )}
 
             {/* Family */}
             <div>
-              <FieldLabel>Group</FieldLabel>
-              <select value={familyId} onChange={(e) => setFamilyId(e.target.value)} className={fieldClass}>
-                <option value="">No group (standalone)</option>
+              <FieldLabel required>Family</FieldLabel>
+              <select value={familyId} onChange={(e) => handleFamilyChange(e.target.value)} className={fieldClass}>
+                <option value="">Select family…</option>
                 {families.map((f) => (
                   <option key={f.id} value={f.id}>{f.name}</option>
                 ))}
               </select>
+            </div>
+
+            {/* Category */}
+            <SelectWithQuickAdd
+              label="Category"
+              value={categoryId}
+              onChange={handleCategoryChange}
+              options={filteredCategories}
+              placeholder="Select category…"
+              disabledPlaceholder="Select a family first"
+              disabled={!familyId}
+              labelClassName="text-[12px] font-medium text-muted-foreground"
+              canAdd={!!familyId}
+              onQuickAdd={async (name) => {
+                const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+                const res: any = await createCategoryMut.mutateAsync({ name, slug, familyId: familyId || undefined });
+                return { id: res?.data?.id ?? res?.id ?? "" };
+              }}
+            />
+
+            {/* Sub-category */}
+            <SelectWithQuickAdd
+              label="Sub-category"
+              value={subcategoryId}
+              onChange={(v) => setSubcategoryId(v)}
+              options={subcategories}
+              placeholder="Select sub-category…"
+              disabledPlaceholder="Select a category first"
+              disabled={!categoryId}
+              labelClassName="text-[12px] font-medium text-muted-foreground"
+              canAdd={!!categoryId}
+              onQuickAdd={async (name) => {
+                const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+                const res: any = await createSubcategoryMut.mutateAsync({ categoryId, name, slug });
+                return { id: res?.data?.id ?? res?.id ?? "" };
+              }}
+            />
+
+            {/* Brand */}
+            <SelectWithQuickAdd
+              label="Brand"
+              value={brandId}
+              onChange={(v) => setBrandId(v)}
+              options={brandsList}
+              placeholder="No Brand"
+              labelClassName="text-[12px] font-medium text-muted-foreground"
+              onQuickAdd={async (name) => {
+                const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+                const res: any = await createBrandMut.mutateAsync({ name, slug });
+                return { id: res?.data?.id ?? res?.id ?? "" };
+              }}
+            />
+
+            {/* ── Inline Variants ── */}
+            <div className="col-span-2 mt-1 rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hasInlineVariants}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        // Add first empty variant row
+                        if (inlineVariants.length === 0) addInlineVariant();
+                      } else {
+                        setInlineVariants([]);
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20"
+                  />
+                  <span className="text-[12px] font-medium text-foreground">This item has variants</span>
+                </label>
+                <span className="text-[10px] text-muted-foreground">
+                  (e.g. Side Mirror LH / RH, Brake Pad Front / Rear)
+                </span>
+              </div>
+
+              {hasInlineVariants && (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-muted-foreground">
+                    Each variant gets its own SKU and barcode. The parent item groups them together.
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[12px]">
+                      <thead>
+                        <tr className="border-b border-border text-left text-[11px] text-muted-foreground">
+                          <th className="pb-1.5 pr-2 min-w-[120px]">Variant Name</th>
+                          <th className="pb-1.5 pr-2 min-w-[100px]">SKU *</th>
+                          <th className="pb-1.5 pr-2 w-[100px]">Sell Price</th>
+                          {showCost && <th className="pb-1.5 pr-2 w-[100px]">Cost Price</th>}
+                          <th className="pb-1.5 w-[32px]"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {inlineVariants.map((v) => (
+                          <tr key={v.id} className="border-b border-border/50">
+                            <td className="py-1.5 pr-2">
+                              <input
+                                type="text"
+                                value={v.suffix}
+                                onChange={(e) => updateInlineVariant(v.id, "suffix", e.target.value)}
+                                placeholder="e.g. LH, RH, Front"
+                                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] focus:border-primary focus:ring-1 focus:ring-primary/20"
+                              />
+                            </td>
+                            <td className="py-1.5 pr-2">
+                              <input
+                                type="text"
+                                value={v.sku}
+                                onChange={(e) => updateInlineVariant(v.id, "sku", e.target.value)}
+                                placeholder="SKU"
+                                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] focus:border-primary focus:ring-1 focus:ring-primary/20"
+                              />
+                            </td>
+                            <td className="py-1.5 pr-2">
+                              <input
+                                type="text"
+                                value={v.unitPrice}
+                                onChange={(e) => updateInlineVariant(v.id, "unitPrice", e.target.value)}
+                                placeholder="0.00"
+                                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] text-right focus:border-primary focus:ring-1 focus:ring-primary/20"
+                              />
+                            </td>
+                            {showCost && (
+                              <td className="py-1.5 pr-2">
+                                <input
+                                  type="text"
+                                  value={v.costPrice}
+                                  onChange={(e) => updateInlineVariant(v.id, "costPrice", e.target.value)}
+                                  placeholder="0.00"
+                                  className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] text-right focus:border-primary focus:ring-1 focus:ring-primary/20"
+                                />
+                              </td>
+                            )}
+                            <td className="py-1.5">
+                              <button
+                                type="button"
+                                onClick={() => removeInlineVariant(v.id)}
+                                className="rounded-md p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addInlineVariant}
+                    className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10"
+                  >
+                    <Plus size={12} /> Add Variant
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Description — full width */}
@@ -618,9 +769,13 @@ export default function AddItemPage() {
                   <input type="number" min="0" value={initialStock} onChange={(e) => setInitialStock(e.target.value)} className={fieldClass} />
                 </div>
                 <div className="col-span-2">
-                  <FieldLabel>Barcode (EAN-13)</FieldLabel>
-                  <input type="text" value={barcode} onChange={(e) => setBarcode(e.target.value.replace(/\D/g, "").slice(0, 13))} placeholder="Auto-generated if empty" maxLength={13} className={cn(fieldClass, "font-mono")} />
+                  <FieldLabel>Barcode</FieldLabel>
+                  <input type="text" value={barcode} onChange={(e) => setBarcode(e.target.value.slice(0, 50))} placeholder="Auto-generated if empty" maxLength={50} className={cn(fieldClass, "font-mono")} />
                   <p className="mt-0.5 text-[10px] text-muted-foreground">Leave blank to auto-generate a unique barcode</p>
+                </div>
+                <div className="col-span-2">
+                  <FieldLabel>OEM Number</FieldLabel>
+                  <input type="text" value={oemNumber} onChange={(e) => setOemNumber(e.target.value.slice(0, 100))} placeholder="e.g. MB295982, 04465-0K160" maxLength={100} className={cn(fieldClass, "font-mono")} />
                 </div>
               </div>
             )}
@@ -865,7 +1020,7 @@ export default function AddItemPage() {
           badge={vehicles.length > 0 ? `${vehicles.length} entries` : undefined}
         >
           <div className="space-y-3">
-            {category === "LABOR_SERVICES" || category === "ACCESSORIES" ? (
+            {(familyToEnum(selectedFamily?.name ?? "") === "LABOR_SERVICES" || familyToEnum(selectedFamily?.name ?? "") === "ACCESSORIES") ? (
               <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
                 <Info size={13} />
                 <span>Vehicle compatibility is typically used for Hard Parts and Tires. You can still add entries if needed.</span>
@@ -890,12 +1045,12 @@ export default function AddItemPage() {
                     <FieldLabel>Make</FieldLabel>
                     <select value={v.make} onChange={(e) => updateVehicle(v.id, "make", e.target.value)} className={fieldClass}>
                       <option value="">Select…</option>
-                      {AUTO_MAKES.map((m) => <option key={m} value={m}>{m}</option>)}
+                      {allMakes.map((m) => <option key={m} value={m}>{m}</option>)}
                     </select>
                   </div>
                   <div>
                     <FieldLabel>Model</FieldLabel>
-                    <input type="text" value={v.model} onChange={(e) => updateVehicle(v.id, "model", e.target.value)} placeholder="e.g. Civic" className={fieldClass} />
+                    <NewPageModelInput token={token} locationId={locationId} make={v.make} value={v.model} onChange={(val) => updateVehicle(v.id, "model", val)} />
                   </div>
                   <div>
                     <FieldLabel>Year From</FieldLabel>
@@ -919,16 +1074,34 @@ export default function AddItemPage() {
               </div>
             ))}
 
-            <button
-              onClick={addVehicle}
-              className="flex items-center gap-1.5 text-[12px] font-medium text-primary hover:text-primary/80"
-            >
-              <Plus size={13} />
-              Add Vehicle Fitment
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={addVehicle}
+                className="flex items-center gap-1.5 text-[12px] font-medium text-primary hover:text-primary/80"
+              >
+                <Plus size={13} />
+                Add Vehicle Fitment
+              </button>
+              <button
+                onClick={() => setCopyModalOpen(true)}
+                className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-primary"
+              >
+                <Copy size={13} />
+                Copy from Item
+              </button>
+            </div>
           </div>
         </FormSection>
       </div>
+
+      {/* Copy Fitment Modal */}
+      <CopyFitmentModal
+        open={copyModalOpen}
+        onClose={() => setCopyModalOpen(false)}
+        onCopy={handleCopyFitments}
+        token={token!}
+        locationId={locationId!}
+      />
 
       {/* ── Sticky Action Bar ── */}
       <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm md:left-[252px]">
@@ -1060,6 +1233,201 @@ function FormSection({
           {children}
         </div>
       )}
+    </div>
+  );
+}
+
+function NewPageModelInput({ token, locationId, make, value, onChange }: { token: string; locationId: string; make: string; value: string; onChange: (v: string) => void }) {
+  const { data: modelsData } = useVehicleModels(token, locationId, make);
+  const listId = useMemo(() => `models-new-${make}-${Math.random().toString(36).slice(2, 8)}`, [make]);
+  return (
+    <>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="e.g. Civic"
+        list={listId}
+        className={fieldClass}
+      />
+      {modelsData?.data && modelsData.data.length > 0 && (
+        <datalist id={listId}>
+          {modelsData.data.map((m) => <option key={m} value={m} />)}
+        </datalist>
+      )}
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────────
+ * Copy Fitment Modal
+ * ───────────────────────────────────────────── */
+
+function CopyFitmentModal({
+  open,
+  onClose,
+  onCopy,
+  token,
+  locationId,
+  excludeProductId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCopy: (entries: VehicleEntry[]) => void;
+  token: string;
+  locationId: string;
+  excludeProductId?: string;
+}) {
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (open) {
+      setSearch("");
+      setDebouncedSearch("");
+      setSelectedProduct(null);
+    }
+  }, [open]);
+
+  const { data: searchResults, isLoading: searching } = useQuery({
+    queryKey: ["copy-fitment-search", debouncedSearch],
+    queryFn: () =>
+      apiFetch(`/products?search=${encodeURIComponent(debouncedSearch)}&limit=10&hasVehicles=true`, {
+        token,
+        locationId,
+      }),
+    enabled: open && !!debouncedSearch && debouncedSearch.length >= 2,
+    staleTime: 15_000,
+  });
+
+  const { data: vehicleData, isLoading: loadingVehicles } = useQuery({
+    queryKey: ["copy-fitment-vehicles", selectedProduct?.id],
+    queryFn: () =>
+      apiFetch(`/products/${selectedProduct.id}/vehicles`, { token, locationId }),
+    enabled: !!selectedProduct?.id,
+  });
+
+  const handleCopy = () => {
+    if (!vehicleData?.data) return;
+    const entries: VehicleEntry[] = vehicleData.data.map((v: any) => ({
+      id: crypto.randomUUID(),
+      make: v.make,
+      model: v.model,
+      yearStart: v.yearStart != null ? String(v.yearStart) : "",
+      yearEnd: v.yearEnd != null ? String(v.yearEnd) : "",
+      engine: v.engine || "",
+      notes: v.notes || "",
+    }));
+    onCopy(entries);
+    onClose();
+  };
+
+  const filteredResults = (searchResults?.data ?? []).filter(
+    (p: any) => p.id !== excludeProductId,
+  );
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-lg rounded-xl border border-border bg-background shadow-xl">
+        <div className="flex items-center justify-between border-b border-border px-5 py-3">
+          <h3 className="text-sm font-semibold">Copy Vehicle Fitment from Another Item</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="border-b border-border px-5 py-3">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setSelectedProduct(null);
+              }}
+              placeholder="Search by item name or SKU..."
+              className="w-full rounded-lg border border-border bg-muted/30 py-2 pl-9 pr-3 text-sm"
+              autoFocus
+            />
+          </div>
+        </div>
+
+        <div className="max-h-[300px] overflow-y-auto px-5 py-3">
+          {searching && (
+            <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">
+              <Loader2 size={14} className="mr-2 animate-spin" /> Searching...
+            </div>
+          )}
+          {!searching && debouncedSearch.length >= 2 && filteredResults.length === 0 && (
+            <div className="py-6 text-center text-xs text-muted-foreground">
+              No products with vehicle fitments found
+            </div>
+          )}
+          {filteredResults.map((product: any) => (
+            <button
+              key={product.id}
+              onClick={() => setSelectedProduct(product)}
+              className={cn(
+                "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left hover:bg-accent",
+                selectedProduct?.id === product.id && "bg-accent ring-1 ring-primary",
+              )}
+            >
+              <div>
+                <div className="text-sm font-medium">{product.name}</div>
+                <div className="text-xs text-muted-foreground">{product.sku}</div>
+              </div>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {product.vehicleCount} fitment{product.vehicleCount !== 1 ? "s" : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {selectedProduct && (
+          <div className="border-t border-border px-5 py-3">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Fitments to copy:
+            </div>
+            {loadingVehicles ? (
+              <div className="flex items-center text-xs text-muted-foreground">
+                <Loader2 size={12} className="mr-2 animate-spin" /> Loading...
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {(vehicleData?.data ?? []).map((v: any, i: number) => (
+                  <div key={i} className="text-xs text-muted-foreground">
+                    {v.make} {v.model}
+                    {(v.yearStart || v.yearEnd) && ` ${v.yearStart || "?"}–${v.yearEnd || "?"}`}
+                    {v.engine ? ` (${v.engine})` : ""}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+          <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted">
+            Cancel
+          </button>
+          <button
+            onClick={handleCopy}
+            disabled={!vehicleData?.data?.length}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            Copy {vehicleData?.data?.length ?? 0} Fitment{(vehicleData?.data?.length ?? 0) !== 1 ? "s" : ""}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

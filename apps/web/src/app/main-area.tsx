@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useSidebar } from "./sidebar-context";
-import { useAuth, type LocationInfo } from "./auth-context";
+import { useAuth, ALL_LOCATIONS, type LocationInfo } from "./auth-context";
 import { cn } from "@/lib/utils";
 import {
   MapPin,
@@ -12,6 +12,7 @@ import {
   Warehouse,
   Store,
   Building2,
+  Globe,
   LogOut,
   Menu,
 } from "lucide-react";
@@ -61,8 +62,9 @@ function LocationSelector() {
     return () => document.removeEventListener("keydown", handler);
   }, [open]);
 
+  const isAllLocations = locationId === ALL_LOCATIONS;
   const activeLocation = locations.find((l) => l.id === locationId);
-  const displayName = activeLocation?.name ?? "Select Location";
+  const displayName = isAllLocations ? "All Locations" : (activeLocation?.name ?? "Select Location");
 
   return (
     <div ref={ref} className="relative">
@@ -75,7 +77,9 @@ function LocationSelector() {
             : "border-border bg-background text-foreground hover:bg-muted",
         )}
       >
-        {activeLocation ? (
+        {isAllLocations ? (
+          <Globe size={14} className="text-muted-foreground" />
+        ) : activeLocation ? (
           <LocationIcon
             type={activeLocation.type}
             className="text-muted-foreground"
@@ -101,6 +105,42 @@ function LocationSelector() {
               Switch Location
             </span>
           </div>
+
+          {/* All Locations option */}
+          <button
+            onClick={() => {
+              setLocationId(ALL_LOCATIONS);
+              setOpen(false);
+            }}
+            className={cn(
+              "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors",
+              isAllLocations
+                ? "bg-primary/[0.06] text-foreground"
+                : "text-foreground hover:bg-muted",
+            )}
+          >
+            <Globe
+              size={14}
+              className={cn(
+                isAllLocations ? "text-primary" : "text-muted-foreground",
+              )}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-medium">All Locations</div>
+              <div className="truncate text-[11px] text-muted-foreground">
+                Aggregate view
+              </div>
+            </div>
+            {isAllLocations && (
+              <Check size={14} className="shrink-0 text-primary" />
+            )}
+          </button>
+
+          {/* Separator */}
+          {locations.length > 0 && (
+            <div className="mx-2.5 my-1 border-t border-border" />
+          )}
+
           {locations.map((loc) => {
             const isActive = loc.id === locationId;
             return (

@@ -7,10 +7,18 @@ import {
   useSalesKPIsQuery,
   useLocationsQuery,
   useEmployeesQuery,
+  useSalesByItemQuery,
+  useSalesByEmployeeQuery,
   type DashboardFilters,
   type DailySalesRow,
+  type ReportFilters,
+  type SalesByItemRow,
+  type SalesByEmployeeRow,
 } from "@/hooks/use-sales-reports";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { fmtPeso, fmtPercent } from "@/lib/format";
+import { MARGIN_THRESHOLDS } from "@/lib/constants";
 import {
   BarChart3,
   ChevronLeft,
@@ -32,17 +40,6 @@ import {
 /* ═══════════════════════════════════════════════
  * Utilities
  * ═══════════════════════════════════════════════ */
-
-function fmtPHP(value: number): string {
-  return `PHP ${value.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function fmtNum(val: string | number): string {
-  return parseFloat(String(val)).toLocaleString("en-PH", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
 
 function toISO(d: Date): string {
   const year = d.getFullYear();
@@ -108,6 +105,17 @@ export default function ReportsOverviewPage() {
     [range.from, range.to, isAllLocations, selectedEmployee],
   );
 
+  // Prior period — same duration shifted back
+  const priorFilters: DashboardFilters = useMemo(
+    () => ({
+      from: toISO(addDays(range.from, -(daysBetween(range.from, range.to) + 1))),
+      to: toISO(addDays(range.to, -(daysBetween(range.from, range.to) + 1))),
+      allLocations: isAllLocations || undefined,
+      employeeId: selectedEmployee || undefined,
+    }),
+    [range.from, range.to, isAllLocations, selectedEmployee],
+  );
+
   // ── Data hooks — ALL called unconditionally ──
   const kpisQuery = useSalesKPIsQuery(
     token,
@@ -119,8 +127,32 @@ export default function ReportsOverviewPage() {
     isAllLocations ? locationId : effectiveLocationId,
     filters,
   );
+  const priorDailyQuery = useDailySalesSummaryQuery(
+    token,
+    isAllLocations ? locationId : effectiveLocationId,
+    priorFilters,
+  );
   const locationsQuery = useLocationsQuery(token);
   const employeesQuery = useEmployeesQuery(token, effectiveLocationId);
+
+  const reportFilters: ReportFilters = useMemo(
+    () => ({
+      from: toISO(range.from),
+      to: toISO(range.to),
+      allLocations: isAllLocations || undefined,
+    }),
+    [range.from, range.to, isAllLocations],
+  );
+  const itemsQuery = useSalesByItemQuery(
+    token,
+    isAllLocations ? locationId : effectiveLocationId,
+    reportFilters,
+  );
+  const employeesReportQuery = useSalesByEmployeeQuery(
+    token,
+    isAllLocations ? locationId : effectiveLocationId,
+    reportFilters,
+  );
 
   // ── Loading guard — AFTER all hooks ──
   if (loading) {
@@ -137,10 +169,20 @@ export default function ReportsOverviewPage() {
   const locations = locationsQuery.data?.data ?? [];
   const employees = employeesQuery.data?.data ?? [];
 
+  const topItems = (itemsQuery.data?.data ?? [])
+    .sort((a, b) => b.unitsSold - a.unitsSold)
+    .slice(0, 5);
+
+  const topEmployees = (employeesReportQuery.data?.data ?? [])
+    .sort((a, b) => b.totalSales - a.totalSales)
+    .slice(0, 5);
+
   // ── Chart data ──
-  const chartData = days.map((d) => ({
+  const priorDays: DailySalesRow[] = priorDailyQuery.data?.data ?? [];
+  const chartData = days.map((d, i) => ({
     date: new Date(d.date).toLocaleDateString("en-PH", { month: "short", day: "numeric" }),
     grossSales: parseFloat(d.grossSales),
+    priorGrossSales: priorDays[i] ? parseFloat(priorDays[i].grossSales) : undefined,
   }));
 
   // ── Table totals ──
@@ -215,7 +257,7 @@ export default function ReportsOverviewPage() {
           {label}
         </p>
         <p className="mt-1.5 text-[20px] font-semibold leading-tight text-foreground">
-          {fmtPHP(current)}
+          {fmtPeso(current)}
         </p>
         <div className="mt-1.5">
           {kpis && pctChange !== null ? (
@@ -232,18 +274,20 @@ export default function ReportsOverviewPage() {
               )}
               {isUp ? "+" : ""}{pctChange}%
               <span className="text-muted-foreground">
-                ({isUp ? "+" : ""}{fmtPHP(diff)})
+                ({isUp ? "+" : ""}{fmtPeso(diff)})
               </span>
             </span>
           ) : kpis ? (
-            <span className="text-[11px] text-muted-foreground">No prior data</span>
+            <span className="text-[11px] text-muted-foreground">
+              {kpis?.current.totalTransactions ?? 0} transactions
+            </span>
           ) : null}
         </div>
       </div>
     );
   }
 
-  const isDataLoading = kpisQuery.isLoading || dailyQuery.isLoading;
+  const isDataLoading = kpisQuery.isLoading || dailyQuery.isLoading || priorDailyQuery.isLoading;
 
   return (
     <div className="mx-auto flex h-full max-w-6xl flex-col gap-6 pb-8">
@@ -402,8 +446,30 @@ export default function ReportsOverviewPage() {
         {isDataLoading ? (
           <div className="h-[320px] animate-pulse rounded-lg bg-muted/30" />
         ) : chartData.length === 0 ? (
-          <div className="flex h-[320px] items-center justify-center text-[13px] text-muted-foreground">
-            No sales data for the selected period
+          <div className="flex h-[320px] flex-col items-center justify-center py-12 text-center">
+            <BarChart3 className="mb-3 h-10 w-10 text-muted-foreground/40" />
+            <p className="text-[14px] font-medium text-foreground">
+              No sales recorded for {fmtRangeLabel(range.from, range.to)}
+            </p>
+            <p className="mt-2 max-w-sm text-[12px] text-muted-foreground leading-relaxed">
+              This could mean no completed transactions in the POS app,
+              sales were made at a different location, or the date range
+              doesn&apos;t include any business days.
+            </p>
+            <div className="mt-4 flex items-center gap-3">
+              <Link
+                href="/sales/shifts"
+                className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted"
+              >
+                View Shift History
+              </Link>
+              <button
+                onClick={() => setSelectedLocation("__all__")}
+                className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted"
+              >
+                Try All Locations
+              </button>
+            </div>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={320}>
@@ -443,7 +509,10 @@ export default function ReportsOverviewPage() {
                   fontSize: "12px",
                   boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
                 }}
-                formatter={(value) => [fmtPHP(Number(value)), "Gross Sales"]}
+                formatter={(value, name) => [
+                  fmtPeso(Number(value)),
+                  name === "priorGrossSales" ? "Prior Period" : "Gross Sales",
+                ]}
                 labelStyle={{ fontSize: "11px", color: "hsl(var(--muted-foreground))", marginBottom: "4px" }}
               />
               <Area
@@ -460,9 +529,27 @@ export default function ReportsOverviewPage() {
                   fill: "hsl(var(--background))",
                 }}
               />
+              <Area
+                type="monotone"
+                dataKey="priorGrossSales"
+                stroke="hsl(var(--muted-foreground))"
+                strokeWidth={1}
+                strokeDasharray="4 4"
+                fill="none"
+                dot={false}
+                name="Prior Period"
+              />
             </AreaChart>
           </ResponsiveContainer>
         )}
+      </div>
+
+      {/* ═══════════════════════════════════════════
+       * Ranked Lists — Top Items + Top Employees
+       * ═══════════════════════════════════════════ */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <TopItemsTable items={topItems} isLoading={itemsQuery.isLoading} />
+        <TopEmployeesTable employees={topEmployees} isLoading={employeesReportQuery.isLoading} />
       </div>
 
       {/* ═══════════════════════════════════════════
@@ -515,11 +602,32 @@ export default function ReportsOverviewPage() {
                 ))
               ) : days.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={8}
-                    className="px-5 py-10 text-center text-[13px] text-muted-foreground"
-                  >
-                    No sales data for the selected period
+                  <td colSpan={8}>
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <BarChart3 className="mb-3 h-10 w-10 text-muted-foreground/40" />
+                      <p className="text-[14px] font-medium text-foreground">
+                        No sales recorded for {fmtRangeLabel(range.from, range.to)}
+                      </p>
+                      <p className="mt-2 max-w-sm text-[12px] text-muted-foreground leading-relaxed">
+                        This could mean no completed transactions in the POS app,
+                        sales were made at a different location, or the date range
+                        doesn&apos;t include any business days.
+                      </p>
+                      <div className="mt-4 flex items-center gap-3">
+                        <Link
+                          href="/sales/shifts"
+                          className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted"
+                        >
+                          View Shift History
+                        </Link>
+                        <button
+                          onClick={() => setSelectedLocation("__all__")}
+                          className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted"
+                        >
+                          Try All Locations
+                        </button>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -539,30 +647,30 @@ export default function ReportsOverviewPage() {
                           })}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-[12px] text-foreground">
-                          {fmtNum(day.grossSales)}
+                          {fmtPeso(day.grossSales)}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-[12px] text-red-500">
-                          {parseFloat(day.refunds) > 0 ? `(${fmtNum(day.refunds)})` : fmtNum(day.refunds)}
+                          {parseFloat(day.refunds) > 0 ? `(${fmtPeso(day.refunds)})` : fmtPeso(day.refunds)}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-[12px] text-muted-foreground">
-                          {fmtNum(day.discounts)}
+                          {fmtPeso(day.discounts)}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-[12px] font-medium text-foreground">
-                          {fmtNum(day.netSales)}
+                          {fmtPeso(day.netSales)}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-[12px] text-muted-foreground">
-                          {fmtNum(day.costOfGoods)}
+                          {fmtPeso(day.costOfGoods)}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-[12px] font-medium text-foreground">
-                          {fmtNum(day.grossProfit)}
+                          {fmtPeso(day.grossProfit)}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-[12px]">
                           <span
                             className={cn(
                               "font-medium",
-                              marginVal >= 30
+                              marginVal >= MARGIN_THRESHOLDS.GOOD
                                 ? "text-emerald-600"
-                                : marginVal >= 15
+                                : marginVal >= MARGIN_THRESHOLDS.WARNING
                                   ? "text-amber-600"
                                   : "text-red-500",
                             )}
@@ -580,30 +688,30 @@ export default function ReportsOverviewPage() {
                       Total
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-foreground">
-                      {fmtNum(totals.grossSales)}
+                      {fmtPeso(totals.grossSales)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-red-500">
-                      {totals.refunds > 0 ? `(${fmtNum(totals.refunds)})` : fmtNum(totals.refunds)}
+                      {totals.refunds > 0 ? `(${fmtPeso(totals.refunds)})` : fmtPeso(totals.refunds)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-muted-foreground">
-                      {fmtNum(totals.discounts)}
+                      {fmtPeso(totals.discounts)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-foreground">
-                      {fmtNum(totals.netSales)}
+                      {fmtPeso(totals.netSales)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-muted-foreground">
-                      {fmtNum(totals.costOfGoods)}
+                      {fmtPeso(totals.costOfGoods)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-foreground">
-                      {fmtNum(totals.grossProfit)}
+                      {fmtPeso(totals.grossProfit)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-[12px]">
                       <span
                         className={cn(
                           "font-semibold",
-                          parseFloat(totalMargin) >= 30
+                          parseFloat(totalMargin) >= MARGIN_THRESHOLDS.GOOD
                             ? "text-emerald-600"
-                            : parseFloat(totalMargin) >= 15
+                            : parseFloat(totalMargin) >= MARGIN_THRESHOLDS.WARNING
                               ? "text-amber-600"
                               : "text-red-500",
                         )}
@@ -617,6 +725,204 @@ export default function ReportsOverviewPage() {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+ * Top Selling Items Table
+ * ═══════════════════════════════════════════════ */
+
+function TopItemsTable({
+  items,
+  isLoading,
+}: {
+  items: SalesByItemRow[];
+  isLoading: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
+      <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+        <h2 className="text-[13px] font-semibold text-foreground">Top Selling Items</h2>
+        <Link
+          href="/reports/sales-by-item"
+          className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          View all &rarr;
+        </Link>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="border-b border-border bg-muted/40">
+              <th scope="col" className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground w-8">
+                #
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Item
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Units
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Revenue
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Margin
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i} className="border-b border-border last:border-0">
+                  {Array.from({ length: 5 }).map((__, j) => (
+                    <td key={j} className="px-4 py-2.5">
+                      <div className="h-4 animate-pulse rounded bg-muted/40" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : items.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-5 py-8 text-center text-[13px] text-muted-foreground">
+                  No item sales data for this period
+                </td>
+              </tr>
+            ) : (
+              items.map((item, i) => {
+                const margin = parseFloat(item.marginPct);
+                return (
+                  <tr
+                    key={item.productId}
+                    className="border-b border-border transition-colors last:border-0 hover:bg-muted/20"
+                  >
+                    <td className="px-5 py-2.5 text-[12px] font-medium text-muted-foreground">
+                      {i + 1}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="text-[12px] font-medium text-foreground">{item.productName}</div>
+                      <div className="mt-px font-mono text-[10px] text-muted-foreground">{item.sku}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                      {item.unitsSold.toLocaleString("en-PH")}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                      {fmtPeso(item.totalRevenue)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums">
+                      <span
+                        className={cn(
+                          "font-medium",
+                          margin >= MARGIN_THRESHOLDS.GOOD
+                            ? "text-emerald-600"
+                            : margin >= MARGIN_THRESHOLDS.WARNING
+                              ? "text-amber-600"
+                              : "text-red-500",
+                        )}
+                      >
+                        {margin.toFixed(1)}%
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+ * Top Employees Table
+ * ═══════════════════════════════════════════════ */
+
+function TopEmployeesTable({
+  employees,
+  isLoading,
+}: {
+  employees: SalesByEmployeeRow[];
+  isLoading: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
+      <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+        <h2 className="text-[13px] font-semibold text-foreground">Top Employees</h2>
+        <Link
+          href="/reports/sales-by-employee"
+          className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          View all &rarr;
+        </Link>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="border-b border-border bg-muted/40">
+              <th scope="col" className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground w-8">
+                #
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Employee
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Sales
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Revenue
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Avg Ticket
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              Array.from({ length: 3 }).map((_, i) => (
+                <tr key={i} className="border-b border-border last:border-0">
+                  {Array.from({ length: 5 }).map((__, j) => (
+                    <td key={j} className="px-4 py-2.5">
+                      <div className="h-4 animate-pulse rounded bg-muted/40" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : employees.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-5 py-8 text-center text-[13px] text-muted-foreground">
+                  No employee sales data for this period
+                </td>
+              </tr>
+            ) : (
+              employees.map((emp, i) => (
+                <tr
+                  key={emp.employeeId}
+                  className="border-b border-border transition-colors last:border-0 hover:bg-muted/20"
+                >
+                  <td className="px-5 py-2.5 text-[12px] font-medium text-muted-foreground">
+                    {i + 1}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <div className="text-[12px] font-medium text-foreground">{emp.employeeName}</div>
+                    <div className="mt-px text-[10px] text-muted-foreground">{emp.employeeRole}</div>
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                    {emp.totalSales.toLocaleString("en-PH")}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                    {fmtPeso(emp.totalRevenue)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                    {fmtPeso(emp.avgSaleValue)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

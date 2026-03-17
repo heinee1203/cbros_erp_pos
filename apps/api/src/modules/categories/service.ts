@@ -15,6 +15,7 @@ export interface CategoryRow {
   sortOrder: number;
   isActive: boolean;
   parentId: string | null;
+  familyId: string | null;
   productCount: number;
   createdAt: string;
   updatedAt: string;
@@ -53,12 +54,16 @@ export async function listCategories(opts: {
       sortOrder: categories.sortOrder,
       isActive: categories.isActive,
       parentId: categories.parentId,
+      familyId: categories.familyId,
       createdAt: categories.createdAt,
       updatedAt: categories.updatedAt,
       productCount: sql<number>`COALESCE(
         (SELECT COUNT(*)::int FROM ${products}
          WHERE ${products.orgId} = ${categories.orgId}
-         AND ${products.category}::text = ${categories.code}),
+         AND (
+           ${products.categoryId} = ${categories.id}
+           OR ${products.category}::text = ${categories.code}
+         )),
         0
       )`,
     })
@@ -91,12 +96,16 @@ export async function getCategoryById(
       sortOrder: categories.sortOrder,
       isActive: categories.isActive,
       parentId: categories.parentId,
+      familyId: categories.familyId,
       createdAt: categories.createdAt,
       updatedAt: categories.updatedAt,
       productCount: sql<number>`COALESCE(
         (SELECT COUNT(*)::int FROM ${products}
          WHERE ${products.orgId} = ${categories.orgId}
-         AND ${products.category}::text = ${categories.code}),
+         AND (
+           ${products.categoryId} = ${categories.id}
+           OR ${products.category}::text = ${categories.code}
+         )),
         0
       )`,
     })
@@ -154,6 +163,7 @@ export async function createCategory(
       sortOrder: input.sortOrder ?? 0,
       isActive: input.isActive ?? true,
       parentId: input.parentId ?? null,
+      familyId: input.familyId ?? null,
     })
     .returning();
 
@@ -167,6 +177,7 @@ export async function createCategory(
     sortOrder: row.sortOrder,
     isActive: row.isActive,
     parentId: row.parentId,
+    familyId: row.familyId,
     productCount: 0,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -216,6 +227,7 @@ export async function updateCategory(
   if (input.sortOrder !== undefined) updateValues.sortOrder = input.sortOrder;
   if (input.isActive !== undefined) updateValues.isActive = input.isActive;
   if (input.parentId !== undefined) updateValues.parentId = input.parentId;
+  if (input.familyId !== undefined) updateValues.familyId = input.familyId;
 
   if (Object.keys(updateValues).length === 0) {
     throw new Error("No fields to update");
@@ -249,23 +261,21 @@ export async function deleteCategory(
 
   const cat = existing[0];
 
-  // Check for products using this category's code
-  if (cat.code) {
-    const productCount = await db
-      .select({ count: sql<number>`COUNT(*)::int` })
-      .from(products)
-      .where(
-        and(
-          eq(products.orgId, orgId),
-          sql`${products.category}::text = ${cat.code}`,
-        ),
-      );
+  // Check for products using this category (via code or categoryId FK)
+  const productCount = await db
+    .select({ count: sql<number>`COUNT(*)::int` })
+    .from(products)
+    .where(
+      and(
+        eq(products.orgId, orgId),
+        sql`(${products.categoryId} = ${categoryId}${cat.code ? sql` OR ${products.category}::text = ${cat.code}` : sql``})`,
+      ),
+    );
 
-    if (Number(productCount[0].count) > 0) {
-      throw new Error(
-        `Cannot delete category with ${productCount[0].count} products assigned. Reassign products first.`,
-      );
-    }
+  if (Number(productCount[0].count) > 0) {
+    throw new Error(
+      `Cannot delete category with ${productCount[0].count} products assigned. Reassign products first.`,
+    );
   }
 
   await db

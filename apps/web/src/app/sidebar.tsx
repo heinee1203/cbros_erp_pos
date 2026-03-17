@@ -79,9 +79,8 @@ const NAV_TOP: NavEntry[] = [
     kind: "group",
     label: "Sales",
     icon: ShoppingCart,
-    match: /^\/(pos|sales)/,
+    match: /^\/sales/,
     children: [
-      { label: "Point of Sale", href: "/pos", match: /^\/pos/ },
       { label: "Receipts", href: "/sales/receipts", match: /^\/sales\/receipts/ },
       { label: "Open Tickets", href: "/sales/open-tickets", match: /^\/sales\/open-tickets/ },
       { label: "Shifts", href: "/sales/shifts", match: /^\/sales\/shifts/ },
@@ -96,7 +95,8 @@ const NAV_TOP: NavEntry[] = [
       { label: "Item List", href: "/inventory", match: /^\/inventory$/ },
       { label: "Categories", href: "/inventory/categories", match: /^\/inventory\/categories/ },
       { label: "Families", href: "/inventory/families", match: /^\/inventory\/families/ },
-      { label: "Attributes", href: "/inventory/attributes", match: /^\/inventory\/attributes/ },
+      { label: "Brands", href: "/inventory/brands", match: /^\/inventory\/brands/ },
+      { label: "Vehicle Lookup", href: "/inventory/vehicle-lookup", match: /^\/inventory\/vehicle-lookup/ },
       { label: "Discounts", href: "/inventory/discounts", match: /^\/inventory\/discounts/ },
       { label: "Barcode Printing", href: "/inventory/barcode-printing", match: /^\/inventory\/barcode-printing/ },
     ],
@@ -201,33 +201,31 @@ export function Sidebar() {
       ...findExpandedGroups(pathname, NAV_TOP),
       ...findExpandedGroups(pathname, NAV_BOTTOM),
     ];
-    return new Set(initial);
+    // Accordion: only one group open at a time
+    return initial.length > 0 ? new Set([initial[0]]) : new Set();
   });
 
-  // Auto-expand group when navigating to a new route
+  // Auto-expand group when navigating to a new route (accordion: only one open)
   useEffect(() => {
     const groups = [
       ...findExpandedGroups(pathname, NAV_TOP),
       ...findExpandedGroups(pathname, NAV_BOTTOM),
     ];
     if (groups.length > 0) {
-      setExpanded((prev) => {
-        const next = new Set(prev);
-        groups.forEach((g) => next.add(g));
-        return next;
-      });
+      // Only keep the first matching group open (accordion)
+      setExpanded(new Set([groups[0]]));
     }
   }, [pathname]);
 
   const toggleGroup = useCallback((label: string) => {
     setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(label)) {
-        next.delete(label);
+      if (prev.has(label)) {
+        // Clicking already-open group → close it
+        return new Set<string>();
       } else {
-        next.add(label);
+        // Open this group, close everything else (accordion)
+        return new Set<string>([label]);
       }
-      return next;
     });
   }, []);
 

@@ -15,9 +15,12 @@ export interface CatalogItem {
   category: string;
   unitPrice: number;
   isVariablePrice: boolean;
+  isParent: boolean;
+  parentProductId: string | null;
   stockLevel: number;
   reservedLevel: number;
   reorderPoint: number;
+  availableForSale: boolean;
 }
 
 export function useCatalogSearch() {
@@ -36,7 +39,10 @@ export function useCatalogSearch() {
       const inventoryCollection = database.get<Inventory>('inventory');
 
       // Build product query conditions
-      const conditions: any[] = [];
+      // Hide variant children — only show parent products and standalone items
+      const conditions: any[] = [
+        Q.where('parent_product_id', Q.eq(null)),
+      ];
 
       if (searchQuery.length >= 2) {
         const q = Q.sanitizeLikeString(searchQuery);
@@ -60,7 +66,7 @@ export function useCatalogSearch() {
 
       // Batch inventory lookup — single query instead of N+1
       const productIds = products.map(p => p.serverId);
-      let invMap = new Map<string, { stockLevel: number; reservedLevel: number; reorderPoint: number }>();
+      let invMap = new Map<string, { stockLevel: number; reservedLevel: number; reorderPoint: number; availableForSale: boolean }>();
 
       if (locationId && productIds.length > 0) {
         const allInventory = await inventoryCollection
@@ -75,11 +81,12 @@ export function useCatalogSearch() {
             stockLevel: inv.stockLevel,
             reservedLevel: inv.reservedLevel,
             reorderPoint: inv.reorderPoint,
+            availableForSale: inv.availableForSale,
           });
         }
       }
 
-      const items: CatalogItem[] = products.map(p => {
+      const enriched: CatalogItem[] = products.map(p => {
         const inv = invMap.get(p.serverId);
         return {
           id: p.id,
@@ -91,11 +98,17 @@ export function useCatalogSearch() {
           category: p.category,
           unitPrice: p.unitPrice,
           isVariablePrice: p.isVariablePrice,
+          isParent: p.isParent,
+          parentProductId: p.parentProductId,
           stockLevel: inv?.stockLevel ?? 0,
           reservedLevel: inv?.reservedLevel ?? 0,
           reorderPoint: inv?.reorderPoint ?? 10,
+          availableForSale: inv?.availableForSale ?? false,
         };
       });
+
+      // Filter: only show products available for sale at this location
+      const items = enriched.filter(p => p.availableForSale);
 
       setResults(items);
     } catch (err) {
@@ -128,6 +141,7 @@ export function useCatalogSearch() {
     let stockLevel = 0;
     let reservedLevel = 0;
     let reorderPoint = 10;
+    let availableForSale = false;
 
     if (locationId) {
       const inv = await inventoryCollection
@@ -140,9 +154,12 @@ export function useCatalogSearch() {
         stockLevel = inv[0].stockLevel;
         reservedLevel = inv[0].reservedLevel;
         reorderPoint = inv[0].reorderPoint;
+        availableForSale = inv[0].availableForSale;
       }
     }
 
+    // Barcode scan returns the product even if not available for sale
+    // (caller should show a warning alert if availableForSale is false)
     return {
       id: p.id,
       serverId: p.serverId,
@@ -153,9 +170,12 @@ export function useCatalogSearch() {
       category: p.category,
       unitPrice: p.unitPrice,
       isVariablePrice: p.isVariablePrice,
+      isParent: p.isParent,
+      parentProductId: p.parentProductId,
       stockLevel,
       reservedLevel,
       reorderPoint,
+      availableForSale,
     };
   }, [locationId]);
 

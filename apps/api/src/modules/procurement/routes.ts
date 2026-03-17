@@ -8,6 +8,9 @@ import {
   paginationSchema,
   PROCUREMENT_ROLES,
 } from "@apex/types";
+import { db } from "@apex/database";
+import { purchaseOrders, poLines } from "@apex/database/schema";
+import { eq, and, sql } from "drizzle-orm";
 import {
   createPO,
   submitPO,
@@ -21,6 +24,9 @@ import {
   getPOReceipts,
   getPOJournal,
   listSuppliers,
+  createSupplier,
+  updateSupplier,
+  deleteSupplier,
 } from "./service";
 
 function assertProcurementRole(role: string) {
@@ -36,6 +42,89 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
     const { orgId } = request.storeContext!;
     const data = await listSuppliers(orgId);
     return reply.send({ data });
+  });
+
+  // ─── POST /procurement/suppliers ──────────────────
+  // Create a new supplier
+  app.post("/suppliers", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertProcurementRole(role);
+
+    const body = request.body as {
+      name?: string;
+      contactEmail?: string;
+      contactPhone?: string;
+      address?: string;
+      mnemonicCode?: string;
+      avgLeadTimeDays?: number;
+    };
+
+    if (!body.name || body.name.trim().length === 0) {
+      return reply.status(400).send({ error: "Supplier name is required" });
+    }
+
+    if (body.mnemonicCode && body.mnemonicCode.length > 2) {
+      return reply.status(400).send({ error: "Mnemonic code must be at most 2 characters" });
+    }
+
+    try {
+      const supplier = await createSupplier(orgId, body);
+      return reply.status(201).send(supplier);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── PATCH /procurement/suppliers/:id ─────────────
+  // Update an existing supplier
+  app.patch("/suppliers/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertProcurementRole(role);
+
+    const body = request.body as {
+      name?: string;
+      contactEmail?: string | null;
+      contactPhone?: string | null;
+      address?: string | null;
+      mnemonicCode?: string | null;
+      avgLeadTimeDays?: number;
+    };
+
+    if (body.mnemonicCode && body.mnemonicCode.length > 2) {
+      return reply.status(400).send({ error: "Mnemonic code must be at most 2 characters" });
+    }
+
+    try {
+      const supplier = await updateSupplier(orgId, id, body);
+      return reply.send(supplier);
+    } catch (err: any) {
+      if (err.message === "Supplier not found") {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── DELETE /procurement/suppliers/:id ─────────────
+  // Delete a supplier (fails if has purchase orders)
+  app.delete("/suppliers/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertProcurementRole(role);
+
+    try {
+      await deleteSupplier(orgId, id);
+      return reply.send({ success: true });
+    } catch (err: any) {
+      if (err.message === "Supplier not found") {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
   });
 
   // ─── POST /procurement/purchase-orders ─────────────
@@ -252,6 +341,233 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: err.message });
     }
   });
+
+  // ─── PATCH /procurement/purchase-orders/:id ──────────
+  // Update PO header fields (DRAFT / SUBMITTED / PARTIALLY_RECEIVED)
+  app.patch("/purchase-orders/:id", async (request, reply) => {
+    const user = request.user as any;
+    assertProcurementRole(user.role);
+
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const body = request.body as any;
+
+    const [po] = await db
+      .select()
+      .from(purchaseOrders)
+      .where(and(eq(purchaseOrders.id, id), eq(purchaseOrders.orgId, orgId)))
+      .limit(1);
+
+    if (!po) return reply.status(404).send({ error: "PO not found" });
+
+    const editableStatuses = ["DRAFT", "SUBMITTED", "PARTIALLY_RECEIVED"];
+    if (!editableStatuses.includes(po.status)) {
+      return reply
+        .status(400)
+        .send({ error: `Cannot edit PO in ${po.status} status` });
+    }
+
+    const updates: Record<string, any> = {};
+
+    // Supplier + destination only editable in DRAFT/SUBMITTED
+    if (body.supplierId !== undefined && po.status !== "PARTIALLY_RECEIVED") {
+      updates.supplierId = body.supplierId;
+    }
+    if (
+      body.destinationLocationId !== undefined &&
+      po.status !== "PARTIALLY_RECEIVED"
+    ) {
+      updates.destinationLocationId = body.destinationLocationId;
+    }
+    // Notes + expected date always editable
+    if (body.expectedDeliveryDate !== undefined) {
+      updates.expectedDeliveryDate = body.expectedDeliveryDate
+        ? new Date(body.expectedDeliveryDate)
+        : null;
+    }
+    if (body.notes !== undefined) {
+      updates.notes = body.notes;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await db
+        .update(purchaseOrders)
+        .set(updates)
+        .where(eq(purchaseOrders.id, id));
+    }
+
+    const updated = await getPOByNumber(po.poNo, orgId);
+    return reply.send(updated);
+  });
+
+  // ─── POST /procurement/purchase-orders/:id/lines ────
+  // Add a new line to an existing PO (DRAFT / SUBMITTED only)
+  app.post("/purchase-orders/:id/lines", async (request, reply) => {
+    const user = request.user as any;
+    assertProcurementRole(user.role);
+
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const body = request.body as any;
+
+    const [po] = await db
+      .select()
+      .from(purchaseOrders)
+      .where(and(eq(purchaseOrders.id, id), eq(purchaseOrders.orgId, orgId)))
+      .limit(1);
+
+    if (!po) return reply.status(404).send({ error: "PO not found" });
+    if (!["DRAFT", "SUBMITTED"].includes(po.status)) {
+      return reply
+        .status(400)
+        .send({ error: `Cannot add lines to PO in ${po.status} status` });
+    }
+
+    if (!body.productId || !body.orderedQty || !body.unitCost) {
+      return reply
+        .status(400)
+        .send({ error: "productId, orderedQty, and unitCost are required" });
+    }
+
+    const [line] = await db
+      .insert(poLines)
+      .values({
+        purchaseOrderId: id,
+        orgId,
+        productId: body.productId,
+        orderedQty: body.orderedQty,
+        unitCost: body.unitCost,
+      })
+      .returning();
+
+    return reply.status(201).send(line);
+  });
+
+  // ─── PATCH /procurement/purchase-orders/:id/lines/:lineId ──
+  // Update a PO line (qty, cost, product)
+  app.patch(
+    "/purchase-orders/:id/lines/:lineId",
+    async (request, reply) => {
+      const user = request.user as any;
+      assertProcurementRole(user.role);
+
+      const { id, lineId } = request.params as {
+        id: string;
+        lineId: string;
+      };
+      const { orgId } = request.storeContext!;
+      const body = request.body as any;
+
+      const [po] = await db
+        .select()
+        .from(purchaseOrders)
+        .where(
+          and(eq(purchaseOrders.id, id), eq(purchaseOrders.orgId, orgId)),
+        )
+        .limit(1);
+
+      if (!po) return reply.status(404).send({ error: "PO not found" });
+
+      if (
+        !["DRAFT", "SUBMITTED", "PARTIALLY_RECEIVED"].includes(po.status)
+      ) {
+        return reply
+          .status(400)
+          .send({ error: `Cannot edit lines on PO in ${po.status} status` });
+      }
+
+      const [line] = await db
+        .select()
+        .from(poLines)
+        .where(
+          and(eq(poLines.id, lineId), eq(poLines.purchaseOrderId, id)),
+        )
+        .limit(1);
+
+      if (!line)
+        return reply.status(404).send({ error: "PO line not found" });
+
+      // PARTIALLY_RECEIVED: can only edit unreceived lines
+      if (po.status === "PARTIALLY_RECEIVED") {
+        if (line.receivedAcceptedQty > 0 || line.rejectedQty > 0) {
+          return reply.status(400).send({
+            error: "Cannot edit a line that has already been received",
+          });
+        }
+      }
+
+      const updates: Record<string, any> = {};
+      if (body.orderedQty !== undefined) updates.orderedQty = body.orderedQty;
+      if (body.unitCost !== undefined) updates.unitCost = body.unitCost;
+      if (body.productId !== undefined) updates.productId = body.productId;
+
+      if (Object.keys(updates).length === 0) {
+        return reply.send(line);
+      }
+
+      const [updated] = await db
+        .update(poLines)
+        .set(updates)
+        .where(eq(poLines.id, lineId))
+        .returning();
+
+      return reply.send(updated);
+    },
+  );
+
+  // ─── DELETE /procurement/purchase-orders/:id/lines/:lineId ──
+  // Remove a line from a PO (DRAFT / SUBMITTED only, not received)
+  app.delete(
+    "/purchase-orders/:id/lines/:lineId",
+    async (request, reply) => {
+      const user = request.user as any;
+      assertProcurementRole(user.role);
+
+      const { id, lineId } = request.params as {
+        id: string;
+        lineId: string;
+      };
+      const { orgId } = request.storeContext!;
+
+      const [po] = await db
+        .select()
+        .from(purchaseOrders)
+        .where(
+          and(eq(purchaseOrders.id, id), eq(purchaseOrders.orgId, orgId)),
+        )
+        .limit(1);
+
+      if (!po) return reply.status(404).send({ error: "PO not found" });
+
+      if (!["DRAFT", "SUBMITTED"].includes(po.status)) {
+        return reply.status(400).send({
+          error: `Cannot remove lines from PO in ${po.status} status`,
+        });
+      }
+
+      const [line] = await db
+        .select()
+        .from(poLines)
+        .where(
+          and(eq(poLines.id, lineId), eq(poLines.purchaseOrderId, id)),
+        )
+        .limit(1);
+
+      if (!line)
+        return reply.status(404).send({ error: "PO line not found" });
+
+      if (line.receivedAcceptedQty > 0 || line.rejectedQty > 0) {
+        return reply.status(400).send({
+          error:
+            "Cannot delete a line that has been partially received",
+        });
+      }
+
+      await db.delete(poLines).where(eq(poLines.id, lineId));
+
+      return reply.status(204).send();
+    },
+  );
 
   // ─── GET /procurement/purchase-orders/:id/receipt-events ──
   // Get receipt events (append-only audit trail)

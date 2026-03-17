@@ -30,15 +30,15 @@ const storeContextPluginFn: FastifyPluginAsync = async (app) => {
     }
 
     const locationId = request.headers["x-location-id"] as string | undefined;
-    if (!locationId) {
-      return reply
-        .status(400)
-        .send({ error: "X-Location-ID header is required" });
-    }
-    if (!UUID_RE.test(locationId)) {
-      return reply
-        .status(400)
-        .send({ error: "X-Location-ID must be a valid UUID" });
+
+    // No header or invalid format → org-only context (no specific location)
+    if (!locationId || !UUID_RE.test(locationId)) {
+      request.storeContext = {
+        locationId: null,
+        orgId: request.user.orgId,
+        locationType: null,
+      };
+      return;
     }
 
     const [location] = await db

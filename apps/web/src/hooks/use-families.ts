@@ -59,6 +59,22 @@ export function useFamilyProducts(token: string, locationId: string, slug: strin
   });
 }
 
+export function useCreateFamily(token: string, locationId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name }: { name: string }) =>
+      apiFetch<{ id: string; name: string; slug: string }>("/products/families", {
+        token,
+        locationId,
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["product-families"] });
+    },
+  });
+}
+
 export function useUpdateFamily(token: string, locationId: string) {
   const qc = useQueryClient();
   return useMutation({

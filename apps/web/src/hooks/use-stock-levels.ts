@@ -41,6 +41,19 @@ export interface StockLevelsPage {
   hasMore: boolean;
 }
 
+export type SortField =
+  | "name"
+  | "sku"
+  | "category"
+  | "location"
+  | "stockLevel"
+  | "reservedLevel"
+  | "available"
+  | "reorderPoint"
+  | "status";
+
+export type SortDir = "asc" | "desc";
+
 export interface StockLevelsFilters {
   allLocations?: boolean;
   locationId?: string;
@@ -48,6 +61,8 @@ export interface StockLevelsFilters {
   category?: string;
   stockStatus?: "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK";
   belowReorder?: boolean;
+  sortBy?: SortField;
+  sortDir?: SortDir;
 }
 
 // ── Hook ──
@@ -75,6 +90,8 @@ export function useStockLevels(
       filters.category,
       filters.stockStatus,
       filters.belowReorder,
+      filters.sortBy,
+      filters.sortDir,
       locationId,
       limit,
     ],
@@ -89,6 +106,8 @@ export function useStockLevels(
       if (filters.category) params.set("category", filters.category);
       if (filters.stockStatus) params.set("stockStatus", filters.stockStatus);
       if (filters.belowReorder) params.set("belowReorder", "true");
+      if (filters.sortBy) params.set("sortBy", filters.sortBy);
+      if (filters.sortDir) params.set("sortDir", filters.sortDir);
 
       return apiFetch<StockLevelsPage>(
         `/inventory/stock-levels?${params.toString()}`,

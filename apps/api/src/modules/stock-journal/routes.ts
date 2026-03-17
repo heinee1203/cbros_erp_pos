@@ -59,7 +59,7 @@ export const stockJournalRoutes: FastifyPluginAsync = async (app) => {
     // ── Parse optional query params ──
     const q = request.query as Record<string, string | undefined>;
 
-    const allLocations = q.allLocations === "true";
+    const allLocations = q.allLocations === "true" || !defaultLocationId;
     const locationId = q.locationId;
     const search = q.search;
     const referenceType = q.referenceType;
@@ -89,7 +89,7 @@ export const stockJournalRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await queryJournal({
       orgId,
-      defaultLocationId,
+      defaultLocationId: defaultLocationId ?? "",
       allLocations,
       locationId,
       search,

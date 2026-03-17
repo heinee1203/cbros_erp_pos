@@ -641,7 +641,7 @@ function NewPODialog({
                     <thead>
                       <tr className="border-b border-border bg-muted/50">
                         <th scope="col" className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase text-muted-foreground">
-                          Product
+                          Item
                         </th>
                         <th scope="col" className="w-20 px-2 py-1.5 text-right text-[10px] font-semibold uppercase text-muted-foreground">
                           Qty

@@ -91,12 +91,14 @@ body {
   color: var(--color-primary-foreground);
 }
 
-/* ─── Print Styles (Barcode Labels) ─── */
+/* ─── Print Styles ─── */
 @media print {
+  /* Default: hide everything (for barcode labels using #print-area) */
   body * {
     visibility: hidden !important;
   }
 
+  /* Barcode label print area */
   #print-area,
   #print-area * {
     visibility: visible !important;
@@ -110,10 +112,29 @@ body {
     display: block !important;
   }
 
-  @page {
-    margin: 5mm;
-    size: auto;
+  /* Invoice print page */
+  .invoice-page,
+  .invoice-page * {
+    visibility: visible !important;
   }
+
+  .invoice-page {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 20mm;
+    display: block !important;
+  }
+
+  /* Hide non-printable elements */
+  .no-print {
+    display: none !important;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 15mm;
 }
 
 /* Dark mode: not implemented. The sidebar uses a dark theme but the main content area is light-only.

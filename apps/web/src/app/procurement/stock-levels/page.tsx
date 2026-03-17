@@ -6,6 +6,8 @@ import {
   Search,
   X,
   ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
   Loader2,
   ChevronsDown,
   Package,
@@ -14,11 +16,14 @@ import {
   ShieldAlert,
   Archive,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import {
   useStockLevels,
   type StockLevelRow,
   type StockLevelsSummary,
+  type SortField,
+  type SortDir,
 } from "@/hooks/use-stock-levels";
 
 /* ═══════════════════════════════════════════════════════
@@ -70,6 +75,19 @@ export default function StockLevelsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [belowReorder, setBelowReorder] = useState(false);
 
+  // ── Sort state ──
+  const [sortBy, setSortBy] = useState<SortField>("name");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  const handleSort = (field: SortField) => {
+    if (sortBy === field) {
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(field);
+      setSortDir("asc");
+    }
+  };
+
   // ── Debounce search ──
   const searchTimeoutRef = useState<ReturnType<typeof setTimeout> | null>(null);
   const handleSearchChange = (value: string) => {
@@ -95,6 +113,8 @@ export default function StockLevelsPage() {
     category: categoryFilter !== "all" ? categoryFilter : undefined,
     stockStatus: stockStatusFilter !== "all" ? (stockStatusFilter as any) : undefined,
     belowReorder: belowReorder || undefined,
+    sortBy,
+    sortDir,
   });
 
   // Flatten pages
@@ -213,7 +233,7 @@ export default function StockLevelsPage() {
               type="text"
               value={searchQuery}
               onChange={(e) => handleSearchChange(e.target.value)}
-              placeholder="Search product, SKU..."
+              placeholder="Search item, SKU..."
               className="h-8 w-56 rounded-md border border-border bg-background pl-8 pr-3 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary/20"
             />
           </div>
@@ -251,15 +271,15 @@ export default function StockLevelsPage() {
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Product</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">SKU</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Category</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Location</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">On Hand</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Reserved</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Available</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Reorder Pt</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Status</th>
+                <SortHeader label="Item" field="name" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="SKU" field="sku" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Category" field="category" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Location" field="location" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="On Hand" field="stockLevel" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
+                <SortHeader label="Reserved" field="reservedLevel" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
+                <SortHeader label="Available" field="available" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
+                <SortHeader label="Reorder Pt" field="reorderPoint" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
+                <SortHeader label="Status" field="status" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -277,7 +297,7 @@ export default function StockLevelsPage() {
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {totalLoaded}
-            {summary ? ` of ${summary.totalSkus.toLocaleString()}` : ""} SKU{totalLoaded !== 1 ? "s" : ""} loaded
+            {summary ? ` of ${summary.totalSkus.toLocaleString()}` : ""} item{totalLoaded !== 1 ? "s" : ""} loaded
             {hasActiveFilters ? " (filtered)" : ""}
             {hasNextPage ? " — more available" : ""}
           </span>
@@ -316,7 +336,7 @@ function SummaryStrip({ summary }: { summary: StockLevelsSummary }) {
       <div className="flex items-center gap-5">
         <SummaryChip
           icon={<Package size={13} />}
-          label="Total SKUs"
+          label="Total Items"
           value={summary.totalSkus.toLocaleString()}
           color="text-foreground"
         />
@@ -509,6 +529,48 @@ function FilterSelect({
         className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
       />
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * SORTABLE HEADER
+ * ═══════════════════════════════════════════════════════ */
+
+function SortHeader({
+  label,
+  field,
+  currentSort,
+  currentDir,
+  onSort,
+  align = "left",
+}: {
+  label: string;
+  field: SortField;
+  currentSort: SortField;
+  currentDir: SortDir;
+  onSort: (field: SortField) => void;
+  align?: "left" | "right";
+}) {
+  const isActive = currentSort === field;
+  return (
+    <th
+      scope="col"
+      className={cn(
+        "cursor-pointer select-none whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
+        align === "right" && "text-right",
+        isActive && "text-foreground",
+      )}
+      onClick={() => onSort(field)}
+    >
+      <span className={cn("inline-flex items-center gap-1", align === "right" && "justify-end")}>
+        {label}
+        {isActive ? (
+          currentDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />
+        ) : (
+          <ChevronsUpDown size={12} className="opacity-30" />
+        )}
+      </span>
+    </th>
   );
 }
 

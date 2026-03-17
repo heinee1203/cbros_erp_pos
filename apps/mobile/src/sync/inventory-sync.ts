@@ -12,6 +12,7 @@ interface ServerInventory {
   stockLevel: number;
   reservedLevel: number;
   reorderPoint: number;
+  availableForSale: boolean;
   updatedAt: string;
 }
 
@@ -50,6 +51,7 @@ export async function syncInventory(): Promise<{ upserted: number }> {
             record.stockLevel = item.stockLevel;
             record.reservedLevel = item.reservedLevel;
             record.reorderPoint = item.reorderPoint;
+            record.availableForSale = item.availableForSale;
             record.serverUpdatedAt = new Date(item.updatedAt).getTime();
           }),
         );
@@ -62,6 +64,7 @@ export async function syncInventory(): Promise<{ upserted: number }> {
             record.stockLevel = item.stockLevel;
             record.reservedLevel = item.reservedLevel;
             record.reorderPoint = item.reorderPoint;
+            record.availableForSale = item.availableForSale;
             record.serverUpdatedAt = new Date(item.updatedAt).getTime();
           }),
         );

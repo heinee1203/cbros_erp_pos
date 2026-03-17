@@ -122,6 +122,7 @@ interface ImportStats {
   withCost: number;
   duplicateBarcodes: number;
   duplicateSkus: number;
+  availableForSaleCount: number;
   inventoryByLocation: Map<string, { skus: number; units: number }>;
   categoryBreakdown: Map<string, number>;
 }
@@ -143,6 +144,7 @@ async function importProducts(
     withCost: 0,
     duplicateBarcodes: 0,
     duplicateSkus: 0,
+    availableForSaleCount: 0,
     inventoryByLocation: new Map(),
     categoryBreakdown: new Map(),
   };
@@ -240,8 +242,13 @@ async function importProducts(
 
           const stockLevel = Math.round(locData.inStock);
           const reorderPoint = Math.round(locData.lowStock) || 10;
+          const availableForSale = locData.availableForSale;
 
-          // Insert inventory row even for 0 stock (so the product shows in location)
+          // Skip locations with no stock AND not available for sale
+          // (no need to create inventory rows for irrelevant locations)
+          if (stockLevel === 0 && !availableForSale) continue;
+
+          // Insert inventory row for available products or those with stock
           await tx.insert(inventory).values({
             orgId,
             productId: product.id,
@@ -249,9 +256,11 @@ async function importProducts(
             stockLevel,
             reservedLevel: 0,
             reorderPoint,
+            availableForSale,
           });
 
           stats.inventoryInserted++;
+          if (availableForSale) stats.availableForSaleCount++;
 
           const locStats = stats.inventoryByLocation.get(locName) || {
             skus: 0,
@@ -301,6 +310,9 @@ function printSummary(stats: ImportStats, elapsed: string) {
   );
   console.log(
     `  Inventory rows:        ${stats.inventoryInserted.toLocaleString()}`,
+  );
+  console.log(
+    `  Available for sale:    ${stats.availableForSaleCount.toLocaleString()} / ${stats.inventoryInserted.toLocaleString()} (${((stats.availableForSaleCount / stats.inventoryInserted) * 100).toFixed(1)}%)`,
   );
   console.log();
   console.log("  Category breakdown:");

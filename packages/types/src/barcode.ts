@@ -1,8 +1,8 @@
 /**
- * EAN-13 Barcode Utilities
+ * Barcode Utilities
  *
  * Pure functions for generating, validating, and computing check digits
- * for EAN-13 barcodes. Uses GS1 prefix "200" for in-store/internal use.
+ * for EAN-13 and UPC-A barcodes. Uses GS1 prefix "200" for in-store/internal use.
  */
 
 /**
@@ -40,6 +40,51 @@ export function isValidEan13(code: string): boolean {
   const first12 = code.slice(0, 12);
   const expectedCheck = computeEan13CheckDigit(first12);
   return code[12] === expectedCheck;
+}
+
+/**
+ * Validate a complete 12-digit UPC-A barcode.
+ *
+ * UPC-A uses the same check digit algorithm as EAN-13 but with 11 data digits + 1 check digit.
+ * The weight pattern is: odd positions (1-indexed) get weight 3, even get weight 1.
+ */
+export function isValidUpcA(code: string): boolean {
+  if (code.length !== 12 || !/^\d{12}$/.test(code)) {
+    return false;
+  }
+
+  let sum = 0;
+  for (let i = 0; i < 11; i++) {
+    const digit = parseInt(code[i], 10);
+    // UPC-A: odd positions (0,2,4,...) get weight 3, even (1,3,5,...) get weight 1
+    sum += digit * (i % 2 === 0 ? 3 : 1);
+  }
+
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return parseInt(code[11], 10) === checkDigit;
+}
+
+/**
+ * Validate a barcode in any supported format (EAN-13, UPC-A, or any numeric string).
+ *
+ * For known formats (12 or 13 digits) it verifies the check digit.
+ * For other lengths, it accepts any non-empty alphanumeric string (up to 50 chars).
+ */
+export function isValidBarcode(code: string): boolean {
+  // Accept any non-empty string up to 50 chars.
+  // No check-digit enforcement — users may have UPC, EAN-8, EAN-13,
+  // custom codes, or manufacturer part numbers as barcodes.
+  return !!code && code.length <= 50;
+}
+
+/**
+ * Detect the JsBarcode format string for a given barcode.
+ */
+export function detectBarcodeFormat(code: string): string {
+  if (/^\d{13}$/.test(code)) return "EAN13";
+  if (/^\d{12}$/.test(code)) return "UPC";
+  if (/^\d{8}$/.test(code)) return "EAN8";
+  return "CODE128"; // fallback for arbitrary strings
 }
 
 /**

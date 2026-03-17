@@ -11,7 +11,7 @@ import {
   suppliers,
   users,
 } from "@apex/database/schema";
-import { eq, and, sql, asc, desc } from "drizzle-orm";
+import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
 import type { CreatePOInput, ReceivePOInput } from "@apex/types";
 import {
   PurchaseOrderStatus,
@@ -128,6 +128,10 @@ export async function createPO(
 ) {
   assertProcurementRole(userRole);
 
+  if (!input.lines || input.lines.length === 0) {
+    throw new Error("Purchase Order must have at least one line item");
+  }
+
   return db.transaction(async (tx) => {
     // Validate supplier belongs to org
     const [supplier] = await tx
@@ -225,12 +229,17 @@ export async function submitPO(
 
     const po = poRows[0] as any;
 
-    // Idempotency: if already submitted with same key, return
+    // Idempotency: if already submitted with same key, return existing (camelCase via Drizzle)
     if (
       po.status === PurchaseOrderStatus.SUBMITTED &&
       po.idempotency_key === idempotencyKey
     ) {
-      return po;
+      const [existing] = await tx
+        .select()
+        .from(purchaseOrders)
+        .where(eq(purchaseOrders.id, poId))
+        .limit(1);
+      return existing;
     }
 
     if (
@@ -450,7 +459,7 @@ export async function receivePO(
       await tx
         .update(poReceiptEvents)
         .set({ poReceiptId: receipt.id })
-        .where(sql`${poReceiptEvents.id} = ANY(${receiptEventIds}::uuid[])`);
+        .where(inArray(poReceiptEvents.id, receiptEventIds));
     }
 
     // ── Step 5: Lock inventory rows in deterministic order ──
@@ -673,9 +682,7 @@ export async function getPOReceipts(poId: string, orgId: string) {
     })
     .from(poReceiptEvents)
     .innerJoin(products, eq(products.id, poReceiptEvents.productId))
-    .where(
-      sql`${poReceiptEvents.poReceiptId} = ANY(${receiptIds}::uuid[])`,
-    )
+    .where(inArray(poReceiptEvents.poReceiptId, receiptIds))
     .orderBy(asc(poReceiptEvents.createdAt));
 
   // Group events by receipt ID
@@ -720,12 +727,17 @@ export async function closeWithVariance(
 
     const po = poRows[0] as any;
 
-    // Idempotency
+    // Idempotency (return camelCase via Drizzle)
     if (
       po.status === PurchaseOrderStatus.CLOSED_WITH_VARIANCE &&
       po.idempotency_key === idempotencyKey
     ) {
-      return po;
+      const [existing] = await tx
+        .select()
+        .from(purchaseOrders)
+        .where(eq(purchaseOrders.id, poId))
+        .limit(1);
+      return existing;
     }
 
     if (
@@ -781,12 +793,17 @@ export async function cancelPO(
 
     const po = poRows[0] as any;
 
-    // Idempotency
+    // Idempotency (return camelCase via Drizzle)
     if (
       po.status === PurchaseOrderStatus.CANCELLED &&
       po.idempotency_key === idempotencyKey
     ) {
-      return po;
+      const [existing] = await tx
+        .select()
+        .from(purchaseOrders)
+        .where(eq(purchaseOrders.id, poId))
+        .limit(1);
+      return existing;
     }
 
     if (
@@ -1004,7 +1021,7 @@ export async function getPOJournal(poId: string, orgId: string) {
       and(
         eq(stockJournal.orgId, orgId),
         eq(stockJournal.referenceType, "RECEIVING"),
-        sql`${stockJournal.referenceId} = ANY(${eventIds})`,
+        inArray(stockJournal.referenceId, eventIds),
       ),
     )
     .orderBy(asc(stockJournal.effectiveAt), asc(stockJournal.createdAt));
@@ -1030,4 +1047,106 @@ export async function listSuppliers(orgId: string) {
     .orderBy(asc(suppliers.name));
 
   return results;
+}
+
+/**
+ * Create a new supplier.
+ */
+export async function createSupplier(
+  orgId: string,
+  input: {
+    name: string;
+    contactEmail?: string;
+    contactPhone?: string;
+    address?: string;
+    mnemonicCode?: string;
+    avgLeadTimeDays?: number;
+  },
+) {
+  const [supplier] = await db
+    .insert(suppliers)
+    .values({
+      orgId,
+      name: input.name,
+      contactEmail: input.contactEmail ?? null,
+      contactPhone: input.contactPhone ?? null,
+      address: input.address ?? null,
+      mnemonicCode: input.mnemonicCode ?? null,
+      avgLeadTimeDays: input.avgLeadTimeDays ?? 7,
+    })
+    .returning();
+
+  return supplier;
+}
+
+/**
+ * Update an existing supplier.
+ */
+export async function updateSupplier(
+  orgId: string,
+  supplierId: string,
+  input: {
+    name?: string;
+    contactEmail?: string | null;
+    contactPhone?: string | null;
+    address?: string | null;
+    mnemonicCode?: string | null;
+    avgLeadTimeDays?: number;
+  },
+) {
+  const setFields: Record<string, any> = {};
+  if (input.name !== undefined) setFields.name = input.name;
+  if (input.contactEmail !== undefined) setFields.contactEmail = input.contactEmail;
+  if (input.contactPhone !== undefined) setFields.contactPhone = input.contactPhone;
+  if (input.address !== undefined) setFields.address = input.address;
+  if (input.mnemonicCode !== undefined) setFields.mnemonicCode = input.mnemonicCode;
+  if (input.avgLeadTimeDays !== undefined) setFields.avgLeadTimeDays = input.avgLeadTimeDays;
+
+  if (Object.keys(setFields).length === 0) {
+    throw new Error("No fields to update");
+  }
+
+  const [updated] = await db
+    .update(suppliers)
+    .set(setFields)
+    .where(and(eq(suppliers.id, supplierId), eq(suppliers.orgId, orgId)))
+    .returning();
+
+  if (!updated) {
+    throw new Error("Supplier not found");
+  }
+
+  return updated;
+}
+
+/**
+ * Delete a supplier. Fails if supplier has any purchase orders.
+ */
+export async function deleteSupplier(orgId: string, supplierId: string) {
+  // Check for existing purchase orders
+  const [po] = await db
+    .select({ id: purchaseOrders.id })
+    .from(purchaseOrders)
+    .where(
+      and(
+        eq(purchaseOrders.supplierId, supplierId),
+        eq(purchaseOrders.orgId, orgId),
+      ),
+    )
+    .limit(1);
+
+  if (po) {
+    throw new Error("Cannot delete supplier with existing purchase orders");
+  }
+
+  const [deleted] = await db
+    .delete(suppliers)
+    .where(and(eq(suppliers.id, supplierId), eq(suppliers.orgId, orgId)))
+    .returning({ id: suppliers.id });
+
+  if (!deleted) {
+    throw new Error("Supplier not found");
+  }
+
+  return deleted;
 }

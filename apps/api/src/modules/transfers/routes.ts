@@ -262,7 +262,7 @@ export const transferRoutes: FastifyPluginAsync = async (app) => {
       transferNo,
       orgId,
       role,
-      locationId,
+      locationId ?? "",
     );
     if (!result) {
       return reply.status(404).send({ error: "Transfer not found" });
@@ -277,7 +277,7 @@ export const transferRoutes: FastifyPluginAsync = async (app) => {
     const { orgId, locationId } = request.storeContext!;
     const { role } = request.user;
 
-    const result = await getTransfer(id, orgId, role, locationId);
+    const result = await getTransfer(id, orgId, role, locationId ?? "");
     if (!result) {
       return reply.status(404).send({ error: "Transfer not found" });
     }

@@ -2,6 +2,9 @@ import type { FastifyPluginAsync } from "fastify";
 import { createAdjustmentSchema } from "@apex/types";
 import { UserRole } from "@apex/types";
 import { createAdjustment } from "./service";
+import { db } from "@apex/database";
+import { stockJournal, products, locations } from "@apex/database/schema";
+import { eq, and, sql, inArray, desc } from "drizzle-orm";
 
 // Roles allowed to make manual adjustments
 const ADJUSTMENT_ROLES = [
@@ -10,7 +13,92 @@ const ADJUSTMENT_ROLES = [
   UserRole.WAREHOUSE_STAFF,
 ];
 
+const ADJUSTMENT_REFERENCE_TYPES = [
+  "ADJUSTMENT",
+  "STOCKTAKE",
+  "OPENING_BALANCE",
+] as const;
+
 export const adjustmentRoutes: FastifyPluginAsync = async (app) => {
+  // ─── GET /inventory/adjustments ───────────────────
+  // List stock adjustments (journal entries with adjustment reference types)
+  app.get("/", async (request, reply) => {
+    const { orgId, locationId } = request.storeContext!;
+    const q = request.query as Record<string, string | undefined>;
+
+    const page = parseInt(q.page ?? "1", 10);
+    const limit = Math.min(parseInt(q.limit ?? "50", 10), 200);
+    const offset = (page - 1) * limit;
+
+    const conditions = [
+      eq(stockJournal.orgId, orgId),
+      inArray(stockJournal.referenceType, [...ADJUSTMENT_REFERENCE_TYPES]),
+    ];
+
+    // Location filter (default to current store-context location)
+    if (q.location === "all" || !locationId) {
+      // No location filter — org-wide view
+    } else {
+      conditions.push(eq(stockJournal.locationId, q.locationId ?? locationId));
+    }
+
+    // Reason code filter
+    if (q.reasonCode) {
+      conditions.push(sql`${stockJournal.reasonCode} = ${q.reasonCode}`);
+    }
+
+    // Direction filter
+    if (q.direction === "add") {
+      conditions.push(sql`${stockJournal.changeQuantity} > 0`);
+    } else if (q.direction === "deduct") {
+      conditions.push(sql`${stockJournal.changeQuantity} < 0`);
+    }
+
+    const where = and(...conditions);
+
+    // Count total
+    const [countResult] = await db
+      .select({ total: sql<number>`COUNT(*)::int` })
+      .from(stockJournal)
+      .where(where);
+
+    const total = countResult?.total ?? 0;
+
+    // Fetch rows with product and location names
+    const rows = await db
+      .select({
+        id: stockJournal.id,
+        productId: stockJournal.productId,
+        productName: products.name,
+        productSku: products.sku,
+        locationId: stockJournal.locationId,
+        locationName: locations.name,
+        changeQuantity: stockJournal.changeQuantity,
+        balanceAfter: stockJournal.balanceAfter,
+        referenceType: stockJournal.referenceType,
+        reasonCode: stockJournal.reasonCode,
+        notes: stockJournal.notes,
+        userId: stockJournal.userId,
+        effectiveAt: stockJournal.effectiveAt,
+        createdAt: stockJournal.createdAt,
+      })
+      .from(stockJournal)
+      .innerJoin(products, eq(stockJournal.productId, products.id))
+      .innerJoin(locations, eq(stockJournal.locationId, locations.id))
+      .where(where)
+      .orderBy(desc(stockJournal.effectiveAt))
+      .limit(limit)
+      .offset(offset);
+
+    return reply.send({
+      data: rows,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  });
+
   // ─── POST /inventory/adjustments ───────────────────
   // Create a manual stock adjustment
   app.post("/", async (request, reply) => {

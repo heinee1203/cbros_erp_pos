@@ -72,7 +72,7 @@ export default function SalesByItemPage() {
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.06]"><Package size={16} className="text-primary" /></div>
           <h1 className="text-[18px] font-semibold tracking-tight text-foreground">Sales by Item</h1>
         </div>
-        <p className="mt-1.5 text-[13px] leading-5 text-muted-foreground">Product-level sales breakdown with revenue, cost, and margin analysis.</p>
+        <p className="mt-1.5 text-[13px] leading-5 text-muted-foreground">Item-level sales breakdown with revenue, cost, and margin analysis.</p>
 
         {/* Summary cards */}
         {summary && (
@@ -124,7 +124,7 @@ export default function SalesByItemPage() {
             onClick={() =>
               downloadCSV(
                 "sales-by-item",
-                ["Product", "SKU", "Category", "Units Sold", "Revenue", "Cost", "Profit", "Margin %"],
+                ["Item", "SKU", "Category", "Units Sold", "Revenue", "Cost", "Profit", "Margin %"],
                 items.map((item) => [
                   item.productName,
                   item.sku,
@@ -149,7 +149,7 @@ export default function SalesByItemPage() {
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
         <div className="flex items-center border-b border-border bg-muted/40 px-4 py-2">
           <div className="w-8 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">#</div>
-          <div className="flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Product</div>
+          <div className="flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Item</div>
           <div className="w-20 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Category</div>
           <div className="w-16 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Units</div>
           <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Revenue</div>

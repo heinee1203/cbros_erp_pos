@@ -13,6 +13,8 @@ import {
   ilike,
   or,
   sql,
+  asc,
+  desc,
   type SQL,
 } from "drizzle-orm";
 
@@ -33,7 +35,9 @@ export interface StockLevelRow {
   reservedLevel: number;
   available: number;
   reorderPoint: number;
+  optimalStock: number;
   leadTimeDays: number;
+  availableForSale: boolean;
   status: "OUT_OF_STOCK" | "LOW_STOCK" | "IN_STOCK";
   updatedAt: string;
 }
@@ -54,6 +58,19 @@ export interface StockLevelsPage {
   hasMore: boolean;
 }
 
+export type SortField =
+  | "name"
+  | "sku"
+  | "category"
+  | "location"
+  | "stockLevel"
+  | "reservedLevel"
+  | "available"
+  | "reorderPoint"
+  | "status";
+
+export type SortDir = "asc" | "desc";
+
 export interface StockLevelsQueryParams {
   orgId: string;
   defaultLocationId: string;
@@ -63,6 +80,8 @@ export interface StockLevelsQueryParams {
   category?: string;
   stockStatus?: "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK";
   belowReorder?: boolean;
+  sortBy?: SortField;
+  sortDir?: SortDir;
   cursor?: string;
   limit?: number;
 }
@@ -72,6 +91,26 @@ export interface StockLevelsQueryParams {
 const availableCol = sql<number>`(${inventory.stockLevel} - ${inventory.reservedLevel})`.as(
   "available",
 );
+
+// ── Sort helper ──
+
+const SORT_COLUMN_MAP: Record<SortField, SQL | typeof products.name> = {
+  name: products.name,
+  sku: products.sku,
+  category: products.category,
+  location: locations.name,
+  stockLevel: inventory.stockLevel,
+  reservedLevel: inventory.reservedLevel,
+  available: sql`(${inventory.stockLevel} - ${inventory.reservedLevel})`,
+  reorderPoint: inventory.reorderPoint,
+  status: inventory.stockLevel, // sort by stock level as proxy for status
+};
+
+function getSortOrder(sortBy?: SortField, sortDir?: SortDir) {
+  const col = SORT_COLUMN_MAP[sortBy ?? "name"] ?? products.name;
+  const dir = sortDir === "desc" ? desc : asc;
+  return [dir(col)];
+}
 
 // ── Summary query ──
 
@@ -183,30 +222,35 @@ export async function queryStockLevels(
 
   const rows = await db
     .select({
-      id: inventory.id,
-      productId: products.id,
-      productName: products.name,
-      productSku: products.sku,
-      mnemonicSku: products.mnemonicSku,
-      category: products.category,
-      familyName: productFamilies.name,
-      locationId: inventory.locationId,
-      locationName: locations.name,
-      locationType: locations.type,
-      stockLevel: inventory.stockLevel,
-      reservedLevel: inventory.reservedLevel,
-      available: availableCol,
-      reorderPoint: inventory.reorderPoint,
-      leadTimeDays: inventory.leadTimeDays,
-      updatedAt: inventory.updatedAt,
-    })
-    .from(inventory)
-    .innerJoin(products, eq(inventory.productId, products.id))
-    .innerJoin(locations, eq(inventory.locationId, locations.id))
-    .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
-    .where(and(...conditions))
-    .orderBy(inventory.id)
-    .limit(limit + 1);
+        id: inventory.id,
+        productId: products.id,
+        productName: products.name,
+        productSku: products.sku,
+        mnemonicSku: products.mnemonicSku,
+        category: products.category,
+        familyName: productFamilies.name,
+        locationId: inventory.locationId,
+        locationName: locations.name,
+        locationType: locations.type,
+        stockLevel: inventory.stockLevel,
+        reservedLevel: inventory.reservedLevel,
+        available: availableCol,
+        reorderPoint: inventory.reorderPoint,
+        optimalStock: inventory.optimalStock,
+        leadTimeDays: inventory.leadTimeDays,
+        availableForSale: inventory.availableForSale,
+        updatedAt: inventory.updatedAt,
+      })
+      .from(inventory)
+      .innerJoin(products, eq(inventory.productId, products.id))
+      .innerJoin(locations, eq(inventory.locationId, locations.id))
+      .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+      .where(and(...conditions))
+      .orderBy(
+        ...getSortOrder(params.sortBy, params.sortDir),
+        asc(inventory.id),
+      )
+      .limit(limit + 1);
 
   const hasMore = rows.length > limit;
   const data = hasMore ? rows.slice(0, limit) : rows;
@@ -228,7 +272,9 @@ export async function queryStockLevels(
     reservedLevel: row.reservedLevel,
     available: row.available,
     reorderPoint: row.reorderPoint,
+    optimalStock: row.optimalStock,
     leadTimeDays: row.leadTimeDays,
+    availableForSale: row.availableForSale,
     status:
       row.stockLevel === 0
         ? "OUT_OF_STOCK"
@@ -249,4 +295,101 @@ export async function queryStockLevels(
   });
 
   return { data: enriched, summary, nextCursor, hasMore };
+}
+
+// ── Per-product inventory across all locations ──
+
+export interface ProductLocationRow {
+  inventoryId: string | null;
+  locationId: string;
+  locationName: string;
+  locationType: string;
+  stockLevel: number;
+  reservedLevel: number;
+  reorderPoint: number;
+  optimalStock: number;
+  availableForSale: boolean;
+}
+
+export async function getProductLocations(
+  orgId: string,
+  productId: string,
+): Promise<ProductLocationRow[]> {
+  // Left join: return ALL org locations, even those with no inventory row
+  const rows = await db
+    .select({
+      inventoryId: inventory.id,
+      locationId: locations.id,
+      locationName: locations.name,
+      locationType: locations.type,
+      stockLevel: inventory.stockLevel,
+      reservedLevel: inventory.reservedLevel,
+      reorderPoint: inventory.reorderPoint,
+      optimalStock: inventory.optimalStock,
+      availableForSale: inventory.availableForSale,
+    })
+    .from(locations)
+    .leftJoin(
+      inventory,
+      and(
+        eq(inventory.locationId, locations.id),
+        eq(inventory.productId, productId),
+      ),
+    )
+    .where(and(eq(locations.orgId, orgId), eq(locations.isActive, true)))
+    .orderBy(locations.name);
+
+  return rows.map((r) => ({
+    inventoryId: r.inventoryId,
+    locationId: r.locationId,
+    locationName: r.locationName,
+    locationType: r.locationType,
+    stockLevel: r.stockLevel ?? 0,
+    reservedLevel: r.reservedLevel ?? 0,
+    reorderPoint: r.reorderPoint ?? 10,
+    optimalStock: r.optimalStock ?? 0,
+    availableForSale: r.availableForSale ?? false,
+  }));
+}
+
+// ── Batch toggle availability ──
+
+export interface AvailabilityUpdate {
+  locationId: string;
+  availableForSale?: boolean;
+  reorderPoint?: number;
+  optimalStock?: number;
+}
+
+export async function updateAvailability(
+  orgId: string,
+  productId: string,
+  updates: AvailabilityUpdate[],
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    for (const update of updates) {
+      const setFields: Record<string, any> = {};
+      if (update.availableForSale !== undefined) setFields.availableForSale = update.availableForSale;
+      if (update.reorderPoint !== undefined) setFields.reorderPoint = update.reorderPoint;
+      if (update.optimalStock !== undefined) setFields.optimalStock = update.optimalStock;
+
+      // Upsert: create inventory row if it doesn't exist
+      await tx
+        .insert(inventory)
+        .values({
+          orgId,
+          productId,
+          locationId: update.locationId,
+          stockLevel: 0,
+          reservedLevel: 0,
+          reorderPoint: update.reorderPoint ?? 10,
+          optimalStock: update.optimalStock ?? 0,
+          availableForSale: update.availableForSale ?? true,
+        })
+        .onConflictDoUpdate({
+          target: [inventory.productId, inventory.locationId],
+          set: Object.keys(setFields).length > 0 ? setFields : { availableForSale: update.availableForSale ?? true },
+        });
+    }
+  });
 }

@@ -51,6 +51,7 @@ export interface LowStockItem {
   productName: string;
   sku: string;
   category: string;
+  categoryName: string | null;
   stockLevel: number;
   reservedLevel: number;
   available: number;
