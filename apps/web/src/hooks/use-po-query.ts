@@ -27,6 +27,8 @@ export interface POLine {
   receivedAcceptedQty: number;
   rejectedQty: number;
   unitCost: string;
+  listPrice: string | null;
+  discountChain: string | null;
   createdAt: string;
   productName: string;
   sku: string;

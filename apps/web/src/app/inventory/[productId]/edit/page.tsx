@@ -1411,10 +1411,10 @@ function CopyFitmentModal({
   }, [open]);
 
   // Search products that have vehicle fitments
-  const { data: searchResults, isLoading: searching } = useQuery({
+  const { data: searchResults, isLoading: searching } = useQuery<{ data: any[] }>({
     queryKey: ["copy-fitment-search", debouncedSearch],
     queryFn: () =>
-      apiFetch(`/products?search=${encodeURIComponent(debouncedSearch)}&limit=10&hasVehicles=true`, {
+      apiFetch<{ data: any[] }>(`/products?search=${encodeURIComponent(debouncedSearch)}&limit=10&hasVehicles=true`, {
         token,
         locationId,
       }),
@@ -1423,10 +1423,10 @@ function CopyFitmentModal({
   });
 
   // Fetch vehicles for selected product
-  const { data: vehicleData, isLoading: loadingVehicles } = useQuery({
+  const { data: vehicleData, isLoading: loadingVehicles } = useQuery<{ data: any[] }>({
     queryKey: ["copy-fitment-vehicles", selectedProduct?.id],
     queryFn: () =>
-      apiFetch(`/products/${selectedProduct.id}/vehicles`, { token, locationId }),
+      apiFetch<{ data: any[] }>(`/products/${selectedProduct.id}/vehicles`, { token, locationId }),
     enabled: !!selectedProduct?.id,
   });
 

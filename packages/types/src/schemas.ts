@@ -405,6 +405,8 @@ export const createPOSchema = z.object({
         productId: z.string().uuid(),
         orderedQty: z.number().int().min(1),
         unitCost: z.string().min(1), // numeric as string
+        listPrice: z.string().optional(),
+        discountChain: z.string().max(100).optional(),
       }),
     )
     .min(1, "At least one PO line is required"),

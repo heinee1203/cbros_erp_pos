@@ -30,6 +30,7 @@ export interface ProductRow {
   brandName: string | null;
   parentProductId: string | null;
   isParent: boolean;
+  oemNumber: string | null;
 }
 
 export interface ProductsResponse {
@@ -157,7 +158,7 @@ export function useProducts(
 export interface CreateProductPayload {
   name: string;
   sku: string;
-  mnemonicSku: string;
+  mnemonicSku?: string;
   category: string;
   unitPrice?: string;
   costPrice?: string;
@@ -172,6 +173,8 @@ export interface CreateProductPayload {
   leadTimeDays?: number;
   initialStock?: number;
   locationIds?: string[];
+  oemNumber?: string;
+  isParent?: boolean;
   vehicleCompatibility?: {
     make: string;
     model: string;
@@ -179,6 +182,12 @@ export interface CreateProductPayload {
     yearEnd: number;
     engine?: string;
     notes?: string;
+  }[];
+  variants?: {
+    suffix: string;
+    sku: string;
+    unitPrice: string;
+    costPrice: string;
   }[];
 }
 
@@ -242,6 +251,7 @@ export interface ProductDetail extends ProductRow {
   isActive: boolean;
   categoryId: string | null;
   categoryName: string | null;
+  oemNumber: string | null;
   vehicleCompatibility: {
     id: string;
     make: string;

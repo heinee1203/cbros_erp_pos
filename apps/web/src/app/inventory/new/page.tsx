@@ -287,8 +287,8 @@ export default function AddItemPage() {
                 .map((v) => ({
                   make: v.make,
                   model: v.model,
-                  yearStart: v.yearStart ? parseInt(v.yearStart, 10) : undefined,
-                  yearEnd: v.yearEnd ? parseInt(v.yearEnd, 10) : undefined,
+                  yearStart: v.yearStart ? parseInt(v.yearStart, 10) : 0,
+                  yearEnd: v.yearEnd ? parseInt(v.yearEnd, 10) : 0,
                   engine: v.engine || undefined,
                   notes: v.notes || undefined,
                 }))
@@ -310,7 +310,6 @@ export default function AddItemPage() {
         setSuccessMessage(`"${name}" created successfully${hasInlineVariants ? ` with ${inlineVariants.length} variants` : ""}`);
         setName("");
         setSku("");
-        setMnemonicSku("");
         setFamilyId("");
         setCategoryId("");
         setSubcategoryId("");
@@ -1295,10 +1294,10 @@ function CopyFitmentModal({
     }
   }, [open]);
 
-  const { data: searchResults, isLoading: searching } = useQuery({
+  const { data: searchResults, isLoading: searching } = useQuery<{ data: any[] }>({
     queryKey: ["copy-fitment-search", debouncedSearch],
     queryFn: () =>
-      apiFetch(`/products?search=${encodeURIComponent(debouncedSearch)}&limit=10&hasVehicles=true`, {
+      apiFetch<{ data: any[] }>(`/products?search=${encodeURIComponent(debouncedSearch)}&limit=10&hasVehicles=true`, {
         token,
         locationId,
       }),
@@ -1306,10 +1305,10 @@ function CopyFitmentModal({
     staleTime: 15_000,
   });
 
-  const { data: vehicleData, isLoading: loadingVehicles } = useQuery({
+  const { data: vehicleData, isLoading: loadingVehicles } = useQuery<{ data: any[] }>({
     queryKey: ["copy-fitment-vehicles", selectedProduct?.id],
     queryFn: () =>
-      apiFetch(`/products/${selectedProduct.id}/vehicles`, { token, locationId }),
+      apiFetch<{ data: any[] }>(`/products/${selectedProduct.id}/vehicles`, { token, locationId }),
     enabled: !!selectedProduct?.id,
   });
 

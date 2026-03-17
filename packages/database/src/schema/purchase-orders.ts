@@ -108,6 +108,8 @@ export const poLines = pgTable(
       .default(0),
     rejectedQty: integer("rejected_qty").notNull().default(0),
     unitCost: numeric("unit_cost", { precision: 12, scale: 2 }).notNull(),
+    listPrice: numeric("list_price", { precision: 12, scale: 2 }),
+    discountChain: varchar("discount_chain", { length: 100 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

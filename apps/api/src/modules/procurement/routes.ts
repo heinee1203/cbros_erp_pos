@@ -437,6 +437,8 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
         productId: body.productId,
         orderedQty: body.orderedQty,
         unitCost: body.unitCost,
+        listPrice: body.listPrice ?? null,
+        discountChain: body.discountChain ?? null,
       })
       .returning();
 
@@ -500,6 +502,8 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
       if (body.orderedQty !== undefined) updates.orderedQty = body.orderedQty;
       if (body.unitCost !== undefined) updates.unitCost = body.unitCost;
       if (body.productId !== undefined) updates.productId = body.productId;
+      if (body.listPrice !== undefined) updates.listPrice = body.listPrice;
+      if (body.discountChain !== undefined) updates.discountChain = body.discountChain;
 
       if (Object.keys(updates).length === 0) {
         return reply.send(line);

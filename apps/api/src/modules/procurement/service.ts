@@ -193,6 +193,8 @@ export async function createPO(
       productId: line.productId,
       orderedQty: line.orderedQty,
       unitCost: line.unitCost,
+      listPrice: line.listPrice ?? null,
+      discountChain: line.discountChain ?? null,
     }));
 
     const insertedLines = await tx
@@ -905,6 +907,8 @@ async function buildPODetail(po: typeof purchaseOrders.$inferSelect) {
       receivedAcceptedQty: poLines.receivedAcceptedQty,
       rejectedQty: poLines.rejectedQty,
       unitCost: poLines.unitCost,
+      listPrice: poLines.listPrice,
+      discountChain: poLines.discountChain,
       createdAt: poLines.createdAt,
       productName: products.name,
       sku: products.sku,

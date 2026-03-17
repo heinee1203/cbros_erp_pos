@@ -57,6 +57,20 @@ const RECEIVABLE_STATES = new Set(["SUBMITTED", "PARTIALLY_RECEIVED"]);
 /** States that allow editing header + lines */
 const EDITABLE_STATES = new Set(["DRAFT", "SUBMITTED", "PARTIALLY_RECEIVED"]);
 
+/** Calculate net cost from list price through a chain of trade discounts */
+function calculateNetCost(listPrice: number, discountChain: string): number {
+  if (!listPrice || listPrice <= 0) return 0;
+  const discounts = discountChain
+    .split(",")
+    .map((s) => parseFloat(s.trim()))
+    .filter((d) => !isNaN(d) && d > 0 && d < 100);
+  let net = listPrice;
+  for (const discount of discounts) {
+    net = net * (1 - discount / 100);
+  }
+  return Math.round(net * 100) / 100;
+}
+
 /* ══════════════════════════════════════════════════════════
  * Purchase Order Detail Page — /procurement/purchase-orders/[poNo]
  *
@@ -149,7 +163,10 @@ function PODetailView({
     productName: string;
     sku: string;
     orderedQty: number;
+    listPrice: string;
+    discountChain: string;
     unitCost: string;
+    isManualCost: boolean;
     receivedAcceptedQty: number;
     rejectedQty: number;
     isNew?: boolean;
@@ -170,7 +187,10 @@ function PODetailView({
         productName: l.productName,
         sku: l.sku,
         orderedQty: l.orderedQty,
+        listPrice: l.listPrice ?? l.unitCost,
+        discountChain: l.discountChain ?? "",
         unitCost: l.unitCost,
+        isManualCost: !l.discountChain,
         receivedAcceptedQty: l.receivedAcceptedQty,
         rejectedQty: l.rejectedQty,
       })),
@@ -191,13 +211,6 @@ function PODetailView({
   const suppliers = suppliersQuery.data?.data ?? [];
   const locations = locationsQuery.data?.data ?? [];
 
-  // Update a line field
-  const updateLine = useCallback((lineId: string, field: keyof EditLine, value: any) => {
-    setEditLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, [field]: value } : l)),
-    );
-  }, []);
-
   // Remove a line
   const removeLine = useCallback((lineId: string, isNew?: boolean) => {
     setEditLines((prev) => prev.filter((l) => l.id !== lineId));
@@ -217,7 +230,10 @@ function PODetailView({
         productName: product.name,
         sku: product.sku,
         orderedQty: 1,
+        listPrice: product.costPrice || "0",
+        discountChain: "",
         unitCost: product.costPrice || "0",
+        isManualCost: false,
         receivedAcceptedQty: 0,
         rejectedQty: 0,
         isNew: true,
@@ -260,6 +276,8 @@ function PODetailView({
               productId: line.productId,
               orderedQty: line.orderedQty,
               unitCost: line.unitCost,
+              listPrice: line.listPrice || null,
+              discountChain: line.discountChain || null,
             }),
             token,
             locationId,
@@ -270,7 +288,9 @@ function PODetailView({
           if (
             original &&
             (original.orderedQty !== line.orderedQty ||
-              original.unitCost !== line.unitCost)
+              original.unitCost !== line.unitCost ||
+              (original.listPrice ?? "") !== line.listPrice ||
+              (original.discountChain ?? "") !== line.discountChain)
           ) {
             await apiFetch(
               `/procurement/purchase-orders/${po.id}/lines/${line.id}`,
@@ -279,6 +299,8 @@ function PODetailView({
                 body: JSON.stringify({
                   orderedQty: line.orderedQty,
                   unitCost: line.unitCost,
+                  listPrice: line.listPrice || null,
+                  discountChain: line.discountChain || null,
                 }),
                 token,
                 locationId,
@@ -550,8 +572,8 @@ function PODetailView({
       {isEditing ? (
         <EditableGrid
           lines={editLines}
+          setEditLines={setEditLines}
           isPartiallyReceived={isPartiallyReceived}
-          onUpdateLine={updateLine}
           onRemoveLine={removeLine}
           onAddLine={addLine}
           grandTotal={editGrandTotal}
@@ -1265,8 +1287,8 @@ function ReceivingGrid({
  * ══════════════════════════════════════════════════════════ */
 function EditableGrid({
   lines,
+  setEditLines,
   isPartiallyReceived,
-  onUpdateLine,
   onRemoveLine,
   onAddLine,
   grandTotal,
@@ -1277,17 +1299,55 @@ function EditableGrid({
     productName: string;
     sku: string;
     orderedQty: number;
+    listPrice: string;
+    discountChain: string;
     unitCost: string;
+    isManualCost: boolean;
     receivedAcceptedQty: number;
     rejectedQty: number;
     isNew?: boolean;
   }>;
+  setEditLines: React.Dispatch<React.SetStateAction<any[]>>;
   isPartiallyReceived: boolean;
-  onUpdateLine: (lineId: string, field: any, value: any) => void;
   onRemoveLine: (lineId: string, isNew?: boolean) => void;
   onAddLine: (product: ProductRow) => void;
   grandTotal: number;
 }) {
+  const updateField = useCallback(
+    (lineId: string, field: string, value: any) => {
+      setEditLines((prev: any[]) =>
+        prev.map((l: any) => {
+          if (l.id !== lineId) return l;
+          if (field === "listPrice") {
+            const newListPrice = value;
+            if (!l.isManualCost && l.discountChain.trim()) {
+              const net = calculateNetCost(parseFloat(newListPrice) || 0, l.discountChain);
+              return { ...l, listPrice: newListPrice, unitCost: String(net) };
+            }
+            return { ...l, listPrice: newListPrice };
+          }
+          if (field === "discountChain") {
+            const newChain = value;
+            const lp = parseFloat(l.listPrice) || 0;
+            if (newChain.trim() && lp > 0) {
+              const net = calculateNetCost(lp, newChain);
+              return { ...l, discountChain: newChain, unitCost: String(net), isManualCost: false };
+            }
+            return { ...l, discountChain: newChain };
+          }
+          if (field === "unitCost") {
+            return { ...l, unitCost: value, isManualCost: true, discountChain: "" };
+          }
+          if (field === "orderedQty") {
+            return { ...l, orderedQty: value };
+          }
+          return { ...l, [field]: value };
+        }),
+      );
+    },
+    [setEditLines],
+  );
+
   return (
     <section>
       <SectionHeader>
@@ -1302,7 +1362,9 @@ function EditableGrid({
             <tr className="border-b border-border bg-muted/50">
               <Th align="left">Item</Th>
               <Th align="right">Qty</Th>
-              <Th align="right">Unit Cost</Th>
+              <Th align="right">List Price</Th>
+              <Th align="right">Discount</Th>
+              <Th align="right">Net Cost</Th>
               <Th align="right">Total</Th>
               <th className="w-10 px-2 py-1.5" />
             </tr>
@@ -1312,6 +1374,7 @@ function EditableGrid({
               const lineTotal = line.orderedQty * (parseFloat(line.unitCost) || 0);
               const isReceived = line.receivedAcceptedQty > 0 || line.rejectedQty > 0;
               const isLocked = isPartiallyReceived && isReceived;
+              const hasDiscount = line.discountChain.trim().length > 0;
 
               return (
                 <tr
@@ -1331,6 +1394,7 @@ function EditableGrid({
                       </div>
                     )}
                   </td>
+                  {/* Qty */}
                   <td className="px-2 py-1.5 text-right">
                     {isLocked ? (
                       <span className="tabular-nums font-medium">
@@ -1342,30 +1406,79 @@ function EditableGrid({
                         min={1}
                         value={line.orderedQty}
                         onChange={(e) =>
-                          onUpdateLine(line.id, "orderedQty", parseInt(e.target.value) || 1)
+                          updateField(line.id, "orderedQty", parseInt(e.target.value) || 1)
                         }
                         className="h-7 w-20 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
                       />
                     )}
                   </td>
+                  {/* List Price */}
                   <td className="px-2 py-1.5 text-right">
                     {isLocked ? (
                       <span className="tabular-nums text-muted-foreground">
-                        {line.unitCost}
+                        {line.listPrice}
                       </span>
                     ) : (
                       <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={line.unitCost}
+                        type="text"
+                        value={line.listPrice}
                         onChange={(e) =>
-                          onUpdateLine(line.id, "unitCost", e.target.value)
+                          updateField(line.id, "listPrice", e.target.value)
                         }
                         className="h-7 w-24 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
                       />
                     )}
                   </td>
+                  {/* Discount Chain */}
+                  <td className="px-2 py-1.5 text-right">
+                    {isLocked ? (
+                      <span className="tabular-nums text-muted-foreground">
+                        {line.discountChain
+                          ? line.discountChain.split(",").map((s) => s.trim()).join("/")
+                          : "\u2014"}
+                      </span>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="20, 5, 3"
+                        value={line.discountChain}
+                        onChange={(e) =>
+                          updateField(line.id, "discountChain", e.target.value)
+                        }
+                        className="h-7 w-24 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+                      />
+                    )}
+                  </td>
+                  {/* Net Cost */}
+                  <td className="px-2 py-1.5 text-right">
+                    {isLocked ? (
+                      <span className="tabular-nums text-muted-foreground">
+                        {line.unitCost}
+                      </span>
+                    ) : hasDiscount ? (
+                      <div>
+                        <span className="inline-block h-7 w-24 rounded bg-muted/30 px-2 leading-7 text-right text-[12px] tabular-nums text-muted-foreground">
+                          {line.unitCost}
+                        </span>
+                        <div className="text-[9px] text-muted-foreground">auto</div>
+                      </div>
+                    ) : (
+                      <div>
+                        <input
+                          type="text"
+                          value={line.unitCost}
+                          onChange={(e) =>
+                            updateField(line.id, "unitCost", e.target.value)
+                          }
+                          className="h-7 w-24 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+                        />
+                        {line.isManualCost && (
+                          <div className="text-[9px] text-muted-foreground">manual</div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  {/* Total */}
                   <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
                     {lineTotal.toLocaleString("en-PH", {
                       minimumFractionDigits: 2,
@@ -1389,7 +1502,7 @@ function EditableGrid({
           </tbody>
           <tfoot>
             <tr className="border-t border-border bg-muted/30">
-              <td colSpan={3} className="px-3 py-2">
+              <td colSpan={5} className="px-3 py-2">
                 {!isPartiallyReceived && (
                   <ProductSearchInline onSelect={onAddLine} />
                 )}
@@ -1509,10 +1622,12 @@ function ReadOnlyGrid({
               <Th align="left">Item</Th>
               <Th align="left">Mnemonic</Th>
               <Th align="right">Ordered</Th>
+              <Th align="right">List Price</Th>
+              <Th align="right">Discount</Th>
+              <Th align="right">Net Cost</Th>
               <Th align="right">Accepted</Th>
               <Th align="right">Rejected</Th>
               <Th align="right">Remaining</Th>
-              <Th align="right">Unit Cost</Th>
             </tr>
           </thead>
           <tbody>
@@ -1543,6 +1658,17 @@ function ReadOnlyGrid({
                   <td className="px-3 py-1.5 text-right tabular-nums font-medium">
                     {line.orderedQty}
                   </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                    {line.listPrice ? `\u20B1${line.listPrice}` : "\u2014"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                    {line.discountChain
+                      ? line.discountChain.split(",").map((s) => s.trim()).join("/")
+                      : "\u2014"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                    {line.unitCost}
+                  </td>
                   <td className="px-3 py-1.5 text-right tabular-nums text-success font-medium">
                     {line.receivedAcceptedQty}
                   </td>
@@ -1555,9 +1681,6 @@ function ReadOnlyGrid({
                     ) : (
                       <span className="text-success">0</span>
                     )}
-                  </td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
-                    {line.unitCost}
                   </td>
                 </tr>
               );
