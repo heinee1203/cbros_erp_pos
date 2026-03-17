@@ -1768,6 +1768,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const subcategoryMap = new Map(allSubcategories.map((s) => [s.name.toLowerCase(), s.id]));
     const brandMap = new Map(allBrands.map((b) => [b.name.toLowerCase(), b.id]));
 
+    // 2b. Load location name -> id map
+    const orgLocations = await db
+      .select({ id: locations.id, name: locations.name })
+      .from(locations)
+      .where(and(eq(locations.orgId, orgId), eq(locations.isActive, true)));
+    const locationNameMap = new Map(orgLocations.map((l) => [l.name.toLowerCase(), l.id]));
+
     // 3. Process rows in a transaction
     let created = 0;
     let updated = 0;
@@ -1794,6 +1801,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
               if (row.barcode !== undefined) updateValues.barcode = row.barcode;
               if (row.oemNumber !== undefined) updateValues.oemNumber = row.oemNumber;
               if (row.isVariablePrice !== undefined) updateValues.isVariablePrice = row.isVariablePrice;
+              if (row.description !== undefined) updateValues.description = row.description;
               if (familyId) updateValues.familyId = familyId;
               if (categoryId) updateValues.categoryId = categoryId;
               if (subcategoryId) updateValues.subcategoryId = subcategoryId;
@@ -1804,18 +1812,35 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                 .set(updateValues)
                 .where(and(eq(products.id, existingId), eq(products.orgId, orgId)));
 
-              // Update reorderPoint in inventory if provided
-              if (row.reorderPoint !== undefined && locationId) {
-                await tx
-                  .update(inventory)
-                  .set({ reorderPoint: row.reorderPoint })
-                  .where(
-                    and(
-                      eq(inventory.productId, existingId),
-                      eq(inventory.orgId, orgId),
-                      eq(inventory.locationId, locationId),
-                    ),
-                  );
+              // Upsert per-location inventory
+              if (row.locations && row.locations.length > 0) {
+                for (const loc of row.locations) {
+                  const locId = locationNameMap.get(loc.locationName.toLowerCase());
+                  if (!locId) continue;
+                  const [existingInv] = await tx
+                    .select({ id: inventory.id })
+                    .from(inventory)
+                    .where(and(eq(inventory.productId, existingId), eq(inventory.locationId, locId)))
+                    .limit(1);
+                  if (existingInv) {
+                    await tx.update(inventory).set({
+                      stockLevel: loc.inStock,
+                      reorderPoint: loc.lowStock,
+                      optimalStock: loc.optimalStock,
+                      availableForSale: loc.availableForSale,
+                    }).where(eq(inventory.id, existingInv.id));
+                  } else {
+                    await tx.insert(inventory).values({
+                      orgId,
+                      productId: existingId,
+                      locationId: locId,
+                      stockLevel: loc.inStock,
+                      reorderPoint: loc.lowStock,
+                      optimalStock: loc.optimalStock,
+                      availableForSale: loc.availableForSale,
+                    });
+                  }
+                }
               }
 
               updated++;
@@ -1838,6 +1863,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                   barcode,
                   oemNumber: row.oemNumber || null,
                   isVariablePrice: row.isVariablePrice ?? false,
+                  description: row.description || null,
                   familyId,
                   categoryId,
                   subcategoryId,
@@ -1852,8 +1878,27 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                   productId: newProduct.id,
                   locationId,
                   stockLevel: 0,
-                  reorderPoint: row.reorderPoint ?? 10,
+                  reorderPoint: 10,
                 });
+              }
+
+              // Upsert per-location inventory from import
+              if (row.locations && row.locations.length > 0) {
+                for (const loc of row.locations) {
+                  const locId = locationNameMap.get(loc.locationName.toLowerCase());
+                  if (!locId) continue;
+                  // Skip if already created above for this location
+                  if (locId === locationId) continue;
+                  await tx.insert(inventory).values({
+                    orgId,
+                    productId: newProduct.id,
+                    locationId: locId,
+                    stockLevel: loc.inStock,
+                    reorderPoint: loc.lowStock,
+                    optimalStock: loc.optimalStock,
+                    availableForSale: loc.availableForSale,
+                  });
+                }
               }
 
               // Track new SKU so subsequent duplicate rows in the same batch resolve to update

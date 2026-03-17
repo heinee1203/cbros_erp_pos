@@ -166,9 +166,19 @@ export const updateProductSchema = z.object({
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
 // ── Product: Bulk Import ──
+const importLocationSchema = z.object({
+  locationName: z.string().min(1).max(255),
+  availableForSale: z.boolean().default(true),
+  price: z.string().nullable().optional(),
+  inStock: z.coerce.number().int().min(0).default(0),
+  lowStock: z.coerce.number().int().min(0).default(0),
+  optimalStock: z.coerce.number().int().min(0).default(0),
+});
+
 const importRowSchema = z.object({
   name: z.string().min(1, "Name is required").max(500),
   sku: z.string().min(1, "SKU is required").max(50),
+  handle: z.string().max(100).optional(),
   barcode: z.string().max(50).optional(),
   oemNumber: z.string().max(100).optional(),
   family: z.string().max(255).optional(),
@@ -177,8 +187,10 @@ const importRowSchema = z.object({
   brand: z.string().max(255).optional(),
   unitPrice: z.string().optional(),
   costPrice: z.string().optional(),
-  reorderPoint: z.coerce.number().int().min(0).optional(),
+  description: z.string().max(2000).optional(),
   isVariablePrice: z.boolean().optional(),
+  trackStock: z.boolean().optional(),
+  locations: z.array(importLocationSchema).optional(),
 });
 
 export const bulkImportSchema = z.object({
