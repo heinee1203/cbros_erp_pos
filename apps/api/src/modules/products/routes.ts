@@ -551,6 +551,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           categoryId: parsed.data.categoryId || null,
           subcategoryId: parsed.data.subcategoryId || null,
           brandId: parsed.data.brandId || null,
+          description: parsed.data.description || null,
         })
         .returning();
 

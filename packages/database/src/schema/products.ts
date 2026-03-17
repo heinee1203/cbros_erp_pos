@@ -63,6 +63,8 @@ export const products = pgTable(
     brandId: uuid("brand_id").references(() => brands.id, { onDelete: "set null" }),
     /** OEM part number — manufacturer's reference code for cross-referencing */
     oemNumber: varchar("oem_number", { length: 100 }),
+    /** Product description — notes, specs, customer-facing detail */
+    description: varchar("description", { length: 2000 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

@@ -158,6 +158,7 @@ export const updateProductSchema = z.object({
   brandId: z.string().uuid().nullable().optional(),
   isParent: z.boolean().optional(),
   parentProductId: z.string().uuid().nullable().optional(),
+  description: z.string().max(2000).nullable().optional(),
   reorderPoint: z.number().int().min(0).optional(),
   // Add new variants to an existing parent product
   newVariants: z.array(variantItemSchema).optional(),
