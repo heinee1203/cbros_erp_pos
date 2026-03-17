@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Search,
   Plus,
@@ -11,7 +11,9 @@ import {
   X,
   Loader2,
   Layers,
+  FileUp,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useProducts, useDeleteProduct, useProductFamilies, type ProductRow, type ProductsResponse, type SortField, type SortDir } from "@/hooks/use-products";
 import { apiFetch } from "@/lib/api";
 import { useCategories } from "@/hooks/use-categories";
@@ -58,6 +60,19 @@ export default function InventoryPage() {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+
+  /* Import modal state */
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<Array<{
+    row: number; sku: string; name: string; action: "create" | "update" | "error"; error?: string;
+    raw: Record<string, string>;
+  }>>([]);
+  const [importStats, setImportStats] = useState<{ created: number; updated: number; errors: number } | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importStep, setImportStep] = useState<"upload" | "preview" | "done">("upload");
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
 
   /* View mode — independent of sort */
   const [viewMode, setViewMode] = useState<"flat" | "nested">("flat");
@@ -243,6 +258,182 @@ export default function InventoryPage() {
     const selected = products.filter((p) => selectedIds.has(p.id));
     downloadCSV(buildCSV(selected));
   }, [products, selectedIds, buildCSV, downloadCSV]);
+
+  /* ── CSV Import helpers ── */
+  const handleDownloadTemplate = useCallback(() => {
+    const headers = ["Name","SKU","Barcode","OEM Number","Family","Category","Sub-category","Brand","Sell Price","Cost Price","Reorder Point","Variable Price"];
+    const sampleRow = ["AKEBONO Brake Pad Front","","4901onal","OEM-12345","Brake System","Brake Pads","Front Pads","AKEBONO","1250.00","850.00","5","No"];
+    const csv = "\uFEFF" + headers.join(",") + "\n" + sampleRow.join(",") + "\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "apex-item-import-template.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const parseImportCSV = useCallback((text: string): Record<string, string>[] => {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
+    if (lines.length < 2) return [];
+
+    // Parse a CSV line handling quoted fields
+    const parseLine = (line: string): string[] => {
+      const cells: string[] = [];
+      let current = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+          if (ch === '"' && line[i + 1] === '"') {
+            current += '"';
+            i++;
+          } else if (ch === '"') {
+            inQuotes = false;
+          } else {
+            current += ch;
+          }
+        } else {
+          if (ch === '"') {
+            inQuotes = true;
+          } else if (ch === ",") {
+            cells.push(current.trim());
+            current = "";
+          } else {
+            current += ch;
+          }
+        }
+      }
+      cells.push(current.trim());
+      return cells;
+    };
+
+    const headerCells = parseLine(lines[0]);
+    // Normalize header names: lowercase, strip non-alphanumeric
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const headers = headerCells.map(normalize);
+
+    const rows: Record<string, string>[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = parseLine(lines[i]);
+      if (cells.every((c) => c === "")) continue;
+      const row: Record<string, string> = {};
+      headers.forEach((h, idx) => {
+        row[h] = cells[idx] ?? "";
+      });
+      rows.push(row);
+    }
+    return rows;
+  }, []);
+
+  const mapCSVRowToPayload = useCallback((row: Record<string, string>) => {
+    const get = (...keys: string[]) => {
+      for (const k of keys) {
+        if (row[k] !== undefined && row[k] !== "") return row[k];
+      }
+      return "";
+    };
+    return {
+      name: get("name"),
+      sku: get("sku"),
+      barcode: get("barcode"),
+      oemNumber: get("oemnumber", "oem"),
+      family: get("family"),
+      category: get("category"),
+      subcategory: get("subcategory"),
+      brand: get("brand"),
+      unitPrice: get("sellprice", "unitprice", "sell"),
+      costPrice: get("costprice", "cost"),
+      reorderPoint: parseInt(get("reorderpoint", "reorder") || "0", 10) || 0,
+      isVariablePrice: ["yes", "true", "1"].includes(get("variableprice", "variable").toLowerCase()),
+    };
+  }, []);
+
+  const handleImportFileUpload = useCallback(async (file: File) => {
+    setImportFile(file);
+    setImportLoading(true);
+    try {
+      const text = await file.text();
+      const parsed = parseImportCSV(text);
+      if (parsed.length === 0) {
+        setImportPreview([{ row: 0, sku: "", name: "", action: "error", error: "No data rows found", raw: {} }]);
+        setImportStats({ created: 0, updated: 0, errors: 1 });
+        setImportStep("preview");
+        return;
+      }
+      const payload = parsed.map(mapCSVRowToPayload);
+      const resp = await apiFetch<{
+        dryRun: boolean;
+        created: number;
+        updated: number;
+        errors: Array<{ row: number; sku: string; error: string }>;
+        results: Array<{ row: number; sku: string; name: string; action: "create" | "update" }>;
+      }>("/products/import", {
+        method: "POST",
+        token,
+        locationId: apiLocationId,
+        body: JSON.stringify({ dryRun: true, rows: payload }),
+      });
+
+      const preview: typeof importPreview = [];
+      for (const r of resp.results) {
+        preview.push({ row: r.row, sku: r.sku, name: r.name, action: r.action, raw: parsed[r.row] ?? {} });
+      }
+      for (const e of resp.errors) {
+        preview.push({ row: e.row, sku: e.sku, name: parsed[e.row]?.name ?? "", action: "error", error: e.error, raw: parsed[e.row] ?? {} });
+      }
+      preview.sort((a, b) => a.row - b.row);
+      setImportPreview(preview);
+      setImportStats({ created: resp.created, updated: resp.updated, errors: resp.errors.length });
+      setImportStep("preview");
+    } catch (err) {
+      setImportPreview([{ row: 0, sku: "", name: "", action: "error", error: err instanceof Error ? err.message : "Import failed", raw: {} }]);
+      setImportStats({ created: 0, updated: 0, errors: 1 });
+      setImportStep("preview");
+    } finally {
+      setImportLoading(false);
+    }
+  }, [parseImportCSV, mapCSVRowToPayload, token, apiLocationId]);
+
+  const handleImportExecute = useCallback(async () => {
+    if (!importFile) return;
+    setImportLoading(true);
+    try {
+      const text = await importFile.text();
+      const parsed = parseImportCSV(text);
+      const payload = parsed.map(mapCSVRowToPayload);
+      const resp = await apiFetch<{
+        dryRun: boolean;
+        created: number;
+        updated: number;
+        errors: Array<{ row: number; sku: string; error: string }>;
+        results: Array<{ row: number; sku: string; name: string; action: "create" | "update" }>;
+      }>("/products/import", {
+        method: "POST",
+        token,
+        locationId: apiLocationId,
+        body: JSON.stringify({ dryRun: false, rows: payload }),
+      });
+      setImportStats({ created: resp.created, updated: resp.updated, errors: resp.errors.length });
+      setImportStep("done");
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    } catch (err) {
+      setImportStats((prev) => prev ? { ...prev, errors: prev.errors + 1 } : { created: 0, updated: 0, errors: 1 });
+    } finally {
+      setImportLoading(false);
+    }
+  }, [importFile, parseImportCSV, mapCSVRowToPayload, token, apiLocationId, queryClient]);
+
+  const resetImport = useCallback(() => {
+    setImportFile(null);
+    setImportPreview([]);
+    setImportStats(null);
+    setImportLoading(false);
+    setImportStep("upload");
+    if (importFileRef.current) importFileRef.current.value = "";
+  }, []);
 
   /* Bulk selection — parent checkbox selects all variants */
   const selectableIds = useMemo(() => products.map((p) => p.id), [products]);
@@ -433,7 +624,7 @@ export default function InventoryPage() {
             <Layers size={13} />
             {viewMode === "nested" ? "List" : "Group"}
           </button>
-          <button className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
+          <button onClick={() => { resetImport(); setShowImportModal(true); }} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
             <Upload size={13} />
             Import
           </button>
@@ -743,6 +934,149 @@ export default function InventoryPage() {
           isAllLocations={isAllLocations}
           onClose={() => setShowQuickAdd(false)}
         />
+      )}
+
+      {/* -- Import Modal -- */}
+      {showImportModal && (
+        <ModalShell title="Import Items" onClose={() => setShowImportModal(false)} wide>
+          {importStep === "upload" && (
+            <div className="space-y-4">
+              <button
+                onClick={handleDownloadTemplate}
+                className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-[12px] font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
+              >
+                <Download size={14} />
+                Download CSV Template
+              </button>
+
+              <div
+                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); const f = e.dataTransfer.files[0]; if (f) handleImportFileUpload(f); }}
+                onClick={() => importFileRef.current?.click()}
+                className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/40 hover:bg-muted/50"
+              >
+                <FileUp size={28} className="text-muted-foreground" />
+                <p className="text-[13px] font-medium text-foreground">
+                  {importLoading ? "Processing..." : "Drop CSV file here or click to browse"}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  {importFile ? importFile.name : "Accepts .csv files"}
+                </p>
+                {importLoading && <Loader2 size={16} className="animate-spin text-muted-foreground" />}
+              </div>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".csv"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportFileUpload(f); }}
+              />
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                <strong>Note:</strong> Items are matched by SKU. Rows with an existing SKU will update that item; rows without a matching SKU create new items.
+              </div>
+            </div>
+          )}
+
+          {importStep === "preview" && (
+            <div className="space-y-4">
+              {importStats && (
+                <div className="flex items-center gap-2">
+                  {importStats.created > 0 && (
+                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                      {importStats.created} new
+                    </span>
+                  )}
+                  {importStats.updated > 0 && (
+                    <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[11px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                      {importStats.updated} updates
+                    </span>
+                  )}
+                  {importStats.errors > 0 && (
+                    <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-[11px] font-medium text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                      {importStats.errors} errors
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <div className="max-h-64 overflow-auto rounded-lg border border-border">
+                <table className="w-full text-[11px]">
+                  <thead className="sticky top-0 border-b border-border bg-muted/90">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Name</th>
+                      <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">SKU</th>
+                      <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Sell</th>
+                      <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Cost</th>
+                      <th className="px-2 py-1.5 text-center font-medium text-muted-foreground">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/60">
+                    {importPreview.map((item, idx) => (
+                      <tr key={idx} className={item.action === "error" ? "bg-red-50 dark:bg-red-950/20" : ""}>
+                        <td className="max-w-[180px] truncate px-2 py-1.5 text-foreground">{item.name || item.raw?.name || "-"}</td>
+                        <td className="px-2 py-1.5 font-mono text-muted-foreground">{item.sku || "-"}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{item.raw?.sellprice || item.raw?.unitprice || "-"}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{item.raw?.costprice || item.raw?.cost || "-"}</td>
+                        <td className="px-2 py-1.5 text-center">
+                          {item.action === "create" && (
+                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">New</span>
+                          )}
+                          {item.action === "update" && (
+                            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">Update</span>
+                          )}
+                          {item.action === "error" && (
+                            <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-950/40 dark:text-red-300" title={item.error}>Error</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => { resetImport(); }}
+                  className="rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleImportExecute}
+                  disabled={importLoading || (importStats?.created === 0 && importStats?.updated === 0)}
+                  className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98] disabled:opacity-50"
+                >
+                  {importLoading && <Loader2 size={13} className="animate-spin" />}
+                  Import {importStats ? importStats.created + importStats.updated : 0} Items
+                </button>
+              </div>
+            </div>
+          )}
+
+          {importStep === "done" && (
+            <div className="space-y-4 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-950/40">
+                <svg className="h-6 w-6 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-[14px] font-semibold text-foreground">Import Complete</p>
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  {importStats?.created ?? 0} created, {importStats?.updated ?? 0} updated
+                  {(importStats?.errors ?? 0) > 0 && `, ${importStats!.errors} errors`}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="rounded-lg bg-primary px-4 py-1.5 text-[12px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98]"
+              >
+                Done
+              </button>
+            </div>
+          )}
+        </ModalShell>
       )}
     </div>
   );
