@@ -12,7 +12,8 @@ import {
   Loader2,
   Layers,
 } from "lucide-react";
-import { useProducts, useDeleteProduct, useProductFamilies, type ProductRow, type SortField, type SortDir } from "@/hooks/use-products";
+import { useProducts, useDeleteProduct, useProductFamilies, type ProductRow, type ProductsResponse, type SortField, type SortDir } from "@/hooks/use-products";
+import { apiFetch } from "@/lib/api";
 import { useCategories } from "@/hooks/use-categories";
 import { useSubcategories } from "@/hooks/use-subcategories";
 import { useBrands } from "@/hooks/use-brands";
@@ -157,6 +158,91 @@ export default function InventoryPage() {
     setSearchQuery("");
     setDebouncedSearch("");
   }, []);
+
+  /* ── CSV Export helpers ── */
+  const escapeCSVCell = useCallback((value: string): string => {
+    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }, []);
+
+  const buildCSV = useCallback((rows: ProductRow[]): string => {
+    const headers = [
+      "Name", "SKU", "Barcode", "OEM Number", "Family", "Category",
+      "Sub-category", "Brand", "Sell Price", "Cost Price", "Margin %",
+      "Stock", "Reorder Point", "Variable Price",
+    ];
+    const lines = [headers.map(escapeCSVCell).join(",")];
+    for (const r of rows) {
+      const sell = parseFloat(r.unitPrice) || 0;
+      const cost = parseFloat(r.costPrice) || 0;
+      const margin = getMarginPercent(sell, cost);
+      const cells = [
+        r.name ?? "",
+        r.sku ?? "",
+        r.barcode ?? "",
+        r.oemNumber ?? "",
+        r.familyName ?? "",
+        r.category ?? "",
+        r.subCategoryName ?? r.subcategoryName ?? "",
+        r.brandName ?? "",
+        r.unitPrice ?? "0",
+        r.costPrice ?? "0",
+        margin.display,
+        String(r.stockLevel ?? 0),
+        String(r.reorderPoint ?? 0),
+        r.isVariablePrice ? "Yes" : "No",
+      ];
+      lines.push(cells.map(escapeCSVCell).join(","));
+    }
+    return "\uFEFF" + lines.join("\n");
+  }, [escapeCSVCell]);
+
+  const downloadCSV = useCallback((csv: string) => {
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const date = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `apex-items-${date}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleExport = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      params.set("page", "1");
+      params.set("limit", "50000");
+      params.set("sortBy", sortBy);
+      params.set("sortDir", sortDir);
+      if (debouncedSearch && debouncedSearch.length >= 2) params.set("search", debouncedSearch);
+      if (familyFilter) params.set("familyId", familyFilter);
+      if (categoryFilter) params.set("subCategoryId", categoryFilter);
+      if (subCategoryFilter) params.set("subcategoryId", subCategoryFilter);
+      if (stockStatusFilter) params.set("stockStatus", stockStatusFilter);
+      if (brandFilter) params.set("brandId", brandFilter);
+      params.set("parentOnly", "true");
+      if (isAllLocations) params.set("allLocations", "true");
+
+      const resp = await apiFetch<ProductsResponse>(
+        `/products?${params.toString()}`,
+        { token, locationId: apiLocationId },
+      );
+      downloadCSV(buildCSV(resp.data));
+    } catch {
+      // Fallback: export current page
+      downloadCSV(buildCSV(products));
+    }
+  }, [sortBy, sortDir, debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, stockStatusFilter, brandFilter, isAllLocations, token, apiLocationId, products, buildCSV, downloadCSV]);
+
+  const handleExportSelected = useCallback(() => {
+    const selected = products.filter((p) => selectedIds.has(p.id));
+    downloadCSV(buildCSV(selected));
+  }, [products, selectedIds, buildCSV, downloadCSV]);
 
   /* Bulk selection — parent checkbox selects all variants */
   const selectableIds = useMemo(() => products.map((p) => p.id), [products]);
@@ -351,7 +437,7 @@ export default function InventoryPage() {
             <Upload size={13} />
             Import
           </button>
-          <button className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
+          <button onClick={handleExport} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
             <Download size={13} />
             Export
           </button>
@@ -478,7 +564,7 @@ export default function InventoryPage() {
             <Trash2 size={12} />
             {deleteMut.isPending ? "Deleting\u2026" : "Delete"}
           </button>
-          <button className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors">
+          <button onClick={handleExportSelected} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors">
             <Download size={12} />
             Export
           </button>
