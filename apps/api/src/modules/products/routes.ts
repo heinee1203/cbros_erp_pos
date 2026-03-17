@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { db } from "@apex/database";
 import { products, inventory, productFamilies, vehicleCompatibility, categories, productSubcategories, brands } from "@apex/database/schema";
 import { eq, and, ilike, sql, asc, desc, inArray, type SQL } from "drizzle-orm";
-import { createProductSchema, updateProductSchema, addVehicleSchema, updateVehicleSchema, generateEan13, isValidBarcode, type VariantItem } from "@apex/types";
+import { createProductSchema, updateProductSchema, addVehicleSchema, updateVehicleSchema, bulkImportSchema, generateEan13, isValidBarcode, type VariantItem } from "@apex/types";
 
 const MANAGE_ROLES = ["ADMIN", "MANAGER"];
 
@@ -1589,6 +1589,163 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
     await db.delete(vehicleCompatibility).where(eq(vehicleCompatibility.id, id));
     return reply.send({ success: true });
+  });
+
+  // ── Bulk Import ──────────────────────────────────────────────────────
+  app.post("/import", async (request, reply) => {
+    const userRole = (request.user as any)?.role;
+    if (!MANAGE_ROLES.includes(userRole)) {
+      return reply
+        .status(403)
+        .send({ error: "Only ADMIN or MANAGER can import products" });
+    }
+
+    const parsed = bulkImportSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Invalid input",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const { orgId, locationId } = request.storeContext!;
+    const { dryRun, rows } = parsed.data;
+
+    // 1. Load all existing SKUs for this org → Map<lowercase_sku, productId>
+    const existingProducts = await db
+      .select({ id: products.id, sku: products.sku })
+      .from(products)
+      .where(eq(products.orgId, orgId));
+    const skuMap = new Map<string, string>();
+    for (const p of existingProducts) {
+      skuMap.set(p.sku.toLowerCase(), p.id);
+    }
+
+    // 2. Load taxonomy lookups → Map<lowercase_name, id>
+    const [allFamilies, allCategories, allSubcategories, allBrands] = await Promise.all([
+      db.select({ id: productFamilies.id, name: productFamilies.name }).from(productFamilies).where(eq(productFamilies.orgId, orgId)),
+      db.select({ id: categories.id, name: categories.name }).from(categories).where(eq(categories.orgId, orgId)),
+      db.select({ id: productSubcategories.id, name: productSubcategories.name }).from(productSubcategories).where(eq(productSubcategories.orgId, orgId)),
+      db.select({ id: brands.id, name: brands.name }).from(brands).where(eq(brands.orgId, orgId)),
+    ]);
+
+    const familyMap = new Map(allFamilies.map((f) => [f.name.toLowerCase(), f.id]));
+    const categoryMap = new Map(allCategories.map((c) => [c.name.toLowerCase(), c.id]));
+    const subcategoryMap = new Map(allSubcategories.map((s) => [s.name.toLowerCase(), s.id]));
+    const brandMap = new Map(allBrands.map((b) => [b.name.toLowerCase(), b.id]));
+
+    // 3. Process rows in a transaction
+    let created = 0;
+    let updated = 0;
+    const errors: Array<{ row: number; sku: string; error: string }> = [];
+    const results: Array<{ row: number; sku: string; action: "created" | "updated" | "error"; productId?: string }> = [];
+
+    try {
+      await db.transaction(async (tx) => {
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          try {
+            const familyId = row.family ? familyMap.get(row.family.toLowerCase()) ?? null : null;
+            const categoryId = row.category ? categoryMap.get(row.category.toLowerCase()) ?? null : null;
+            const subcategoryId = row.subcategory ? subcategoryMap.get(row.subcategory.toLowerCase()) ?? null : null;
+            const brandId = row.brand ? brandMap.get(row.brand.toLowerCase()) ?? null : null;
+
+            const existingId = skuMap.get(row.sku.toLowerCase());
+
+            if (existingId) {
+              // ── UPDATE existing product ──
+              const updateValues: Record<string, any> = { name: row.name };
+              if (row.unitPrice !== undefined) updateValues.unitPrice = row.unitPrice;
+              if (row.costPrice !== undefined) updateValues.costPrice = row.costPrice;
+              if (row.barcode !== undefined) updateValues.barcode = row.barcode;
+              if (row.oemNumber !== undefined) updateValues.oemNumber = row.oemNumber;
+              if (row.isVariablePrice !== undefined) updateValues.isVariablePrice = row.isVariablePrice;
+              if (familyId) updateValues.familyId = familyId;
+              if (categoryId) updateValues.categoryId = categoryId;
+              if (subcategoryId) updateValues.subcategoryId = subcategoryId;
+              if (brandId) updateValues.brandId = brandId;
+
+              await tx
+                .update(products)
+                .set(updateValues)
+                .where(and(eq(products.id, existingId), eq(products.orgId, orgId)));
+
+              // Update reorderPoint in inventory if provided
+              if (row.reorderPoint !== undefined && locationId) {
+                await tx
+                  .update(inventory)
+                  .set({ reorderPoint: row.reorderPoint })
+                  .where(
+                    and(
+                      eq(inventory.productId, existingId),
+                      eq(inventory.orgId, orgId),
+                      eq(inventory.locationId, locationId),
+                    ),
+                  );
+              }
+
+              updated++;
+              results.push({ row: i + 1, sku: row.sku, action: "updated", productId: existingId });
+            } else {
+              // ── CREATE new product ──
+              const mnemonicSku = await generateUniqueMnemonicSku(orgId, row.name, tx as any);
+              const barcode = row.barcode || generateEan13();
+
+              const [newProduct] = await tx
+                .insert(products)
+                .values({
+                  orgId,
+                  name: row.name,
+                  sku: row.sku,
+                  mnemonicSku,
+                  category: "HARD_PARTS" as any,
+                  unitPrice: row.unitPrice || "0.00",
+                  costPrice: row.costPrice || "0.00",
+                  barcode,
+                  oemNumber: row.oemNumber || null,
+                  isVariablePrice: row.isVariablePrice ?? false,
+                  familyId,
+                  categoryId,
+                  subcategoryId,
+                  brandId,
+                })
+                .returning();
+
+              // Create inventory row at current location
+              if (locationId) {
+                await tx.insert(inventory).values({
+                  orgId,
+                  productId: newProduct.id,
+                  locationId,
+                  stockLevel: 0,
+                  reorderPoint: row.reorderPoint ?? 10,
+                });
+              }
+
+              // Track new SKU so subsequent duplicate rows in the same batch resolve to update
+              skuMap.set(row.sku.toLowerCase(), newProduct.id);
+
+              created++;
+              results.push({ row: i + 1, sku: row.sku, action: "created", productId: newProduct.id });
+            }
+          } catch (rowErr: any) {
+            errors.push({ row: i + 1, sku: row.sku, error: rowErr.message ?? String(rowErr) });
+            results.push({ row: i + 1, sku: row.sku, action: "error" });
+          }
+        }
+
+        // Dry-run: rollback the transaction but keep the preview data
+        if (dryRun) {
+          throw new Error("__DRY_RUN_ROLLBACK__");
+        }
+      });
+    } catch (err: any) {
+      if (err.message !== "__DRY_RUN_ROLLBACK__") {
+        throw err; // re-throw real errors
+      }
+    }
+
+    return reply.send({ dryRun, created, updated, errors, results });
   });
 };
 

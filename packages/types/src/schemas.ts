@@ -164,6 +164,29 @@ export const updateProductSchema = z.object({
 });
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
+// ── Product: Bulk Import ──
+const importRowSchema = z.object({
+  name: z.string().min(1, "Name is required").max(500),
+  sku: z.string().min(1, "SKU is required").max(50),
+  barcode: z.string().max(50).optional(),
+  oemNumber: z.string().max(100).optional(),
+  family: z.string().max(255).optional(),
+  category: z.string().max(255).optional(),
+  subcategory: z.string().max(255).optional(),
+  brand: z.string().max(255).optional(),
+  unitPrice: z.string().optional(),
+  costPrice: z.string().optional(),
+  reorderPoint: z.coerce.number().int().min(0).optional(),
+  isVariablePrice: z.boolean().optional(),
+});
+
+export const bulkImportSchema = z.object({
+  dryRun: z.boolean().default(false),
+  rows: z.array(importRowSchema).min(1).max(5000),
+});
+export type BulkImportInput = z.infer<typeof bulkImportSchema>;
+export type ImportRow = z.infer<typeof importRowSchema>;
+
 // ── Product Family ──
 export const productFamilySchema = z.object({
   name: z.string().min(1).max(255),
