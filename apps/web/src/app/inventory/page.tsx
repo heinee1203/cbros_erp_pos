@@ -14,12 +14,13 @@ import {
   FileUp,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useProducts, useDeleteProduct, useProductFamilies, type ProductRow, type ProductsResponse, type SortField, type SortDir } from "@/hooks/use-products";
+import { useProducts, useDeleteProduct, useProductFamilies, type ProductRow, type SortField, type SortDir } from "@/hooks/use-products";
 import { apiFetch } from "@/lib/api";
 import { useCategories } from "@/hooks/use-categories";
 import { useSubcategories } from "@/hooks/use-subcategories";
 import { useBrands } from "@/hooks/use-brands";
 import { useAuth, ALL_LOCATIONS } from "@/app/auth-context";
+import { useLocations, type LocationRow } from "@/hooks/use-locations";
 import { useConfirm } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { DrillDownView } from "./drill-down";
@@ -31,13 +32,50 @@ import { TransferModal } from "./components/transfer-modal";
 import { SearchableSelect } from "./components/searchable-select";
 import { ModalShell } from "./components/modal-shell";
 import { EmptyState } from "./components/empty-state";
-import { PAGE_SIZES, DEFAULT_PAGE_SIZE, getStockStatus, getMarginPercent, formatPrice, getVariantDescriptor, type StockStatus } from "./lib/inventory-utils";
+import { PAGE_SIZES, DEFAULT_PAGE_SIZE, getStockStatus, formatPrice, getVariantDescriptor, type StockStatus } from "./lib/inventory-utils";
+
+interface ExportProduct {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  oemNumber: string | null;
+  description: string | null;
+  unitPrice: string;
+  costPrice: string;
+  isVariablePrice: boolean;
+  isParent: boolean;
+  parentProductId: string | null;
+  handle: string;
+  familyName: string | null;
+  categoryName: string | null;
+  subcategoryName: string | null;
+  brandName: string | null;
+  locations: Array<{
+    locationId: string;
+    locationName: string;
+    availableForSale: boolean;
+    stockLevel: number;
+    reorderPoint: number;
+    optimalStock: number;
+  }>;
+}
+
+interface ExportResponse {
+  data: ExportProduct[];
+  locations: Array<{ id: string; name: string }>;
+}
 
 /* ─────────────────────────────────────────────
  * Page Root
  * ───────────────────────────────────────────── */
 export default function InventoryPage() {
   const { token, locationId, apiLocationId, user } = useAuth();
+
+  const locationsQuery = useLocations(token);
+  const orgLocations = useMemo(() => {
+    return (locationsQuery.data?.data ?? []).filter((l: LocationRow) => l.isActive);
+  }, [locationsQuery.data]);
 
   const isAllLocations = locationId === ALL_LOCATIONS;
 
@@ -182,34 +220,50 @@ export default function InventoryPage() {
     return value;
   }, []);
 
-  const buildCSV = useCallback((rows: ProductRow[]): string => {
-    const headers = [
-      "Name", "SKU", "Barcode", "OEM Number", "Family", "Category",
-      "Sub-category", "Brand", "Sell Price", "Cost Price", "Margin %",
-      "Stock", "Reorder Point", "Variable Price",
+  const buildCSV = useCallback((items: ExportProduct[], locs: Array<{ id: string; name: string }>): string => {
+    const staticHeaders = [
+      "Handle", "Name", "SKU", "Barcode", "OEM Number",
+      "Family", "Category", "Sub-category", "Brand",
+      "Default Price", "Cost", "Variable Price", "Track Stock", "Description",
     ];
+    const locationHeaders = locs.flatMap((loc) => [
+      `Available for sale [${loc.name}]`,
+      `Price [${loc.name}]`,
+      `In stock [${loc.name}]`,
+      `Low stock [${loc.name}]`,
+      `Optimal stock [${loc.name}]`,
+    ]);
+    const headers = [...staticHeaders, ...locationHeaders];
     const lines = [headers.map(escapeCSVCell).join(",")];
-    for (const r of rows) {
-      const sell = parseFloat(r.unitPrice) || 0;
-      const cost = parseFloat(r.costPrice) || 0;
-      const margin = getMarginPercent(sell, cost);
-      const cells = [
-        r.name ?? "",
-        r.sku ?? "",
-        r.barcode ?? "",
-        r.oemNumber ?? "",
-        r.familyName ?? "",
-        r.category ?? "",
-        r.subCategoryName ?? r.subcategoryName ?? "",
-        r.brandName ?? "",
-        r.unitPrice ?? "0",
-        r.costPrice ?? "0",
-        margin.display,
-        String(r.stockLevel ?? 0),
-        String(r.reorderPoint ?? 0),
-        r.isVariablePrice ? "Yes" : "No",
+
+    for (const item of items) {
+      const staticCells = [
+        item.handle ?? "",
+        item.name ?? "",
+        item.sku ?? "",
+        item.barcode ?? "",
+        item.oemNumber ?? "",
+        item.familyName ?? "",
+        item.categoryName ?? "",
+        item.subcategoryName ?? "",
+        item.brandName ?? "",
+        item.unitPrice ?? "0.00",
+        item.costPrice ?? "0.00",
+        item.isVariablePrice ? "Y" : "N",
+        "Y",
+        item.description ?? "",
       ];
-      lines.push(cells.map(escapeCSVCell).join(","));
+      const locationCells = locs.flatMap((loc) => {
+        const inv = item.locations.find((l) => l.locationId === loc.id);
+        return [
+          inv?.availableForSale ? "Y" : "N",
+          "",
+          String(inv?.stockLevel ?? 0),
+          String(inv?.reorderPoint ?? 0),
+          String(inv?.optimalStock ?? 0),
+        ];
+      });
+      lines.push([...staticCells, ...locationCells].map(escapeCSVCell).join(","));
     }
     return "\uFEFF" + lines.join("\n");
   }, [escapeCSVCell]);
@@ -230,8 +284,6 @@ export default function InventoryPage() {
   const handleExport = useCallback(async () => {
     try {
       const params = new URLSearchParams();
-      params.set("page", "1");
-      params.set("limit", "50000");
       params.set("sortBy", sortBy);
       params.set("sortDir", sortDir);
       if (debouncedSearch && debouncedSearch.length >= 2) params.set("search", debouncedSearch);
@@ -240,30 +292,55 @@ export default function InventoryPage() {
       if (subCategoryFilter) params.set("subcategoryId", subCategoryFilter);
       if (stockStatusFilter) params.set("stockStatus", stockStatusFilter);
       if (brandFilter) params.set("brandId", brandFilter);
-      params.set("parentOnly", "true");
-      if (isAllLocations) params.set("allLocations", "true");
 
-      const resp = await apiFetch<ProductsResponse>(
-        `/products?${params.toString()}`,
+      const resp = await apiFetch<ExportResponse>(
+        `/products/export?${params.toString()}`,
         { token, locationId: apiLocationId },
       );
-      downloadCSV(buildCSV(resp.data));
+      downloadCSV(buildCSV(resp.data, resp.locations));
     } catch {
-      // Fallback: export current page
-      downloadCSV(buildCSV(products));
+      // Silent fail — user can retry
     }
-  }, [sortBy, sortDir, debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, stockStatusFilter, brandFilter, isAllLocations, token, apiLocationId, products, buildCSV, downloadCSV]);
+  }, [sortBy, sortDir, debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, stockStatusFilter, brandFilter, token, apiLocationId, buildCSV, downloadCSV]);
 
-  const handleExportSelected = useCallback(() => {
-    const selected = products.filter((p) => selectedIds.has(p.id));
-    downloadCSV(buildCSV(selected));
-  }, [products, selectedIds, buildCSV, downloadCSV]);
+  const handleExportSelected = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      const resp = await apiFetch<ExportResponse>(
+        `/products/export`,
+        { token, locationId: apiLocationId },
+      );
+      const selected = resp.data.filter((p) => selectedIds.has(p.id));
+      downloadCSV(buildCSV(selected, resp.locations));
+    } catch {}
+  }, [selectedIds, token, apiLocationId, buildCSV, downloadCSV]);
 
   /* ── CSV Import helpers ── */
   const handleDownloadTemplate = useCallback(() => {
-    const headers = ["Name","SKU","Barcode","OEM Number","Family","Category","Sub-category","Brand","Sell Price","Cost Price","Reorder Point","Variable Price"];
-    const sampleRow = ["AKEBONO Brake Pad Front","","4901onal","OEM-12345","Brake System","Brake Pads","Front Pads","AKEBONO","1250.00","850.00","5","No"];
-    const csv = "\uFEFF" + headers.join(",") + "\n" + sampleRow.join(",") + "\n";
+    const locs = orgLocations;
+    const staticHeaders = [
+      "Handle", "Name", "SKU", "Barcode", "OEM Number",
+      "Family", "Category", "Sub-category", "Brand",
+      "Default Price", "Cost", "Variable Price", "Track Stock", "Description",
+    ];
+    const locationHeaders = locs.flatMap((loc: LocationRow) => [
+      `Available for sale [${loc.name}]`,
+      `Price [${loc.name}]`,
+      `In stock [${loc.name}]`,
+      `Low stock [${loc.name}]`,
+      `Optimal stock [${loc.name}]`,
+    ]);
+    const headers = [...staticHeaders, ...locationHeaders];
+
+    const staticSample = [
+      "sample-handle", "Sample Brake Pad", "SAMPLE-001", "1234567890123", "MB-000001",
+      "Brakes", "Brake Pad", "", "AKEBONO",
+      "2500.00", "1630.00", "N", "Y", "Sample item - delete this row",
+    ];
+    const locationSample = locs.flatMap(() => ["Y", "", "0", "10", "25"]);
+    const sampleRow = [...staticSample, ...locationSample];
+
+    const csv = "\uFEFF" + headers.map(escapeCSVCell).join(",") + "\n" + sampleRow.map(escapeCSVCell).join(",") + "\n";
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -273,11 +350,11 @@ export default function InventoryPage() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, []);
+  }, [orgLocations, escapeCSVCell]);
 
-  const parseImportCSV = useCallback((text: string): Record<string, string>[] => {
+  const parseImportCSV = useCallback((text: string): { rows: Record<string, string>[]; rawHeaders: string[] } => {
     const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
-    if (lines.length < 2) return [];
+    if (lines.length < 2) return { rows: [], rawHeaders: [] };
 
     // Parse a CSV line handling quoted fields
     const parseLine = (line: string): string[] => {
@@ -325,29 +402,69 @@ export default function InventoryPage() {
       });
       rows.push(row);
     }
-    return rows;
+    return { rows, rawHeaders: headerCells };
   }, []);
 
-  const mapCSVRowToPayload = useCallback((row: Record<string, string>) => {
+  const mapCSVRowToPayload = useCallback((row: Record<string, string>, rawHeaders: string[]) => {
     const get = (...keys: string[]) => {
       for (const k of keys) {
-        if (row[k] !== undefined && row[k] !== "") return row[k];
+        const normalized = k.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (row[normalized] !== undefined && row[normalized] !== "") return row[normalized];
       }
       return "";
     };
+
+    // Detect per-location columns
+    const locNameSet = new Set<string>();
+    for (const h of rawHeaders) {
+      const match = h.match(/^(?:Available for sale|In stock|Low stock|Optimal stock|Price)\s*\[(.+)\]$/i);
+      if (match) locNameSet.add(match[1]);
+    }
+
+    const locationData: Array<{
+      locationName: string;
+      availableForSale: boolean;
+      price: string | null;
+      inStock: number;
+      lowStock: number;
+      optimalStock: number;
+    }> = [];
+
+    for (const locName of locNameSet) {
+      const findVal = (prefix: string) => {
+        const target = `${prefix}${locName}`.toLowerCase().replace(/[^a-z0-9]/g, "");
+        for (const [k, v] of Object.entries(row)) {
+          if (k.replace(/[^a-z0-9]/g, "") === target) return v;
+        }
+        return "";
+      };
+
+      locationData.push({
+        locationName: locName,
+        availableForSale: findVal("availableforsale").toUpperCase() === "Y",
+        price: findVal("price") || null,
+        inStock: parseInt(findVal("instock")) || 0,
+        lowStock: parseInt(findVal("lowstock")) || 0,
+        optimalStock: parseInt(findVal("optimalstock")) || 0,
+      });
+    }
+
     return {
       name: get("name"),
       sku: get("sku"),
+      handle: get("handle"),
       barcode: get("barcode"),
-      oemNumber: get("oemnumber", "oem"),
+      oemNumber: get("oemnumber", "oem number"),
       family: get("family"),
       category: get("category"),
-      subcategory: get("subcategory"),
+      subcategory: get("subcategory", "sub-category"),
       brand: get("brand"),
-      unitPrice: get("sellprice", "unitprice", "sell"),
-      costPrice: get("costprice", "cost"),
-      reorderPoint: parseInt(get("reorderpoint", "reorder") || "0", 10) || 0,
-      isVariablePrice: ["yes", "true", "1"].includes(get("variableprice", "variable").toLowerCase()),
+      unitPrice: get("defaultprice", "default price", "sellprice", "unitprice"),
+      costPrice: get("cost", "costprice", "cost price"),
+      description: get("description"),
+      isVariablePrice: ["yes", "y", "true", "1"].includes(get("variableprice", "variable price").toLowerCase()),
+      trackStock: !["no", "n", "false", "0"].includes(get("trackstock", "track stock").toLowerCase()),
+      locations: locationData.length > 0 ? locationData : undefined,
     };
   }, []);
 
@@ -356,14 +473,14 @@ export default function InventoryPage() {
     setImportLoading(true);
     try {
       const text = await file.text();
-      const parsed = parseImportCSV(text);
+      const { rows: parsed, rawHeaders } = parseImportCSV(text);
       if (parsed.length === 0) {
         setImportPreview([{ row: 0, sku: "", name: "", action: "error", error: "No data rows found", raw: {} }]);
         setImportStats({ created: 0, updated: 0, errors: 1 });
         setImportStep("preview");
         return;
       }
-      const payload = parsed.map(mapCSVRowToPayload);
+      const payload = parsed.map((r) => mapCSVRowToPayload(r, rawHeaders));
       const resp = await apiFetch<{
         dryRun: boolean;
         created: number;
@@ -402,8 +519,8 @@ export default function InventoryPage() {
     setImportLoading(true);
     try {
       const text = await importFile.text();
-      const parsed = parseImportCSV(text);
-      const payload = parsed.map(mapCSVRowToPayload);
+      const { rows: parsed, rawHeaders } = parseImportCSV(text);
+      const payload = parsed.map((r) => mapCSVRowToPayload(r, rawHeaders));
       const resp = await apiFetch<{
         dryRun: boolean;
         created: number;
