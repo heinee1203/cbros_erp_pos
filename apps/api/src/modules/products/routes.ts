@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { db } from "@apex/database";
-import { products, inventory, productFamilies, vehicleCompatibility, categories, productSubcategories, brands } from "@apex/database/schema";
+import { products, inventory, productFamilies, vehicleCompatibility, categories, productSubcategories, brands, locations } from "@apex/database/schema";
 import { eq, and, ilike, sql, asc, desc, inArray, type SQL } from "drizzle-orm";
 import { createProductSchema, updateProductSchema, addVehicleSchema, updateVehicleSchema, bulkImportSchema, generateEan13, isValidBarcode, type VariantItem } from "@apex/types";
 
@@ -1590,6 +1590,139 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
     await db.delete(vehicleCompatibility).where(eq(vehicleCompatibility.id, id));
     return reply.send({ success: true });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // GET /products/export — Denormalized export with per-location inventory
+  // ────────────────────────────────────────────────────────────────────
+  app.get("/export", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const query = request.query as Record<string, string>;
+
+    const search = query.search || "";
+    const familyId = query.familyId || "";
+    const subCategoryId = query.subCategoryId || "";
+    const subcategoryId = query.subcategoryId || "";
+    const stockStatus = query.stockStatus || "";
+    const brandId = query.brandId || "";
+    const sortBy = query.sortBy || "name";
+    const sortDir = query.sortDir || "asc";
+
+    // Build WHERE conditions
+    const conditions: SQL[] = [eq(products.orgId, orgId), eq(products.isActive, true)];
+    if (search && search.length >= 2) {
+      conditions.push(ilike(products.name, `%${search}%`));
+    }
+    if (familyId) conditions.push(eq(products.familyId, familyId));
+    if (subCategoryId) conditions.push(eq(products.categoryId, subCategoryId));
+    if (subcategoryId) conditions.push(eq(products.subcategoryId, subcategoryId));
+    if (brandId) conditions.push(eq(products.brandId, brandId));
+
+    // Fetch all active locations for the org
+    const orgLocations = await db
+      .select({ id: locations.id, name: locations.name })
+      .from(locations)
+      .where(and(eq(locations.orgId, orgId), eq(locations.isActive, true)))
+      .orderBy(asc(locations.name));
+
+    // Fetch products with taxonomy joins
+    const productRows = await db
+      .select({
+        id: products.id,
+        name: products.name,
+        sku: products.sku,
+        barcode: products.barcode,
+        oemNumber: products.oemNumber,
+        description: products.description,
+        unitPrice: products.unitPrice,
+        costPrice: products.costPrice,
+        isVariablePrice: products.isVariablePrice,
+        isParent: products.isParent,
+        parentProductId: products.parentProductId,
+        familyName: productFamilies.name,
+        categoryName: categories.name,
+        subcategoryName: productSubcategories.name,
+        brandName: brands.name,
+      })
+      .from(products)
+      .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .leftJoin(productSubcategories, eq(products.subcategoryId, productSubcategories.id))
+      .leftJoin(brands, eq(products.brandId, brands.id))
+      .where(and(...conditions))
+      .orderBy(sortDir === "desc" ? desc(SORT_COLUMNS[sortBy] ?? products.name) : asc(SORT_COLUMNS[sortBy] ?? products.name))
+      .limit(50000);
+
+    // Fetch ALL inventory rows for these products
+    const productIds = productRows.map((p) => p.id);
+    let allInventory: Array<{
+      productId: string;
+      locationId: string;
+      stockLevel: number;
+      reorderPoint: number;
+      optimalStock: number;
+      availableForSale: boolean;
+    }> = [];
+
+    if (productIds.length > 0) {
+      allInventory = await db
+        .select({
+          productId: inventory.productId,
+          locationId: inventory.locationId,
+          stockLevel: inventory.stockLevel,
+          reorderPoint: inventory.reorderPoint,
+          optimalStock: inventory.optimalStock,
+          availableForSale: inventory.availableForSale,
+        })
+        .from(inventory)
+        .where(and(
+          eq(inventory.orgId, orgId),
+          inArray(inventory.productId, productIds),
+        ));
+    }
+
+    // Build inventory map: productId -> locationId -> row
+    const invMap = new Map<string, Map<string, typeof allInventory[0]>>();
+    for (const row of allInventory) {
+      if (!invMap.has(row.productId)) invMap.set(row.productId, new Map());
+      invMap.get(row.productId)!.set(row.locationId, row);
+    }
+
+    // Build parent handle map
+    const parentHandleMap = new Map<string, string>();
+    for (const p of productRows) {
+      if (p.isParent) {
+        const handle = p.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50);
+        parentHandleMap.set(p.id, handle);
+      }
+    }
+
+    // Enrich products
+    const enriched = productRows.map((p) => {
+      const locMap = invMap.get(p.id) ?? new Map();
+      const locData = orgLocations.map((loc) => {
+        const inv = locMap.get(loc.id);
+        return {
+          locationId: loc.id,
+          locationName: loc.name,
+          availableForSale: inv?.availableForSale ?? true,
+          stockLevel: inv?.stockLevel ?? 0,
+          reorderPoint: inv?.reorderPoint ?? 0,
+          optimalStock: inv?.optimalStock ?? 0,
+        };
+      });
+
+      let handle = "";
+      if (p.isParent) {
+        handle = parentHandleMap.get(p.id) ?? "";
+      } else if (p.parentProductId) {
+        handle = parentHandleMap.get(p.parentProductId) ?? "";
+      }
+
+      return { ...p, handle, locations: locData };
+    });
+
+    return reply.send({ data: enriched, locations: orgLocations });
   });
 
   // ── Bulk Import ──────────────────────────────────────────────────────
