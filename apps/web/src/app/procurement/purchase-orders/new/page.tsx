@@ -18,7 +18,6 @@ interface ProductSearchResult {
   sku: string;
   mnemonicSku: string;
   costPrice: string;
-  unitPrice: string;
   barcode: string | null;
   categoryName?: string;
 }
@@ -193,7 +192,7 @@ export default function NewPurchaseOrderPage() {
         ),
       );
     } else {
-      const costPrice = product.costPrice || product.unitPrice || "0";
+      const costPrice = product.costPrice || "0.00";
       setLines((prev) => [
         ...prev,
         {
@@ -494,7 +493,7 @@ export default function NewPurchaseOrderPage() {
       } else {
         const lp = row.listPrice && parseFloat(row.listPrice) > 0
           ? row.listPrice
-          : product.costPrice || product.unitPrice || "0";
+          : product.costPrice || "0.00";
         const disc = row.discount || "";
         const net = disc
           ? String(calculateNetCost(parseFloat(lp), disc))
@@ -517,6 +516,22 @@ export default function NewPurchaseOrderPage() {
     }
     setShowCSVModal(false);
     setCsvPreview([]);
+  };
+
+  const handleDownloadPOTemplate = () => {
+    const headers = "SKU,Qty,List Price,Discount,Notes";
+    const sample1 = 'SDG-30003,10,26500,"20,5,3",Sample with chain discount';
+    const sample2 = "DB-1390,20,1550,15,Sample with single discount";
+    const sample3 = "14624134,5,3400,,Sample with no discount";
+    const csv = `\ufeff${headers}\n${sample1}\n${sample2}\n${sample3}\n`;
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "apex-po-import-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // ── Loading state ──
@@ -773,7 +788,7 @@ export default function NewPurchaseOrderPage() {
                       )}
                     </div>
                     <span className="shrink-0 text-xs font-mono text-muted-foreground">
-                      {fmtPeso(p.costPrice || p.unitPrice)}
+                      {fmtPeso(p.costPrice || "0.00")}
                     </span>
                   </button>
                 ))}
@@ -789,6 +804,13 @@ export default function NewPurchaseOrderPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
             </svg>
             Import CSV
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadPOTemplate}
+            className="text-xs text-primary hover:underline"
+          >
+            Download template
           </button>
           <input
             ref={fileInputRef}
