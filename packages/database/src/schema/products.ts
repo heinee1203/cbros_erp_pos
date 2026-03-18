@@ -73,6 +73,8 @@ export const products = pgTable(
     packagingUnit: varchar("packaging_unit", { length: 50 }),
     /** Default supplier for this product — used to pre-fill PO creation */
     primarySupplierId: uuid("primary_supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    reorderEnabled: boolean("reorder_enabled").notNull().default(true),
+    customReorderPoint: integer("custom_reorder_point"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
