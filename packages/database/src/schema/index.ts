@@ -25,3 +25,4 @@ export * from "./product-subcategories";
 export * from "./product-options";
 export * from "./shifts";
 export * from "./organization-settings";
+export * from "./stock-metrics";
