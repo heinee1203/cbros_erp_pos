@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Search, Trash2 } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 import { useTransferQuery, type TransferDetail, type TransferItem } from "@/hooks/use-transfer-query";
 import {
   useApproveMutation,
@@ -87,6 +90,118 @@ export default function TransferDetailPage() {
 
   const closeModal = useCallback(() => setActiveModal(null), []);
 
+  // ── Edit mode state ──
+  const queryClient = useQueryClient();
+  const [editMode, setEditMode] = useState(false);
+  const [editLines, setEditLines] = useState<Array<{
+    id: string;
+    productId: string;
+    productName: string;
+    sku: string;
+    requestedQty: number;
+    isNew?: boolean;
+  }>>([]);
+  const [editNotes, setEditNotes] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editSearch, setEditSearch] = useState("");
+  const [debouncedEditSearch, setDebouncedEditSearch] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedEditSearch(editSearch), 300);
+    return () => clearTimeout(t);
+  }, [editSearch]);
+
+  const editSearchResults = useQuery<{ data: any[] }>({
+    queryKey: ["transfer-edit-search", debouncedEditSearch, transfer?.sourceLocationId],
+    queryFn: () =>
+      apiFetch<{ data: any[] }>(
+        `/products?search=${encodeURIComponent(debouncedEditSearch)}&limit=10`,
+        { token, locationId: transfer?.sourceLocationId ?? locationId }
+      ),
+    enabled: editMode && debouncedEditSearch.length >= 2 && !!transfer?.sourceLocationId,
+    staleTime: 10_000,
+  });
+
+  const enterEditMode = useCallback(() => {
+    if (!transfer) return;
+    setEditLines(
+      transfer.items.map((item: any) => ({
+        id: item.id,
+        productId: item.productId,
+        productName: item.productName,
+        sku: item.sku,
+        requestedQty: item.requestedQty,
+      }))
+    );
+    setEditNotes(transfer.notes ?? "");
+    setEditMode(true);
+  }, [transfer]);
+
+  const handleEditSave = useCallback(async () => {
+    if (!transfer) return;
+    setEditSaving(true);
+    try {
+      // Update notes if changed
+      if (editNotes !== (transfer.notes ?? "")) {
+        await apiFetch(`/transfers/${transfer.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ notes: editNotes }),
+          token,
+          locationId,
+        });
+      }
+
+      const originalIds = new Set(transfer.items.map((i: any) => i.id));
+      const editIds = new Set(editLines.filter((l) => !l.isNew).map((l) => l.id));
+
+      // Delete removed lines
+      for (const original of transfer.items) {
+        if (!editIds.has(original.id)) {
+          await apiFetch(`/transfers/${transfer.id}/items/${original.id}`, {
+            method: "DELETE",
+            token,
+            locationId,
+          });
+        }
+      }
+
+      // Update changed lines
+      for (const line of editLines) {
+        if (line.isNew) continue;
+        const original = transfer.items.find((i: any) => i.id === line.id);
+        if (original && original.requestedQty !== line.requestedQty) {
+          await apiFetch(`/transfers/${transfer.id}/items/${line.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ requestedQty: line.requestedQty }),
+            token,
+            locationId,
+          });
+        }
+      }
+
+      // Add new lines
+      for (const line of editLines) {
+        if (!line.isNew) continue;
+        await apiFetch(`/transfers/${transfer.id}/items`, {
+          method: "POST",
+          body: JSON.stringify({
+            productId: line.productId,
+            requestedQty: line.requestedQty,
+          }),
+          token,
+          locationId,
+        });
+      }
+
+      queryClient.invalidateQueries({ queryKey: ["transfer", transferNo] });
+      setEditMode(false);
+    } catch (err: any) {
+      alert(err.message || "Failed to save changes");
+    } finally {
+      setEditSaving(false);
+    }
+  }, [transfer, editLines, editNotes, token, locationId, queryClient, transferNo]);
+
   // ── Loading / Error states ──
   if (isLoading) {
     return (
@@ -129,6 +244,24 @@ export default function TransferDetailPage() {
             >
               {STATUS_LABELS[transfer.status] ?? transfer.status}
             </span>
+            {transfer.status === "DRAFT" && !editMode && (
+              <button onClick={enterEditMode}
+                className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+                Edit Transfer
+              </button>
+            )}
+            {editMode && (
+              <div className="flex gap-2">
+                <button onClick={() => setEditMode(false)}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+                  Cancel
+                </button>
+                <button onClick={handleEditSave} disabled={editSaving || editLines.length === 0}
+                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+                  {editSaving ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -163,53 +296,124 @@ export default function TransferDetailPage() {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Line Items
         </h3>
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/50">
-                <th scope="col" className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Mnemonic</th>
-                <th scope="col" className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Item</th>
-                <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Requested</th>
-                <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Dispatched</th>
-                <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Received</th>
-                <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Variance</th>
-                <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Remaining</th>
-              </tr>
-            </thead>
-            <tbody>
-              {transfer.items.map((item, i) => (
-                <tr
-                  key={item.id}
-                  className={`border-b border-border ${
-                    i % 2 === 0 ? "bg-background" : "bg-muted/20"
-                  }`}
-                >
-                  <td className="px-3 py-1.5">
-                    <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-bold tracking-wider text-primary">
-                      {item.mnemonicSku}
-                    </span>
-                  </td>
-                  <td className="px-3 py-1.5 text-sm">{item.productName}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{item.requestedQty}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{item.dispatchedQty}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-success">
-                    {item.receivedQty}
-                  </td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-destructive">
-                    {item.varianceQty > 0 ? item.varianceQty : "\u2014"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right tabular-nums font-medium">
-                    {item.remainingReceivable > 0 ? (
-                      <span className="text-warning">{item.remainingReceivable}</span>
-                    ) : (
-                      <span className="text-success">0</span>
-                    )}
-                  </td>
+        {editMode ? (
+          <div className="rounded-xl border border-border bg-background p-4">
+            <div className="mb-4">
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Notes</label>
+              <textarea value={editNotes} onChange={(e) => setEditNotes(e.target.value)} rows={2}
+                className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm" />
+            </div>
+            <div className="relative mb-3">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input type="text" value={editSearch} onChange={(e) => setEditSearch(e.target.value)}
+                placeholder="Search products to add..."
+                className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm outline-none" />
+              {debouncedEditSearch.length >= 2 && editSearchResults.data?.data && editSearchResults.data.data.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full max-h-[200px] overflow-y-auto rounded-lg border bg-background shadow-lg">
+                  {editSearchResults.data.data.map((p: any) => (
+                    <button key={p.id} onClick={() => {
+                      if (editLines.some((l) => l.productId === p.id)) return;
+                      setEditLines((prev) => [...prev, {
+                        id: crypto.randomUUID(), productId: p.id, productName: p.name,
+                        sku: p.sku, requestedQty: 1, isNew: true,
+                      }]);
+                      setEditSearch("");
+                    }}
+                      disabled={editLines.some((l) => l.productId === p.id)}
+                      className="flex w-full items-center justify-between px-3 py-2 text-sm text-left hover:bg-accent disabled:opacity-40">
+                      <span>{p.name}</span>
+                      <span className="text-xs text-muted-foreground">{p.sku}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/40 text-xs font-semibold uppercase text-muted-foreground">
+                  <th className="px-3 py-2 text-left">Item</th>
+                  <th className="px-3 py-2 text-left">SKU</th>
+                  <th className="px-3 py-2 text-right">Qty</th>
+                  <th className="px-3 py-2 w-10" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {editLines.map((line) => (
+                  <tr key={line.id} className="border-b border-border">
+                    <td className="px-3 py-2 font-medium">
+                      {line.productName}
+                      {line.isNew && <span className="ml-2 text-[10px] text-primary font-semibold">NEW</span>}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{line.sku}</td>
+                    <td className="px-3 py-2 text-right">
+                      <input type="number" min={1} value={line.requestedQty}
+                        onChange={(e) => {
+                          const qty = Math.max(parseInt(e.target.value) || 1, 1);
+                          setEditLines((prev) => prev.map((l) => l.id === line.id ? { ...l, requestedQty: qty } : l));
+                        }}
+                        className="w-[70px] rounded border border-border px-2 py-1 text-right text-sm" />
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <button onClick={() => setEditLines((prev) => prev.filter((l) => l.id !== line.id))}
+                        disabled={editLines.length <= 1}
+                        className="text-muted-foreground hover:text-destructive disabled:opacity-30">
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/50">
+                  <th scope="col" className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Mnemonic</th>
+                  <th scope="col" className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Item</th>
+                  <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Requested</th>
+                  <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Dispatched</th>
+                  <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Received</th>
+                  <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Variance</th>
+                  <th scope="col" className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Remaining</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transfer.items.map((item, i) => (
+                  <tr
+                    key={item.id}
+                    className={`border-b border-border ${
+                      i % 2 === 0 ? "bg-background" : "bg-muted/20"
+                    }`}
+                  >
+                    <td className="px-3 py-1.5">
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-bold tracking-wider text-primary">
+                        {item.mnemonicSku}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 text-sm">{item.productName}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{item.requestedQty}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{item.dispatchedQty}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums text-success">
+                      {item.receivedQty}
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular-nums text-destructive">
+                      {item.varianceQty > 0 ? item.varianceQty : "\u2014"}
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular-nums font-medium">
+                      {item.remainingReceivable > 0 ? (
+                        <span className="text-warning">{item.remainingReceivable}</span>
+                      ) : (
+                        <span className="text-success">0</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* ── Action Bar — strictly from allowedActions ── */}
