@@ -573,13 +573,7 @@ export default function EditItemPage() {
             </p>
           </div>
         </div>
-        <Link
-          href={`/inventory/${productId}/history`}
-          className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-        >
-          <Clock size={14} />
-          View History
-        </Link>
+        {/* View History moved to Inventory section */}
       </div>
 
       {/* Status Messages */}
@@ -1063,7 +1057,13 @@ export default function EditItemPage() {
               <div className={cn(fieldClass, "flex items-center bg-muted/40 text-muted-foreground cursor-not-allowed")}>
                 {(product.stockLevel ?? 0).toLocaleString()}
               </div>
-              <p className="mt-0.5 text-[10px] text-muted-foreground">Use Stock Adjustments to change stock levels</p>
+              <Link
+                href={`/inventory/${productId}/history`}
+                className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+              >
+                <Clock size={12} />
+                View stock history
+              </Link>
             </div>
             <div>
               <FieldLabel>Barcode</FieldLabel>
