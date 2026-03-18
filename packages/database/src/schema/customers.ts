@@ -1,12 +1,24 @@
 import {
   pgTable,
+  pgEnum,
   uuid,
   varchar,
+  text,
+  numeric,
+  integer,
+  boolean,
   timestamp,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
+
+export const customerTypeEnum = pgEnum("customer_type", [
+  "INDIVIDUAL",
+  "SHOP",
+  "FLEET",
+  "WHOLESALE",
+]);
 
 export const customers = pgTable(
   "customers",
@@ -17,7 +29,25 @@ export const customers = pgTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 255 }).notNull(),
     phone: varchar("phone", { length: 50 }).notNull(),
-    notes: varchar("notes", { length: 1000 }),
+    customerType: customerTypeEnum("customer_type")
+      .notNull()
+      .default("INDIVIDUAL"),
+    contactPerson: varchar("contact_person", { length: 255 }),
+    email: varchar("email", { length: 255 }),
+    address: text("address"),
+    tin: varchar("tin", { length: 20 }),
+    creditLimit: numeric("credit_limit", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    paymentTermsDays: integer("payment_terms_days").notNull().default(30),
+    currentBalance: numeric("current_balance", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    totalPurchases: numeric("total_purchases", { precision: 14, scale: 2 })
+      .notNull()
+      .default("0.00"),
+    isActive: boolean("is_active").notNull().default(true),
+    notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -30,5 +60,7 @@ export const customers = pgTable(
     uniqueIndex("idx_customers_org_phone").on(table.orgId, table.phone),
     index("idx_customers_org_id").on(table.orgId),
     index("idx_customers_name").on(table.name),
+    index("idx_customers_org_type").on(table.orgId, table.customerType),
+    index("idx_customers_org_active").on(table.orgId, table.isActive),
   ],
 );

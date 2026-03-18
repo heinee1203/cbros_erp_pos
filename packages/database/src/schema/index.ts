@@ -12,6 +12,7 @@ export * from "./stock-journal";
 export * from "./vehicle-compatibility";
 export * from "./customers";
 export * from "./customer-vehicles";
+export * from "./customer-transactions";
 export * from "./service-operations";
 export * from "./job-cards";
 export * from "./job-card-state-log";
