@@ -29,6 +29,7 @@ import { shiftRoutes } from "./modules/shifts/routes";
 import { brandRoutes } from "./modules/brands/routes";
 import { settingsRoutes } from "./modules/settings/routes";
 import { stockMonitorRoutes } from "./modules/stock-monitor/routes";
+import { reorderRoutes } from "./modules/reorder/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const JWT_SECRET = process.env.JWT_SECRET;
@@ -86,6 +87,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(brandRoutes, { prefix: "/brands" });
   await app.register(settingsRoutes, { prefix: "/settings" });
   await app.register(stockMonitorRoutes, { prefix: "/inventory/stock-monitor" });
+  await app.register(reorderRoutes, { prefix: "/inventory/reorder" });
 
   return app;
 }
