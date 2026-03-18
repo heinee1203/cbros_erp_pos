@@ -303,6 +303,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         brandName: brands.name,
         parentProductId: products.parentProductId,
         isParent: products.isParent,
+        unitsPerCase: products.unitsPerCase,
+        packagingUnit: products.packagingUnit,
         vehicleModel: q.vehicleMake && q.vehicleMake !== "__none__"
           ? sql<string>`(SELECT string_agg(DISTINCT vc.model, ', ' ORDER BY vc.model) FROM vehicle_compatibility vc WHERE vc.product_id = ${products.id} AND vc.make = ${q.vehicleMake})`.as('vehicle_model')
           : sql<string | null>`null`.as('vehicle_model'),
@@ -552,6 +554,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           subcategoryId: parsed.data.subcategoryId || null,
           brandId: parsed.data.brandId || null,
           description: parsed.data.description || null,
+          unitsPerCase: parsed.data.unitsPerCase ?? 1,
+          packagingUnit: parsed.data.packagingUnit || null,
         })
         .returning();
 
@@ -821,6 +825,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           subcategoryName: productSubcategories.name,
           brandId: products.brandId,
           brandName: brands.name,
+          unitsPerCase: products.unitsPerCase,
+          packagingUnit: products.packagingUnit,
         })
         .from(products)
         .leftJoin(inventory, and(
@@ -1043,6 +1049,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         brandId: products.brandId,
         brandName: brands.name,
         parentProductId: products.parentProductId,
+        unitsPerCase: products.unitsPerCase,
+        packagingUnit: products.packagingUnit,
       })
       .from(products)
       .leftJoin(inventory, and(
@@ -1643,6 +1651,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         categoryName: categories.name,
         subcategoryName: productSubcategories.name,
         brandName: brands.name,
+        unitsPerCase: products.unitsPerCase,
+        packagingUnit: products.packagingUnit,
       })
       .from(products)
       .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
@@ -1802,6 +1812,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
               if (row.oemNumber !== undefined) updateValues.oemNumber = row.oemNumber;
               if (row.isVariablePrice !== undefined) updateValues.isVariablePrice = row.isVariablePrice;
               if (row.description !== undefined) updateValues.description = row.description;
+              if (row.unitsPerCase !== undefined) updateValues.unitsPerCase = row.unitsPerCase;
+              if (row.packagingUnit !== undefined) updateValues.packagingUnit = row.packagingUnit;
               if (familyId) updateValues.familyId = familyId;
               if (categoryId) updateValues.categoryId = categoryId;
               if (subcategoryId) updateValues.subcategoryId = subcategoryId;
@@ -1864,6 +1876,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                   oemNumber: row.oemNumber || null,
                   isVariablePrice: row.isVariablePrice ?? false,
                   description: row.description || null,
+                  unitsPerCase: row.unitsPerCase ?? 1,
+                  packagingUnit: row.packagingUnit || null,
                   familyId,
                   categoryId,
                   subcategoryId,

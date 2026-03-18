@@ -46,6 +46,8 @@ interface ExportProduct {
   isVariablePrice: boolean;
   isParent: boolean;
   parentProductId: string | null;
+  unitsPerCase: number;
+  packagingUnit: string | null;
   handle: string;
   familyName: string | null;
   categoryName: string | null;
@@ -225,6 +227,7 @@ export default function InventoryPage() {
       "Handle", "Name", "SKU", "Barcode", "OEM Number",
       "Family", "Category", "Sub-category", "Brand",
       "Default Price", "Cost", "Variable Price", "Track Stock", "Description",
+      "Units per Case", "Packaging Unit",
     ];
     const locationHeaders = locs.flatMap((loc) => [
       `Available for sale [${loc.name}]`,
@@ -252,6 +255,8 @@ export default function InventoryPage() {
         item.isVariablePrice ? "Y" : "N",
         "Y",
         item.description ?? "",
+        String(item.unitsPerCase ?? 1),
+        item.packagingUnit ?? "",
       ];
       const locationCells = locs.flatMap((loc) => {
         const inv = item.locations.find((l) => l.locationId === loc.id);
@@ -322,6 +327,7 @@ export default function InventoryPage() {
       "Handle", "Name", "SKU", "Barcode", "OEM Number",
       "Family", "Category", "Sub-category", "Brand",
       "Default Price", "Cost", "Variable Price", "Track Stock", "Description",
+      "Units per Case", "Packaging Unit",
     ];
     const locationHeaders = locs.flatMap((loc: LocationRow) => [
       `Available for sale [${loc.name}]`,
@@ -336,6 +342,7 @@ export default function InventoryPage() {
       "sample-handle", "Sample Brake Pad", "SAMPLE-001", "1234567890123", "MB-000001",
       "Brakes", "Brake Pad", "", "AKEBONO",
       "2500.00", "1630.00", "N", "Y", "Sample item - delete this row",
+      "1", "",
     ];
     const locationSample = locs.flatMap(() => ["Y", "", "0", "10", "25"]);
     const sampleRow = [...staticSample, ...locationSample];
@@ -464,6 +471,8 @@ export default function InventoryPage() {
       description: get("description"),
       isVariablePrice: ["yes", "y", "true", "1"].includes(get("variableprice", "variable price").toLowerCase()),
       trackStock: !["no", "n", "false", "0"].includes(get("trackstock", "track stock").toLowerCase()),
+      unitsPerCase: parseInt(get("unitspercase", "units per case")) || undefined,
+      packagingUnit: get("packagingunit", "packaging unit") || undefined,
       locations: locationData.length > 0 ? locationData : undefined,
     };
   }, []);

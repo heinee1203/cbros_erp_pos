@@ -31,6 +31,8 @@ export interface ProductRow {
   parentProductId: string | null;
   isParent: boolean;
   oemNumber: string | null;
+  unitsPerCase: number;
+  packagingUnit: string | null;
 }
 
 export interface ProductsResponse {
@@ -175,6 +177,8 @@ export interface CreateProductPayload {
   locationIds?: string[];
   oemNumber?: string;
   isParent?: boolean;
+  unitsPerCase?: number;
+  packagingUnit?: string;
   vehicleCompatibility?: {
     make: string;
     model: string;
@@ -223,6 +227,8 @@ export interface UpdateProductPayload {
   subcategoryId?: string | null;
   brandId?: string | null;
   reorderPoint?: number;
+  unitsPerCase?: number;
+  packagingUnit?: string | null;
 }
 
 export function useUpdateProduct(token: string, locationId: string) {
