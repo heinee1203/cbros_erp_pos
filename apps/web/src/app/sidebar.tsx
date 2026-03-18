@@ -18,6 +18,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Barcode,
+  Activity,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -114,6 +115,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Inventory Counts", href: "/procurement/inventory-counts", match: /^\/procurement\/inventory-counts/ },
       { label: "Suppliers", href: "/procurement/suppliers", match: /^\/procurement\/suppliers/ },
       { label: "Inventory History", href: "/procurement/inventory-history", match: /^\/procurement\/inventory-history/ },
+      { label: "Stock Monitor", href: "/procurement/stock-monitor", match: /^\/procurement\/stock-monitor/ },
     ],
   },
   {

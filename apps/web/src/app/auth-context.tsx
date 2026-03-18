@@ -104,15 +104,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ── Fetch locations for an authenticated user ──
   const fetchLocations = useCallback(async (authData: AuthState) => {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       const locRes = await fetch(`${API_BASE}/locations`, {
         headers: { Authorization: `Bearer ${authData.token}` },
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       if (locRes.ok) {
         const locData = await locRes.json();
         setLocations(locData.data ?? []);
       }
     } catch {
-      // Location fetch failed — non-fatal
+      // Location fetch failed or timed out — non-fatal
     }
   }, []);
 
