@@ -5,7 +5,7 @@ import { locations } from "@apex/database/schema";
 import { eq, and } from "drizzle-orm";
 import type { StoreContext } from "@apex/types";
 
-const SKIP_PATHS = ["/health", "/auth/login", "/auth/register", "/auth/verify-pin", "/locations"];
+const SKIP_PATHS = ["/health", "/auth/login", "/auth/register", "/auth/verify-pin", "/locations", "/api/v1/catalog"];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

@@ -16,7 +16,7 @@ declare module "fastify" {
 }
 
 // Paths that do NOT require authentication
-const PUBLIC_PATHS = ["/health", "/auth/login", "/auth/register"];
+const PUBLIC_PATHS = ["/health", "/auth/login", "/auth/register", "/api/v1/catalog"];
 
 const authPluginFn: FastifyPluginAsync = async (app) => {
   app.decorate(
