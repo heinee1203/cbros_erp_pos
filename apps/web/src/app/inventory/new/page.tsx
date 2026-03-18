@@ -821,9 +821,14 @@ export default function AddItemPage() {
                 </select>
               </div>
             </div>
-            {unitsPerCase > 1 && parseFloat(costPrice || "0") > 0 && (
-              <div className="mt-1 text-xs text-muted-foreground">
-                Cost per piece: ₱{(parseFloat(costPrice) / unitsPerCase).toFixed(2)}
+            {unitsPerCase > 1 && (parseFloat(costPrice || "0") > 0 || parseFloat(unitPrice || "0") > 0) && (
+              <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {parseFloat(costPrice || "0") > 0 && (
+                  <div>Cost per {packagingUnit || "case"}: ₱{(parseFloat(costPrice) * unitsPerCase).toFixed(2)}</div>
+                )}
+                {parseFloat(unitPrice || "0") > 0 && (
+                  <div>Sell per {packagingUnit || "case"}: ₱{(parseFloat(unitPrice) * unitsPerCase).toFixed(2)}</div>
+                )}
               </div>
             )}
           </div>

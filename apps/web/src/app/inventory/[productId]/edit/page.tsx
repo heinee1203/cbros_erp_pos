@@ -355,10 +355,12 @@ export default function EditItemPage() {
       costPrice !== product.costPrice ||
       barcode !== (product.barcode ?? "") ||
       oemNumber !== (product.oemNumber ?? "") ||
-      isParent !== (product.isParent ?? false);
+      isParent !== (product.isParent ?? false) ||
+      unitsPerCase !== (product.unitsPerCase ?? 1) ||
+      (packagingUnit ?? "") !== (product.packagingUnit ?? "");
     const vehicleDirty = JSON.stringify(vehicles) !== JSON.stringify(initialVehiclesRef.current);
     return basicDirty || vehicleDirty || isAvailabilityDirty || isVariantFieldsDirty;
-  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
+  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
 
   // Unsaved changes warning
   useEffect(() => {
@@ -1094,9 +1096,14 @@ export default function EditItemPage() {
                 </select>
               </div>
             </div>
-            {unitsPerCase > 1 && parseFloat(costPrice || "0") > 0 && (
-              <div className="mt-1 text-xs text-muted-foreground">
-                Cost per piece: ₱{(parseFloat(costPrice) / unitsPerCase).toFixed(2)}
+            {unitsPerCase > 1 && (parseFloat(costPrice || "0") > 0 || parseFloat(unitPrice || "0") > 0) && (
+              <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {parseFloat(costPrice || "0") > 0 && (
+                  <div>Cost per {packagingUnit || "case"}: ₱{(parseFloat(costPrice) * unitsPerCase).toFixed(2)}</div>
+                )}
+                {parseFloat(unitPrice || "0") > 0 && (
+                  <div>Sell per {packagingUnit || "case"}: ₱{(parseFloat(unitPrice) * unitsPerCase).toFixed(2)}</div>
+                )}
               </div>
             )}
           </div>
