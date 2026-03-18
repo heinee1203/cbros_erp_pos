@@ -20,6 +20,7 @@ export interface JournalEntry {
   referenceType: string;
   referenceId: string;
   referenceNumber: string | null;
+  referenceDocId: string | null;
   referenceLineId: string | null;
   reasonCode: string | null;
   notes: string | null;
