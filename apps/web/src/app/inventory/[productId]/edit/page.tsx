@@ -36,6 +36,7 @@ import { mergeVehicleMakes } from "@/lib/vehicle-makes";
 import { useProductLocations } from "@/hooks/use-product-locations";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useSidebar } from "@/app/sidebar-context";
 import { SelectWithQuickAdd } from "@/components/select-with-quick-add";
 import {
   useProductOptions,
@@ -91,6 +92,7 @@ export default function EditItemPage() {
   const productId = params.productId as string;
   const queryClient = useQueryClient();
   const { token, locationId, user } = useAuth();
+  const { isCollapsed } = useSidebar();
   const updateMutation = useUpdateProduct(token, locationId);
   const { data: product, isLoading, error: loadError } = useProductDetail(token, locationId, productId);
   const familiesQuery = useProductFamilies(token, locationId);
@@ -1305,7 +1307,7 @@ export default function EditItemPage() {
       />
 
       {/* Sticky Action Bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm md:left-[252px]">
+      <div className={cn("fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm transition-[left] duration-200", isCollapsed ? "md:left-16" : "md:left-[252px]")}>
         <div className="flex items-center justify-between px-6 py-3">
           <button
             onClick={() => router.push("/inventory")}

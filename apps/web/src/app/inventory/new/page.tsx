@@ -37,6 +37,7 @@ import { useVehicleMakes, useVehicleModels } from "@/hooks/use-vehicles";
 import { mergeVehicleMakes } from "@/lib/vehicle-makes";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useSidebar } from "@/app/sidebar-context";
 import { SelectWithQuickAdd } from "@/components/select-with-quick-add";
 
 /* ─────────────────────────────────────────────
@@ -99,6 +100,7 @@ interface OptionTypeEntry {
 export default function AddItemPage() {
   const router = useRouter();
   const { token, locationId, user, locations } = useAuth();
+  const { isCollapsed } = useSidebar();
   const createMutation = useCreateProduct(token, locationId);
   const createOptionTypeMutation = useCreateOptionType(token, locationId);
   const createVariantBatchMutation = useCreateVariantBatch(token, locationId);
@@ -1156,7 +1158,7 @@ export default function AddItemPage() {
       />
 
       {/* ── Sticky Action Bar ── */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm md:left-[252px]">
+      <div className={cn("fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm transition-[left] duration-200", isCollapsed ? "md:left-16" : "md:left-[252px]")}>
         <div className="flex items-center justify-between px-6 py-3">
           <button
             onClick={() => router.push("/inventory")}
