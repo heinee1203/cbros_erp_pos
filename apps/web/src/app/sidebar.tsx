@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./sidebar-context";
+import { useAuth } from "@/app/auth-context";
+import { useReorderCounts } from "@/hooks/use-reorder";
 
 /* ─── Nav Data Types ─── */
 interface NavChild {
@@ -116,6 +118,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Suppliers", href: "/procurement/suppliers", match: /^\/procurement\/suppliers/ },
       { label: "Inventory History", href: "/procurement/inventory-history", match: /^\/procurement\/inventory-history/ },
       { label: "Stock Monitor", href: "/procurement/stock-monitor", match: /^\/procurement\/stock-monitor/ },
+      { label: "Suggested Orders", href: "/procurement/suggested-orders", match: /^\/procurement\/suggested-orders/ },
     ],
   },
   {
@@ -418,6 +421,7 @@ function NavGroupItem({
                     <div className="mr-2 h-1 w-1 shrink-0 rounded-full bg-sidebar-foreground-active" />
                   )}
                   <span className="truncate">{child.label}</span>
+                  {child.label === "Suggested Orders" && <ReorderBadge />}
                 </Link>
               );
             })}
@@ -553,6 +557,20 @@ function NavDirectItem({
   );
 }
 
+/* ─── Reorder Badge (sidebar) ─── */
+function ReorderBadge() {
+  const { token, locationId } = useAuth();
+  const { data } = useReorderCounts(token, locationId);
+  if (!data) return null;
+  const count = (data.critical ?? 0) + (data.urgent ?? 0);
+  if (count <= 0) return null;
+  return (
+    <span className="ml-auto flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
 /* ─── Child Link (active state) ─── */
 function NavChildLink({
   child,
@@ -562,6 +580,7 @@ function NavChildLink({
   pathname: string;
 }) {
   const active = isChildActive(child, pathname);
+  const showBadge = child.label === "Suggested Orders";
 
   return (
     <Link
@@ -577,6 +596,7 @@ function NavChildLink({
         <div className="absolute left-[18px] top-1/2 h-1 w-1 -translate-y-1/2 rounded-full bg-sidebar-foreground-active" />
       )}
       <span className="truncate">{child.label}</span>
+      {showBadge && <ReorderBadge />}
     </Link>
   );
 }

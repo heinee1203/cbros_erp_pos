@@ -197,6 +197,8 @@ export default function EditItemPage() {
   const [unitsPerCase, setUnitsPerCase] = useState(1);
   const [packagingUnit, setPackagingUnit] = useState<string | null>(null);
   const [primarySupplierId, setPrimarySupplierId] = useState<string | null>(null);
+  const [reorderEnabled, setReorderEnabled] = useState(true);
+  const [customReorderPoint, setCustomReorderPoint] = useState<number | null>(null);
   const [vehicles, setVehicles] = useState<VehicleEntry[]>([]);
   const initialVehiclesRef = useRef<VehicleEntry[]>([]);
   const [initialized, setInitialized] = useState(false);
@@ -300,6 +302,8 @@ export default function EditItemPage() {
     setUnitsPerCase(product.unitsPerCase ?? 1);
     setPackagingUnit(product.packagingUnit ?? null);
     setPrimarySupplierId(product.primarySupplierId ?? null);
+    setReorderEnabled((product as any).reorderEnabled ?? true);
+    setCustomReorderPoint((product as any).customReorderPoint ?? null);
     if (product.vehicleCompatibility?.length > 0) {
       const mapped = product.vehicleCompatibility.map((v: any) => ({
         id: v.id,
@@ -367,10 +371,12 @@ export default function EditItemPage() {
       isParent !== (product.isParent ?? false) ||
       unitsPerCase !== (product.unitsPerCase ?? 1) ||
       (packagingUnit ?? "") !== (product.packagingUnit ?? "") ||
-      primarySupplierId !== (product.primarySupplierId ?? null);
+      primarySupplierId !== (product.primarySupplierId ?? null) ||
+      reorderEnabled !== ((product as any).reorderEnabled ?? true) ||
+      (customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null);
     const vehicleDirty = JSON.stringify(vehicles) !== JSON.stringify(initialVehiclesRef.current);
     return basicDirty || vehicleDirty || isAvailabilityDirty || isVariantFieldsDirty;
-  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, primarySupplierId, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
+  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, primarySupplierId, reorderEnabled, customReorderPoint, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
 
   // Unsaved changes warning
   useEffect(() => {
@@ -402,6 +408,8 @@ export default function EditItemPage() {
     if (unitsPerCase !== (product.unitsPerCase ?? 1)) payload.unitsPerCase = unitsPerCase;
     if (packagingUnit !== (product.packagingUnit ?? null)) payload.packagingUnit = packagingUnit;
     if (primarySupplierId !== (product.primarySupplierId ?? null)) payload.primarySupplierId = primarySupplierId;
+    if (reorderEnabled !== ((product as any).reorderEnabled ?? true)) payload.reorderEnabled = reorderEnabled;
+    if ((customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null)) payload.customReorderPoint = customReorderPoint;
 
     try {
       await updateMutation.mutateAsync(payload as any);
@@ -1141,6 +1149,36 @@ export default function EditItemPage() {
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          {/* Reorder Settings */}
+          <div className="mt-4 border-t border-border/50 pt-4">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Reorder</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={reorderEnabled}
+                  onChange={(e) => setReorderEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-border"
+                />
+                <label className="text-xs font-medium text-muted-foreground">Include in Reorder Suggestions</label>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Custom Reorder Point</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={customReorderPoint ?? ""}
+                  onChange={(e) => setCustomReorderPoint(e.target.value ? parseInt(e.target.value) : null)}
+                  placeholder="Auto (from engine)"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  {customReorderPoint ? `Fixed at ${customReorderPoint} units` : "Calculated dynamically by reorder engine"}
+                </span>
+              </div>
             </div>
           </div>
         </FormSection>

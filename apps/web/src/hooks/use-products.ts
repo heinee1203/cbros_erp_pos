@@ -34,6 +34,8 @@ export interface ProductRow {
   unitsPerCase: number;
   packagingUnit: string | null;
   primarySupplierId: string | null;
+  reorderEnabled: boolean;
+  customReorderPoint: number | null;
 }
 
 export interface ProductsResponse {
@@ -232,6 +234,8 @@ export interface UpdateProductPayload {
   unitsPerCase?: number;
   packagingUnit?: string | null;
   primarySupplierId?: string | null;
+  reorderEnabled?: boolean;
+  customReorderPoint?: number | null;
 }
 
 export function useUpdateProduct(token: string, locationId: string) {
