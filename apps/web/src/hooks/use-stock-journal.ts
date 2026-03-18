@@ -19,6 +19,7 @@ export interface JournalEntry {
   balanceAfter: number;
   referenceType: string;
   referenceId: string;
+  referenceNumber: string | null;
   referenceLineId: string | null;
   reasonCode: string | null;
   notes: string | null;

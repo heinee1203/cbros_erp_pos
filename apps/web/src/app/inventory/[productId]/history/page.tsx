@@ -47,6 +47,24 @@ function formatDateTime(iso: string): string {
     " " + d.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
+/** Map referenceType to the route path for the source document */
+function getDocumentLink(referenceType: string, referenceNumber: string | null): string | null {
+  if (!referenceNumber) return null;
+  switch (referenceType) {
+    case "RECEIVING":
+      return `/procurement/purchase-orders/${referenceNumber}`;
+    case "TRANSFER_IN":
+    case "TRANSFER_OUT":
+      return `/procurement/transfer-orders/${referenceNumber}`;
+    case "SALE":
+    case "RETURN":
+    case "VOID":
+      return `/sales/${referenceNumber}`;
+    default:
+      return null;
+  }
+}
+
 export default function ItemHistoryPage() {
   const { productId } = useParams<{ productId: string }>();
   const { token, locationId, apiLocationId } = useAuth();
@@ -188,6 +206,21 @@ export default function ItemHistoryPage() {
                   )}>
                     {TYPE_LABELS[entry.referenceType] ?? entry.referenceType}
                   </span>
+                  {entry.referenceNumber && (() => {
+                    const href = getDocumentLink(entry.referenceType, entry.referenceNumber);
+                    return href ? (
+                      <Link
+                        href={href}
+                        className="ml-1 text-[10px] font-medium text-green-600 hover:underline hover:opacity-80"
+                      >
+                        #{entry.referenceNumber}
+                      </Link>
+                    ) : (
+                      <span className="ml-1 text-[10px] text-muted-foreground">
+                        #{entry.referenceNumber}
+                      </span>
+                    );
+                  })()}
                   {entry.reasonCode && (
                     <span className="ml-1 text-[10px] text-muted-foreground">
                       ({entry.reasonCode.replace(/_/g, " ").toLowerCase()})

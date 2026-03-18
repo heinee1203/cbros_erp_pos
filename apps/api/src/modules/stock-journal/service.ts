@@ -1,5 +1,5 @@
 import { db } from "@apex/database";
-import { stockJournal, products, locations, users } from "@apex/database/schema";
+import { stockJournal, products, locations, users, purchaseOrders, stockTransfers, sales } from "@apex/database/schema";
 import { eq, and, gt, lt, gte, lte, ilike, or, sql, type SQL } from "drizzle-orm";
 
 // ── Types ──
@@ -46,6 +46,7 @@ export interface JournalEntry {
   balanceAfter: number;
   referenceType: string;
   referenceId: string;
+  referenceNumber: string | null;
   referenceLineId: string | null;
   reasonCode: string | null;
   notes: string | null;
@@ -174,6 +175,7 @@ export async function queryJournal(params: JournalQueryParams): Promise<JournalP
       balanceAfter: stockJournal.balanceAfter,
       referenceType: stockJournal.referenceType,
       referenceId: stockJournal.referenceId,
+      referenceNumber: sql<string | null>`COALESCE(${purchaseOrders.poNo}, ${stockTransfers.transferNo}, ${sales.saleNo})`.as("reference_number"),
       referenceLineId: stockJournal.referenceLineId,
       reasonCode: stockJournal.reasonCode,
       notes: stockJournal.notes,
@@ -186,6 +188,9 @@ export async function queryJournal(params: JournalQueryParams): Promise<JournalP
     .innerJoin(products, eq(stockJournal.productId, products.id))
     .innerJoin(locations, eq(stockJournal.locationId, locations.id))
     .leftJoin(users, eq(stockJournal.userId, users.id))
+    .leftJoin(purchaseOrders, eq(stockJournal.referenceId, purchaseOrders.id))
+    .leftJoin(stockTransfers, eq(stockJournal.referenceId, stockTransfers.id))
+    .leftJoin(sales, eq(stockJournal.referenceId, sales.id))
     .where(and(...conditions))
     .orderBy(sql`${stockJournal.effectiveAt} DESC, ${stockJournal.id} DESC`)
     .limit(limit + 1);
