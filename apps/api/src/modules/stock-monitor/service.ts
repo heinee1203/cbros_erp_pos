@@ -1,5 +1,24 @@
 import { db } from "@apex/database";
-import { sql } from "drizzle-orm";
+import {
+  stockMetrics,
+  supplierMetrics,
+  products,
+  brands,
+  categories,
+  productFamilies,
+  suppliers,
+} from "@apex/database/schema";
+import {
+  eq,
+  and,
+  gt,
+  ilike,
+  or,
+  sql,
+  asc,
+  desc,
+  type SQL,
+} from "drizzle-orm";
 
 /**
  * Recompute stock_metrics for every active product in the org.
@@ -169,4 +188,427 @@ export async function refreshSupplierMetrics(orgId: string): Promise<number> {
   });
 
   return result;
+}
+
+// ── Stock Monitor Query Types ──
+
+export interface StockMonitorQueryParams {
+  orgId: string;
+  search?: string;
+  status?: string;
+  brandId?: string;
+  categoryId?: string;
+  familyId?: string;
+  sortBy?: string;
+  sortDir?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface StockMonitorRow {
+  id: string;
+  productId: string;
+  productName: string;
+  productSku: string;
+  brandName: string | null;
+  categoryName: string | null;
+  familyName: string | null;
+  totalStock: number;
+  avgDailySales30d: string;
+  avgDailySales60d: string;
+  avgDailySales90d: string;
+  daysOfStock: string | null;
+  stockoutDays90d: number;
+  lastPoDate: string | null;
+  lastPoSupplierName: string | null;
+  lastLeadTimeDays: number | null;
+  status: string;
+  computedAt: string;
+}
+
+export interface StockMonitorSummary {
+  critical: number;
+  low: number;
+  healthy: number;
+  overstock: number;
+  deadStock: number;
+  outOfStock: number;
+  total: number;
+}
+
+export interface StockMonitorPage {
+  data: StockMonitorRow[];
+  summary: StockMonitorSummary;
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+// ── Sort helper ──
+
+const SORT_COLUMNS: Record<string, any> = {
+  status: stockMetrics.status,
+  name: products.name,
+  totalStock: stockMetrics.totalStock,
+  avgDailySales30d: stockMetrics.avgDailySales30d,
+  daysOfStock: stockMetrics.daysOfStock,
+  stockoutDays90d: stockMetrics.stockoutDays90d,
+  lastPoDate: stockMetrics.lastPoDate,
+  lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
+};
+
+const STATUS_ORDER = sql`CASE ${stockMetrics.status}
+  WHEN 'CRITICAL' THEN 1
+  WHEN 'LOW' THEN 2
+  WHEN 'HEALTHY' THEN 3
+  WHEN 'OVERSTOCK' THEN 4
+  WHEN 'DEAD_STOCK' THEN 5
+  ELSE 6
+END`;
+
+// ── Summary query ──
+
+async function queryStockMonitorSummary(orgId: string): Promise<StockMonitorSummary> {
+  const statusRows = await db.execute(
+    sql`SELECT status, COUNT(*)::integer AS count FROM stock_metrics WHERE org_id = ${orgId} GROUP BY status`,
+  );
+
+  const [oosRow] = await db.execute(
+    sql`SELECT COUNT(*)::integer AS count FROM stock_metrics WHERE org_id = ${orgId} AND total_stock = 0 AND avg_daily_sales_90d::numeric > 0`,
+  );
+
+  const summary: StockMonitorSummary = {
+    critical: 0,
+    low: 0,
+    healthy: 0,
+    overstock: 0,
+    deadStock: 0,
+    outOfStock: (oosRow as any).count ?? 0,
+    total: 0,
+  };
+
+  for (const row of statusRows as any[]) {
+    const count = row.count as number;
+    summary.total += count;
+    switch (row.status) {
+      case "CRITICAL":
+        summary.critical = count;
+        break;
+      case "LOW":
+        summary.low = count;
+        break;
+      case "HEALTHY":
+        summary.healthy = count;
+        break;
+      case "OVERSTOCK":
+        summary.overstock = count;
+        break;
+      case "DEAD_STOCK":
+        summary.deadStock = count;
+        break;
+    }
+  }
+
+  return summary;
+}
+
+// ── Paginated stock monitor query ──
+
+export async function queryStockMonitor(
+  params: StockMonitorQueryParams,
+): Promise<StockMonitorPage> {
+  const limit = params.limit ?? 50;
+
+  const conditions: SQL[] = [eq(stockMetrics.orgId, params.orgId)];
+
+  if (params.search && params.search.length >= 2) {
+    conditions.push(
+      or(
+        ilike(products.name, `%${params.search}%`),
+        eq(products.sku, params.search),
+      )!,
+    );
+  }
+
+  if (params.status) {
+    conditions.push(eq(stockMetrics.status, params.status as any));
+  }
+
+  if (params.brandId) {
+    conditions.push(eq(products.brandId, params.brandId));
+  }
+
+  if (params.categoryId) {
+    conditions.push(eq(products.categoryId, params.categoryId));
+  }
+
+  if (params.familyId) {
+    conditions.push(eq(products.familyId, params.familyId));
+  }
+
+  if (params.cursor) {
+    conditions.push(gt(stockMetrics.id, params.cursor));
+  }
+
+  // Determine sort
+  let orderCols: SQL[];
+  if (params.sortBy === "status" || !params.sortBy) {
+    const dir = params.sortDir === "desc" ? desc : asc;
+    orderCols = [
+      dir(STATUS_ORDER),
+      asc(sql`${stockMetrics.daysOfStock} NULLS LAST`),
+    ];
+  } else {
+    const col = SORT_COLUMNS[params.sortBy] ?? products.name;
+    const dir = params.sortDir === "desc" ? desc : asc;
+    orderCols = [dir(col)];
+  }
+
+  const rows = await db
+    .select({
+      id: stockMetrics.id,
+      productId: stockMetrics.productId,
+      productName: products.name,
+      productSku: products.sku,
+      brandName: brands.name,
+      categoryName: categories.name,
+      familyName: productFamilies.name,
+      totalStock: stockMetrics.totalStock,
+      avgDailySales30d: stockMetrics.avgDailySales30d,
+      avgDailySales60d: stockMetrics.avgDailySales60d,
+      avgDailySales90d: stockMetrics.avgDailySales90d,
+      daysOfStock: stockMetrics.daysOfStock,
+      stockoutDays90d: stockMetrics.stockoutDays90d,
+      lastPoDate: stockMetrics.lastPoDate,
+      lastPoSupplierName: stockMetrics.lastPoSupplierName,
+      lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
+      status: stockMetrics.status,
+      computedAt: stockMetrics.computedAt,
+    })
+    .from(stockMetrics)
+    .innerJoin(products, eq(stockMetrics.productId, products.id))
+    .leftJoin(brands, eq(products.brandId, brands.id))
+    .leftJoin(categories, eq(products.categoryId, categories.id))
+    .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+    .where(and(...conditions))
+    .orderBy(...orderCols, asc(stockMetrics.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore ? data[data.length - 1]!.id : null;
+
+  const enriched: StockMonitorRow[] = data.map((r) => ({
+    id: r.id,
+    productId: r.productId,
+    productName: r.productName,
+    productSku: r.productSku,
+    brandName: r.brandName,
+    categoryName: r.categoryName,
+    familyName: r.familyName,
+    totalStock: r.totalStock,
+    avgDailySales30d: r.avgDailySales30d,
+    avgDailySales60d: r.avgDailySales60d,
+    avgDailySales90d: r.avgDailySales90d,
+    daysOfStock: r.daysOfStock,
+    stockoutDays90d: r.stockoutDays90d,
+    lastPoDate: r.lastPoDate ? r.lastPoDate.toISOString() : null,
+    lastPoSupplierName: r.lastPoSupplierName,
+    lastLeadTimeDays: r.lastLeadTimeDays,
+    status: r.status,
+    computedAt: r.computedAt.toISOString(),
+  }));
+
+  const summary = await queryStockMonitorSummary(params.orgId);
+
+  return { data: enriched, summary, nextCursor, hasMore };
+}
+
+// ── CSV export (all matching rows, no pagination) ──
+
+export async function exportStockMonitorCSV(
+  params: Omit<StockMonitorQueryParams, "cursor" | "limit">,
+): Promise<StockMonitorRow[]> {
+  const conditions: SQL[] = [eq(stockMetrics.orgId, params.orgId)];
+
+  if (params.search && params.search.length >= 2) {
+    conditions.push(
+      or(
+        ilike(products.name, `%${params.search}%`),
+        eq(products.sku, params.search),
+      )!,
+    );
+  }
+
+  if (params.status) {
+    conditions.push(eq(stockMetrics.status, params.status as any));
+  }
+
+  if (params.brandId) {
+    conditions.push(eq(products.brandId, params.brandId));
+  }
+
+  if (params.categoryId) {
+    conditions.push(eq(products.categoryId, params.categoryId));
+  }
+
+  if (params.familyId) {
+    conditions.push(eq(products.familyId, params.familyId));
+  }
+
+  // Sort
+  let orderCols: SQL[];
+  if (params.sortBy === "status" || !params.sortBy) {
+    const dir = params.sortDir === "desc" ? desc : asc;
+    orderCols = [
+      dir(STATUS_ORDER),
+      asc(sql`${stockMetrics.daysOfStock} NULLS LAST`),
+    ];
+  } else {
+    const col = SORT_COLUMNS[params.sortBy] ?? products.name;
+    const dir = params.sortDir === "desc" ? desc : asc;
+    orderCols = [dir(col)];
+  }
+
+  const rows = await db
+    .select({
+      id: stockMetrics.id,
+      productId: stockMetrics.productId,
+      productName: products.name,
+      productSku: products.sku,
+      brandName: brands.name,
+      categoryName: categories.name,
+      familyName: productFamilies.name,
+      totalStock: stockMetrics.totalStock,
+      avgDailySales30d: stockMetrics.avgDailySales30d,
+      avgDailySales60d: stockMetrics.avgDailySales60d,
+      avgDailySales90d: stockMetrics.avgDailySales90d,
+      daysOfStock: stockMetrics.daysOfStock,
+      stockoutDays90d: stockMetrics.stockoutDays90d,
+      lastPoDate: stockMetrics.lastPoDate,
+      lastPoSupplierName: stockMetrics.lastPoSupplierName,
+      lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
+      status: stockMetrics.status,
+      computedAt: stockMetrics.computedAt,
+    })
+    .from(stockMetrics)
+    .innerJoin(products, eq(stockMetrics.productId, products.id))
+    .leftJoin(brands, eq(products.brandId, brands.id))
+    .leftJoin(categories, eq(products.categoryId, categories.id))
+    .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+    .where(and(...conditions))
+    .orderBy(...orderCols, asc(stockMetrics.id));
+
+  return rows.map((r) => ({
+    id: r.id,
+    productId: r.productId,
+    productName: r.productName,
+    productSku: r.productSku,
+    brandName: r.brandName,
+    categoryName: r.categoryName,
+    familyName: r.familyName,
+    totalStock: r.totalStock,
+    avgDailySales30d: r.avgDailySales30d,
+    avgDailySales60d: r.avgDailySales60d,
+    avgDailySales90d: r.avgDailySales90d,
+    daysOfStock: r.daysOfStock,
+    stockoutDays90d: r.stockoutDays90d,
+    lastPoDate: r.lastPoDate ? r.lastPoDate.toISOString() : null,
+    lastPoSupplierName: r.lastPoSupplierName,
+    lastLeadTimeDays: r.lastLeadTimeDays,
+    status: r.status,
+    computedAt: r.computedAt.toISOString(),
+  }));
+}
+
+// ── Supplier Metrics Query ──
+
+export interface SupplierMetricsQueryParams {
+  orgId: string;
+  search?: string;
+  sortBy?: string;
+  sortDir?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface SupplierMetricsRow {
+  id: string;
+  supplierId: string;
+  supplierName: string;
+  poCount6m: number;
+  avgLeadTimeDays: string | null;
+  minLeadTimeDays: number | null;
+  maxLeadTimeDays: number | null;
+  reliabilityPct: string | null;
+  lastPoDate: string | null;
+  computedAt: string;
+}
+
+const SUPPLIER_SORT_COLUMNS: Record<string, any> = {
+  name: suppliers.name,
+  poCount6m: supplierMetrics.poCount6m,
+  avgLeadTimeDays: supplierMetrics.avgLeadTimeDays,
+  reliabilityPct: supplierMetrics.reliabilityPct,
+  lastPoDate: supplierMetrics.lastPoDate,
+};
+
+export async function querySupplierMetrics(
+  params: SupplierMetricsQueryParams,
+): Promise<{
+  data: SupplierMetricsRow[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}> {
+  const limit = params.limit ?? 50;
+
+  const conditions: SQL[] = [eq(supplierMetrics.orgId, params.orgId)];
+
+  if (params.search && params.search.length >= 2) {
+    conditions.push(ilike(suppliers.name, `%${params.search}%`));
+  }
+
+  if (params.cursor) {
+    conditions.push(gt(supplierMetrics.id, params.cursor));
+  }
+
+  const col = SUPPLIER_SORT_COLUMNS[params.sortBy ?? "name"] ?? suppliers.name;
+  const dir = params.sortDir === "desc" ? desc : asc;
+
+  const rows = await db
+    .select({
+      id: supplierMetrics.id,
+      supplierId: supplierMetrics.supplierId,
+      supplierName: suppliers.name,
+      poCount6m: supplierMetrics.poCount6m,
+      avgLeadTimeDays: supplierMetrics.avgLeadTimeDays,
+      minLeadTimeDays: supplierMetrics.minLeadTimeDays,
+      maxLeadTimeDays: supplierMetrics.maxLeadTimeDays,
+      reliabilityPct: supplierMetrics.reliabilityPct,
+      lastPoDate: supplierMetrics.lastPoDate,
+      computedAt: supplierMetrics.computedAt,
+    })
+    .from(supplierMetrics)
+    .innerJoin(suppliers, eq(supplierMetrics.supplierId, suppliers.id))
+    .where(and(...conditions))
+    .orderBy(dir(col), asc(supplierMetrics.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore ? data[data.length - 1]!.id : null;
+
+  const enriched: SupplierMetricsRow[] = data.map((r) => ({
+    id: r.id,
+    supplierId: r.supplierId,
+    supplierName: r.supplierName,
+    poCount6m: r.poCount6m,
+    avgLeadTimeDays: r.avgLeadTimeDays,
+    minLeadTimeDays: r.minLeadTimeDays,
+    maxLeadTimeDays: r.maxLeadTimeDays,
+    reliabilityPct: r.reliabilityPct,
+    lastPoDate: r.lastPoDate ? r.lastPoDate.toISOString() : null,
+    computedAt: r.computedAt.toISOString(),
+  }));
+
+  return { data: enriched, nextCursor, hasMore };
 }
