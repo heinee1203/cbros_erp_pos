@@ -107,11 +107,18 @@ export function StockPopover({
   productId,
   stockLevel,
   reorderPoint,
+  unitsPerCase = 1,
+  packagingUnit,
 }: {
   productId: string;
   stockLevel: number;
   reorderPoint: number;
+  unitsPerCase?: number;
+  packagingUnit?: string | null;
 }) {
+  const upc = unitsPerCase > 1 ? unitsPerCase : 0;
+  const pkgUnit = packagingUnit || "case";
+  const hasPkg = upc > 1;
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -186,6 +193,11 @@ export function StockPopover({
         )}>
           <div className="border-b border-border px-3 py-2">
             <span className="text-[11px] font-semibold text-foreground">Stock by Location</span>
+            {hasPkg && (
+              <div className="text-[10px] text-muted-foreground mt-0.5">
+                1 {pkgUnit} = {upc} pieces
+              </div>
+            )}
           </div>
 
           {isLoading ? (
@@ -223,12 +235,29 @@ export function StockPopover({
                         {isCurrent && <span className="ml-1 text-[9px] text-primary">(current)</span>}
                       </span>
                     </div>
-                    <span className={cn(
-                      "ml-2 shrink-0 text-[11px] font-semibold tabular-nums",
-                      loc.stockLevel === 0 ? "text-red-600" : "text-foreground",
-                    )}>
-                      {loc.stockLevel.toLocaleString()}
-                    </span>
+                    <div className="ml-2 shrink-0 text-right">
+                      {hasPkg && loc.stockLevel >= upc ? (() => {
+                        const cases = Math.floor(loc.stockLevel / upc);
+                        const loose = loc.stockLevel % upc;
+                        return (
+                          <>
+                            <span className="text-[11px] font-semibold tabular-nums text-foreground">
+                              {loc.stockLevel.toLocaleString()}
+                            </span>
+                            <span className="text-[9px] text-muted-foreground ml-1">
+                              ({cases}{loose > 0 ? `.${loose}` : ""} {pkgUnit}{cases !== 1 ? "s" : ""})
+                            </span>
+                          </>
+                        );
+                      })() : (
+                        <span className={cn(
+                          "text-[11px] font-semibold tabular-nums",
+                          loc.stockLevel === 0 ? "text-red-600" : "text-foreground",
+                        )}>
+                          {loc.stockLevel.toLocaleString()}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -238,9 +267,20 @@ export function StockPopover({
           {!isLoading && locations.length > 0 && (
             <div className="flex items-center justify-between border-t border-border px-3 py-1.5">
               <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Total</span>
-              <span className="text-[11px] font-bold tabular-nums text-foreground">
-                {total.toLocaleString()}
-              </span>
+              <div className="text-right">
+                <span className="text-[11px] font-bold tabular-nums text-foreground">
+                  {total.toLocaleString()}
+                </span>
+                {hasPkg && total >= upc && (() => {
+                  const cases = Math.floor(total / upc);
+                  const loose = total % upc;
+                  return (
+                    <span className="text-[9px] text-muted-foreground ml-1">
+                      ({cases}{loose > 0 ? `.${loose}` : ""} {pkgUnit}{cases !== 1 ? "s" : ""})
+                    </span>
+                  );
+                })()}
+              </div>
             </div>
           )}
         </div>
@@ -467,7 +507,7 @@ export function FlatProductRow({
         </td>
         {/* Stock */}
         <td className="px-2 py-[5px] text-right">
-          <StockPopover productId={p.id} stockLevel={p.stockLevel} reorderPoint={p.reorderPoint} />
+          <StockPopover productId={p.id} stockLevel={p.stockLevel} reorderPoint={p.reorderPoint} unitsPerCase={p.unitsPerCase} packagingUnit={p.packagingUnit} />
         </td>
         {/* Category */}
         <td className="px-3 py-[5px]">
