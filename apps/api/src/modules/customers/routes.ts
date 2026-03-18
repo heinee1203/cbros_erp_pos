@@ -19,6 +19,9 @@ import {
   recordPayment,
   recordAdjustment,
   listTransactions,
+  getAgingReport,
+  getSOA,
+  getARSummary,
 } from "./service";
 
 function assertArRole(role: string) {
@@ -60,6 +63,38 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       .limit(20);
 
     return reply.send({ data: results });
+  });
+
+  // ─── Report routes (BEFORE /:id to avoid conflicts) ───
+
+  app.get("/reports/aging", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const data = await getAgingReport(orgId);
+    return reply.send({ data });
+  });
+
+  app.get("/reports/soa/:customerId", async (request, reply) => {
+    const { customerId } = request.params as { customerId: string };
+    const { orgId } = request.storeContext!;
+    const { from, to } = request.query as { from?: string; to?: string };
+
+    // Default: current month
+    const now = new Date();
+    const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const defaultTo = now.toISOString();
+
+    try {
+      const result = await getSOA(customerId, orgId, from || defaultFrom, to || defaultTo);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(404).send({ error: err.message });
+    }
+  });
+
+  app.get("/reports/summary", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const data = await getARSummary(orgId);
+    return reply.send(data);
   });
 
   // ─── GET /customers ──────────────────────────────

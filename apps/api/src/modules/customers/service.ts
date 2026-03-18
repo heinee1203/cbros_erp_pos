@@ -1,6 +1,6 @@
 import { db, type DbOrTx } from "@apex/database";
 import { customers, customerTransactions } from "@apex/database/schema";
-import { eq, and, or, sql, desc, asc, ilike, gt, type SQL } from "drizzle-orm";
+import { eq, and, or, sql, desc, asc, ilike, gt, lt, gte, lte, type SQL } from "drizzle-orm";
 import type {
   CreateCustomerInput,
   UpdateCustomerInput,
@@ -454,4 +454,135 @@ export async function chargeCustomerAccount(
     .returning();
 
   return transaction;
+}
+
+// ── AR Report Functions ──
+
+/**
+ * Get AR aging report — buckets outstanding CHARGE transactions by age.
+ */
+export async function getAgingReport(orgId: string) {
+  const rows = await db.execute(sql`
+    SELECT
+      c.id, c.name, c.current_balance as total,
+      COALESCE(SUM(CASE WHEN ct.recorded_at >= NOW() - INTERVAL '30 days' THEN ct.amount::numeric ELSE 0 END), 0) as "current",
+      COALESCE(SUM(CASE WHEN ct.recorded_at < NOW() - INTERVAL '30 days' AND ct.recorded_at >= NOW() - INTERVAL '60 days' THEN ct.amount::numeric ELSE 0 END), 0) as "days31to60",
+      COALESCE(SUM(CASE WHEN ct.recorded_at < NOW() - INTERVAL '60 days' AND ct.recorded_at >= NOW() - INTERVAL '90 days' THEN ct.amount::numeric ELSE 0 END), 0) as "days61to90",
+      COALESCE(SUM(CASE WHEN ct.recorded_at < NOW() - INTERVAL '90 days' THEN ct.amount::numeric ELSE 0 END), 0) as "over90"
+    FROM customers c
+    LEFT JOIN customer_transactions ct
+      ON ct.customer_id = c.id AND ct.type = 'CHARGE' AND ct.org_id = c.org_id
+    WHERE c.org_id = ${orgId} AND c.current_balance > 0 AND c.is_active = true
+    GROUP BY c.id, c.name, c.current_balance
+    ORDER BY c.current_balance DESC
+  `);
+
+  return rows.map((row: any) => ({
+    customer: { id: row.id, name: row.name },
+    current: parseFloat(row.current),
+    days31to60: parseFloat(row.days31to60),
+    days61to90: parseFloat(row.days61to90),
+    over90: parseFloat(row.over90),
+    total: parseFloat(row.total),
+  }));
+}
+
+/**
+ * Get Statement of Account for a customer within a date range.
+ */
+export async function getSOA(
+  customerId: string,
+  orgId: string,
+  from: string,
+  to: string,
+) {
+  // Validate customer exists and belongs to org
+  const [customer] = await db
+    .select()
+    .from(customers)
+    .where(and(eq(customers.id, customerId), eq(customers.orgId, orgId)))
+    .limit(1);
+
+  if (!customer) throw new Error("Customer not found");
+
+  // Get opening balance: balanceAfter of the last transaction before `from`
+  const [lastBefore] = await db
+    .select({ balanceAfter: customerTransactions.balanceAfter })
+    .from(customerTransactions)
+    .where(
+      and(
+        eq(customerTransactions.customerId, customerId),
+        eq(customerTransactions.orgId, orgId),
+        sql`${customerTransactions.recordedAt} < ${from}`,
+      ),
+    )
+    .orderBy(desc(customerTransactions.recordedAt), desc(customerTransactions.id))
+    .limit(1);
+
+  const openingBalance = lastBefore ? parseFloat(lastBefore.balanceAfter) : 0;
+
+  // Fetch transactions in [from, to] range
+  const transactions = await db
+    .select()
+    .from(customerTransactions)
+    .where(
+      and(
+        eq(customerTransactions.customerId, customerId),
+        eq(customerTransactions.orgId, orgId),
+        sql`${customerTransactions.recordedAt} >= ${from}`,
+        sql`${customerTransactions.recordedAt} <= ${to}`,
+      ),
+    )
+    .orderBy(asc(customerTransactions.recordedAt), asc(customerTransactions.id));
+
+  const closingBalance =
+    transactions.length > 0
+      ? parseFloat(transactions[transactions.length - 1].balanceAfter)
+      : openingBalance;
+
+  return {
+    customer,
+    openingBalance,
+    transactions,
+    closingBalance,
+    from,
+    to,
+  };
+}
+
+/**
+ * Get AR summary — totals, counts, overdue info.
+ */
+export async function getARSummary(orgId: string) {
+  // Total receivables and customer count
+  const [totals] = await db.execute(sql`
+    SELECT
+      COALESCE(SUM(current_balance::numeric), 0) as "totalReceivables",
+      COUNT(*) as "customerCount"
+    FROM customers
+    WHERE org_id = ${orgId} AND current_balance > 0 AND is_active = true
+  `);
+
+  // Overdue: customers with current_balance > 0 who have any CHARGE older than their payment_terms_days
+  const [overdue] = await db.execute(sql`
+    SELECT
+      COUNT(DISTINCT c.id) as "overdueCount",
+      COALESCE(SUM(DISTINCT c.current_balance::numeric), 0) as "overdueAmount"
+    FROM customers c
+    WHERE c.org_id = ${orgId} AND c.current_balance > 0 AND c.is_active = true
+      AND EXISTS (
+        SELECT 1 FROM customer_transactions ct
+        WHERE ct.customer_id = c.id
+          AND ct.org_id = c.org_id
+          AND ct.type = 'CHARGE'
+          AND ct.recorded_at < NOW() - (c.payment_terms_days || ' days')::interval
+      )
+  `);
+
+  return {
+    totalReceivables: parseFloat((totals as any).totalReceivables),
+    customerCount: parseInt((totals as any).customerCount, 10),
+    overdueCount: parseInt((overdue as any).overdueCount, 10),
+    overdueAmount: parseFloat((overdue as any).overdueAmount),
+  };
 }
