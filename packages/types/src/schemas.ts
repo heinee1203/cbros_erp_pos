@@ -117,6 +117,8 @@ export const createProductSchema = z.object({
   isParent: z.boolean().default(false),
   parentProductId: z.string().uuid().nullable().optional(),
   description: z.string().max(2000).optional(),
+  unitsPerCase: z.number().int().min(1).default(1),
+  packagingUnit: z.string().max(50).nullable().optional(),
   trackInventory: z.boolean().default(true),
   reorderPoint: z.number().int().min(0).default(10),
   leadTimeDays: z.number().int().min(0).default(7),
@@ -159,6 +161,8 @@ export const updateProductSchema = z.object({
   isParent: z.boolean().optional(),
   parentProductId: z.string().uuid().nullable().optional(),
   description: z.string().max(2000).nullable().optional(),
+  unitsPerCase: z.number().int().min(1).optional(),
+  packagingUnit: z.string().max(50).nullable().optional(),
   reorderPoint: z.number().int().min(0).optional(),
   // Add new variants to an existing parent product
   newVariants: z.array(variantItemSchema).optional(),
@@ -189,6 +193,8 @@ const importRowSchema = z.object({
   costPrice: z.string().optional(),
   description: z.string().max(2000).optional(),
   isVariablePrice: z.boolean().optional(),
+  unitsPerCase: z.coerce.number().int().min(1).optional(),
+  packagingUnit: z.string().max(50).optional(),
   trackStock: z.boolean().optional(),
   locations: z.array(importLocationSchema).optional(),
 });

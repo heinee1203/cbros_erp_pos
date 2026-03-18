@@ -9,6 +9,7 @@ import {
   numeric,
   check,
   boolean,
+  integer,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { organizations } from "./organizations";
@@ -65,6 +66,10 @@ export const products = pgTable(
     oemNumber: varchar("oem_number", { length: 100 }),
     /** Product description — notes, specs, customer-facing detail */
     description: varchar("description", { length: 2000 }),
+    /** Number of pieces per case/box — 1 means sold individually */
+    unitsPerCase: integer("units_per_case").notNull().default(1),
+    /** Packaging label: box, case, pack, carton, drum, pail, set */
+    packagingUnit: varchar("packaging_unit", { length: 50 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
