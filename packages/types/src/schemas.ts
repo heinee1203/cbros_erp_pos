@@ -431,6 +431,9 @@ export const completeSaleSchema = z.object({
     )
     .optional(),
   allowNegativeStock: z.boolean().optional(),
+  overrideApproval: z.object({
+    pin: z.string().length(4),
+  }).optional(),
 });
 export type CompleteSaleInput = z.infer<typeof completeSaleSchema>;
 
@@ -845,13 +848,66 @@ export const updateLocationSchema = z.object({
 });
 export type UpdateLocationInput = z.infer<typeof updateLocationSchema>;
 
-// ── Customer: Create ──
+// ── Customer: Create (with AR fields) ──
+const CUSTOMER_TYPES = ["INDIVIDUAL", "SHOP", "FLEET", "WHOLESALE"] as const;
+
 export const createCustomerSchema = z.object({
   name: z.string().min(1).max(255),
+  customerType: z.enum(CUSTOMER_TYPES).default("INDIVIDUAL"),
+  contactPerson: z.string().max(255).optional(),
   phone: z.string().min(1).max(50),
-  notes: z.string().max(1000).optional(),
+  email: z.string().email().max(255).optional(),
+  address: z.string().max(2000).optional(),
+  tin: z.string().max(20).optional(),
+  creditLimit: z.string().default("0.00").refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val),
+    { message: "Credit limit must be a valid decimal" },
+  ),
+  paymentTermsDays: z.number().int().min(1).max(365).default(30),
+  notes: z.string().max(5000).optional(),
 });
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
+
+// ── Customer: Update ──
+export const updateCustomerSchema = z.object({
+  name: z.string().min(1).max(255).optional(),
+  customerType: z.enum(CUSTOMER_TYPES).optional(),
+  contactPerson: z.string().max(255).nullable().optional(),
+  phone: z.string().min(1).max(50).optional(),
+  email: z.string().email().max(255).nullable().optional(),
+  address: z.string().max(2000).nullable().optional(),
+  tin: z.string().max(20).nullable().optional(),
+  creditLimit: z.string().refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val),
+    { message: "Credit limit must be a valid decimal" },
+  ).optional(),
+  paymentTermsDays: z.number().int().min(1).max(365).optional(),
+  notes: z.string().max(5000).nullable().optional(),
+  isActive: z.boolean().optional(),
+});
+export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
+
+// ── Customer: Record Payment ──
+export const recordPaymentSchema = z.object({
+  amount: z.string().min(1).refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val) && parseFloat(val) > 0,
+    { message: "Amount must be a positive decimal" },
+  ),
+  paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHECK", "GCASH", "MAYA", "QRPH", "OTHER"]),
+  referenceNumber: z.string().max(100).optional(),
+  notes: z.string().max(1000).optional(),
+});
+export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
+
+// ── Customer: Manual Adjustment ──
+export const customerAdjustmentSchema = z.object({
+  amount: z.string().min(1).refine(
+    (val) => /^-?\d+(\.\d{1,2})?$/.test(val) && parseFloat(val) !== 0,
+    { message: "Amount must be a non-zero decimal (positive to increase, negative to decrease)" },
+  ),
+  notes: z.string().min(1).max(1000),
+});
+export type CustomerAdjustmentInput = z.infer<typeof customerAdjustmentSchema>;
 
 // ── Customer Vehicle: Create ──
 export const createCustomerVehicleSchema = z.object({

@@ -125,6 +125,26 @@ export const PaymentMethod = {
 } as const;
 export type PaymentMethod = (typeof PaymentMethod)[keyof typeof PaymentMethod];
 
+export const CustomerType = {
+  INDIVIDUAL: "INDIVIDUAL",
+  SHOP: "SHOP",
+  FLEET: "FLEET",
+  WHOLESALE: "WHOLESALE",
+} as const;
+export type CustomerType = (typeof CustomerType)[keyof typeof CustomerType];
+
+export const CustomerTransactionType = {
+  CHARGE: "CHARGE",
+  PAYMENT: "PAYMENT",
+  CREDIT_NOTE: "CREDIT_NOTE",
+  ADJUSTMENT: "ADJUSTMENT",
+} as const;
+export type CustomerTransactionType =
+  (typeof CustomerTransactionType)[keyof typeof CustomerTransactionType];
+
+/** Roles allowed to manage customer accounts (create, edit, record payments) */
+export const AR_ROLES = [UserRole.ADMIN, UserRole.MANAGER] as const;
+
 export const PurchaseOrderStatus = {
   DRAFT: "DRAFT",
   SUBMITTED: "SUBMITTED",
