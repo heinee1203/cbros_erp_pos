@@ -19,6 +19,7 @@ import {
   PackageX,
   TrendingUp,
   Archive,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -31,6 +32,7 @@ import {
 } from "@/hooks/use-stock-monitor";
 import { useBrands } from "@/hooks/use-brands";
 import { useCategories } from "@/hooks/use-categories";
+import { AiAdvisorPanel } from "@/components/ai-advisor-panel";
 
 /* ═══════════════════════════════════════════════════════
  * CONSTANTS
@@ -75,6 +77,12 @@ export default function StockMonitorPage() {
   // ── Sort state ──
   const [sortBy, setSortBy] = useState<SortField>("daysOfStock");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  // ── AI Advisor panel ──
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiProductIds, setAiProductIds] = useState<string[]>([]);
+  const [aiProductNames, setAiProductNames] = useState<string[]>([]);
+  const [aiMode, setAiMode] = useState<"single" | "multi" | "budget">("single");
 
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -336,6 +344,7 @@ export default function StockMonitorPage() {
                   <SortHeader label="Stockout Days" field="stockoutDays90d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                   <SortHeader label="Last PO" field="lastPoDate" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
                   <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Lead Time</th>
+                  <th scope="col" className="w-10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-center">AI</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -344,6 +353,12 @@ export default function StockMonitorPage() {
                     key={row.id}
                     row={row}
                     onClick={() => router.push(`/inventory/${row.productId}/edit`)}
+                    onAskAi={() => {
+                      setAiProductIds([row.productId]);
+                      setAiProductNames([row.productName]);
+                      setAiMode("single");
+                      setAiPanelOpen(true);
+                    }}
                   />
                 ))}
               </tbody>
@@ -376,6 +391,14 @@ export default function StockMonitorPage() {
           </div>
         </div>
       </div>
+
+      <AiAdvisorPanel
+        open={aiPanelOpen}
+        onClose={() => { setAiPanelOpen(false); setAiProductIds([]); setAiProductNames([]); }}
+        productIds={aiProductIds}
+        productNames={aiProductNames}
+        mode={aiMode}
+      />
     </div>
   );
 }
@@ -436,7 +459,7 @@ function SummaryCards({
  * TABLE ROW
  * ═══════════════════════════════════════════════════════ */
 
-function StockMonitorRow({ row, onClick }: { row: StockMonitorRow; onClick: () => void }) {
+function StockMonitorRow({ row, onClick, onAskAi }: { row: StockMonitorRow; onClick: () => void; onAskAi: () => void }) {
   const cfg = STATUS_CONFIG[row.status] ?? { label: row.status, badge: "bg-muted text-muted-foreground", text: "text-muted-foreground" };
   const avgSales = parseFloat(row.avgDailySales30d);
   const daysOfStock = row.daysOfStock != null ? parseFloat(row.daysOfStock) : null;
@@ -515,6 +538,17 @@ function StockMonitorRow({ row, onClick }: { row: StockMonitorRow; onClick: () =
       {/* Lead Time */}
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.lastLeadTimeDays != null ? `${row.lastLeadTimeDays}d` : "—"}
+      </td>
+
+      {/* AI */}
+      <td className="whitespace-nowrap px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={onAskAi}
+          className="rounded p-1 text-amber-500 hover:bg-amber-50"
+          title="Ask AI"
+        >
+          <Sparkles size={13} />
+        </button>
       </td>
     </tr>
   );

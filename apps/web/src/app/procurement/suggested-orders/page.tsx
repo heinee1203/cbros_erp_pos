@@ -19,6 +19,7 @@ import {
   Settings,
   Check,
   XCircle,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -35,6 +36,7 @@ import {
 import { useBrands } from "@/hooks/use-brands";
 import { useCategories } from "@/hooks/use-categories";
 import { useSuppliers } from "@/hooks/use-suppliers";
+import { AiAdvisorPanel } from "@/components/ai-advisor-panel";
 
 /* ═══════════════════════════════════════════════════════
  * CONSTANTS
@@ -93,6 +95,12 @@ export default function SuggestedOrdersPage() {
 
   // ── Success banner ──
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // ── AI Advisor panel ──
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiProductIds, setAiProductIds] = useState<string[]>([]);
+  const [aiProductNames, setAiProductNames] = useState<string[]>([]);
+  const [aiMode, setAiMode] = useState<"single" | "multi" | "budget">("single");
 
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -428,6 +436,18 @@ export default function SuggestedOrdersPage() {
           >
             Dismiss Selected
           </button>
+          <button
+            onClick={() => {
+              const selectedRows = rows.filter(r => selected.has(r.id));
+              setAiProductIds(selectedRows.map(r => r.productId));
+              setAiProductNames(selectedRows.map(r => r.productName));
+              setAiMode("multi");
+              setAiPanelOpen(true);
+            }}
+            className="flex h-7 items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 text-xs font-medium text-amber-700 hover:bg-amber-100"
+          >
+            <Sparkles size={12} /> AI Analysis
+          </button>
         </div>
       )}
 
@@ -484,6 +504,12 @@ export default function SuggestedOrdersPage() {
                     onQtyBlur={(val) => handleQtyBlur(row.id, val)}
                     onDismiss={() => dismissMutation.mutate(row.id)}
                     onClick={() => router.push(`/inventory/${row.productId}/edit`)}
+                    onAskAi={() => {
+                      setAiProductIds([row.productId]);
+                      setAiProductNames([row.productName]);
+                      setAiMode("single");
+                      setAiPanelOpen(true);
+                    }}
                   />
                 ))}
               </tbody>
@@ -515,6 +541,14 @@ export default function SuggestedOrdersPage() {
           </div>
         </div>
       </div>
+
+      <AiAdvisorPanel
+        open={aiPanelOpen}
+        onClose={() => { setAiPanelOpen(false); setAiProductIds([]); setAiProductNames([]); }}
+        productIds={aiProductIds}
+        productNames={aiProductNames}
+        mode={aiMode}
+      />
     </div>
   );
 }
@@ -583,6 +617,7 @@ function SuggestionRow({
   onQtyBlur,
   onDismiss,
   onClick,
+  onAskAi,
 }: {
   row: ReorderSuggestionRow;
   isSelected: boolean;
@@ -592,6 +627,7 @@ function SuggestionRow({
   onQtyBlur: (val: number) => void;
   onDismiss: () => void;
   onClick: () => void;
+  onAskAi: () => void;
 }) {
   const priorityCfg = PRIORITY_CONFIG[row.priority] ?? { label: row.priority, badge: "bg-muted text-muted-foreground" };
   const abcCfg = ABC_CONFIG[row.abcClass] ?? { badge: "bg-gray-100 text-gray-600" };
@@ -696,6 +732,16 @@ function SuggestionRow({
             title="Dismiss suggestion"
           >
             <XCircle size={10} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAskAi();
+            }}
+            className="rounded p-1 text-amber-500 hover:bg-amber-50"
+            title="Ask AI"
+          >
+            <Sparkles size={13} />
           </button>
         </div>
       </td>
