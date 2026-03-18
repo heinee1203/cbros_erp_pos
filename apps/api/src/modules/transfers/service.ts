@@ -1080,3 +1080,86 @@ export async function getTransferJournal(transferId: string, orgId: string) {
 
   return entries;
 }
+
+// ── DRAFT Editing Functions ──
+
+export async function updateTransfer(transferId: string, orgId: string, data: { notes?: string }) {
+  const [transfer] = await db
+    .select({ id: stockTransfers.id, status: stockTransfers.status })
+    .from(stockTransfers)
+    .where(and(eq(stockTransfers.id, transferId), eq(stockTransfers.orgId, orgId)))
+    .limit(1);
+  if (!transfer) throw new Error("Transfer not found");
+  if (transfer.status !== "DRAFT") throw new Error("Only DRAFT transfers can be edited");
+
+  const [updated] = await db
+    .update(stockTransfers)
+    .set({ notes: data.notes ?? null })
+    .where(eq(stockTransfers.id, transferId))
+    .returning();
+  return updated;
+}
+
+export async function addTransferItem(transferId: string, orgId: string, data: { productId: string; requestedQty: number }) {
+  const [transfer] = await db
+    .select({ id: stockTransfers.id, status: stockTransfers.status })
+    .from(stockTransfers)
+    .where(and(eq(stockTransfers.id, transferId), eq(stockTransfers.orgId, orgId)))
+    .limit(1);
+  if (!transfer) throw new Error("Transfer not found");
+  if (transfer.status !== "DRAFT") throw new Error("Only DRAFT transfers can be edited");
+
+  const [existing] = await db
+    .select({ id: stockTransferItems.id })
+    .from(stockTransferItems)
+    .where(and(eq(stockTransferItems.transferId, transferId), eq(stockTransferItems.productId, data.productId)))
+    .limit(1);
+  if (existing) throw new Error("Product already exists in this transfer");
+
+  const [item] = await db
+    .insert(stockTransferItems)
+    .values({ transferId, orgId, productId: data.productId, requestedQty: data.requestedQty })
+    .returning();
+  return item;
+}
+
+export async function updateTransferItem(transferId: string, itemId: string, orgId: string, data: { requestedQty: number }) {
+  const [transfer] = await db
+    .select({ id: stockTransfers.id, status: stockTransfers.status })
+    .from(stockTransfers)
+    .where(and(eq(stockTransfers.id, transferId), eq(stockTransfers.orgId, orgId)))
+    .limit(1);
+  if (!transfer) throw new Error("Transfer not found");
+  if (transfer.status !== "DRAFT") throw new Error("Only DRAFT transfers can be edited");
+
+  const [updated] = await db
+    .update(stockTransferItems)
+    .set({ requestedQty: data.requestedQty })
+    .where(and(eq(stockTransferItems.id, itemId), eq(stockTransferItems.transferId, transferId)))
+    .returning();
+  if (!updated) throw new Error("Transfer item not found");
+  return updated;
+}
+
+export async function deleteTransferItem(transferId: string, itemId: string, orgId: string) {
+  const [transfer] = await db
+    .select({ id: stockTransfers.id, status: stockTransfers.status })
+    .from(stockTransfers)
+    .where(and(eq(stockTransfers.id, transferId), eq(stockTransfers.orgId, orgId)))
+    .limit(1);
+  if (!transfer) throw new Error("Transfer not found");
+  if (transfer.status !== "DRAFT") throw new Error("Only DRAFT transfers can be edited");
+
+  const items = await db
+    .select({ id: stockTransferItems.id })
+    .from(stockTransferItems)
+    .where(eq(stockTransferItems.transferId, transferId));
+  if (items.length <= 1) throw new Error("Transfer must have at least one item");
+
+  const [deleted] = await db
+    .delete(stockTransferItems)
+    .where(and(eq(stockTransferItems.id, itemId), eq(stockTransferItems.transferId, transferId)))
+    .returning();
+  if (!deleted) throw new Error("Transfer item not found");
+  return deleted;
+}

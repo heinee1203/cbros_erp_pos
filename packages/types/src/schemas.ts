@@ -272,6 +272,25 @@ export const createTransferSchema = z.object({
 });
 export type CreateTransferInput = z.infer<typeof createTransferSchema>;
 
+// ── Transfer: Update (DRAFT only) ──
+export const updateTransferSchema = z.object({
+  notes: z.string().max(1000).optional(),
+});
+export type UpdateTransferInput = z.infer<typeof updateTransferSchema>;
+
+// ── Transfer: Add Line Item (DRAFT only) ──
+export const addTransferItemSchema = z.object({
+  productId: z.string().uuid(),
+  requestedQty: z.number().int().min(1),
+});
+export type AddTransferItemInput = z.infer<typeof addTransferItemSchema>;
+
+// ── Transfer: Update Line Item (DRAFT only) ──
+export const updateTransferItemSchema = z.object({
+  requestedQty: z.number().int().min(1),
+});
+export type UpdateTransferItemInput = z.infer<typeof updateTransferItemSchema>;
+
 // ── Transfer: Approve ──
 export const approveTransferSchema = z.object({
   idempotencyKey: z.string().min(1).max(255),
