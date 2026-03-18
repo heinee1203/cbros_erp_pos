@@ -356,7 +356,15 @@ function BarcodePrintingContent() {
         style.id = id;
         document.head.appendChild(style);
       }
-      style.textContent = `@page { size: ${labelSize.widthMm}mm ${labelSize.heightMm}mm; margin: 1mm; }`;
+      style.textContent = `
+        @page { size: ${labelSize.widthMm}mm ${labelSize.heightMm}mm; margin: 0; }
+        @media print {
+          body { margin: 0; padding: 0; }
+          body > *:not(#print-area) { display: none !important; }
+          #print-area { position: static !important; left: auto !important; top: auto !important; width: auto !important; height: auto !important; overflow: visible !important; display: block !important; }
+          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+      `;
     } else {
       const existing = document.getElementById("__label-printer-page-style");
       if (existing) existing.remove();
@@ -768,8 +776,11 @@ function BarcodePrintingContent() {
         </div>
       </div>
 
-      {/* ── Print Area (hidden on screen, visible only when printing) ── */}
-      <div id="print-area" className="hidden print:block">
+      {/* ── Print Area (off-screen so barcodes render; brought back for print) ── */}
+      <div
+        id="print-area"
+        style={{ position: "fixed", left: "-9999px", top: 0, width: "1px", height: "1px", overflow: "hidden" }}
+      >
         {printerType === "label" ? (
           /* Label Printer mode: one label per page (for Zebra ZD230, etc.) */
           <div>
@@ -781,6 +792,8 @@ function BarcodePrintingContent() {
                   style={{
                     width: `${labelSize.widthMm}mm`,
                     height: `${labelSize.heightMm}mm`,
+                    padding: "1mm",
+                    boxSizing: "border-box",
                     pageBreakAfter: "always",
                     overflow: "hidden",
                   }}
@@ -813,10 +826,12 @@ function BarcodePrintingContent() {
               Array.from({ length: item.quantity }, (_, i) => (
                 <div
                   key={`${item.product.id}-${i}`}
-                  className="flex items-center justify-center border border-gray-200 p-2"
+                  className="flex items-center justify-center border border-gray-200"
                   style={{
                     width: `${labelSize.widthMm}mm`,
                     height: `${labelSize.heightMm}mm`,
+                    padding: "1mm",
+                    boxSizing: "border-box",
                     pageBreakInside: "avoid",
                   }}
                 >
@@ -985,7 +1000,7 @@ function PrintLabel({
         <p className={cn("font-mono", isLargeLabel ? "text-[11px]" : "text-[7px]")}>{product.sku}</p>
       )}
       {barcodeDataUrl ? (
-        <img src={barcodeDataUrl} alt={product.barcode ?? ""} className="max-w-full" />
+        <img src={barcodeDataUrl} alt={product.barcode ?? ""} style={{ width: "95%", height: "auto", maxHeight: "60%" }} />
       ) : (
         <span className={cn("text-gray-400", isLargeLabel ? "text-[9px]" : "text-[6px]")}>No barcode</span>
       )}
