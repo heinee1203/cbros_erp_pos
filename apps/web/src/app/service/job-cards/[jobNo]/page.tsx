@@ -673,7 +673,6 @@ function EstimateTab({ jc }: { jc: JobCardDetail }) {
               <tbody className="divide-y divide-border">
                 {jc.partLines.map((p) => (
                   <tr key={p.id} className="hover:bg-muted/30">
-                    <td className="px-3 py-2 font-mono text-[11px]">{p.mnemonicSku}</td>
                     <td className="px-3 py-2">{p.productName}</td>
                     <td className="px-3 py-2 text-right font-mono">{p.plannedQty}</td>
                     <td className="px-3 py-2 text-right font-mono">{p.reservedQty}</td>
@@ -778,7 +777,7 @@ function ReadinessPanel({ jc }: { jc: JobCardDetail }) {
           {shortfall.map((p) => (
             <div key={p.id} className="flex items-center justify-between text-xs">
               <span className="text-orange-800">
-                {p.mnemonicSku} — {p.productName}
+                {p.productName}
               </span>
               <span className="font-mono text-orange-700">
                 {p.reservedQty}/{p.plannedQty} reserved
@@ -1102,7 +1101,6 @@ function PartsUsageTab({ jc }: { jc: JobCardDetail }) {
               const netUsed = p.issuedQty - p.returnedQty;
               return (
                 <tr key={p.id} className="hover:bg-muted/30">
-                  <td className="px-3 py-2.5 font-mono text-[11px]">{p.mnemonicSku}</td>
                   <td className="px-3 py-2.5">{p.productName}</td>
                   <td className="px-3 py-2.5 text-right font-mono">
                     <span className="text-muted-foreground">{p.reservedQty}</span>
@@ -1220,7 +1218,7 @@ function IssuePartModal({
       <div className="space-y-3">
         <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
           <div className="text-xs font-medium">
-            {part.mnemonicSku} — {part.productName}
+            {part.productName}
           </div>
         </div>
 
@@ -1307,7 +1305,7 @@ function ReturnPartModal({
       <div className="space-y-3">
         <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
           <div className="text-xs font-medium">
-            {part.mnemonicSku} — {part.productName}
+            {part.productName}
           </div>
         </div>
 
@@ -1516,8 +1514,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
                     className="flex items-center justify-between px-4 py-2.5 text-xs"
                   >
                     <div>
-                      <span className="font-mono">{p.mnemonicSku}</span>
-                      <span className="ml-1.5 text-muted-foreground">{p.productName}</span>
+                      <span className="text-foreground">{p.productName}</span>
                       <span className="ml-1.5 text-[10px] text-muted-foreground">
                         ({netUsed} × ${p.unitPrice})
                       </span>

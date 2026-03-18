@@ -177,7 +177,6 @@ export default function SalesByItemPage() {
                   <div className="text-[13px] font-medium text-foreground truncate">{item.productName}</div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <span className="font-mono text-[10px] text-muted-foreground">{item.sku}</span>
-                    <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider text-primary">{item.mnemonicSku}</span>
                   </div>
                 </div>
                 <div className="w-20">

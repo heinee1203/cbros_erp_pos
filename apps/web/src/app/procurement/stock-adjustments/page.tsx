@@ -715,7 +715,7 @@ function NewAdjustmentDrawer({
                         setShowProductDropdown(true);
                       }}
                       onFocus={() => setShowProductDropdown(true)}
-                      placeholder="Search by name, SKU, or mnemonic..."
+                      placeholder="Search by name or SKU..."
                       disabled={isSubmitting}
                       className="w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
                     />

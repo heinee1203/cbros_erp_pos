@@ -922,7 +922,7 @@ function ReceivingGrid({
             value={scanValue}
             onChange={(e) => setScanValue(e.target.value)}
             onKeyDown={handleScanKeyDown}
-            placeholder="Scan barcode or type SKU / Mnemonic \u2026 press Enter"
+            placeholder="Scan barcode or type SKU \u2026 press Enter"
             disabled={receiveMut.isSubmitting}
             className="w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-sm font-mono outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
           />
@@ -952,7 +952,6 @@ function ReceivingGrid({
                 />
               </th>
               <Th align="left" width="w-[180px]">Item</Th>
-              <Th align="left" width="w-[100px]">Mnemonic</Th>
               <Th align="right" width="w-[70px]">Ordered</Th>
               <Th align="right" width="w-[80px]">Accepted</Th>
               <Th align="right" width="w-[80px]">Rejected</Th>
@@ -1011,13 +1010,6 @@ function ReceivingGrid({
                     <div className="text-[10px] text-muted-foreground font-mono">
                       {line.sku}
                     </div>
-                  </td>
-
-                  {/* Mnemonic SKU */}
-                  <td className="px-2 py-1.5">
-                    <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-bold tracking-wider text-primary">
-                      {line.mnemonicSku}
-                    </span>
                   </td>
 
                   {/* Ordered */}
@@ -1169,9 +1161,6 @@ function ReceivingGrid({
                 d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            <span className="font-mono font-medium">
-              {line?.mnemonicSku}:
-            </span>{" "}
             {state.error}
           </div>
         );
@@ -1620,7 +1609,6 @@ function ReadOnlyGrid({
           <thead>
             <tr className="border-b border-border bg-muted/50">
               <Th align="left">Item</Th>
-              <Th align="left">Mnemonic</Th>
               <Th align="right">Ordered</Th>
               <Th align="right">List Price</Th>
               <Th align="right">Discount</Th>
@@ -1649,11 +1637,6 @@ function ReadOnlyGrid({
                     <div className="text-[10px] text-muted-foreground font-mono">
                       {line.sku}
                     </div>
-                  </td>
-                  <td className="px-3 py-1.5">
-                    <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] font-bold tracking-wider text-primary">
-                      {line.mnemonicSku}
-                    </span>
                   </td>
                   <td className="px-3 py-1.5 text-right tabular-nums font-medium">
                     {line.orderedQty}
@@ -1776,7 +1759,6 @@ function ReceiptHistory({ po }: { po: PODetail }) {
                           <td className="px-4 py-1.5">
                             <div className="text-xs font-medium">{line.productName}</div>
                             <div className="flex items-center gap-1.5 mt-px">
-                              <span className="rounded bg-primary/10 px-1 py-0.5 font-mono text-[10px] font-bold tracking-wider text-primary">{line.mnemonicSku}</span>
                               <span className="font-mono text-[10px] text-muted-foreground">{line.sku}</span>
                             </div>
                           </td>
@@ -1813,11 +1795,10 @@ function ReceiptHistory({ po }: { po: PODetail }) {
 function LegacyReceiptHistory({ po }: { po: PODetail }) {
   // Build a product name lookup from PO lines
   const productNames = useMemo(() => {
-    const map = new Map<string, { name: string; mnemonic: string }>();
+    const map = new Map<string, { name: string }>();
     for (const line of po.lines) {
       map.set(line.id, {
         name: line.productName,
-        mnemonic: line.mnemonicSku,
       });
     }
     return map;
@@ -1869,11 +1850,7 @@ function LegacyReceiptHistory({ po }: { po: PODetail }) {
                     })}
                   </td>
                   <td className="px-3 py-1.5">
-                    {product && (
-                      <span className="rounded bg-primary/10 px-1 py-0.5 font-mono text-[10px] font-bold tracking-wider text-primary">
-                        {product.mnemonic}
-                      </span>
-                    )}
+                    {product?.name}
                   </td>
                   <td className="px-3 py-1.5 text-right tabular-nums text-success font-medium">
                     {event.receivedAcceptedQty > 0
