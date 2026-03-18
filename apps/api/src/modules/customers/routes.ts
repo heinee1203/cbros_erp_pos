@@ -1,19 +1,41 @@
 import type { FastifyPluginAsync } from "fastify";
-import { createCustomerSchema, createCustomerVehicleSchema } from "@apex/types";
-import { POS_ROLES } from "@apex/types";
+import {
+  createCustomerSchema,
+  updateCustomerSchema,
+  createCustomerVehicleSchema,
+  recordPaymentSchema,
+  customerAdjustmentSchema,
+  AR_ROLES,
+} from "@apex/types";
 import { db } from "@apex/database";
 import { customers, customerVehicles } from "@apex/database/schema";
 import { eq, and, ilike, or } from "drizzle-orm";
+import {
+  listCustomers,
+  getCustomer,
+  createCustomer,
+  updateCustomer,
+  softDeleteCustomer,
+  recordPayment,
+  recordAdjustment,
+  listTransactions,
+} from "./service";
 
-function assertPosRole(role: string) {
-  if (!POS_ROLES.includes(role as any)) {
-    throw new Error("Insufficient role for customer operations");
+function assertArRole(role: string) {
+  if (!AR_ROLES.includes(role as any)) {
+    throw new Error("Insufficient role for customer account operations");
+  }
+}
+
+function assertAdmin(role: string) {
+  if (role !== "ADMIN") {
+    throw new Error("Only ADMIN can perform this operation");
   }
 }
 
 export const customerRoutes: FastifyPluginAsync = async (app) => {
   // ─── GET /customers/search?q=... ─────────────────
-  // Search customers by name or phone
+  // Simple search for POS autocomplete
   app.get("/search", async (request, reply) => {
     const { orgId } = request.storeContext!;
     const { q } = request.query as { q?: string };
@@ -40,12 +62,40 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ data: results });
   });
 
-  // ─── POST /customers ────────────────────────────
+  // ─── GET /customers ──────────────────────────────
+  // List customers with search, filters, sorting, keyset pagination
+  app.get("/", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { search, type, hasBalance, sortBy, cursor, limit } =
+      request.query as {
+        search?: string;
+        type?: string;
+        hasBalance?: string;
+        sortBy?: string;
+        cursor?: string;
+        limit?: string;
+      };
+
+    const parsedLimit = Math.min(parseInt(limit || "50", 10) || 50, 100);
+
+    const result = await listCustomers(orgId, {
+      search,
+      type,
+      hasBalance: hasBalance === "true",
+      sortBy,
+      cursor,
+      limit: parsedLimit,
+    });
+
+    return reply.send(result);
+  });
+
+  // ─── POST /customers ─────────────────────────────
   // Create a new customer
   app.post("/", async (request, reply) => {
     const { orgId } = request.storeContext!;
     const { role } = request.user;
-    assertPosRole(role);
+    assertArRole(role);
 
     const parsed = createCustomerSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -55,16 +105,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      const [customer] = await db
-        .insert(customers)
-        .values({
-          orgId,
-          name: parsed.data.name,
-          phone: parsed.data.phone,
-          notes: parsed.data.notes ?? null,
-        })
-        .returning();
-
+      const customer = await createCustomer(parsed.data, orgId);
       return reply.status(201).send(customer);
     } catch (err: any) {
       if (err.code === "23505" || err.message?.includes("unique")) {
@@ -72,6 +113,134 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           .status(409)
           .send({ error: "A customer with this phone number already exists" });
       }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── GET /customers/:id ──────────────────────────
+  // Customer detail with recent transactions
+  app.get("/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+
+    const result = await getCustomer(id, orgId);
+    if (!result) {
+      return reply.status(404).send({ error: "Customer not found" });
+    }
+
+    return reply.send(result);
+  });
+
+  // ─── PATCH /customers/:id ────────────────────────
+  // Update customer fields
+  app.patch("/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertArRole(role);
+
+    const parsed = updateCustomerSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: "Validation failed", details: parsed.error.flatten() });
+    }
+
+    const updated = await updateCustomer(id, parsed.data, orgId);
+    if (!updated) {
+      return reply.status(404).send({ error: "Customer not found" });
+    }
+
+    return reply.send(updated);
+  });
+
+  // ─── DELETE /customers/:id ────────────────────────
+  // Soft-delete (deactivate) a customer
+  app.delete("/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertAdmin(role);
+
+    try {
+      const result = await softDeleteCustomer(id, orgId);
+      return reply.send(result);
+    } catch (err: any) {
+      if (err.message.includes("not found")) {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── GET /customers/:id/transactions ──────────────
+  // Transaction ledger with filters and pagination
+  app.get("/:id/transactions", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { type, from, to, cursor, limit } = request.query as {
+      type?: string;
+      from?: string;
+      to?: string;
+      cursor?: string;
+      limit?: string;
+    };
+
+    const parsedLimit = Math.min(parseInt(limit || "50", 10) || 50, 100);
+
+    const result = await listTransactions(id, orgId, {
+      type,
+      from,
+      to,
+      cursor,
+      limit: parsedLimit,
+    });
+
+    return reply.send(result);
+  });
+
+  // ─── POST /customers/:id/payments ─────────────────
+  // Record a payment against customer AR balance
+  app.post("/:id/payments", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertArRole(role);
+
+    const parsed = recordPaymentSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: "Validation failed", details: parsed.error.flatten() });
+    }
+
+    try {
+      const result = await recordPayment(id, parsed.data, orgId, userId);
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /customers/:id/adjustments ──────────────
+  // Manual balance adjustment (ADMIN only)
+  app.post("/:id/adjustments", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertAdmin(role);
+
+    const parsed = customerAdjustmentSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: "Validation failed", details: parsed.error.flatten() });
+    }
+
+    try {
+      const result = await recordAdjustment(id, parsed.data, orgId, userId);
+      return reply.status(201).send(result);
+    } catch (err: any) {
       return reply.status(400).send({ error: err.message });
     }
   });
@@ -101,7 +270,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const { id } = request.params as { id: string };
     const { orgId } = request.storeContext!;
     const { role } = request.user;
-    assertPosRole(role);
+    assertArRole(role);
 
     // Validate customer exists
     const [customer] = await db
