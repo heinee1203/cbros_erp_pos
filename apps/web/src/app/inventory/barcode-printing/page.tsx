@@ -860,12 +860,13 @@ function LabelPreview({
   mnemonicCostCode?: string | null;
   dateEncoded?: string;
 }) {
-  const svgRef = useRef<SVGSVGElement>(null);
+  const [barcodeDataUrl, setBarcodeDataUrl] = useState<string>("");
 
   useEffect(() => {
-    if (svgRef.current && product.barcode) {
+    if (product.barcode) {
       try {
-        JsBarcode(svgRef.current, product.barcode, {
+        const canvas = document.createElement("canvas");
+        JsBarcode(canvas, product.barcode, {
           format: detectBarcodeFormat(product.barcode),
           width: isLargeLabel ? 2.2 : 1.5,
           height: isLargeLabel ? 55 : template.showEmployeeInfo ? 32 : 40,
@@ -875,9 +876,12 @@ function LabelPreview({
           textMargin: 2,
           font: "monospace",
         });
+        setBarcodeDataUrl(canvas.toDataURL("image/png"));
       } catch {
-        // Invalid barcode format — render nothing
+        setBarcodeDataUrl("");
       }
+    } else {
+      setBarcodeDataUrl("");
     }
   }, [product.barcode, template.showEmployeeInfo, isLargeLabel]);
 
@@ -897,7 +901,11 @@ function LabelPreview({
       {template.showSku && (
         <p className={cn("font-mono text-gray-600", isLargeLabel ? "text-[13px]" : "text-[10px]")}>{product.sku}</p>
       )}
-      <svg ref={svgRef} />
+      {barcodeDataUrl ? (
+        <img src={barcodeDataUrl} alt={product.barcode ?? ""} className="max-w-full" />
+      ) : (
+        <span className="text-[8px] text-gray-400">No barcode</span>
+      )}
       {template.showPrice && price > 0 && (
         <p className={cn("font-bold text-gray-900", isLargeLabel ? "text-[16px]" : "text-[12px]")}>
           ₱{price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -935,12 +943,13 @@ function PrintLabel({
   mnemonicCostCode?: string | null;
   dateEncoded?: string;
 }) {
-  const svgRef = useRef<SVGSVGElement>(null);
+  const [barcodeDataUrl, setBarcodeDataUrl] = useState<string>("");
 
   useEffect(() => {
-    if (svgRef.current && product.barcode) {
+    if (product.barcode) {
       try {
-        JsBarcode(svgRef.current, product.barcode, {
+        const canvas = document.createElement("canvas");
+        JsBarcode(canvas, product.barcode, {
           format: detectBarcodeFormat(product.barcode),
           width: isLargeLabel ? 2 : 1.2,
           height: isLargeLabel ? 45 : template.showEmployeeInfo ? 22 : 30,
@@ -950,9 +959,12 @@ function PrintLabel({
           textMargin: 1,
           font: "monospace",
         });
+        setBarcodeDataUrl(canvas.toDataURL("image/png"));
       } catch {
-        // Invalid barcode
+        setBarcodeDataUrl("");
       }
+    } else {
+      setBarcodeDataUrl("");
     }
   }, [product.barcode, template.showEmployeeInfo, isLargeLabel]);
 
@@ -972,7 +984,11 @@ function PrintLabel({
       {template.showSku && (
         <p className={cn("font-mono", isLargeLabel ? "text-[11px]" : "text-[7px]")}>{product.sku}</p>
       )}
-      <svg ref={svgRef} />
+      {barcodeDataUrl ? (
+        <img src={barcodeDataUrl} alt={product.barcode ?? ""} className="max-w-full" />
+      ) : (
+        <span className={cn("text-gray-400", isLargeLabel ? "text-[9px]" : "text-[6px]")}>No barcode</span>
+      )}
       {template.showPrice && price > 0 && (
         <p className={cn("font-bold", isLargeLabel ? "text-[14px]" : "text-[9px]")}>
           ₱{price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
