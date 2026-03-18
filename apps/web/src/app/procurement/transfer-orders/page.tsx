@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { ArrowRightLeft, Search, X, Package } from "lucide-react";
+import { ArrowRightLeft, Search, X, Package, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtDate } from "@/lib/format";
 import { useAuth } from "@/app/auth-context";
@@ -24,19 +24,34 @@ export default function TransferOrdersPage() {
   const { token, locationId } = useAuth();
   const transfersQuery = useTransfersList(token, locationId);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
 
   const transfers = transfersQuery.data?.data ?? [];
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return transfers;
-    const q = search.toLowerCase();
-    return transfers.filter(
-      (t) =>
-        t.transferNo.toLowerCase().includes(q) ||
-        t.sourceLocationName.toLowerCase().includes(q) ||
-        t.destinationLocationName.toLowerCase().includes(q)
-    );
-  }, [transfers, search]);
+    let list = transfers;
+    if (statusFilter) {
+      list = list.filter((t) => t.status === statusFilter);
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (t) =>
+          t.transferNo.toLowerCase().includes(q) ||
+          t.sourceLocationName.toLowerCase().includes(q) ||
+          t.destinationLocationName.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [transfers, search, statusFilter]);
+
+  const drafts = transfers.filter((t) => t.status === "DRAFT").length;
+  const inTransit = transfers.filter((t) =>
+    ["APPROVED", "PICKING", "DISPATCHED", "PARTIALLY_RECEIVED"].includes(t.status)
+  ).length;
+  const received = transfers.filter((t) =>
+    ["RECEIVED", "CLOSED_WITH_VARIANCE"].includes(t.status)
+  ).length;
 
   if (transfersQuery.isLoading) {
     return (
@@ -65,6 +80,12 @@ export default function TransferOrdersPage() {
             Inter-location stock movements, dispatch, and receiving
           </p>
         </div>
+        <Link
+          href="/procurement/transfer-orders/new"
+          className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+        >
+          <Plus size={14} /> New Transfer
+        </Link>
       </div>
 
       {/* Search */}
@@ -90,6 +111,31 @@ export default function TransferOrdersPage() {
         )}
       </div>
 
+      {/* Filters + summary */}
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+          <span>{transfers.length} total</span>
+          <span>{drafts} drafts</span>
+          <span>{inTransit} in transit</span>
+          <span>{received} received</span>
+        </div>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="rounded-md border border-border bg-background px-2 py-1 text-xs"
+        >
+          <option value="">All Statuses</option>
+          <option value="DRAFT">Draft</option>
+          <option value="APPROVED">Approved</option>
+          <option value="PICKING">Picking</option>
+          <option value="DISPATCHED">Dispatched</option>
+          <option value="PARTIALLY_RECEIVED">Partially Received</option>
+          <option value="RECEIVED">Received</option>
+          <option value="CLOSED_WITH_VARIANCE">Closed w/ Variance</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
+      </div>
+
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
         <table className="w-full text-sm">
@@ -112,6 +158,9 @@ export default function TransferOrdersPage() {
                 Created
               </th>
               <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Items
+              </th>
+              <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Action
               </th>
             </tr>
@@ -119,7 +168,7 @@ export default function TransferOrdersPage() {
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={7} className="py-12 text-center">
+                <td colSpan={8} className="py-12 text-center">
                   <div className="flex flex-col items-center">
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
                       <Package size={16} className="text-muted-foreground" />
@@ -165,6 +214,9 @@ export default function TransferOrdersPage() {
                   </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
                     {fmtDate(t.createdAt)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-xs text-muted-foreground">
+                    {t.lineCount ?? "—"}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <Link
