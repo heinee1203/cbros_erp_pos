@@ -20,6 +20,8 @@ interface ProductSearchResult {
   costPrice: string;
   barcode: string | null;
   categoryName?: string;
+  unitsPerCase?: number;
+  packagingUnit?: string | null;
 }
 
 interface POLineInput {
@@ -32,6 +34,9 @@ interface POLineInput {
   discountChain: string;
   netCost: string;
   isManualCost: boolean;
+  unitsPerCase: number;
+  packagingUnit: string | null;
+  entryUnit: "piece" | "case";
 }
 
 interface CSVPreviewRow {
@@ -205,6 +210,9 @@ export default function NewPurchaseOrderPage() {
           discountChain: "",
           netCost: costPrice,
           isManualCost: false,
+          unitsPerCase: product.unitsPerCase ?? 1,
+          packagingUnit: product.packagingUnit ?? null,
+          entryUnit: (product.unitsPerCase ?? 1) > 1 ? "case" : "piece",
         },
       ]);
     }
@@ -334,13 +342,22 @@ export default function NewPurchaseOrderPage() {
           ? new Date(expectedDelivery).toISOString()
           : undefined,
         notes: notes.trim() || undefined,
-        lines: lines.map((l) => ({
-          productId: l.productId,
-          orderedQty: l.orderedQty,
-          unitCost: l.netCost,
-          listPrice: l.listPrice,
-          discountChain: l.discountChain || undefined,
-        })),
+        lines: lines.map((l) => {
+          const actualQty = l.entryUnit === "case" ? l.orderedQty * l.unitsPerCase : l.orderedQty;
+          const actualUnitCost = l.entryUnit === "case"
+            ? String((parseFloat(l.netCost) / l.unitsPerCase).toFixed(2))
+            : l.netCost;
+          const actualListPrice = l.entryUnit === "case" && l.listPrice
+            ? String((parseFloat(l.listPrice) / l.unitsPerCase).toFixed(2))
+            : l.listPrice;
+          return {
+            productId: l.productId,
+            orderedQty: actualQty,
+            unitCost: actualUnitCost,
+            listPrice: actualListPrice,
+            discountChain: l.discountChain || undefined,
+          };
+        }),
       };
 
       const result = await apiFetch<{ po: { id: string; poNo: string } }>(
@@ -510,6 +527,9 @@ export default function NewPurchaseOrderPage() {
             discountChain: disc,
             netCost: net,
             isManualCost: false,
+            unitsPerCase: product.unitsPerCase ?? 1,
+            packagingUnit: product.packagingUnit ?? null,
+            entryUnit: "piece" as const,
           },
         ]);
       }
@@ -882,15 +902,36 @@ export default function NewPurchaseOrderPage() {
                           </div>
                         </td>
                         <td className="px-2 py-1.5 text-right">
-                          <input
-                            type="number"
-                            min={1}
-                            value={line.orderedQty}
-                            onChange={(e) =>
-                              updateLine(line.localId, "orderedQty", e.target.value)
-                            }
-                            className="w-16 rounded border border-border bg-background px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none focus:border-primary"
-                          />
+                          <div className="flex items-center justify-end gap-1">
+                            {line.unitsPerCase > 1 ? (
+                              <select
+                                value={line.entryUnit}
+                                onChange={(e) =>
+                                  updateLine(line.localId, "entryUnit", e.target.value as "piece" | "case")
+                                }
+                                className="w-auto rounded border border-border px-1 py-0.5 text-xs"
+                              >
+                                <option value="piece">pc</option>
+                                <option value="case">{line.packagingUnit || "case"} ({line.unitsPerCase}/cs)</option>
+                              </select>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">pc</span>
+                            )}
+                            <input
+                              type="number"
+                              min={1}
+                              value={line.orderedQty}
+                              onChange={(e) =>
+                                updateLine(line.localId, "orderedQty", e.target.value)
+                              }
+                              className="w-16 rounded border border-border bg-background px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none focus:border-primary"
+                            />
+                          </div>
+                          {line.entryUnit === "case" && line.unitsPerCase > 1 && (
+                            <div className="text-[10px] text-muted-foreground mt-0.5 text-right">
+                              = {line.orderedQty * line.unitsPerCase} pieces @ {fmtPeso((parseFloat(line.netCost) / line.unitsPerCase).toFixed(2))}/pc
+                            </div>
+                          )}
                         </td>
                         <td className="px-2 py-1.5 text-right">
                           <input

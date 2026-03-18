@@ -19,6 +19,9 @@ interface TransferLine {
   sku: string;
   availableStock: number;
   transferQty: number;
+  unitsPerCase: number;
+  packagingUnit: string | null;
+  entryUnit: "piece" | "case";
 }
 
 interface CSVPreviewRow {
@@ -27,6 +30,8 @@ interface CSVPreviewRow {
   productId?: string;
   productName?: string;
   availableStock?: number;
+  unitsPerCase?: number;
+  packagingUnit?: string | null;
   status: "ready" | "insufficient" | "not_found";
   message?: string;
 }
@@ -75,17 +80,24 @@ export default function NewTransferPage() {
   const [csvLoading, setCsvLoading] = useState(false);
 
   const totalItems = lines.length;
-  const totalUnits = lines.reduce((sum, l) => sum + l.transferQty, 0);
+  const totalUnits = lines.reduce((sum, l) => {
+    return sum + (l.entryUnit === "case" ? l.transferQty * l.unitsPerCase : l.transferQty);
+  }, 0);
   const canSave =
     !!sourceLocationId &&
     !!destinationLocationId &&
     sourceLocationId !== destinationLocationId &&
     lines.length > 0 &&
-    lines.every((l) => l.transferQty > 0 && l.transferQty <= l.availableStock);
+    lines.every((l) => {
+      if (l.transferQty <= 0) return false;
+      const piecesQty = l.entryUnit === "case" ? l.transferQty * l.unitsPerCase : l.transferQty;
+      return piecesQty <= l.availableStock;
+    });
 
   const addLine = useCallback(
     (product: any) => {
       if (lines.some((l) => l.productId === product.id)) return;
+      const upc = product.unitsPerCase ?? 1;
       setLines((prev) => [
         ...prev,
         {
@@ -95,6 +107,9 @@ export default function NewTransferPage() {
           sku: product.sku,
           availableStock: product.stockLevel ?? 0,
           transferQty: Math.min(1, product.stockLevel ?? 0),
+          unitsPerCase: upc,
+          packagingUnit: product.packagingUnit ?? null,
+          entryUnit: upc > 1 ? "case" as const : "piece" as const,
         },
       ]);
       setSearchQuery("");
@@ -129,7 +144,9 @@ export default function NewTransferPage() {
             notes: notes.trim() || undefined,
             items: lines.map((l) => ({
               productId: l.productId,
-              requestedQty: l.transferQty,
+              requestedQty: l.entryUnit === "case"
+                ? l.transferQty * l.unitsPerCase
+                : l.transferQty,
             })),
           }),
           token,
@@ -213,13 +230,19 @@ export default function NewTransferPage() {
             } else if ((match.stockLevel ?? 0) < qty) {
               preview.push({
                 sku, qty, productId: match.id, productName: match.name,
-                availableStock: match.stockLevel ?? 0, status: "insufficient",
+                availableStock: match.stockLevel ?? 0,
+                unitsPerCase: match.unitsPerCase ?? 1,
+                packagingUnit: match.packagingUnit ?? null,
+                status: "insufficient",
                 message: `Only ${match.stockLevel ?? 0} available`,
               });
             } else {
               preview.push({
                 sku, qty, productId: match.id, productName: match.name,
-                availableStock: match.stockLevel ?? 0, status: "ready",
+                availableStock: match.stockLevel ?? 0,
+                unitsPerCase: match.unitsPerCase ?? 1,
+                packagingUnit: match.packagingUnit ?? null,
+                status: "ready",
               });
             }
           } catch {
@@ -249,6 +272,9 @@ export default function NewTransferPage() {
           sku: r.sku,
           availableStock: r.availableStock!,
           transferQty: r.qty,
+          unitsPerCase: r.unitsPerCase ?? 1,
+          packagingUnit: r.packagingUnit ?? null,
+          entryUnit: "piece" as const,
         },
       ]);
     }
@@ -368,14 +394,43 @@ export default function NewTransferPage() {
                   <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{line.sku}</td>
                   <td className="px-3 py-2 text-right">
                     <span className={line.availableStock > 0 ? "text-green-600" : "text-red-500"}>{line.availableStock}</span>
+                    {line.unitsPerCase > 1 && (
+                      <span className="text-[10px] text-muted-foreground ml-1">
+                        ({Math.floor(line.availableStock / line.unitsPerCase)} {line.packagingUnit || "cs"})
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <input type="number" min={1} max={line.availableStock} value={line.transferQty}
-                      onChange={(e) => {
-                        const qty = Math.min(Math.max(parseInt(e.target.value) || 0, 0), line.availableStock);
-                        updateLine(line.localId, "transferQty", qty);
-                      }}
-                      className="w-[70px] rounded border border-border px-2 py-1 text-right text-sm" />
+                    <div className="flex items-center justify-end gap-1">
+                      {line.unitsPerCase > 1 && (
+                        <select
+                          value={line.entryUnit}
+                          onChange={(e) => updateLine(line.localId, "entryUnit", e.target.value)}
+                          className="w-auto rounded border border-border px-1 py-0.5 text-xs"
+                        >
+                          <option value="piece">pc</option>
+                          <option value="case">{line.packagingUnit || "cs"}</option>
+                        </select>
+                      )}
+                      <input type="number" min={1}
+                        max={line.entryUnit === "case"
+                          ? Math.floor(line.availableStock / line.unitsPerCase)
+                          : line.availableStock}
+                        value={line.transferQty}
+                        onChange={(e) => {
+                          const maxQty = line.entryUnit === "case"
+                            ? Math.floor(line.availableStock / line.unitsPerCase)
+                            : line.availableStock;
+                          const qty = Math.min(Math.max(parseInt(e.target.value) || 0, 0), maxQty);
+                          updateLine(line.localId, "transferQty", qty);
+                        }}
+                        className="w-[70px] rounded border border-border px-2 py-1 text-right text-sm" />
+                    </div>
+                    {line.entryUnit === "case" && line.unitsPerCase > 1 && (
+                      <div className="text-[10px] text-muted-foreground mt-0.5 text-right">
+                        = {line.transferQty * line.unitsPerCase} pcs
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-center">
                     <button onClick={() => removeLine(line.localId)} className="text-muted-foreground hover:text-destructive">
