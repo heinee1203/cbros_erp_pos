@@ -185,6 +185,8 @@ export default function AddItemPage() {
   const [barcode, setBarcode] = useState("");
   const [oemNumber, setOemNumber] = useState("");
   const [initialStock, setInitialStock] = useState("0");
+  const [unitsPerCase, setUnitsPerCase] = useState(1);
+  const [packagingUnit, setPackagingUnit] = useState<string | null>(null);
 
   // ── Section 4: Location Availability ──
   const [selectedLocations, setSelectedLocations] = useState<Set<string>>(() => {
@@ -278,6 +280,8 @@ export default function AddItemPage() {
         trackInventory,
         reorderPoint: parseInt(reorderPoint, 10) || 10,
         leadTimeDays: parseInt(leadTimeDays, 10) || 7,
+        unitsPerCase: unitsPerCase > 1 ? unitsPerCase : undefined,
+        packagingUnit: packagingUnit || undefined,
         initialStock: hasInlineVariants ? 0 : (trackInventory ? parseInt(initialStock, 10) || 0 : 0),
         locationIds: Array.from(selectedLocations),
         vehicleCompatibility:
@@ -776,6 +780,50 @@ export default function AddItemPage() {
                   <FieldLabel>OEM Number</FieldLabel>
                   <input type="text" value={oemNumber} onChange={(e) => setOemNumber(e.target.value.slice(0, 100))} placeholder="e.g. MB295982, 04465-0K160" maxLength={100} className={cn(fieldClass, "font-mono")} />
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Packaging */}
+          <div className="mt-4">
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Packaging</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <FieldLabel>Units per Case</FieldLabel>
+                <input
+                  type="number"
+                  min={1}
+                  value={unitsPerCase}
+                  onChange={(e) => setUnitsPerCase(parseInt(e.target.value) || 1)}
+                  className={fieldClass}
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  {unitsPerCase > 1
+                    ? `1 ${packagingUnit || "case"} = ${unitsPerCase} pieces`
+                    : "Sold individually"}
+                </span>
+              </div>
+              <div>
+                <FieldLabel>Packaging Unit</FieldLabel>
+                <select
+                  value={packagingUnit ?? ""}
+                  onChange={(e) => setPackagingUnit(e.target.value || null)}
+                  className={fieldClass}
+                >
+                  <option value="">None (pieces)</option>
+                  <option value="box">Box</option>
+                  <option value="case">Case</option>
+                  <option value="pack">Pack</option>
+                  <option value="carton">Carton</option>
+                  <option value="drum">Drum</option>
+                  <option value="pail">Pail</option>
+                  <option value="set">Set</option>
+                </select>
+              </div>
+            </div>
+            {unitsPerCase > 1 && parseFloat(costPrice || "0") > 0 && (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Cost per piece: ₱{(parseFloat(costPrice) / unitsPerCase).toFixed(2)}
               </div>
             )}
           </div>
