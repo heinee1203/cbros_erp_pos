@@ -14,6 +14,7 @@ import {
   Plus,
   Maximize2,
   Trash2,
+  Clock,
 } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/app/auth-context";
@@ -324,6 +325,12 @@ export function DetailDrawer({
                     className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
                     <Maximize2 size={12} /> Full Edit
+                  </Link>
+                  <Link
+                    href={`/inventory/${product.id}/history`}
+                    className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <Clock size={12} /> History
                   </Link>
                 </div>
               )}

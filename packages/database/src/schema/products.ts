@@ -17,6 +17,7 @@ import { productFamilies } from "./product-families";
 import { brands } from "./brands";
 import { categories } from "./categories";
 import { productSubcategories } from "./product-subcategories";
+import { suppliers } from "./suppliers";
 
 export const productCategoryEnum = pgEnum("product_category", [
   "TIRES",
@@ -70,6 +71,8 @@ export const products = pgTable(
     unitsPerCase: integer("units_per_case").notNull().default(1),
     /** Packaging label: box, case, pack, carton, drum, pail, set */
     packagingUnit: varchar("packaging_unit", { length: 50 }),
+    /** Default supplier for this product — used to pre-fill PO creation */
+    primarySupplierId: uuid("primary_supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

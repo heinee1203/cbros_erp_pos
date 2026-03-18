@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
+import Link from "next/link";
 import {
   ArrowLeft,
   Package,
@@ -22,6 +23,7 @@ import {
   Search,
   X,
   Layers,
+  Clock,
 } from "lucide-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/app/auth-context";
@@ -34,6 +36,7 @@ import { useCreateSubcategory } from "@/hooks/use-subcategories";
 import { useVehicleMakes, useVehicleModels } from "@/hooks/use-vehicles";
 import { mergeVehicleMakes } from "@/lib/vehicle-makes";
 import { useProductLocations } from "@/hooks/use-product-locations";
+import { useSuppliers } from "@/hooks/use-suppliers";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "@/app/sidebar-context";
@@ -104,6 +107,8 @@ export default function EditItemPage() {
   const createBrandMut = useCreateBrand(token, locationId);
   const createCategoryMut = useCreateCategory(token, locationId);
   const createSubcategoryMut = useCreateSubcategory(token, locationId);
+  const suppliersQuery = useSuppliers(token, locationId);
+  const suppliersList = suppliersQuery.data?.data ?? [];
 
   const { data: dbMakesData } = useVehicleMakes(token, locationId);
   const allMakes = useMemo(() => mergeVehicleMakes(dbMakesData?.data ?? []), [dbMakesData]);
@@ -191,6 +196,7 @@ export default function EditItemPage() {
   const [reorderPoint, setReorderPoint] = useState("10");
   const [unitsPerCase, setUnitsPerCase] = useState(1);
   const [packagingUnit, setPackagingUnit] = useState<string | null>(null);
+  const [primarySupplierId, setPrimarySupplierId] = useState<string | null>(null);
   const [vehicles, setVehicles] = useState<VehicleEntry[]>([]);
   const initialVehiclesRef = useRef<VehicleEntry[]>([]);
   const [initialized, setInitialized] = useState(false);
@@ -293,6 +299,7 @@ export default function EditItemPage() {
     setReorderPoint(String(product.reorderPoint));
     setUnitsPerCase(product.unitsPerCase ?? 1);
     setPackagingUnit(product.packagingUnit ?? null);
+    setPrimarySupplierId(product.primarySupplierId ?? null);
     if (product.vehicleCompatibility?.length > 0) {
       const mapped = product.vehicleCompatibility.map((v: any) => ({
         id: v.id,
@@ -359,10 +366,11 @@ export default function EditItemPage() {
       oemNumber !== (product.oemNumber ?? "") ||
       isParent !== (product.isParent ?? false) ||
       unitsPerCase !== (product.unitsPerCase ?? 1) ||
-      (packagingUnit ?? "") !== (product.packagingUnit ?? "");
+      (packagingUnit ?? "") !== (product.packagingUnit ?? "") ||
+      primarySupplierId !== (product.primarySupplierId ?? null);
     const vehicleDirty = JSON.stringify(vehicles) !== JSON.stringify(initialVehiclesRef.current);
     return basicDirty || vehicleDirty || isAvailabilityDirty || isVariantFieldsDirty;
-  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
+  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, primarySupplierId, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
 
   // Unsaved changes warning
   useEffect(() => {
@@ -393,6 +401,7 @@ export default function EditItemPage() {
     if (isParent !== (product.isParent ?? false)) payload.isParent = isParent;
     if (unitsPerCase !== (product.unitsPerCase ?? 1)) payload.unitsPerCase = unitsPerCase;
     if (packagingUnit !== (product.packagingUnit ?? null)) payload.packagingUnit = packagingUnit;
+    if (primarySupplierId !== (product.primarySupplierId ?? null)) payload.primarySupplierId = primarySupplierId;
 
     try {
       await updateMutation.mutateAsync(payload as any);
@@ -564,6 +573,13 @@ export default function EditItemPage() {
             </p>
           </div>
         </div>
+        <Link
+          href={`/inventory/${productId}/history`}
+          className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        >
+          <Clock size={14} />
+          View History
+        </Link>
       </div>
 
       {/* Status Messages */}
@@ -1108,6 +1124,24 @@ export default function EditItemPage() {
                 )}
               </div>
             )}
+          </div>
+
+          {/* Primary Supplier */}
+          <div className="mt-4">
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Supplier</h4>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Primary Supplier</label>
+              <select
+                value={primarySupplierId ?? ""}
+                onChange={(e) => setPrimarySupplierId(e.target.value || null)}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="">None</option>
+                {suppliersList.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </FormSection>
 
