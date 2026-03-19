@@ -24,6 +24,7 @@ import {
   X,
   Layers,
   Clock,
+  Truck,
 } from "lucide-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/app/auth-context";
@@ -276,6 +277,17 @@ export default function EditItemPage() {
   };
 
   // ── Copy Fitment Modal ──
+  // ── Product Suppliers ──
+  const suppliersListQuery = useQuery({
+    queryKey: ["product-suppliers", productId],
+    queryFn: () => apiFetch<{ data: any[] }>(`/products/${productId}/suppliers`, { token: token!, locationId }),
+    enabled: !!token && !!productId,
+  });
+  const productSuppliersList = suppliersListQuery.data?.data ?? [];
+
+  const [showAddSupplier, setShowAddSupplier] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<any>(null);
+
   const [copyModalOpen, setCopyModalOpen] = useState(false);
   const handleCopyFitments = (copiedEntries: VehicleEntry[]) => {
     setVehicles((prev) => {
@@ -1303,6 +1315,75 @@ export default function EditItemPage() {
           </div>
         </FormSection>
 
+        {/* SECTION 3b — Suppliers */}
+        <FormSection
+          id="suppliers"
+          icon={Truck}
+          title="Suppliers"
+          collapsed={collapsedSections.has("suppliers")}
+          onToggle={() => toggleSection("suppliers")}
+          badge={`${productSuppliersList.length} suppliers`}
+        >
+          {productSuppliersList.length === 0 ? (
+            <div className="text-sm text-muted-foreground py-4 text-center">
+              No suppliers configured.{" "}
+              <button onClick={() => setShowAddSupplier(true)} className="text-primary hover:underline">
+                Add one
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {productSuppliersList.map((ps: any, idx: number) => (
+                <div key={ps.id} className={cn("rounded-lg border p-3", idx === 0 && "border-primary/30 bg-primary/5")}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        {idx === 0 && (
+                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">PRIMARY</span>
+                        )}
+                        <span className="text-sm font-medium">{ps.supplierName}</span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-4 text-xs text-muted-foreground">
+                        {ps.supplierSku && <span>SKU: {ps.supplierSku}</span>}
+                        {ps.supplierCost && <span>Cost: &#8369;{parseFloat(ps.supplierCost).toLocaleString()}</span>}
+                        {ps.leadTimeDays && <span>Lead: {ps.leadTimeDays}d</span>}
+                        {ps.lastOrderedAt && <span>Last ordered: {new Date(ps.lastOrderedAt).toLocaleDateString()}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setEditingSupplier(ps)}
+                        className="rounded p-1 text-muted-foreground hover:bg-muted"
+                      >
+                        <Settings size={13} />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await apiFetch(`/products/${productId}/suppliers/${ps.id}`, {
+                            method: "DELETE",
+                            token: token!,
+                            locationId,
+                          });
+                          queryClient.invalidateQueries({ queryKey: ["product-suppliers"] });
+                        }}
+                        className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={() => setShowAddSupplier(true)}
+            className="mt-3 flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+          >
+            <Plus size={12} /> Add Supplier
+          </button>
+        </FormSection>
+
         {/* SECTION 4 — Store Availability */}
         <FormSection
           id="stores"
@@ -1497,6 +1578,24 @@ export default function EditItemPage() {
         locationId={locationId!}
         excludeProductId={productId}
       />
+
+      {/* Add / Edit Supplier Modal */}
+      {(showAddSupplier || editingSupplier) && (
+        <AddSupplierModal
+          open
+          onClose={() => { setShowAddSupplier(false); setEditingSupplier(null); }}
+          productId={productId}
+          token={token!}
+          locationId={locationId!}
+          suppliers={suppliersList}
+          editing={editingSupplier}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: ["product-suppliers"] });
+            setShowAddSupplier(false);
+            setEditingSupplier(null);
+          }}
+        />
+      )}
 
       {/* Sticky Action Bar */}
       <div className={cn("fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-background/95 backdrop-blur-sm transition-[left] duration-200", isCollapsed ? "md:left-16" : "md:left-[252px]")}>
@@ -2105,5 +2204,171 @@ function VariantTableRow({
         </div>
       </td>
     </tr>
+  );
+}
+
+/* ─────────────────────────────────────────────
+ * Add / Edit Supplier Modal
+ * ───────────────────────────────────────────── */
+function AddSupplierModal({
+  open,
+  onClose,
+  productId,
+  token,
+  locationId,
+  suppliers,
+  editing,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  productId: string;
+  token: string;
+  locationId: string;
+  suppliers: { id: string; name: string }[];
+  editing: any | null;
+  onSaved: () => void;
+}) {
+  const [supplierId, setSupplierId] = useState(editing?.supplierId ?? "");
+  const [supplierSku, setSupplierSku] = useState(editing?.supplierSku ?? "");
+  const [cost, setCost] = useState(editing?.supplierCost ?? "");
+  const [leadTimeDays, setLeadTimeDays] = useState(editing?.leadTimeDays ?? "");
+  const [minOrderQty, setMinOrderQty] = useState(editing?.minOrderQty ?? "");
+  const [notes, setNotes] = useState(editing?.notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!open) return null;
+
+  const handleSubmit = async () => {
+    if (!editing && !supplierId) { setErr("Select a supplier"); return; }
+    setSaving(true);
+    setErr(null);
+    try {
+      const body: Record<string, any> = {
+        supplierSku: supplierSku || null,
+        supplierCost: cost || null,
+        leadTimeDays: leadTimeDays ? parseInt(leadTimeDays) : null,
+        minOrderQty: minOrderQty ? parseInt(minOrderQty) : null,
+        notes: notes || null,
+      };
+      if (editing) {
+        await apiFetch(`/products/${productId}/suppliers/${editing.id}`, {
+          method: "PATCH",
+          token,
+          locationId,
+          body: JSON.stringify(body),
+        });
+      } else {
+        body.supplierId = supplierId;
+        await apiFetch(`/products/${productId}/suppliers`, {
+          method: "POST",
+          token,
+          locationId,
+          body: JSON.stringify(body),
+        });
+      }
+      onSaved();
+    } catch (e: any) {
+      setErr(e?.message || "Failed to save supplier");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold">{editing ? "Edit Supplier" : "Add Supplier"}</h3>
+          <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted"><X size={14} /></button>
+        </div>
+        {err && <div className="mb-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">{err}</div>}
+        <div className="space-y-3">
+          {!editing && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Supplier</label>
+              <select
+                value={supplierId}
+                onChange={(e) => setSupplierId(e.target.value)}
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+              >
+                <option value="">Select supplier...</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Supplier SKU</label>
+            <input
+              type="text"
+              value={supplierSku}
+              onChange={(e) => setSupplierSku(e.target.value)}
+              placeholder="Supplier's part number"
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Cost</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={cost}
+                onChange={(e) => setCost(e.target.value)}
+                placeholder="0.00"
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Lead Time (days)</label>
+              <input
+                type="number"
+                min="0"
+                value={leadTimeDays}
+                onChange={(e) => setLeadTimeDays(e.target.value)}
+                placeholder="e.g. 7"
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Min Order Qty</label>
+            <input
+              type="number"
+              min="1"
+              value={minOrderQty}
+              onChange={(e) => setMinOrderQty(e.target.value)}
+              placeholder="1"
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Notes</label>
+            <input
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Optional notes"
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+            />
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted">Cancel</button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-50"
+          >
+            {saving && <Loader2 size={12} className="animate-spin" />}
+            {editing ? "Update" : "Add Supplier"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

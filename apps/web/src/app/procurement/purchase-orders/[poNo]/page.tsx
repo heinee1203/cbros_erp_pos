@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { Printer, Pencil, Trash2, Plus, Search, X, Save, Loader2 } from "lucide-react";
+import { Printer, Pencil, Trash2, Plus, Search, X, Save, Loader2, ArrowRightLeft } from "lucide-react";
 import {
   usePOQuery,
   usePOReceipts,
@@ -334,6 +334,66 @@ function PODetailView({
 
   const isPartiallyReceived = po.status === "PARTIALLY_RECEIVED";
 
+  // ── Redirect Unfulfilled Modal ──
+  const [showRedirectModal, setShowRedirectModal] = useState(false);
+  const [redirectPlan, setRedirectPlan] = useState<any>(null);
+  const [redirectLoading, setRedirectLoading] = useState(false);
+  const [redirectSelections, setRedirectSelections] = useState<Record<string, string>>({});
+  const [redirectCreating, setRedirectCreating] = useState(false);
+  const [redirectError, setRedirectError] = useState<string | null>(null);
+
+  const openRedirectModal = useCallback(async () => {
+    setShowRedirectModal(true);
+    setRedirectLoading(true);
+    setRedirectError(null);
+    try {
+      const result = await apiFetch<{ data: any }>(`/procurement/purchase-orders/${po.id}/redirect-plan`, {
+        method: "POST",
+        token,
+        locationId,
+      });
+      setRedirectPlan(result.data);
+      // Default selections: first alternate supplier for each item, or "skip"
+      const defaults: Record<string, string> = {};
+      for (const item of result.data?.items ?? []) {
+        defaults[item.lineId] = item.alternateSuppliers?.[0]?.supplierId ?? "skip";
+      }
+      setRedirectSelections(defaults);
+    } catch (e: any) {
+      setRedirectError(e?.message || "Failed to load redirect plan");
+    } finally {
+      setRedirectLoading(false);
+    }
+  }, [po.id, token, locationId]);
+
+  const handleCreateRedirectPOs = useCallback(async () => {
+    setRedirectCreating(true);
+    setRedirectError(null);
+    try {
+      const lines = Object.entries(redirectSelections)
+        .filter(([, supplierId]) => supplierId !== "skip")
+        .map(([lineId, supplierId]) => ({ lineId, supplierId }));
+      if (lines.length === 0) {
+        setRedirectError("Select at least one supplier to redirect to");
+        setRedirectCreating(false);
+        return;
+      }
+      await apiFetch(`/procurement/purchase-orders/${po.id}/create-redirect-pos`, {
+        method: "POST",
+        token,
+        locationId,
+        body: JSON.stringify({ lines }),
+      });
+      setShowRedirectModal(false);
+      setRedirectPlan(null);
+      refetch();
+    } catch (e: any) {
+      setRedirectError(e?.message || "Failed to create redirect POs");
+    } finally {
+      setRedirectCreating(false);
+    }
+  }, [po.id, redirectSelections, token, locationId, refetch]);
+
   return (
     <div className="mx-auto max-w-7xl space-y-5">
       {/* ── Header ── */}
@@ -421,6 +481,14 @@ function PODetailView({
               )}
               {po.status === "PARTIALLY_RECEIVED" && (
                 <CloseVarianceButton po={po} />
+              )}
+              {(po.status === "PARTIALLY_RECEIVED" || po.status === "CLOSED_WITH_VARIANCE") && (
+                <button
+                  onClick={openRedirectModal}
+                  className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                >
+                  <ArrowRightLeft size={14} /> Redirect Unfulfilled
+                </button>
               )}
             </>
           )}
@@ -597,6 +665,99 @@ function PODetailView({
             {po.notes}
           </p>
         </section>
+      )}
+
+      {/* ── Redirect Unfulfilled Modal ── */}
+      {showRedirectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowRedirectModal(false)}>
+          <div className="w-full max-w-lg rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Redirect Unfulfilled Items</h3>
+              <button onClick={() => setShowRedirectModal(false)} className="rounded p-1 text-muted-foreground hover:bg-muted"><X size={14} /></button>
+            </div>
+
+            {redirectLoading && (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 size={18} className="animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Loading redirect plan...</span>
+              </div>
+            )}
+
+            {redirectError && (
+              <div className="mb-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">{redirectError}</div>
+            )}
+
+            {redirectPlan && !redirectLoading && (
+              <>
+                <div className="max-h-[50vh] space-y-3 overflow-y-auto">
+                  {(redirectPlan.items ?? []).map((item: any) => (
+                    <div key={item.lineId} className="rounded-lg border border-border p-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-sm font-medium">{item.productName}</span>
+                          <span className="ml-2 text-xs text-muted-foreground">SKU: {item.sku}</span>
+                        </div>
+                        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                          {item.unfulfilledQty} unfulfilled
+                        </span>
+                      </div>
+                      <div className="mt-2 space-y-1">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name={`redirect-${item.lineId}`}
+                            value="skip"
+                            checked={redirectSelections[item.lineId] === "skip"}
+                            onChange={() => setRedirectSelections((prev) => ({ ...prev, [item.lineId]: "skip" }))}
+                            className="h-3.5 w-3.5"
+                          />
+                          <span className="text-xs text-muted-foreground">Skip (do not redirect)</span>
+                        </label>
+                        {(item.alternateSuppliers ?? []).map((alt: any) => (
+                          <label key={alt.supplierId} className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name={`redirect-${item.lineId}`}
+                              value={alt.supplierId}
+                              checked={redirectSelections[item.lineId] === alt.supplierId}
+                              onChange={() => setRedirectSelections((prev) => ({ ...prev, [item.lineId]: alt.supplierId }))}
+                              className="h-3.5 w-3.5"
+                            />
+                            <span className="text-xs">
+                              {alt.supplierName}
+                              {alt.cost && <span className="ml-1 text-muted-foreground">(&#8369;{parseFloat(alt.cost).toLocaleString()})</span>}
+                              {alt.leadTimeDays && <span className="ml-1 text-muted-foreground">{alt.leadTimeDays}d lead</span>}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Summary */}
+                <div className="mt-4 rounded-lg bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  {Object.values(redirectSelections).filter((v) => v !== "skip").length} of{" "}
+                  {(redirectPlan.items ?? []).length} items selected for redirect
+                </div>
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <button onClick={() => setShowRedirectModal(false)} className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCreateRedirectPOs}
+                    disabled={redirectCreating || Object.values(redirectSelections).every((v) => v === "skip")}
+                    className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-4 py-2 text-xs font-medium text-white shadow-sm hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {redirectCreating && <Loader2 size={12} className="animate-spin" />}
+                    Create Redirect PO(s)
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
