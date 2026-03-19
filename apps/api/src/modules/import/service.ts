@@ -32,6 +32,7 @@ export interface ParsedRow {
   barcode: string;
   costPrice: string;
   unitPrice: string;
+  isVariablePrice: boolean;
   categoryName: string;
   description: string;
   handle: string;
@@ -349,11 +350,21 @@ export async function parseLoyverseCSV(
       rowErrors.push("SKU is required");
     }
 
-    // Validate prices are numeric if provided
-    const costPrice = costStr ? parseFloat(costStr.replace(/[^0-9.-]/g, "")) : 0;
-    const unitPrice = priceStr ? parseFloat(priceStr.replace(/[^0-9.-]/g, "")) : 0;
-    if (costStr && isNaN(costPrice)) rowErrors.push("Invalid cost price");
-    if (priceStr && isNaN(unitPrice)) rowErrors.push("Invalid unit price");
+    // Validate prices — handle Loyverse "variable" price items
+    const priceNorm = (priceStr ?? "").trim().toLowerCase();
+    const costNorm = (costStr ?? "").trim().toLowerCase();
+    const isVariablePrice = priceNorm === "variable";
+    const costPrice = costNorm && costNorm !== "variable" && costNorm !== "n/a"
+      ? parseFloat(costStr!.replace(/[^0-9.-]/g, ""))
+      : 0;
+    const unitPrice = isVariablePrice ? 0
+      : priceNorm && priceNorm !== "n/a"
+        ? parseFloat(priceStr!.replace(/[^0-9.-]/g, ""))
+        : 0;
+    if (costStr && costNorm !== "variable" && costNorm !== "n/a" && isNaN(costPrice))
+      rowErrors.push("Invalid cost price");
+    if (priceStr && !isVariablePrice && priceNorm !== "n/a" && priceNorm !== "" && isNaN(unitPrice))
+      rowErrors.push("Invalid unit price");
 
     // Extract per-location stock data
     const rowLocations: ParsedRowLocation[] = [];
@@ -414,6 +425,7 @@ export async function parseLoyverseCSV(
       barcode,
       costPrice: isNaN(costPrice) ? "0.00" : costPrice.toFixed(2),
       unitPrice: isNaN(unitPrice) ? "0.00" : unitPrice.toFixed(2),
+      isVariablePrice,
       categoryName,
       description,
       handle,
@@ -582,6 +594,7 @@ export async function executeImport(
                   mnemonicSku,
                   unitPrice: row.unitPrice,
                   costPrice: row.costPrice,
+                  isVariablePrice: row.isVariablePrice,
                   barcode,
                   category: "HARD_PARTS",
                   categoryId,
@@ -608,6 +621,7 @@ export async function executeImport(
               if (row.name) updateFields.name = row.name;
               if (row.unitPrice !== "0.00") updateFields.unitPrice = row.unitPrice;
               if (row.costPrice !== "0.00") updateFields.costPrice = row.costPrice;
+              if (row.isVariablePrice) updateFields.isVariablePrice = true;
               if (row.barcode) updateFields.barcode = row.barcode;
               if (row.description) updateFields.description = row.description;
               if (categoryId) updateFields.categoryId = categoryId;
