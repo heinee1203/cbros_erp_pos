@@ -355,7 +355,7 @@ export async function queryStockMonitor(
     const dir = params.sortDir === "desc" ? desc : asc;
     orderCols = [
       dir(STATUS_ORDER),
-      asc(sql`${stockMetrics.daysOfStock} NULLS LAST`),
+      sql`${stockMetrics.daysOfStock} ASC NULLS LAST`,
     ];
   } else {
     const col = SORT_COLUMNS[params.sortBy] ?? products.name;
@@ -461,7 +461,7 @@ export async function exportStockMonitorCSV(
     const dir = params.sortDir === "desc" ? desc : asc;
     orderCols = [
       dir(STATUS_ORDER),
-      asc(sql`${stockMetrics.daysOfStock} NULLS LAST`),
+      sql`${stockMetrics.daysOfStock} ASC NULLS LAST`,
     ];
   } else {
     const col = SORT_COLUMNS[params.sortBy] ?? products.name;
