@@ -113,6 +113,13 @@ export default function EditItemPage() {
   const { data: dbMakesData } = useVehicleMakes(token, locationId);
   const allMakes = useMemo(() => mergeVehicleMakes(dbMakesData?.data ?? []), [dbMakesData]);
 
+  const metricsQuery = useQuery({
+    queryKey: ["product-metrics", productId],
+    queryFn: () => apiFetch<{ data: any[] }>(`/inventory/stock-monitor?search=${product?.sku}&limit=1`, { token: token!, locationId }),
+    enabled: !!product?.sku && !!token,
+  });
+  const metrics = metricsQuery.data?.data?.[0];
+
   const showCost = ["ADMIN", "MANAGER"].includes(user?.role ?? "");
 
   // Section collapse state
@@ -203,6 +210,7 @@ export default function EditItemPage() {
   const [vehicles, setVehicles] = useState<VehicleEntry[]>([]);
   const initialVehiclesRef = useRef<VehicleEntry[]>([]);
   const [initialized, setInitialized] = useState(false);
+  const [priceChangeReason, setPriceChangeReason] = useState("");
 
   // ── Store Availability ──
   const locationsQuery = useProductLocations(token, locationId, productId);
@@ -355,6 +363,21 @@ export default function EditItemPage() {
     return ((sell - cost) / sell * 100).toFixed(1);
   }, [unitPrice, costPrice]);
 
+  // Dead stock tier calculation
+  function getDeadStockInfo(lastSaleDate: string | null, costPriceVal: number) {
+    if (!lastSaleDate) return null;
+    const daysSince = Math.floor((Date.now() - new Date(lastSaleDate).getTime()) / 86400000);
+    if (daysSince < 90) return null;
+
+    let tier, targetMargin;
+    if (daysSince <= 180) { tier = "Slow Mover"; targetMargin = 12; }
+    else if (daysSince <= 365) { tier = "Clearance"; targetMargin = 3; }
+    else { tier = "Deep Clearance"; targetMargin = -15; }
+
+    const suggestedPrice = Math.round(costPriceVal * (1 + targetMargin / 100) * 100) / 100;
+    return { daysSince, tier, targetMargin, suggestedPrice };
+  }
+
   const isValid = name.trim() !== "";
 
   // Dirty check
@@ -414,6 +437,9 @@ export default function EditItemPage() {
     if (isSerialized !== (product.isSerialized ?? false)) payload.isSerialized = isSerialized;
     if (reorderEnabled !== ((product as any).reorderEnabled ?? true)) payload.reorderEnabled = reorderEnabled;
     if ((customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null)) payload.customReorderPoint = customReorderPoint;
+    if ((unitPrice !== product.unitPrice || costPrice !== product.costPrice) && priceChangeReason.trim()) {
+      payload.priceChangeReason = priceChangeReason.trim();
+    }
 
     try {
       await updateMutation.mutateAsync(payload as any);
@@ -595,6 +621,55 @@ export default function EditItemPage() {
           {error}
         </div>
       )}
+
+      {/* Dead Stock Banner */}
+      {metrics?.status === "DEAD_STOCK" && (() => {
+        const info = getDeadStockInfo(metrics.lastSaleDate, parseFloat(costPrice) || 0);
+        if (!info) return null;
+        return (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 mb-6">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="flex items-center gap-2 text-amber-800 font-medium text-sm">
+                  <AlertCircle size={16} />
+                  Dead Stock — No sales in {info.daysSince} days
+                </div>
+                <div className="text-xs text-amber-700 mt-1">
+                  Suggested clearance price: ₱{info.suggestedPrice.toLocaleString()} (current: ₱{parseFloat(unitPrice || "0").toLocaleString()})
+                </div>
+                <div className="text-xs text-amber-600 mt-0.5">
+                  Tier: {info.tier} ({info.targetMargin > 0 ? `${info.targetMargin}%` : `${info.targetMargin}%`} margin)
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await apiFetch(`/inventory/pricing/${productId}`, {
+                      method: "PATCH",
+                      token: token!,
+                      locationId,
+                      body: JSON.stringify({
+                        sellPrice: info.suggestedPrice,
+                        reason: `Dead stock clearance markdown (${info.tier})`,
+                      }),
+                    });
+                    setUnitPrice(String(info.suggestedPrice));
+                  } catch {}
+                }}
+                className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+              >
+                Apply Suggested Price
+              </button>
+            </div>
+            {product?.reorderEnabled === false && (
+              <div className="text-[10px] text-amber-600 mt-2 flex items-center gap-1">
+                <Info size={10} />
+                Reorder disabled (Dead stock). Will auto-re-enable if demand recovers (3+ sales in 30 days).
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Sections */}
       <div className="flex-1 overflow-y-auto pb-20 space-y-3">
@@ -1052,6 +1127,26 @@ export default function EditItemPage() {
                 </div>
               </>
             )}
+          </div>
+          {(unitPrice !== product?.unitPrice || costPrice !== product?.costPrice) && (
+            <div className="mt-3">
+              <label className="text-xs font-medium text-muted-foreground">Price Change Reason</label>
+              <input
+                type="text"
+                value={priceChangeReason}
+                onChange={(e) => setPriceChangeReason(e.target.value)}
+                placeholder="e.g., Supplier price increase, Clearance markdown"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm mt-1"
+              />
+            </div>
+          )}
+          <div className="mt-2">
+            <Link
+              href={`/inventory/pricing?tab=history&product=${productId}`}
+              className="text-xs text-primary hover:underline"
+            >
+              View price history →
+            </Link>
           </div>
         </FormSection>
 
