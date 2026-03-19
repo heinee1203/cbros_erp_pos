@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import SyncStatusBar from '@/components/SyncStatusBar';
+import { NetworkBanner } from '@/components/NetworkBanner';
 import { NavRail, NAV_RAIL_WIDTH } from '@/components/NavRail';
 import { SplitView } from '@/components/SplitView';
 import { useLayout } from '@/hooks/use-layout';
@@ -152,6 +153,7 @@ export default function MainTabs() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg.primary }}>
       <SyncStatusBar />
+      <NetworkBanner />
       <Tab.Navigator
         tabBar={isTablet ? TabletTabBar : undefined}
         screenOptions={{
