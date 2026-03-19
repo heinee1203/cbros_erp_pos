@@ -118,6 +118,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Stock Adjustments", href: "/procurement/stock-adjustments", match: /^\/procurement\/stock-adjustments/ },
       { label: "Inventory Counts", href: "/procurement/inventory-counts", match: /^\/procurement\/inventory-counts/ },
       { label: "Suppliers", href: "/procurement/suppliers", match: /^\/procurement\/suppliers/ },
+      { label: "Supplier Returns", href: "/procurement/supplier-returns", match: /^\/procurement\/supplier-returns/ },
       { label: "Inventory History", href: "/procurement/inventory-history", match: /^\/procurement\/inventory-history/ },
       { label: "Stock Monitor", href: "/procurement/stock-monitor", match: /^\/procurement\/stock-monitor/ },
       { label: "Suggested Orders", href: "/procurement/suggested-orders", match: /^\/procurement\/suggested-orders/ },
