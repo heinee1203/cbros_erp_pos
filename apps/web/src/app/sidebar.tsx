@@ -19,6 +19,7 @@ import {
   PanelLeftOpen,
   Barcode,
   Activity,
+  RotateCcw,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -82,11 +83,12 @@ const NAV_TOP: NavEntry[] = [
     kind: "group",
     label: "Sales",
     icon: ShoppingCart,
-    match: /^\/sales/,
+    match: /^\/(sales|returns)/,
     children: [
       { label: "Receipts", href: "/sales/receipts", match: /^\/sales\/receipts/ },
       { label: "Open Tickets", href: "/sales/open-tickets", match: /^\/sales\/open-tickets/ },
       { label: "Shifts", href: "/sales/shifts", match: /^\/sales\/shifts/ },
+      { label: "Returns", href: "/returns", match: /^\/returns/ },
     ],
   },
   {
