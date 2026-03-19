@@ -66,6 +66,7 @@ export interface PreviewResult {
   preview: Array<{
     rowIndex: number;
     name: string;
+    variantName: string | null;
     sku: string;
     action: "CREATE" | "UPDATE";
     changes: string[];
@@ -545,7 +546,10 @@ export async function parseLoyverseCSV(
     errors: updatedErrors,
     preview: parsedRows.slice(0, 100).map((r) => ({
       rowIndex: r.rowIndex,
-      name: r.resolvedName || r.name,
+      name: r.isVariant ? r.parentName : r.name,
+      variantName: r.isVariant
+        ? [r.option1Value, r.option2Value, r.option3Value].filter(Boolean).join(" / ") || null
+        : null,
       sku: r.sku,
       action: r.action,
       changes: r.changes,

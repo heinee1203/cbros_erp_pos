@@ -556,6 +556,7 @@ export default function ImportItemsPage() {
                     <th className="px-4 py-2 font-medium">Row</th>
                     <th className="px-4 py-2 font-medium">SKU</th>
                     <th className="px-4 py-2 font-medium">Name</th>
+                    <th className="px-4 py-2 font-medium">Variant</th>
                     <th className="px-4 py-2 font-medium">Action</th>
                     <th className="px-4 py-2 font-medium">Changes</th>
                   </tr>
@@ -570,6 +571,9 @@ export default function ImportItemsPage() {
                       <td className="px-4 py-2 font-mono text-xs text-foreground">{row.sku}</td>
                       <td className="max-w-[200px] truncate px-4 py-2 text-foreground">
                         {row.name}
+                      </td>
+                      <td className="max-w-[150px] truncate px-4 py-2 text-muted-foreground">
+                        {(row as any).variantName || "—"}
                       </td>
                       <td className="px-4 py-2">
                         <span
