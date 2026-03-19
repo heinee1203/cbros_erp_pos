@@ -35,3 +35,4 @@ export * from "./serial-numbers";
 export * from "./historical-sales";
 export * from "./price-changes";
 export * from "./product-suppliers";
+export * from "./accounts-payable";
