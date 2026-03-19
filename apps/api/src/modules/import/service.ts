@@ -108,6 +108,38 @@ function cleanExpiredCache() {
   }
 }
 
+// ── Header Alias Map ─────────────────────────────────────────────────
+
+const HEADER_ALIASES: Record<string, string[]> = {
+  name: ["Name", "Item name", "Item Name", "name", "item name"],
+  sku: ["SKU", "Sku", "sku"],
+  price: ["Default price", "Price", "default price", "price"],
+  cost: ["Cost", "Purchase cost", "cost", "purchase cost"],
+  barcode: ["Barcode", "barcode"],
+  category: ["Category", "category"],
+  handle: ["Handle", "handle"],
+  description: ["Description", "description"],
+  trackStock: ["Track stock", "track stock"],
+  supplier: ["Supplier", "supplier"],
+  option1Name: ["Option 1 name", "option 1 name"],
+  option1Value: ["Option 1 value", "option 1 value"],
+  option2Name: ["Option 2 name", "option 2 name"],
+  option2Value: ["Option 2 value", "option 2 value"],
+  option3Name: ["Option 3 name", "option 3 name"],
+  option3Value: ["Option 3 value", "option 3 value"],
+};
+
+function findColumn(headers: string[], field: string): number {
+  const aliases = HEADER_ALIASES[field] ?? [field];
+  return headers.findIndex((h) => aliases.includes(h.trim()));
+}
+
+function isLoyverseFormat(headers: string[]): boolean {
+  const hasName = findColumn(headers, "name") >= 0;
+  const hasSku = findColumn(headers, "sku") >= 0;
+  return hasName && hasSku;
+}
+
 // ── CSV Parser ───────────────────────────────────────────────────────
 
 function parseCSV(text: string): string[][] {
@@ -199,26 +231,37 @@ export async function parseLoyverseCSV(
 
   const headers = rows[0].map((h) => h.trim());
 
-  // Validate Loyverse format
-  const requiredHeaders = ["Item name", "SKU", "Price"];
-  const missingHeaders = requiredHeaders.filter(
-    (rh) => !headers.some((h) => h.toLowerCase() === rh.toLowerCase()),
-  );
-  if (missingHeaders.length > 0) {
+  // Validate Loyverse format using alias-based detection
+  if (!isLoyverseFormat(headers)) {
     throw new Error(
-      `Not a valid Loyverse CSV. Missing headers: ${missingHeaders.join(", ")}`,
+      `Not a valid Loyverse CSV. Could not find required columns: Name (or "Item name") and SKU.`,
     );
   }
 
-  // Build header index map (case-insensitive)
+  // Build column index map using aliases
+  const colIdx = {
+    name: findColumn(headers, "name"),
+    sku: findColumn(headers, "sku"),
+    price: findColumn(headers, "price"),
+    cost: findColumn(headers, "cost"),
+    barcode: findColumn(headers, "barcode"),
+    category: findColumn(headers, "category"),
+    description: findColumn(headers, "description"),
+    handle: findColumn(headers, "handle"),
+  };
+
+  // Also build a generic lowercase header index map for location columns
   const headerIdx: Record<string, number> = {};
   for (let i = 0; i < headers.length; i++) {
     headerIdx[headers[i].toLowerCase()] = i;
   }
 
-  // Extract location columns: "In stock [LocationName]" and "Available for sale [LocationName]"
+  // Extract per-location columns: "In stock [X]", "Available for sale [X]", "Price [X]", "Low stock [X]", "Optimal stock [X]"
   const stockPattern = /^in stock \[(.+)\]$/i;
   const availPattern = /^available for sale \[(.+)\]$/i;
+  const priceLocPattern = /^price \[(.+)\]$/i;
+  const lowStockPattern = /^low stock \[(.+)\]$/i;
+  const optimalStockPattern = /^optimal stock \[(.+)\]$/i;
   const csvLocationNames = new Set<string>();
 
   for (const h of headers) {
@@ -226,6 +269,12 @@ export async function parseLoyverseCSV(
     if (stockMatch) csvLocationNames.add(stockMatch[1].trim());
     const availMatch = h.match(availPattern);
     if (availMatch) csvLocationNames.add(availMatch[1].trim());
+    const priceLocMatch = h.match(priceLocPattern);
+    if (priceLocMatch) csvLocationNames.add(priceLocMatch[1].trim());
+    const lowStockMatch = h.match(lowStockPattern);
+    if (lowStockMatch) csvLocationNames.add(lowStockMatch[1].trim());
+    const optimalStockMatch = h.match(optimalStockPattern);
+    if (optimalStockMatch) csvLocationNames.add(optimalStockMatch[1].trim());
   }
 
   // Match CSV locations to Apex locations by name (case-insensitive)
@@ -247,10 +296,9 @@ export async function parseLoyverseCSV(
     });
   }
 
-  // Helper: get cell value by header name
-  const getVal = (row: string[], headerName: string): string => {
-    const idx = headerIdx[headerName.toLowerCase()];
-    if (idx === undefined) return "";
+  // Helper: get cell value by column index
+  const getByIdx = (row: string[], idx: number): string => {
+    if (idx < 0) return "";
     return (row[idx] ?? "").trim();
   };
 
@@ -285,14 +333,14 @@ export async function parseLoyverseCSV(
     const row = rows[i];
     const rowNum = i + 1; // 1-based for user display
 
-    const name = getVal(row, "item name");
-    const sku = getVal(row, "sku");
-    const barcode = getVal(row, "barcode");
-    const costStr = getVal(row, "cost");
-    const priceStr = getVal(row, "price");
-    const categoryName = getVal(row, "category");
-    const description = getVal(row, "description");
-    const handle = getVal(row, "handle");
+    const name = getByIdx(row, colIdx.name);
+    const sku = getByIdx(row, colIdx.sku);
+    const barcode = getByIdx(row, colIdx.barcode);
+    const costStr = getByIdx(row, colIdx.cost);
+    const priceStr = getByIdx(row, colIdx.price);
+    const categoryName = getByIdx(row, colIdx.category);
+    const description = getByIdx(row, colIdx.description);
+    const handle = getByIdx(row, colIdx.handle);
 
     const rowErrors: string[] = [];
 

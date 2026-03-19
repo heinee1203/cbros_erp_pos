@@ -289,7 +289,7 @@ export default function ImportItemsPage() {
         </Link>
         <div>
           <h1 className="text-xl font-semibold text-zinc-100">Import Items</h1>
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm text-zinc-300">
             Import items from a Loyverse CSV export
           </p>
         </div>
@@ -329,17 +329,17 @@ export default function ImportItemsPage() {
                   "flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold transition",
                   isDone && "bg-emerald-500/20 text-emerald-400",
                   isActive && "bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30",
-                  !isDone && !isActive && "bg-zinc-800 text-zinc-500",
+                  !isDone && !isActive && "bg-zinc-800 text-zinc-400",
                 )}
               >
                 {isDone ? <CheckCircle size={12} /> : i + 1}
               </div>
               <span
                 className={cn(
-                  "hidden sm:inline",
+                  "hidden sm:inline font-medium",
                   isDone && "text-emerald-400",
                   isActive && "text-blue-400",
-                  !isDone && !isActive && "text-zinc-500",
+                  !isDone && !isActive && "text-zinc-400",
                 )}
               >
                 {labels[i]}
@@ -353,8 +353,8 @@ export default function ImportItemsPage() {
       {error && (
         <div className="flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-400" />
-          <div className="flex-1 text-sm text-red-300">{error}</div>
-          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">
+          <div className="flex-1 text-sm text-red-200">{error}</div>
+          <button onClick={() => setError(null)} className="text-red-300 hover:text-red-200">
             <X size={14} />
           </button>
         </div>
@@ -390,8 +390,8 @@ export default function ImportItemsPage() {
                     className="mt-0.5 accent-blue-500"
                   />
                   <div>
-                    <div className="text-sm font-medium text-zinc-200">{mode.label}</div>
-                    <div className="text-xs text-zinc-400">{mode.desc}</div>
+                    <div className="text-sm font-medium text-zinc-100">{mode.label}</div>
+                    <div className="text-xs text-zinc-300">{mode.desc}</div>
                   </div>
                 </label>
               ))}
@@ -418,12 +418,12 @@ export default function ImportItemsPage() {
               </>
             ) : (
               <>
-                <Upload size={32} className="text-zinc-500" />
+                <Upload size={32} className="text-zinc-400" />
                 <div className="text-center">
-                  <p className="text-sm font-medium text-zinc-300">
+                  <p className="text-sm font-medium text-zinc-100">
                     Drop your Loyverse CSV here, or click to browse
                   </p>
-                  <p className="mt-1 text-xs text-zinc-500">Supports .csv files</p>
+                  <p className="mt-1 text-xs text-zinc-400">Supports .csv files</p>
                 </div>
               </>
             )}
@@ -461,7 +461,7 @@ export default function ImportItemsPage() {
                 key={card.label}
                 className="rounded-lg border border-zinc-700/60 bg-zinc-800/50 px-4 py-3"
               >
-                <div className="text-xs text-zinc-400">{card.label}</div>
+                <div className="text-xs text-zinc-300">{card.label}</div>
                 <div className={cn("mt-1 text-2xl font-semibold", card.color)}>
                   {card.value.toLocaleString()}
                 </div>
@@ -604,11 +604,11 @@ export default function ImportItemsPage() {
                   <div className="max-h-60 space-y-1 overflow-y-auto">
                     {preview.errors.map((err, i) => (
                       <div key={i} className="flex gap-3 text-xs">
-                        <span className="shrink-0 text-red-400/60">Row {err.row}</span>
+                        <span className="shrink-0 text-red-400">Row {err.row}</span>
                         {err.field && (
-                          <span className="shrink-0 font-mono text-red-400/60">{err.field}</span>
+                          <span className="shrink-0 font-mono text-red-400">{err.field}</span>
                         )}
-                        <span className="text-red-300">{err.message}</span>
+                        <span className="text-red-200">{err.message}</span>
                       </div>
                     ))}
                   </div>
@@ -669,7 +669,7 @@ export default function ImportItemsPage() {
                   { label: "Errors", value: progress?.errors ?? 0 },
                 ].map((c) => (
                   <div key={c.label} className="text-center">
-                    <div className="text-xs text-zinc-500">{c.label}</div>
+                    <div className="text-xs text-zinc-400">{c.label}</div>
                     <div className="mt-0.5 text-lg font-semibold text-zinc-200">
                       {c.value.toLocaleString()}
                       {"showTotal" in c && c.showTotal && (
@@ -734,7 +734,7 @@ export default function ImportItemsPage() {
                   { label: "Errors", value: results.errors, color: "text-red-400" },
                 ].map((c) => (
                   <div key={c.label} className="rounded-lg bg-zinc-900/40 px-3 py-2 text-center">
-                    <div className="text-xs text-zinc-500">{c.label}</div>
+                    <div className="text-xs text-zinc-400">{c.label}</div>
                     <div className={cn("mt-0.5 text-xl font-semibold", c.color)}>
                       {c.value.toLocaleString()}
                     </div>
