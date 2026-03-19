@@ -36,6 +36,7 @@ export interface ProductRow {
   primarySupplierId: string | null;
   reorderEnabled: boolean;
   customReorderPoint: number | null;
+  isSerialized: boolean;
 }
 
 export interface ProductsResponse {
@@ -183,6 +184,7 @@ export interface CreateProductPayload {
   unitsPerCase?: number;
   packagingUnit?: string;
   primarySupplierId?: string | null;
+  isSerialized?: boolean;
   vehicleCompatibility?: {
     make: string;
     model: string;
@@ -236,6 +238,7 @@ export interface UpdateProductPayload {
   primarySupplierId?: string | null;
   reorderEnabled?: boolean;
   customReorderPoint?: number | null;
+  isSerialized?: boolean;
 }
 
 export function useUpdateProduct(token: string, locationId: string) {

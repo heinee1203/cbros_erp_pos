@@ -306,6 +306,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         unitsPerCase: products.unitsPerCase,
         packagingUnit: products.packagingUnit,
         primarySupplierId: products.primarySupplierId,
+        isSerialized: products.isSerialized,
         vehicleModel: q.vehicleMake && q.vehicleMake !== "__none__"
           ? sql<string>`(SELECT string_agg(DISTINCT vc.model, ', ' ORDER BY vc.model) FROM vehicle_compatibility vc WHERE vc.product_id = ${products.id} AND vc.make = ${q.vehicleMake})`.as('vehicle_model')
           : sql<string | null>`null`.as('vehicle_model'),
@@ -558,6 +559,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           unitsPerCase: parsed.data.unitsPerCase ?? 1,
           packagingUnit: parsed.data.packagingUnit || null,
           primarySupplierId: parsed.data.primarySupplierId || null,
+          isSerialized: parsed.data.isSerialized ?? false,
         })
         .returning();
 
@@ -1055,6 +1057,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         unitsPerCase: products.unitsPerCase,
         packagingUnit: products.packagingUnit,
         primarySupplierId: products.primarySupplierId,
+        isSerialized: products.isSerialized,
       })
       .from(products)
       .leftJoin(inventory, and(
@@ -1657,6 +1660,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         brandName: brands.name,
         unitsPerCase: products.unitsPerCase,
         packagingUnit: products.packagingUnit,
+        isSerialized: products.isSerialized,
       })
       .from(products)
       .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
