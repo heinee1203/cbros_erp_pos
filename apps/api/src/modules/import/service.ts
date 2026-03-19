@@ -474,7 +474,23 @@ export async function parseLoyverseCSV(
   }
 
   for (const [, rows] of handleGroups) {
-    if (rows.length <= 1) continue; // Single row with handle = standalone, skip
+    if (rows.length <= 1) {
+      // Single row with handle — check if it has option values
+      const row = rows[0];
+      const hasOptionValue = row.option1Value?.trim();
+      if (hasOptionValue) {
+        // Single variant — still create parent/child structure
+        const parentName = row.name.trim() || `Unknown (${row.handle})`;
+        const variantParts = [row.option1Value, row.option2Value, row.option3Value].filter(Boolean);
+        const variantSuffix = variantParts.join(" / ");
+        row.isVariant = true;
+        row.parentName = parentName;
+        row.resolvedName = `${parentName} (${variantSuffix})`;
+        if (variantSuffix) row.name = variantSuffix;
+        row.errors = row.errors.filter((e) => e !== "Name is required");
+      }
+      continue;
+    }
 
     // Find the parent row — the one with a non-empty Name
     const parentRow = rows.find((r) => r.name.trim()) || rows[0];
