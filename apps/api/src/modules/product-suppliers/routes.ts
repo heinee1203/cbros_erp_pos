@@ -5,11 +5,23 @@ import {
   updateProductSupplier,
   deleteProductSupplier,
   reorderPriorities,
+  backfillProductSuppliers,
 } from "./service";
 
 const MANAGE_ROLES = ["ADMIN", "MANAGER"];
 
 export const productSuppliersRoutes: FastifyPluginAsync = async (app) => {
+  // ─── POST /products/backfill-suppliers ──────────────
+  // One-time backfill from PO history
+  app.post("/backfill-suppliers", async (request, reply) => {
+    const role = (request.user as any)?.role;
+    if (role !== "ADMIN") return reply.status(403).send({ error: "Admin only" });
+
+    const { orgId } = request.storeContext!;
+    const count = await backfillProductSuppliers(orgId);
+    return reply.send({ success: true, created: count });
+  });
+
   // ─── GET /products/:productId/suppliers ──────────────
   // List all suppliers for a product, ordered by priority
   app.get("/:productId/suppliers", async (request, reply) => {

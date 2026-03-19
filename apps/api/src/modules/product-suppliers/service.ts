@@ -9,6 +9,68 @@ import {
 } from "@apex/database/schema";
 import { eq, and, sql, asc, ne, gt, gte, lt } from "drizzle-orm";
 
+// ── Backfill product_suppliers from PO history ──
+
+export async function backfillProductSuppliers(orgId: string): Promise<number> {
+  // Use raw SQL for the complex backfill query
+  await db.execute(sql`
+    WITH supplier_orders AS (
+      SELECT
+        po.org_id,
+        pl.product_id,
+        po.supplier_id,
+        COUNT(*) as order_count,
+        MAX(po.created_at) as last_ordered_at,
+        -- Get the most recent cost for this product-supplier combo
+        (
+          SELECT pl2.unit_cost
+          FROM po_lines pl2
+          JOIN purchase_orders po2 ON pl2.purchase_order_id = po2.id
+          WHERE pl2.product_id = pl.product_id
+            AND po2.supplier_id = po.supplier_id
+            AND po2.org_id = ${orgId}
+          ORDER BY po2.created_at DESC
+          LIMIT 1
+        ) as last_cost
+      FROM po_lines pl
+      JOIN purchase_orders po ON pl.purchase_order_id = po.id
+      WHERE po.org_id = ${orgId}
+        AND po.status IN ('FULLY_RECEIVED', 'CLOSED', 'CLOSED_WITH_VARIANCE', 'PARTIALLY_RECEIVED', 'SUBMITTED')
+      GROUP BY po.org_id, pl.product_id, po.supplier_id
+    ),
+    ranked AS (
+      SELECT *,
+        ROW_NUMBER() OVER (
+          PARTITION BY product_id
+          ORDER BY order_count DESC, last_ordered_at DESC
+        ) as priority
+      FROM supplier_orders
+    )
+    INSERT INTO product_suppliers (org_id, product_id, supplier_id, priority, last_ordered_at, last_cost)
+    SELECT org_id, product_id, supplier_id, priority::integer, last_ordered_at, last_cost
+    FROM ranked
+    ON CONFLICT (org_id, product_id, supplier_id) DO NOTHING
+  `);
+
+  // Sync primary_supplier_id for all products
+  await db.execute(sql`
+    UPDATE products p
+    SET primary_supplier_id = ps.supplier_id
+    FROM product_suppliers ps
+    WHERE ps.product_id = p.id
+      AND ps.org_id = p.org_id
+      AND ps.priority = 1
+      AND p.org_id = ${orgId}
+      AND (p.primary_supplier_id IS NULL OR p.primary_supplier_id != ps.supplier_id)
+  `);
+
+  // Count what was created
+  const [countRow] = await db.execute(
+    sql`SELECT COUNT(*)::integer as cnt FROM product_suppliers WHERE org_id = ${orgId}`
+  );
+  return (countRow as any).cnt;
+}
+
 // ── List suppliers for a product ──
 
 export async function listProductSuppliers(orgId: string, productId: string) {
