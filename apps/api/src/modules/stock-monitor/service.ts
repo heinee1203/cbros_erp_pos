@@ -128,7 +128,7 @@ export async function refreshStockMetrics(orgId: string): Promise<number> {
       LEFT JOIN stock st ON p.id = st.product_id
       LEFT JOIN stockouts so ON p.id = so.product_id
       LEFT JOIN last_po lp ON p.id = lp.product_id
-      WHERE p.org_id = ${orgId} AND p.is_active = true
+      WHERE p.org_id = ${orgId} AND p.is_active = true AND p.is_parent = false
     `);
 
     const [countRow] = await tx.execute(
@@ -418,16 +418,19 @@ export async function queryStockMonitor(
     .orderBy(...orderCols, asc(stockMetrics.id))
     .limit(limit + 1);
 
-  // Batch-fetch parent names for variants
+  // Batch-fetch parent info for variants (name, brand, category, family)
   const parentIds = [...new Set(rows.filter(r => r.parentProductId).map(r => r.parentProductId!))];
-  const parentNameMap = new Map<string, string>();
+  const parentInfoMap = new Map<string, { name: string; brandName: string | null; categoryName: string | null; familyName: string | null }>();
   if (parentIds.length > 0) {
     const parentRows = await db
-      .select({ id: products.id, name: products.name })
+      .select({ id: products.id, name: products.name, brandName: brands.name, categoryName: categories.name, familyName: productFamilies.name })
       .from(products)
+      .leftJoin(brands, eq(products.brandId, brands.id))
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
       .where(inArray(products.id, parentIds));
     for (const p of parentRows) {
-      parentNameMap.set(p.id, p.name);
+      parentInfoMap.set(p.id, { name: p.name, brandName: p.brandName, categoryName: p.categoryName, familyName: p.familyName });
     }
   }
 
@@ -436,22 +439,21 @@ export async function queryStockMonitor(
   const nextCursor = hasMore ? data[data.length - 1]!.id : null;
 
   const enriched: StockMonitorRow[] = data.map((r) => {
-    // Build display name: "Parent Name (Variant)" for variants, plain name for standalone
-    let displayName = r.productName;
-    if (r.parentProductId) {
-      const parentName = parentNameMap.get(r.parentProductId);
-      if (parentName) {
-        displayName = `${parentName} (${r.productName})`;
-      }
-    }
+    const parentInfo = r.parentProductId ? parentInfoMap.get(r.parentProductId) : null;
+    // Build display name: "Parent Name (Variant)" for variants
+    const displayName = parentInfo ? `${parentInfo.name} (${r.productName})` : r.productName;
+    // Inherit brand/category/family from parent if variant doesn't have its own
+    const brandName = r.brandName || parentInfo?.brandName || null;
+    const categoryName = r.categoryName || parentInfo?.categoryName || null;
+    const familyName = r.familyName || parentInfo?.familyName || null;
     return {
     id: r.id,
     productId: r.productId,
     productName: displayName,
     productSku: r.productSku,
-    brandName: r.brandName,
-    categoryName: r.categoryName,
-    familyName: r.familyName,
+    brandName,
+    categoryName,
+    familyName,
     totalStock: r.totalStock,
     avgDailySales30d: r.avgDailySales30d,
     avgDailySales60d: r.avgDailySales60d,
@@ -547,28 +549,34 @@ export async function exportStockMonitorCSV(
     .where(and(...conditions))
     .orderBy(...orderCols, asc(stockMetrics.id));
 
-  // Batch-fetch parent names for variants
+  // Batch-fetch parent info for variants (name, brand, category, family)
   const csvParentIds = [...new Set(rows.filter(r => r.parentProductId).map(r => r.parentProductId!))];
-  const csvParentMap = new Map<string, string>();
+  const csvParentInfoMap = new Map<string, { name: string; brandName: string | null; categoryName: string | null; familyName: string | null }>();
   if (csvParentIds.length > 0) {
-    const parents = await db.select({ id: products.id, name: products.name }).from(products).where(inArray(products.id, csvParentIds));
-    for (const p of parents) csvParentMap.set(p.id, p.name);
+    const parents = await db
+      .select({ id: products.id, name: products.name, brandName: brands.name, categoryName: categories.name, familyName: productFamilies.name })
+      .from(products)
+      .leftJoin(brands, eq(products.brandId, brands.id))
+      .leftJoin(categories, eq(products.categoryId, categories.id))
+      .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+      .where(inArray(products.id, csvParentIds));
+    for (const p of parents) csvParentInfoMap.set(p.id, { name: p.name, brandName: p.brandName, categoryName: p.categoryName, familyName: p.familyName });
   }
 
   return rows.map((r) => {
-    let displayName = r.productName;
-    if (r.parentProductId) {
-      const parentName = csvParentMap.get(r.parentProductId);
-      if (parentName) displayName = `${parentName} (${r.productName})`;
-    }
+    const parentInfo = r.parentProductId ? csvParentInfoMap.get(r.parentProductId) : null;
+    const displayName = parentInfo ? `${parentInfo.name} (${r.productName})` : r.productName;
+    const brandName = r.brandName || parentInfo?.brandName || null;
+    const categoryName = r.categoryName || parentInfo?.categoryName || null;
+    const familyName = r.familyName || parentInfo?.familyName || null;
     return {
     id: r.id,
     productId: r.productId,
     productName: displayName,
     productSku: r.productSku,
-    brandName: r.brandName,
-    categoryName: r.categoryName,
-    familyName: r.familyName,
+    brandName,
+    categoryName,
+    familyName,
     totalStock: r.totalStock,
     avgDailySales30d: r.avgDailySales30d,
     avgDailySales60d: r.avgDailySales60d,
