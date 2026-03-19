@@ -20,6 +20,7 @@ import {
   Barcode,
   Activity,
   RotateCcw,
+  CreditCard,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -144,6 +145,18 @@ const NAV_TOP: NavEntry[] = [
     children: [
       { label: "Customer List", href: "/customers", match: /^\/customers$/ },
       { label: "AR Aging Report", href: "/customers/reports/aging", match: /^\/customers\/reports\/aging/ },
+    ],
+  },
+  {
+    kind: "group",
+    label: "Accounts Payable",
+    icon: CreditCard,
+    match: /^\/ap/,
+    children: [
+      { label: "Supplier Invoices", href: "/ap/invoices", match: /^\/ap\/invoices/ },
+      { label: "Check Vouchers", href: "/ap/check-vouchers", match: /^\/ap\/check-vouchers/ },
+      { label: "AP Aging Report", href: "/ap/reports/aging", match: /^\/ap\/reports\/aging/ },
+      { label: "PDC Report", href: "/ap/reports/pdcs", match: /^\/ap\/reports\/pdcs/ },
     ],
   },
 ];
