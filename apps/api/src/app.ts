@@ -38,6 +38,7 @@ import { importRoutes } from "./modules/import/routes";
 import { importHistoryRoutes } from "./modules/import-history/routes";
 import { pricingRoutes } from "./modules/pricing/routes";
 import { productSuppliersRoutes } from "./modules/product-suppliers/routes";
+import { accountsPayableRoutes } from "./modules/accounts-payable/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const JWT_SECRET = process.env.JWT_SECRET;
@@ -104,6 +105,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(importHistoryRoutes, { prefix: "/inventory/import/history" });
   await app.register(pricingRoutes, { prefix: "/inventory/pricing" });
   await app.register(productSuppliersRoutes, { prefix: "/products" });
+  await app.register(accountsPayableRoutes, { prefix: "/ap" });
 
   return app;
 }
