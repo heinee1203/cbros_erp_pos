@@ -25,6 +25,8 @@ export const journalReferenceTypeEnum = pgEnum("journal_reference_type", [
   "JOB_CARD_ISSUE",
   "JOB_CARD_RETURN",
   "OPENING_BALANCE",
+  "SUPPLIER_RETURN",
+  "SUPPLIER_RETURN_CANCEL",
 ]);
 
 export const actorTypeEnum = pgEnum("actor_type", [

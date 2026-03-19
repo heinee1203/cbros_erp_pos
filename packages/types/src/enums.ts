@@ -51,6 +51,8 @@ export const JournalReferenceType = {
   JOB_CARD_ISSUE: "JOB_CARD_ISSUE",
   JOB_CARD_RETURN: "JOB_CARD_RETURN",
   OPENING_BALANCE: "OPENING_BALANCE",
+  SUPPLIER_RETURN: "SUPPLIER_RETURN",
+  SUPPLIER_RETURN_CANCEL: "SUPPLIER_RETURN_CANCEL",
 } as const;
 export type JournalReferenceType =
   (typeof JournalReferenceType)[keyof typeof JournalReferenceType];
@@ -232,6 +234,21 @@ export const REFUND_ROLES = [UserRole.ADMIN, UserRole.MANAGER] as const;
 
 /** Roles allowed to manage procurement */
 export const PROCUREMENT_ROLES = [UserRole.ADMIN, UserRole.MANAGER, UserRole.WAREHOUSE_STAFF] as const;
+
+export const SupplierReturnStatus = {
+  DRAFT: "DRAFT",
+  SUBMITTED: "SUBMITTED",
+  ACKNOWLEDGED: "ACKNOWLEDGED",
+  CREDIT_RECEIVED: "CREDIT_RECEIVED",
+  CLOSED: "CLOSED",
+  CLOSED_WITHOUT_CREDIT: "CLOSED_WITHOUT_CREDIT",
+  CANCELLED: "CANCELLED",
+} as const;
+export type SupplierReturnStatus =
+  (typeof SupplierReturnStatus)[keyof typeof SupplierReturnStatus];
+
+/** Roles allowed to manage supplier returns */
+export const SUPPLIER_RETURN_ROLES = [UserRole.ADMIN, UserRole.MANAGER] as const;
 
 /** Valid status transitions for purchase orders */
 export const PO_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrderStatus[]> = {

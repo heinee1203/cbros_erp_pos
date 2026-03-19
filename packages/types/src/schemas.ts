@@ -56,7 +56,7 @@ export const stockJournalEntrySchema = z.object({
   productId: z.string().uuid(),
   locationId: z.string().uuid(),
   changeQuantity: z.number().int(),
-  referenceType: z.enum(["SALE", "RECEIVING", "TRANSFER_IN", "TRANSFER_OUT", "ADJUSTMENT", "RETURN", "STOCKTAKE", "VOID", "JOB_CARD_ISSUE", "JOB_CARD_RETURN", "OPENING_BALANCE"]),
+  referenceType: z.enum(["SALE", "RECEIVING", "TRANSFER_IN", "TRANSFER_OUT", "ADJUSTMENT", "RETURN", "STOCKTAKE", "VOID", "JOB_CARD_ISSUE", "JOB_CARD_RETURN", "OPENING_BALANCE", "SUPPLIER_RETURN", "SUPPLIER_RETURN_CANCEL"]),
   referenceId: z.string().uuid(),
   referenceLineId: z.string().uuid().optional(),
   unitCostSnapshot: z.string().optional(),
@@ -991,3 +991,98 @@ export const voidReturnSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 export type VoidReturnInput = z.infer<typeof voidReturnSchema>;
+
+// ══════════════════════════════════════════════
+// Supplier Returns (RTV)
+// ══════════════════════════════════════════════
+
+const SUPPLIER_RETURN_REASONS = [
+  "DEFECTIVE",
+  "DAMAGED_ON_DELIVERY",
+  "WRONG_ITEM",
+  "OVERSHIPMENT",
+  "WARRANTY",
+  "EXPIRED",
+  "OTHER",
+] as const;
+
+const SUPPLIER_RETURN_CONDITIONS = [
+  "DEFECTIVE",
+  "DAMAGED",
+  "WRONG_ITEM",
+  "EXPIRED",
+  "OTHER",
+] as const;
+
+const SUPPLIER_RETURN_CREDIT_TYPES = [
+  "CREDIT_MEMO",
+  "REPLACEMENT",
+  "CASH_REFUND",
+  "DEDUCTED_FROM_NEXT_PO",
+] as const;
+
+// ── Supplier Return: Create ──
+export const createSupplierReturnSchema = z.object({
+  supplierId: z.string().uuid(),
+  locationId: z.string().uuid(),
+  reason: z.enum(SUPPLIER_RETURN_REASONS),
+  reasonNotes: z.string().max(1000).optional(),
+  sourcePoId: z.string().uuid().optional(),
+  sourceCustomerReturnId: z.string().uuid().optional(),
+  lines: z.array(z.object({
+    productId: z.string().uuid(),
+    quantity: z.number().int().positive(),
+    costPrice: z.string(),
+    condition: z.enum(SUPPLIER_RETURN_CONDITIONS),
+    sourcePoLineId: z.string().uuid().optional(),
+    sourceCustomerReturnLineId: z.string().uuid().optional(),
+    notes: z.string().max(500).optional(),
+  })).min(1),
+  notes: z.string().max(1000).optional(),
+  idempotencyKey: z.string().min(1).max(255),
+});
+export type CreateSupplierReturnInput = z.infer<typeof createSupplierReturnSchema>;
+
+// ── Supplier Return: Update Draft ──
+export const updateSupplierReturnSchema = z.object({
+  reason: z.enum(SUPPLIER_RETURN_REASONS).optional(),
+  reasonNotes: z.string().max(1000).nullable().optional(),
+  notes: z.string().max(1000).nullable().optional(),
+  lines: z.array(z.object({
+    productId: z.string().uuid(),
+    quantity: z.number().int().positive(),
+    costPrice: z.string(),
+    condition: z.enum(SUPPLIER_RETURN_CONDITIONS),
+    sourcePoLineId: z.string().uuid().optional(),
+    sourceCustomerReturnLineId: z.string().uuid().optional(),
+    notes: z.string().max(500).optional(),
+  })).min(1).optional(),
+});
+export type UpdateSupplierReturnInput = z.infer<typeof updateSupplierReturnSchema>;
+
+// ── Supplier Return: Receive Credit ──
+export const receiveCreditSchema = z.object({
+  creditAmount: z.string(),
+  creditType: z.enum(SUPPLIER_RETURN_CREDIT_TYPES),
+  creditReference: z.string().max(100).optional(),
+  notes: z.string().max(500).optional(),
+});
+export type ReceiveCreditInput = z.infer<typeof receiveCreditSchema>;
+
+// ── Supplier Return: Cancel ──
+export const cancelSupplierReturnSchema = z.object({
+  reason: z.string().min(1).max(500),
+});
+export type CancelSupplierReturnInput = z.infer<typeof cancelSupplierReturnSchema>;
+
+// ── Supplier Return: Status Transition Notes ──
+export const supplierReturnNotesSchema = z.object({
+  notes: z.string().max(500).optional(),
+});
+export type SupplierReturnNotesInput = z.infer<typeof supplierReturnNotesSchema>;
+
+// ── Supplier Return: Close Without Credit ──
+export const closeWithoutCreditSchema = z.object({
+  reason: z.string().min(1).max(500),
+});
+export type CloseWithoutCreditInput = z.infer<typeof closeWithoutCreditSchema>;
