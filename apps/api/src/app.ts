@@ -31,6 +31,7 @@ import { settingsRoutes } from "./modules/settings/routes";
 import { stockMonitorRoutes } from "./modules/stock-monitor/routes";
 import { reorderRoutes } from "./modules/reorder/routes";
 import { catalogRoutes } from "./modules/catalog/routes";
+import { returnsRoutes } from "./modules/returns/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const JWT_SECRET = process.env.JWT_SECRET;
@@ -90,6 +91,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(stockMonitorRoutes, { prefix: "/inventory/stock-monitor" });
   await app.register(reorderRoutes, { prefix: "/inventory/reorder" });
   await app.register(catalogRoutes, { prefix: "/api/v1/catalog" });
+  await app.register(returnsRoutes, { prefix: "/returns" });
 
   return app;
 }

@@ -934,3 +934,60 @@ export const updateCompanySettingsSchema = z.object({
   invoiceFooter: z.string().max(500).optional(),
 });
 export type UpdateCompanySettingsInput = z.infer<typeof updateCompanySettingsSchema>;
+
+// ══════════════════════════════════════════════
+// Returns
+// ══════════════════════════════════════════════
+
+const RETURN_REASONS = [
+  "WRONG_FITMENT",
+  "DEFECTIVE",
+  "CUSTOMER_CHANGED_MIND",
+  "WARRANTY",
+  "DUPLICATE_PURCHASE",
+  "OTHER",
+] as const;
+
+const REFUND_METHODS = [
+  "CASH",
+  "ORIGINAL_METHOD",
+  "STORE_CREDIT",
+  "ACCOUNT_CREDIT",
+] as const;
+
+const RETURN_CONDITIONS = [
+  "RESELLABLE",
+  "DAMAGED",
+  "DEFECTIVE",
+] as const;
+
+// ── Return: Create ──
+export const createReturnSchema = z.object({
+  originalSaleId: z.string().uuid(),
+  returnReason: z.enum(RETURN_REASONS),
+  reasonNotes: z.string().max(1000).optional(),
+  refundMethod: z.enum(REFUND_METHODS),
+  lines: z.array(z.object({
+    originalSaleLineId: z.string().uuid(),
+    quantity: z.number().int().positive(),
+    condition: z.enum(RETURN_CONDITIONS).default("RESELLABLE"),
+    restock: z.boolean().default(true),
+    restockLocationId: z.string().uuid().optional(),
+    notes: z.string().max(500).optional(),
+  })).min(1),
+  notes: z.string().max(1000).optional(),
+  idempotencyKey: z.string().min(1).max(255),
+});
+export type CreateReturnInput = z.infer<typeof createReturnSchema>;
+
+// ── Return: Complete (with PIN) ──
+export const completeReturnSchema = z.object({
+  approvalPin: z.string().min(4).max(6),
+});
+export type CompleteReturnInput = z.infer<typeof completeReturnSchema>;
+
+// ── Return: Void ──
+export const voidReturnSchema = z.object({
+  reason: z.string().min(1).max(500),
+});
+export type VoidReturnInput = z.infer<typeof voidReturnSchema>;
