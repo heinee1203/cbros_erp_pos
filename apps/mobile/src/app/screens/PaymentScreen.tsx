@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useMemo } from 'react';
+import React, { useCallback, useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import {
   type PaymentEntry,
 } from '@/stores/cart-store';
 import { useCheckout } from '@/hooks/use-checkout';
+import { apiFetch } from '@/services/api-client';
 import { getPendingSales } from '@/storage/pending-sales';
 import { usePrinter } from '@/hardware/printer/context';
 import type { ReceiptData } from '@/hardware/printer/types';
@@ -94,6 +95,25 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
 
   const { status, error, result, checkout, reset } = useCheckout();
   const isProcessing = status === 'creating' || status === 'completing';
+
+  // ── Fetch next receipt number from server on mount ──
+  const [receiptLoading, setReceiptLoading] = useState(true);
+
+  const fetchNextReceiptNumber = useCallback(async () => {
+    try {
+      const data = await apiFetch<{ receiptNumber: string }>('/sales/next-receipt-number');
+      setReceiptNumber(data.receiptNumber);
+    } catch {
+      // Offline — generate local receipt number
+      setReceiptNumber(`OFFLINE-${Date.now()}`);
+    } finally {
+      setReceiptLoading(false);
+    }
+  }, [setReceiptNumber]);
+
+  useEffect(() => {
+    fetchNextReceiptNumber();
+  }, [fetchNextReceiptNumber]);
 
   // ── Form state for composing a new payment entry ──
   const [formMethod, setFormMethod] = useState('CASH');
@@ -225,21 +245,39 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   }, [locations, locationId, payments, lines, subtotal, discount, grandTotal, paidTotal, user]);
 
   const handleCheckout = useCallback(async () => {
-    const res = await checkout({ allowNegativeStock: allowNegativeStock || undefined });
-    if (res) {
-      const receiptData = buildReceiptData(res.saleNo);
-      if (!printer.isConnected) {
-        Alert.alert('Printer Offline', 'Receipt was not printed — no printer connected. You can reprint from the success screen.');
-      } else {
-        const printResult = await printer.printReceipt(receiptData).catch(() => ({ success: false, error: 'Print failed' }));
-        if (printResult.success) {
-          printer.openCashDrawer().catch(() => {});
+    // Retry loop: on 409 Conflict (receipt number collision), fetch next number and retry
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      const res = await checkout({ allowNegativeStock: allowNegativeStock || undefined });
+      if (res) {
+        const receiptData = buildReceiptData(res.saleNo);
+        if (!printer.isConnected) {
+          Alert.alert('Printer Offline', 'Receipt was not printed — no printer connected. You can reprint from the success screen.');
         } else {
-          Alert.alert('Print Notice', printResult.error || 'Receipt could not be printed. You can reprint from the success screen.');
+          const printResult = await printer.printReceipt(receiptData).catch(() => ({ success: false, error: 'Print failed' }));
+          if (printResult.success) {
+            printer.openCashDrawer().catch(() => {});
+          } else {
+            Alert.alert('Print Notice', printResult.error || 'Receipt could not be printed. You can reprint from the success screen.');
+          }
+        }
+        return; // Success — exit retry loop
+      }
+
+      // Check if the error was a 409 receipt conflict — if so, fetch next number and retry
+      if (status === 'error' && error?.includes('409')) {
+        try {
+          const data = await apiFetch<{ receiptNumber: string }>('/sales/next-receipt-number');
+          setReceiptNumber(data.receiptNumber);
+          reset(); // Reset checkout state for retry
+          continue; // Retry with new receipt number
+        } catch {
+          break; // Can't fetch next number, stop retrying
         }
       }
+      break; // Non-409 error or success=null for other reasons — stop retrying
     }
-  }, [checkout, buildReceiptData, printer]);
+  }, [checkout, buildReceiptData, printer, status, error, setReceiptNumber, reset, allowNegativeStock]);
 
   const handlePrintReceipt = useCallback(async () => {
     if (!result) return;
@@ -347,14 +385,13 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
         <Card style={styles.receiptCard}>
           <Text style={styles.sectionTitle}>Receipt No. (auto-generated)</Text>
           <TextInput
-            style={[styles.receiptInput, receiptMissing && styles.inputRequired]}
-            placeholder="Enter receipt number"
+            style={[styles.receiptInput, receiptMissing && styles.inputRequired, styles.receiptReadOnly]}
+            placeholder={receiptLoading ? 'Loading...' : 'Receipt number'}
             placeholderTextColor={colors.text.muted}
             value={receiptNumber}
-            onChangeText={setReceiptNumber}
-            keyboardType="numeric"
+            editable={false}
           />
-          {receiptMissing && (
+          {receiptMissing && !receiptLoading && (
             <Text style={styles.refRequiredText}>Receipt number is required</Text>
           )}
         </Card>
@@ -668,6 +705,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     fontFamily: fonts.mono.medium,
   },
+  receiptReadOnly: {
+    backgroundColor: colors.bg.elevated,
+    color: colors.text.secondary,
+  },
 
   // ── Payments List ──
   paymentsListCard: {
@@ -745,7 +786,9 @@ const styles = StyleSheet.create({
     borderColor: colors.border.default,
     backgroundColor: colors.bg.surface,
     minWidth: '47%',
+    minHeight: touchTarget.min,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   methodBtnActive: {
     backgroundColor: colors.accent.primary,

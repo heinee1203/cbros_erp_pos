@@ -1,4 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
+import { sql } from "drizzle-orm";
+import { db } from "@apex/database";
 import {
   createSaleSchema,
   completeSaleSchema,
@@ -216,6 +218,28 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return reply.send(result);
+  });
+
+  // ─── GET /sales/next-receipt-number ──────────────
+  // Auto-increment receipt number for BIR compliance
+  app.get("/next-receipt-number", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+
+    // Get the highest existing receipt number with OR- prefix
+    const [result] = await db.execute(
+      sql`SELECT receipt_number FROM sales
+          WHERE org_id = ${orgId} AND receipt_number IS NOT NULL AND receipt_number LIKE 'OR-%'
+          ORDER BY receipt_number DESC LIMIT 1`
+    );
+
+    let nextNum = 1;
+    if (result?.receipt_number) {
+      const match = (result.receipt_number as string).match(/OR-(\d+)/);
+      if (match) nextNum = parseInt(match[1], 10) + 1;
+    }
+
+    const receiptNumber = `OR-${String(nextNum).padStart(7, '0')}`;
+    return reply.send({ receiptNumber });
   });
 
   // ─── GET /sales/by-number/:saleNo ────────────────
