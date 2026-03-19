@@ -228,7 +228,7 @@ export default function TransactionListScreen() {
             </Pressable>
             <Pressable
               style={styles.shiftBtnPrimary}
-              android_ripple={{ color: '#fff3' }}
+              android_ripple={{ color: colors.accent.glow }}
               onPress={() => navigation.navigate('ZReading' as any, { shiftId: activeShift.id, mode: 'close' })}
             >
               <Text style={styles.shiftBtnPrimaryText}>Z-Reading</Text>

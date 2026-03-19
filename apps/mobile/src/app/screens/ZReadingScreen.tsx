@@ -406,12 +406,12 @@ export default function ZReadingScreen() {
             </Pressable>
             <Pressable
               style={[styles.closeShiftBtn, closing && styles.btnDisabled]}
-              android_ripple={{ color: '#fff3' }}
+              android_ripple={{ color: colors.accent.glow }}
               onPress={handleCloseShift}
               disabled={closing}
             >
               {closing ? (
-                <ActivityIndicator size="small" color="#1A1000" />
+                <ActivityIndicator size="small" color={colors.shift.bannerBtnText} />
               ) : (
                 <Text style={styles.closeShiftBtnText}>Close Shift</Text>
               )}
