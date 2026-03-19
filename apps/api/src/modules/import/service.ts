@@ -36,6 +36,16 @@ export interface ParsedRow {
   categoryName: string;
   description: string;
   handle: string;
+  option1Name: string;
+  option1Value: string;
+  option2Value: string;
+  option3Value: string;
+  /** Resolved display name for variants: "Parent Name (Variant)" */
+  resolvedName: string;
+  /** True if this row is part of a variant group */
+  isVariant: boolean;
+  /** The parent product name for variant groups */
+  parentName: string;
   locations: ParsedRowLocation[];
   action: "CREATE" | "UPDATE";
   existingProductId: string | null;
@@ -60,6 +70,7 @@ export interface PreviewResult {
     action: "CREATE" | "UPDATE";
     changes: string[];
     errors: string[];
+    isVariant?: boolean;
   }>;
 }
 
@@ -249,6 +260,10 @@ export async function parseLoyverseCSV(
     category: findColumn(headers, "category"),
     description: findColumn(headers, "description"),
     handle: findColumn(headers, "handle"),
+    option1Name: findColumn(headers, "option1Name"),
+    option1Value: findColumn(headers, "option1Value"),
+    option2Value: findColumn(headers, "option2Value"),
+    option3Value: findColumn(headers, "option3Value"),
   };
 
   // Also build a generic lowercase header index map for location columns
@@ -342,6 +357,10 @@ export async function parseLoyverseCSV(
     const categoryName = getByIdx(row, colIdx.category);
     const description = getByIdx(row, colIdx.description);
     const handle = getByIdx(row, colIdx.handle);
+    const option1Name = getByIdx(row, colIdx.option1Name);
+    const option1Value = getByIdx(row, colIdx.option1Value);
+    const option2Value = getByIdx(row, colIdx.option2Value);
+    const option3Value = getByIdx(row, colIdx.option3Value);
 
     const rowErrors: string[] = [];
 
@@ -429,12 +448,80 @@ export async function parseLoyverseCSV(
       categoryName,
       description,
       handle,
+      option1Name,
+      option1Value,
+      option2Value,
+      option3Value,
+      resolvedName: name, // Will be updated below for variants
+      isVariant: false,   // Will be updated below
+      parentName: "",     // Will be updated below
       locations: rowLocations,
       action,
       existingProductId: existing?.id ?? null,
       changes,
       errors: rowErrors,
     });
+  }
+
+  // ── Variant grouping by Handle ──
+  // Group rows by Handle to resolve parent/variant relationships
+  const handleGroups = new Map<string, ParsedRow[]>();
+  for (const row of parsedRows) {
+    if (!row.handle) continue;
+    if (!handleGroups.has(row.handle)) handleGroups.set(row.handle, []);
+    handleGroups.get(row.handle)!.push(row);
+  }
+
+  for (const [, rows] of handleGroups) {
+    if (rows.length <= 1) continue; // Single row with handle = standalone, skip
+
+    // Find the parent row — the one with a non-empty Name
+    const parentRow = rows.find((r) => r.name.trim()) || rows[0];
+    const parentName = parentRow.name.trim() || `Unknown (${parentRow.handle})`;
+
+    // Mark all rows in this group as variants
+    for (const row of rows) {
+      const variantParts = [row.option1Value, row.option2Value, row.option3Value].filter(Boolean);
+      const variantSuffix = variantParts.join(" / ");
+
+      row.isVariant = true;
+      row.parentName = parentName;
+      row.resolvedName = variantSuffix
+        ? `${parentName} (${variantSuffix})`
+        : parentName;
+
+      // If the row has an empty name (variant rows in Loyverse), fill it with the variant suffix
+      // so the product name in the DB will be the short variant name (e.g., "FORD RANGER")
+      if (!row.name.trim() && variantSuffix) {
+        row.name = variantSuffix;
+      }
+
+      // Don't flag missing Name as error for variant rows — we resolved it
+      row.errors = row.errors.filter((e) => e !== "Name is required");
+      if (row.errors.length === 0 && row.sku) {
+        // Re-count: was previously counted as skip due to missing name
+        // Don't re-count — the counts were set based on errors at parse time
+        // This is fine since we removed the error
+      }
+    }
+  }
+
+  // Recount after variant resolution (some rows may have lost their errors)
+  createCount = 0;
+  updateCount = 0;
+  skipCount = 0;
+  const updatedErrors: Array<{ row: number; message: string }> = [];
+  for (const row of parsedRows) {
+    if (row.errors.length > 0) {
+      skipCount++;
+      for (const e of row.errors) {
+        updatedErrors.push({ row: row.rowIndex, message: `[${row.sku || "no SKU"}] ${e}` });
+      }
+    } else if (row.action === "CREATE") {
+      createCount++;
+    } else {
+      updateCount++;
+    }
   }
 
   // Generate preview token and cache
@@ -453,16 +540,17 @@ export async function parseLoyverseCSV(
     createCount,
     updateCount,
     skipCount,
-    errorCount: errors.length,
+    errorCount: updatedErrors.length,
     locationMapping,
-    errors,
+    errors: updatedErrors,
     preview: parsedRows.slice(0, 100).map((r) => ({
       rowIndex: r.rowIndex,
-      name: r.name,
+      name: r.resolvedName || r.name,
       sku: r.sku,
       action: r.action,
       changes: r.changes,
       errors: r.errors,
+      isVariant: r.isVariant,
     })),
   };
 }
@@ -528,6 +616,72 @@ export async function executeImport(
     categoryCache.set(c.name.toLowerCase(), c.id);
   }
 
+  // Pre-create parent products for variant groups
+  // Collect unique parent names from variant groups that need parents
+  const parentProductMap = new Map<string, string>(); // handle -> parentProductId
+  const variantHandles = new Set(
+    parsedRows.filter((r) => r.isVariant && r.handle).map((r) => r.handle),
+  );
+
+  if (variantHandles.size > 0) {
+    await db.transaction(async (tx) => {
+      for (const handle of variantHandles) {
+        const groupRows = parsedRows.filter((r) => r.handle === handle);
+        const parentRow = groupRows.find((r) => r.parentName) || groupRows[0];
+        const parentName = parentRow.parentName || parentRow.name;
+
+        // Check if parent already exists by name + isParent
+        const [existingParent] = await tx
+          .select({ id: products.id })
+          .from(products)
+          .where(
+            and(
+              eq(products.orgId, orgId),
+              eq(products.name, parentName),
+              eq(products.isParent, true),
+            ),
+          )
+          .limit(1);
+
+        if (existingParent) {
+          parentProductMap.set(handle, existingParent.id);
+        } else {
+          // Create parent product
+          const parentMnemonic = await generateUniqueMnemonicSku(
+            orgId,
+            parentName,
+            tx as unknown as DbOrTx,
+          );
+          const parentSku = `P-${Date.now().toString(36).toUpperCase().slice(-8)}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+
+          let parentCategoryId: string | null = null;
+          if (parentRow.categoryName) {
+            parentCategoryId = categoryCache.get(parentRow.categoryName.toLowerCase()) ?? null;
+          }
+
+          const [newParent] = await tx
+            .insert(products)
+            .values({
+              orgId,
+              name: parentName,
+              sku: parentSku,
+              mnemonicSku: parentMnemonic,
+              category: "HARD_PARTS",
+              unitPrice: "0.00",
+              costPrice: "0.00",
+              isParent: true,
+              categoryId: parentCategoryId,
+            })
+            .returning({ id: products.id });
+
+          if (newParent) {
+            parentProductMap.set(handle, newParent.id);
+          }
+        }
+      }
+    });
+  }
+
   // Process in batches of 500
   const BATCH_SIZE = 500;
   for (let batchStart = 0; batchStart < parsedRows.length; batchStart += BATCH_SIZE) {
@@ -585,11 +739,16 @@ export async function executeImport(
               // Generate barcode if not provided
               const barcode = row.barcode || generateEan13();
 
+              // Determine parent product ID for variants
+              const parentProductId = row.isVariant && row.handle
+                ? parentProductMap.get(row.handle) ?? null
+                : null;
+
               const [product] = await tx
                 .insert(products)
                 .values({
                   orgId,
-                  name: row.name,
+                  name: row.name, // Short variant name (e.g., "FORD RANGER") — display combines with parent
                   sku: row.sku,
                   mnemonicSku,
                   unitPrice: row.unitPrice,
@@ -599,6 +758,8 @@ export async function executeImport(
                   category: "HARD_PARTS",
                   categoryId,
                   description: row.description || null,
+                  parentProductId,
+                  isParent: false,
                 })
                 .returning({ id: products.id });
 
