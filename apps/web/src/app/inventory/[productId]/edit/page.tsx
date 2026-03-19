@@ -193,6 +193,7 @@ export default function EditItemPage() {
     return false;
   }, [modifiedVariants, originalVariants]);
 
+  const [isSerialized, setIsSerialized] = useState(false);
   const [reorderPoint, setReorderPoint] = useState("10");
   const [unitsPerCase, setUnitsPerCase] = useState(1);
   const [packagingUnit, setPackagingUnit] = useState<string | null>(null);
@@ -302,6 +303,7 @@ export default function EditItemPage() {
     setUnitsPerCase(product.unitsPerCase ?? 1);
     setPackagingUnit(product.packagingUnit ?? null);
     setPrimarySupplierId(product.primarySupplierId ?? null);
+    setIsSerialized(product.isSerialized ?? false);
     setReorderEnabled((product as any).reorderEnabled ?? true);
     setCustomReorderPoint((product as any).customReorderPoint ?? null);
     if (product.vehicleCompatibility?.length > 0) {
@@ -373,10 +375,11 @@ export default function EditItemPage() {
       (packagingUnit ?? "") !== (product.packagingUnit ?? "") ||
       primarySupplierId !== (product.primarySupplierId ?? null) ||
       reorderEnabled !== ((product as any).reorderEnabled ?? true) ||
-      (customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null);
+      (customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null) ||
+      isSerialized !== (product.isSerialized ?? false);
     const vehicleDirty = JSON.stringify(vehicles) !== JSON.stringify(initialVehiclesRef.current);
     return basicDirty || vehicleDirty || isAvailabilityDirty || isVariantFieldsDirty;
-  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, primarySupplierId, reorderEnabled, customReorderPoint, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
+  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, primarySupplierId, reorderEnabled, customReorderPoint, isSerialized, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
 
   // Unsaved changes warning
   useEffect(() => {
@@ -408,6 +411,7 @@ export default function EditItemPage() {
     if (unitsPerCase !== (product.unitsPerCase ?? 1)) payload.unitsPerCase = unitsPerCase;
     if (packagingUnit !== (product.packagingUnit ?? null)) payload.packagingUnit = packagingUnit;
     if (primarySupplierId !== (product.primarySupplierId ?? null)) payload.primarySupplierId = primarySupplierId;
+    if (isSerialized !== (product.isSerialized ?? false)) payload.isSerialized = isSerialized;
     if (reorderEnabled !== ((product as any).reorderEnabled ?? true)) payload.reorderEnabled = reorderEnabled;
     if ((customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null)) payload.customReorderPoint = customReorderPoint;
 
@@ -1132,6 +1136,27 @@ export default function EditItemPage() {
                 )}
               </div>
             )}
+          </div>
+
+          {/* Serialization */}
+          <div className="mt-4 pt-4 border-t border-border/50">
+            <label className="flex items-center gap-3 cursor-pointer" onClick={() => setIsSerialized((v) => !v)}>
+              <div className={cn(
+                "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                isSerialized ? "bg-primary" : "bg-muted-foreground/30",
+              )}>
+                <span className={cn(
+                  "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
+                  isSerialized ? "translate-x-4" : "translate-x-0.5",
+                )} />
+              </div>
+              <div>
+                <span className="text-sm font-medium">Track Serial Numbers</span>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Require serial number entry when receiving and selling this item. Recommended for tires, batteries, and high-value items.
+                </p>
+              </div>
+            </label>
           </div>
 
           {/* Primary Supplier */}

@@ -101,6 +101,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Vehicle Lookup", href: "/inventory/vehicle-lookup", match: /^\/inventory\/vehicle-lookup/ },
       { label: "Discounts", href: "/inventory/discounts", match: /^\/inventory\/discounts/ },
       { label: "Barcode Printing", href: "/inventory/barcode-printing", match: /^\/inventory\/barcode-printing/ },
+      { label: "Serial Lookup", href: "/inventory/serials", match: /^\/inventory\/serials/ },
     ],
   },
   {
