@@ -49,6 +49,18 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
 
   if (favorites.length === 0) return null;
 
+  const handleFavoriteTap = (product: Product) => {
+    // Validate required fields before adding to cart
+    if (!product.name || product.retailPrice == null || product.retailPrice <= 0) {
+      Alert.alert(
+        'Invalid Product',
+        `"${product.name || 'Unknown'}" has incomplete data. Check the web dashboard.`,
+      );
+      return;
+    }
+    onAddToCart(product);
+  };
+
   const handleLongPress = (product: Product) => {
     Alert.alert(
       'Remove Favorite',
@@ -91,7 +103,7 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
                   price={product.retailPrice}
                   stockLevel={product.available}
                   reorderPoint={product.reorderPoint}
-                  onPress={() => onAddToCart(product)}
+                  onPress={() => handleFavoriteTap(product)}
                   onLongPress={() => handleLongPress(product)}
                 />
               ))}

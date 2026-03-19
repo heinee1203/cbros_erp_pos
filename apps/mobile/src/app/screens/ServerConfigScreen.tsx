@@ -31,7 +31,7 @@ export default function ServerConfigScreen() {
   }, [existing, navigation]);
 
   const handleSave = async () => {
-    const trimmed = url.trim();
+    const trimmed = url.trim().replace(/\/+$/, '');
     if (!trimmed) {
       setError('Server URL is required');
       return;
@@ -45,11 +45,14 @@ export default function ServerConfigScreen() {
     setTesting(true);
     setError('');
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       const response = await fetch(`${trimmed}/health`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(5000),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       if (!response.ok) {
         setError(`Server responded with ${response.status}. Check the URL.`);
         setTesting(false);
@@ -59,8 +62,8 @@ export default function ServerConfigScreen() {
       storage.set(KEYS.API_BASE_URL, trimmed);
       navigation.replace('Login');
     } catch (err: any) {
-      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-        setError('Connection timed out. Check the URL and network.');
+      if (err.name === 'AbortError') {
+        setError('Connection timed out (5s). Check the URL and network.');
       } else {
         setError(`Cannot reach server: ${err.message}`);
       }
@@ -93,7 +96,7 @@ export default function ServerConfigScreen() {
 
         <View style={styles.buttonContainer}>
           <Button
-            title={testing ? 'Testing...' : 'Save & Connect'}
+            title={testing ? 'Testing connection...' : 'Save & Connect'}
             onPress={handleSave}
             variant="primary"
             disabled={testing}
