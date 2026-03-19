@@ -40,6 +40,7 @@ export const stockMetrics = pgTable(
     lastPoDate: timestamp("last_po_date", { withTimezone: true }),
     lastPoSupplierName: varchar("last_po_supplier_name", { length: 255 }),
     lastLeadTimeDays: integer("last_lead_time_days"),
+    lastSaleDate: timestamp("last_sale_date", { withTimezone: true }),
     status: stockMonitorStatusEnum("status").notNull(),
     computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
   },

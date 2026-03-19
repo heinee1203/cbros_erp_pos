@@ -89,12 +89,29 @@ export async function refreshStockMetrics(orgId: string): Promise<number> {
         LEFT JOIN suppliers sup ON po.supplier_id = sup.id
         WHERE po.org_id = ${orgId}
         ORDER BY pre.product_id, pre.created_at DESC
+      ),
+      last_sale AS (
+        SELECT DISTINCT ON (combined.product_id)
+          combined.product_id,
+          combined.sale_date AS last_sale_date
+        FROM (
+          SELECT sl.product_id, s.created_at AS sale_date
+          FROM sale_lines sl
+          JOIN sales s ON sl.sale_id = s.id
+          WHERE s.org_id = ${orgId} AND s.status = 'COMPLETED'
+          UNION ALL
+          SELECT hs.product_id, hs.movement_date AS sale_date
+          FROM historical_sales hs
+          WHERE hs.org_id = ${orgId} AND hs.reason_type = 'SALE' AND hs.product_id IS NOT NULL
+        ) combined
+        ORDER BY combined.product_id, combined.sale_date DESC
       )
       INSERT INTO stock_metrics (
         org_id, product_id, total_stock,
         avg_daily_sales_30d, avg_daily_sales_60d, avg_daily_sales_90d,
         days_of_stock, stockout_days_90d,
         last_po_date, last_po_supplier_name, last_lead_time_days,
+        last_sale_date,
         status, computed_at
       )
       SELECT
@@ -113,6 +130,7 @@ export async function refreshStockMetrics(orgId: string): Promise<number> {
         lp.last_receipt_date,
         lp.supplier_name,
         lp.lead_time_days,
+        ls.last_sale_date,
         CASE
           WHEN COALESCE(v.avg_90d, 0) = 0 AND COALESCE(st.total_stock, 0) > 0 THEN 'DEAD_STOCK'
           WHEN COALESCE(st.total_stock, 0) = 0 AND COALESCE(v.avg_90d, 0) > 0 THEN 'CRITICAL'
@@ -128,6 +146,7 @@ export async function refreshStockMetrics(orgId: string): Promise<number> {
       LEFT JOIN stock st ON p.id = st.product_id
       LEFT JOIN stockouts so ON p.id = so.product_id
       LEFT JOIN last_po lp ON p.id = lp.product_id
+      LEFT JOIN last_sale ls ON p.id = ls.product_id
       WHERE p.org_id = ${orgId} AND p.is_active = true AND p.is_parent = false
     `);
 
@@ -136,6 +155,17 @@ export async function refreshStockMetrics(orgId: string): Promise<number> {
     );
     return (countRow as any).cnt as number;
   });
+
+  // Auto-disable reorder for dead stock items
+  await db.execute(sql`
+    UPDATE products p
+    SET reorder_enabled = false
+    FROM stock_metrics sm
+    WHERE sm.product_id = p.id
+      AND sm.org_id = ${orgId}
+      AND sm.status = 'DEAD_STOCK'
+      AND p.reorder_enabled = true
+  `);
 
   return result;
 }
@@ -241,6 +271,7 @@ export interface StockMonitorRow {
   lastPoDate: string | null;
   lastPoSupplierName: string | null;
   lastLeadTimeDays: number | null;
+  lastSaleDate: string | null;
   status: string;
   computedAt: string;
 }
@@ -274,6 +305,7 @@ const SORT_COLUMNS: Record<string, any> = {
   stockoutDays90d: stockMetrics.stockoutDays90d,
   lastPoDate: stockMetrics.lastPoDate,
   lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
+  lastSaleDate: stockMetrics.lastSaleDate,
   brand: brands.name,
   brandName: brands.name,
   category: categories.name,
@@ -406,6 +438,7 @@ export async function queryStockMonitor(
       lastPoDate: stockMetrics.lastPoDate,
       lastPoSupplierName: stockMetrics.lastPoSupplierName,
       lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
+      lastSaleDate: stockMetrics.lastSaleDate,
       status: stockMetrics.status,
       computedAt: stockMetrics.computedAt,
     })
@@ -463,6 +496,7 @@ export async function queryStockMonitor(
     lastPoDate: r.lastPoDate ? r.lastPoDate.toISOString() : null,
     lastPoSupplierName: r.lastPoSupplierName,
     lastLeadTimeDays: r.lastLeadTimeDays,
+    lastSaleDate: r.lastSaleDate ? r.lastSaleDate.toISOString() : null,
     status: r.status,
     computedAt: r.computedAt.toISOString(),
   };
@@ -538,6 +572,7 @@ export async function exportStockMonitorCSV(
       lastPoDate: stockMetrics.lastPoDate,
       lastPoSupplierName: stockMetrics.lastPoSupplierName,
       lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
+      lastSaleDate: stockMetrics.lastSaleDate,
       status: stockMetrics.status,
       computedAt: stockMetrics.computedAt,
     })
@@ -586,10 +621,40 @@ export async function exportStockMonitorCSV(
     lastPoDate: r.lastPoDate ? r.lastPoDate.toISOString() : null,
     lastPoSupplierName: r.lastPoSupplierName,
     lastLeadTimeDays: r.lastLeadTimeDays,
+    lastSaleDate: r.lastSaleDate ? r.lastSaleDate.toISOString() : null,
     status: r.status,
     computedAt: r.computedAt.toISOString(),
   };
   });
+}
+
+// ── Dead Stock Tier Intelligence ──
+
+export interface DeadStockTier {
+  label: string;
+  targetMarginPct: number;
+  daysSinceLastSale: number;
+}
+
+const DEAD_STOCK_TIERS = [
+  { minDays: 90, maxDays: 180, targetMarginPct: 12, label: "Slow Mover" },
+  { minDays: 181, maxDays: 365, targetMarginPct: 3, label: "Clearance" },
+  { minDays: 366, maxDays: null as number | null, targetMarginPct: -15, label: "Deep Clearance" },
+];
+
+export function getDeadStockTier(daysSinceLastSale: number): DeadStockTier | null {
+  for (const tier of DEAD_STOCK_TIERS) {
+    if (daysSinceLastSale >= tier.minDays && (tier.maxDays === null || daysSinceLastSale <= tier.maxDays)) {
+      return { ...tier, daysSinceLastSale };
+    }
+  }
+  return null;
+}
+
+export function suggestClearancePrice(costPrice: number, daysSinceLastSale: number): number | null {
+  const tier = getDeadStockTier(daysSinceLastSale);
+  if (!tier) return null;
+  return Math.round(costPrice * (1 + tier.targetMarginPct / 100) * 100) / 100;
 }
 
 // ── Supplier Metrics Query ──
