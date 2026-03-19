@@ -74,9 +74,6 @@ const NAV_TOP: NavEntry[] = [
       { label: "Receipts Log", href: "/reports/receipts", match: /^\/reports\/receipts/ },
       { label: "Inventory Valuation", href: "/reports/inventory-valuation", match: /^\/reports\/inventory-valuation/ },
       { label: "Stock Movement", href: "/reports/stock-movement", match: /^\/reports\/stock-movement/ },
-      { label: "Job Margins", href: "/reports/job-margins", match: /^\/reports\/job-margins/ },
-      { label: "Tech. Efficiency", href: "/reports/technician-efficiency", match: /^\/reports\/technician-efficiency/ },
-      { label: "Service History", href: "/reports/service-history", match: /^\/reports\/service-history/ },
     ],
   },
   {
