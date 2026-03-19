@@ -75,6 +75,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Receipts Log", href: "/reports/receipts", match: /^\/reports\/receipts/ },
       { label: "Inventory Valuation", href: "/reports/inventory-valuation", match: /^\/reports\/inventory-valuation/ },
       { label: "Stock Movement", href: "/reports/stock-movement", match: /^\/reports\/stock-movement/ },
+      { label: "Demand by Application", href: "/reports/demand-by-tag", match: /^\/reports\/demand-by-tag/ },
     ],
   },
   {
@@ -104,6 +105,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Barcode Printing", href: "/inventory/barcode-printing", match: /^\/inventory\/barcode-printing/ },
       { label: "Serial Lookup", href: "/inventory/serials", match: /^\/inventory\/serials/ },
       { label: "Import Items", href: "/inventory/import", match: /^\/inventory\/import/ },
+      { label: "Tags / Fitment", href: "/inventory/tags", match: /^\/inventory\/tags/ },
       { label: "Price Management", href: "/inventory/pricing", match: /^\/inventory\/pricing/ },
       { label: "Inventory Counts", href: "/inventory/counts", match: /^\/inventory\/counts/ },
     ],

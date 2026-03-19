@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -25,6 +25,7 @@ import {
   Layers,
   Clock,
   Truck,
+  Tag,
 } from "lucide-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/app/auth-context";
@@ -287,6 +288,70 @@ export default function EditItemPage() {
 
   const [showAddSupplier, setShowAddSupplier] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<any>(null);
+
+  // ── Product Tags ──
+  const productTagsQuery = useQuery({
+    queryKey: ["product-tags", productId],
+    queryFn: () => apiFetch<{ data: Array<{ tagId: string; tagName: string; tagType: string }> }>(`/tags/by-product/${productId}`, { token: token!, locationId }),
+    enabled: !!token && !!productId,
+  });
+  const productTagsList = productTagsQuery.data?.data ?? [];
+  const [tagSearch, setTagSearch] = useState("");
+  const [tagResults, setTagResults] = useState<Array<{ id: string; name: string; tagType: string }>>([]);
+  const tagSearchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleTagSearch = useCallback((val: string) => {
+    setTagSearch(val);
+    if (tagSearchTimeout.current) clearTimeout(tagSearchTimeout.current);
+    if (!val.trim()) { setTagResults([]); return; }
+    tagSearchTimeout.current = setTimeout(async () => {
+      try {
+        const res = await apiFetch<{ data: Array<{ id: string; name: string; tagType: string }> }>(
+          `/tags?search=${encodeURIComponent(val)}&limit=10`,
+          { token: token!, locationId },
+        );
+        setTagResults(res.data ?? []);
+      } catch { setTagResults([]); }
+    }, 300);
+  }, [token, locationId]);
+
+  const addTag = useCallback(async (tagId: string) => {
+    try {
+      await apiFetch(`/tags/by-product/${productId}`, {
+        method: "POST", token: token!, locationId,
+        body: JSON.stringify({ tagId }),
+      });
+      queryClient.invalidateQueries({ queryKey: ["product-tags", productId] });
+      setTagSearch("");
+      setTagResults([]);
+    } catch { /* ignore duplicates */ }
+  }, [token, locationId, productId, queryClient]);
+
+  const createAndAddTag = useCallback(async () => {
+    if (!tagSearch.trim()) return;
+    try {
+      const res = await apiFetch<{ data: { id: string } }>("/tags", {
+        method: "POST", token: token!, locationId,
+        body: JSON.stringify({ name: tagSearch.trim(), tagType: "CUSTOM" }),
+      });
+      await apiFetch(`/tags/by-product/${productId}`, {
+        method: "POST", token: token!, locationId,
+        body: JSON.stringify({ tagId: res.data.id }),
+      });
+      queryClient.invalidateQueries({ queryKey: ["product-tags", productId] });
+      setTagSearch("");
+      setTagResults([]);
+    } catch { /* ignore */ }
+  }, [token, locationId, productId, tagSearch, queryClient]);
+
+  const removeTag = useCallback(async (tagId: string) => {
+    try {
+      await apiFetch(`/tags/by-product/${productId}/${tagId}`, {
+        method: "DELETE", token: token!, locationId,
+      });
+      queryClient.invalidateQueries({ queryKey: ["product-tags", productId] });
+    } catch { /* ignore */ }
+  }, [token, locationId, productId, queryClient]);
 
   const [copyModalOpen, setCopyModalOpen] = useState(false);
   const handleCopyFitments = (copiedEntries: VehicleEntry[]) => {
@@ -1483,6 +1548,57 @@ export default function EditItemPage() {
               })}
             </div>
           )}
+        </FormSection>
+
+        {/* SECTION — Tags / Fitment */}
+        <FormSection
+          id="tags"
+          icon={Tag}
+          title="Tags / Fitment"
+          collapsed={collapsedSections.has("tags")}
+          onToggle={() => toggleSection("tags")}
+          badge={productTagsList.length > 0 ? `${productTagsList.length} tags` : undefined}
+        >
+          <div className="flex flex-wrap gap-2">
+            {productTagsList.map((pt: any) => (
+              <span key={pt.tagId} className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium",
+                pt.tagType === "TIRE_SIZE" ? "bg-blue-50 text-blue-700" :
+                pt.tagType === "VEHICLE" ? "bg-green-50 text-green-700" :
+                pt.tagType === "APPLICATION_CODE" ? "bg-purple-50 text-purple-700" :
+                "bg-gray-100 text-gray-700"
+              )}>
+                {pt.tagName}
+                <button onClick={() => removeTag(pt.tagId)} className="ml-0.5 hover:text-red-500">
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+            {productTagsList.length === 0 && (
+              <span className="text-[12px] text-muted-foreground">No tags assigned yet.</span>
+            )}
+          </div>
+          <div className="mt-3 relative">
+            <input
+              type="text"
+              value={tagSearch}
+              onChange={(e) => handleTagSearch(e.target.value)}
+              placeholder="Add tag (e.g., 175/65R14, Toyota Wigo)..."
+              className="w-full rounded-md border border-border px-3 py-2 text-sm outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+            />
+            {tagResults.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full rounded-lg border bg-background shadow-lg max-h-[180px] overflow-y-auto">
+                {tagResults.map((t: any) => (
+                  <button key={t.id} onClick={() => addTag(t.id)} className="w-full px-3 py-2 text-left text-sm hover:bg-accent">
+                    {t.name} <span className="text-xs text-muted-foreground">({t.tagType.replace(/_/g, " ")})</span>
+                  </button>
+                ))}
+                <button onClick={() => createAndAddTag()} className="w-full px-3 py-2 text-left text-sm text-primary hover:bg-accent">
+                  + Create &quot;{tagSearch}&quot; as tag
+                </button>
+              </div>
+            )}
+          </div>
         </FormSection>
 
         {/* SECTION 5 — Vehicle Compatibility */}
