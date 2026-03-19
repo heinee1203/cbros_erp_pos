@@ -126,6 +126,20 @@ body {
     display: block !important;
   }
 
+  /* Statement of Account print area */
+  .print-soa-container,
+  .print-soa-container * {
+    visibility: visible !important;
+  }
+
+  .print-soa-container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 20px;
+  }
+
   /* Hide non-printable elements */
   .no-print {
     display: none !important;
