@@ -19,6 +19,7 @@ import {
   getSaleJournal,
   listSales,
 } from "./service";
+import { CreditLimitError } from "../customers/service";
 import { parseQuery, salesQuerySchema } from "../../lib/validate-query";
 
 function assertPosRole(role: string) {
@@ -128,6 +129,15 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
       const result = await completeSale(id, orgId, userId, parsed.data);
       return reply.send(result);
     } catch (err: any) {
+      if (err instanceof CreditLimitError) {
+        return reply.status(409).send({
+          error: err.message,
+          code: "CREDIT_LIMIT_EXCEEDED",
+          overage: err.overage,
+          currentBalance: err.currentBalance,
+          creditLimit: err.creditLimit,
+        });
+      }
       if (
         err.code === "23505" ||
         err.message?.includes("unique constraint") ||

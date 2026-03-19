@@ -15,6 +15,7 @@ import { eq, and, or, sql, desc, ilike, inArray, type SQL, asc } from "drizzle-o
 import type { CreateSaleInput, CompleteSaleInput, RefundSaleInput } from "@apex/types";
 import { SaleStatus, isValidSaleTransition, REFUND_ROLES } from "@apex/types";
 import { getOrCreateShift } from "../shifts/service";
+import { chargeCustomerAccount, CreditLimitError } from "../customers/service";
 
 // ── Helpers ──
 
@@ -503,6 +504,24 @@ export async function completeSale(
           reference: p.reference ?? null,
           notes: p.notes ?? null,
         })),
+      );
+    }
+
+    // ── Charge-to-Account: update customer AR balance ──
+    const accountPayment = input.payments?.find((p) => p.method === "ACCOUNT");
+    if (accountPayment) {
+      if (!sale.customer_id) {
+        throw new Error("Cannot charge to account without a customer on the sale");
+      }
+      await chargeCustomerAccount(
+        tx,
+        sale.customer_id,
+        orgId,
+        saleId,
+        sale.sale_no,
+        grandTotal,
+        userId,
+        input.overrideApproval?.pin,
       );
     }
 
