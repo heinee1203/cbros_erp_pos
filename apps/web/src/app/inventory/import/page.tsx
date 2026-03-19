@@ -283,13 +283,13 @@ export default function ImportItemsPage() {
       <div className="flex items-center gap-3">
         <Link
           href="/inventory"
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800 text-zinc-400 transition hover:bg-zinc-700 hover:text-zinc-200"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
         >
           <ArrowLeft size={16} />
         </Link>
         <div>
-          <h1 className="text-xl font-semibold text-zinc-100">Import Items</h1>
-          <p className="text-sm text-zinc-300">
+          <h1 className="text-xl font-semibold text-foreground">Import Items</h1>
+          <p className="text-sm text-muted-foreground">
             Import items from a Loyverse CSV export
           </p>
         </div>
@@ -323,13 +323,13 @@ export default function ImportItemsPage() {
           const isDone = i < stepIndex;
           return (
             <div key={s} className="flex items-center gap-2">
-              {i > 0 && <div className={cn("h-px w-8", isDone ? "bg-emerald-500" : "bg-zinc-700")} />}
+              {i > 0 && <div className={cn("h-px w-8", isDone ? "bg-emerald-500" : "bg-border")} />}
               <div
                 className={cn(
                   "flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold transition",
-                  isDone && "bg-emerald-500/20 text-emerald-400",
-                  isActive && "bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30",
-                  !isDone && !isActive && "bg-zinc-800 text-zinc-400",
+                  isDone && "bg-emerald-500/20 text-emerald-600",
+                  isActive && "bg-primary/10 text-primary ring-1 ring-primary/30",
+                  !isDone && !isActive && "bg-muted text-muted-foreground",
                 )}
               >
                 {isDone ? <CheckCircle size={12} /> : i + 1}
@@ -337,9 +337,9 @@ export default function ImportItemsPage() {
               <span
                 className={cn(
                   "hidden sm:inline font-medium",
-                  isDone && "text-emerald-400",
-                  isActive && "text-blue-400",
-                  !isDone && !isActive && "text-zinc-400",
+                  isDone && "text-emerald-600",
+                  isActive && "text-primary",
+                  !isDone && !isActive && "text-muted-foreground",
                 )}
               >
                 {labels[i]}
@@ -351,10 +351,10 @@ export default function ImportItemsPage() {
 
       {/* Global error */}
       {error && (
-        <div className="flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-400" />
-          <div className="flex-1 text-sm text-red-200">{error}</div>
-          <button onClick={() => setError(null)} className="text-red-300 hover:text-red-200">
+        <div className="flex items-start gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-600" />
+          <div className="flex-1 text-sm text-red-700">{error}</div>
+          <button onClick={() => setError(null)} className="text-red-600 hover:text-red-700">
             <X size={14} />
           </button>
         </div>
@@ -364,8 +364,8 @@ export default function ImportItemsPage() {
       {(step === "upload" || step === "parsing") && (
         <div className="space-y-6">
           {/* Import mode */}
-          <div className="rounded-lg border border-zinc-700/60 bg-zinc-800/50 p-5">
-            <h3 className="mb-3 text-sm font-medium text-zinc-200">Import Mode</h3>
+          <div className="rounded-lg border border-border bg-muted/30 p-5">
+            <h3 className="mb-3 text-sm font-medium text-foreground">Import Mode</h3>
             <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
               {([
                 { value: "smart_sync", label: "Smart Sync", desc: "Create new items, update existing" },
@@ -377,8 +377,8 @@ export default function ImportItemsPage() {
                   className={cn(
                     "flex flex-1 cursor-pointer items-start gap-3 rounded-lg border p-3 transition",
                     importMode === mode.value
-                      ? "border-blue-500/50 bg-blue-500/10"
-                      : "border-zinc-700 bg-zinc-800/30 hover:border-zinc-600",
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-background hover:border-primary/30",
                   )}
                 >
                   <input
@@ -390,8 +390,8 @@ export default function ImportItemsPage() {
                     className="mt-0.5 accent-blue-500"
                   />
                   <div>
-                    <div className="text-sm font-medium text-zinc-100">{mode.label}</div>
-                    <div className="text-xs text-zinc-300">{mode.desc}</div>
+                    <div className="text-sm font-medium text-foreground">{mode.label}</div>
+                    <div className="text-xs text-muted-foreground">{mode.desc}</div>
                   </div>
                 </label>
               ))}
@@ -407,23 +407,23 @@ export default function ImportItemsPage() {
             className={cn(
               "flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-12 transition",
               step === "parsing"
-                ? "pointer-events-none border-blue-500/40 bg-blue-500/5"
-                : "border-zinc-700 bg-zinc-800/30 hover:border-zinc-500 hover:bg-zinc-800/50",
+                ? "pointer-events-none border-primary/40 bg-primary/5"
+                : "border-border bg-muted/20 hover:border-primary/30 hover:bg-muted/40",
             )}
           >
             {step === "parsing" ? (
               <>
-                <Loader2 size={32} className="animate-spin text-blue-400" />
-                <p className="text-sm text-blue-300">Parsing CSV...</p>
+                <Loader2 size={32} className="animate-spin text-primary" />
+                <p className="text-sm text-primary">Parsing CSV...</p>
               </>
             ) : (
               <>
-                <Upload size={32} className="text-zinc-400" />
+                <Upload size={32} className="text-muted-foreground" />
                 <div className="text-center">
-                  <p className="text-sm font-medium text-zinc-100">
+                  <p className="text-sm font-medium text-foreground">
                     Drop your Loyverse CSV here, or click to browse
                   </p>
-                  <p className="mt-1 text-xs text-zinc-400">Supports .csv files</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Supports .csv files</p>
                 </div>
               </>
             )}
@@ -437,10 +437,10 @@ export default function ImportItemsPage() {
           </div>
 
           {file && step !== "parsing" && (
-            <div className="flex items-center gap-2 rounded-lg border border-zinc-700/60 bg-zinc-800/50 px-4 py-2.5 text-sm">
-              <FileText size={14} className="text-zinc-400" />
-              <span className="text-zinc-300">{file.name}</span>
-              <span className="text-zinc-500">({(file.size / 1024).toFixed(1)} KB)</span>
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-4 py-2.5 text-sm">
+              <FileText size={14} className="text-muted-foreground" />
+              <span className="text-foreground">{file.name}</span>
+              <span className="text-muted-foreground">({(file.size / 1024).toFixed(1)} KB)</span>
             </div>
           )}
         </div>
@@ -452,16 +452,16 @@ export default function ImportItemsPage() {
           {/* Summary cards */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { label: "Total Rows", value: preview.summary.totalRows, color: "text-zinc-200" },
-              { label: "Creates", value: preview.summary.creates, color: "text-emerald-400" },
-              { label: "Updates", value: preview.summary.updates, color: "text-blue-400" },
-              { label: "Errors", value: preview.summary.errors, color: "text-red-400" },
+              { label: "Total Rows", value: preview.summary.totalRows, color: "text-foreground" },
+              { label: "Creates", value: preview.summary.creates, color: "text-emerald-600" },
+              { label: "Updates", value: preview.summary.updates, color: "text-primary" },
+              { label: "Errors", value: preview.summary.errors, color: "text-red-600" },
             ].map((card) => (
               <div
                 key={card.label}
-                className="rounded-lg border border-zinc-700/60 bg-zinc-800/50 px-4 py-3"
+                className="rounded-lg border border-border bg-muted/50 px-4 py-3"
               >
-                <div className="text-xs text-zinc-300">{card.label}</div>
+                <div className="text-xs text-muted-foreground">{card.label}</div>
                 <div className={cn("mt-1 text-2xl font-semibold", card.color)}>
                   {card.value.toLocaleString()}
                 </div>
@@ -471,20 +471,20 @@ export default function ImportItemsPage() {
 
           {/* Location mapping */}
           {preview.locations.length > 0 && (
-            <div className="rounded-lg border border-zinc-700/60 bg-zinc-800/50 p-5">
-              <h3 className="mb-3 text-sm font-medium text-zinc-200">Location Mapping</h3>
+            <div className="rounded-lg border border-border bg-muted/50 p-5">
+              <h3 className="mb-3 text-sm font-medium text-foreground">Location Mapping</h3>
               <div className="space-y-2">
                 {preview.locations.map((loc) => (
                   <div
                     key={loc.csvName}
-                    className="flex items-center gap-3 rounded-md bg-zinc-900/40 px-3 py-2"
+                    className="flex items-center gap-3 rounded-md bg-muted/50 px-3 py-2"
                   >
-                    <span className="min-w-0 flex-1 truncate text-sm text-zinc-300">
+                    <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                       {loc.csvName}
                     </span>
-                    <span className="text-zinc-500">&#8594;</span>
+                    <span className="text-muted-foreground">&#8594;</span>
                     {loc.matched ? (
-                      <span className="flex items-center gap-1.5 text-sm text-emerald-400">
+                      <span className="flex items-center gap-1.5 text-sm text-emerald-600">
                         <CheckCircle size={14} />
                         {loc.apexName}
                       </span>
@@ -497,7 +497,7 @@ export default function ImportItemsPage() {
                             [loc.csvName]: e.target.value,
                           }))
                         }
-                        className="rounded-md border border-zinc-600 bg-zinc-800 px-2 py-1 text-sm text-zinc-200 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                       >
                         <option value="">Select location...</option>
                         {orgLocations.map((ol) => (
@@ -515,14 +515,14 @@ export default function ImportItemsPage() {
 
           {/* New categories notice */}
           {preview.newCategories.length > 0 && (
-            <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-400" />
+            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
               <div>
-                <div className="text-sm font-medium text-amber-300">
+                <div className="text-sm font-medium text-amber-700">
                   {preview.newCategories.length} new{" "}
                   {preview.newCategories.length === 1 ? "category" : "categories"} will be created
                 </div>
-                <div className="mt-1 text-xs text-amber-400/70">
+                <div className="mt-1 text-xs text-amber-600">
                   {preview.newCategories.join(", ")}
                 </div>
               </div>
@@ -530,11 +530,11 @@ export default function ImportItemsPage() {
           )}
 
           {/* Preview table */}
-          <div className="rounded-lg border border-zinc-700/60 bg-zinc-800/50">
-            <div className="border-b border-zinc-700/60 px-4 py-3">
-              <h3 className="text-sm font-medium text-zinc-200">
+          <div className="rounded-lg border border-border bg-muted/50">
+            <div className="border-b border-border px-4 py-3">
+              <h3 className="text-sm font-medium text-foreground">
                 Preview{" "}
-                <span className="font-normal text-zinc-500">
+                <span className="font-normal text-muted-foreground">
                   (first {Math.min(preview.rows.length, 100)} rows)
                 </span>
               </h3>
@@ -542,7 +542,7 @@ export default function ImportItemsPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-700/40 text-left text-xs text-zinc-500">
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
                     <th className="px-4 py-2 font-medium">Row</th>
                     <th className="px-4 py-2 font-medium">SKU</th>
                     <th className="px-4 py-2 font-medium">Name</th>
@@ -554,27 +554,27 @@ export default function ImportItemsPage() {
                   {preview.rows.slice(0, 100).map((row) => (
                     <tr
                       key={row.row}
-                      className="border-b border-zinc-700/20 hover:bg-zinc-700/20"
+                      className="border-b border-border hover:bg-accent"
                     >
-                      <td className="px-4 py-2 text-zinc-500">{row.row}</td>
-                      <td className="px-4 py-2 font-mono text-xs text-zinc-300">{row.sku}</td>
-                      <td className="max-w-[200px] truncate px-4 py-2 text-zinc-200">
+                      <td className="px-4 py-2 text-muted-foreground">{row.row}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-foreground">{row.sku}</td>
+                      <td className="max-w-[200px] truncate px-4 py-2 text-foreground">
                         {row.name}
                       </td>
                       <td className="px-4 py-2">
                         <span
                           className={cn(
                             "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                            row.action === "CREATE" && "bg-emerald-500/20 text-emerald-400",
-                            row.action === "UPDATE" && "bg-blue-500/20 text-blue-400",
-                            row.action === "SKIP" && "bg-zinc-500/20 text-zinc-400",
+                            row.action === "CREATE" && "bg-emerald-50 text-emerald-600",
+                            row.action === "UPDATE" && "bg-primary/10 text-primary",
+                            row.action === "SKIP" && "bg-muted text-muted-foreground",
                           )}
                         >
                           {row.action}
                         </span>
                       </td>
-                      <td className="max-w-[200px] truncate px-4 py-2 text-xs text-zinc-400">
-                        {row.changes?.join(", ") || "—"}
+                      <td className="max-w-[200px] truncate px-4 py-2 text-xs text-muted-foreground">
+                        {row.changes?.join(", ") || "\u2014"}
                       </td>
                     </tr>
                   ))}
@@ -585,10 +585,10 @@ export default function ImportItemsPage() {
 
           {/* Errors (collapsible) */}
           {preview.errors.length > 0 && (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/5">
+            <div className="rounded-lg border border-red-300 bg-red-50">
               <button
                 onClick={() => setErrorsExpanded(!errorsExpanded)}
-                className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-red-300"
+                className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-red-700"
               >
                 <span className="flex items-center gap-2">
                   <AlertTriangle size={14} />
@@ -600,15 +600,15 @@ export default function ImportItemsPage() {
                 />
               </button>
               {errorsExpanded && (
-                <div className="border-t border-red-500/20 px-4 py-3">
+                <div className="border-t border-red-200 px-4 py-3">
                   <div className="max-h-60 space-y-1 overflow-y-auto">
                     {preview.errors.map((err, i) => (
                       <div key={i} className="flex gap-3 text-xs">
-                        <span className="shrink-0 text-red-400">Row {err.row}</span>
+                        <span className="shrink-0 text-red-600">Row {err.row}</span>
                         {err.field && (
-                          <span className="shrink-0 font-mono text-red-400">{err.field}</span>
+                          <span className="shrink-0 font-mono text-red-600">{err.field}</span>
                         )}
-                        <span className="text-red-200">{err.message}</span>
+                        <span className="text-red-700">{err.message}</span>
                       </div>
                     ))}
                   </div>
@@ -621,7 +621,7 @@ export default function ImportItemsPage() {
           <div className="flex items-center justify-between">
             <button
               onClick={handleReset}
-              className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 transition hover:bg-zinc-800"
+              className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted"
             >
               Cancel
             </button>
@@ -631,7 +631,7 @@ export default function ImportItemsPage() {
               className={cn(
                 "rounded-lg px-5 py-2 text-sm font-medium transition",
                 hasUnmappedLocations
-                  ? "cursor-not-allowed bg-zinc-700 text-zinc-400"
+                  ? "cursor-not-allowed bg-muted text-muted-foreground"
                   : "bg-blue-600 text-white hover:bg-blue-500",
               )}
             >
@@ -644,15 +644,15 @@ export default function ImportItemsPage() {
       {/* ─── Step 3: Progress ─── */}
       {step === "progress" && (
         <div className="space-y-6">
-          <div className="rounded-lg border border-zinc-700/60 bg-zinc-800/50 p-8">
+          <div className="rounded-lg border border-border bg-muted/50 p-8">
             <div className="mx-auto max-w-md space-y-6">
               {/* Progress bar */}
               <div>
                 <div className="mb-2 flex items-center justify-between text-sm">
-                  <span className="text-zinc-300">Importing...</span>
-                  <span className="font-mono text-blue-400">{pct}%</span>
+                  <span className="text-foreground">Importing...</span>
+                  <span className="font-mono text-primary">{pct}%</span>
                 </div>
-                <div className="h-2.5 overflow-hidden rounded-full bg-zinc-700">
+                <div className="h-2.5 overflow-hidden rounded-full bg-muted">
                   <div
                     className="h-full rounded-full bg-blue-500 transition-all duration-500"
                     style={{ width: `${pct}%` }}
@@ -669,11 +669,11 @@ export default function ImportItemsPage() {
                   { label: "Errors", value: progress?.errors ?? 0 },
                 ].map((c) => (
                   <div key={c.label} className="text-center">
-                    <div className="text-xs text-zinc-400">{c.label}</div>
-                    <div className="mt-0.5 text-lg font-semibold text-zinc-200">
+                    <div className="text-xs text-muted-foreground">{c.label}</div>
+                    <div className="mt-0.5 text-lg font-semibold text-foreground">
                       {c.value.toLocaleString()}
                       {"showTotal" in c && c.showTotal && (
-                        <span className="text-sm text-zinc-500">
+                        <span className="text-sm text-muted-foreground">
                           /{(c as { total: number }).total.toLocaleString()}
                         </span>
                       )}
@@ -683,7 +683,7 @@ export default function ImportItemsPage() {
               </div>
 
               {/* Time info */}
-              <div className="flex justify-center gap-6 text-xs text-zinc-500">
+              <div className="flex justify-center gap-6 text-xs text-muted-foreground">
                 <span>
                   Elapsed: {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
                 </span>
@@ -697,7 +697,7 @@ export default function ImportItemsPage() {
 
               {/* Spinner */}
               <div className="flex justify-center">
-                <Loader2 size={24} className="animate-spin text-blue-400" />
+                <Loader2 size={24} className="animate-spin text-primary" />
               </div>
             </div>
           </div>
@@ -707,19 +707,19 @@ export default function ImportItemsPage() {
       {/* ─── Step 4: Results ─── */}
       {step === "results" && results && (
         <div className="space-y-6">
-          <div className="rounded-lg border border-zinc-700/60 bg-zinc-800/50 p-8">
+          <div className="rounded-lg border border-border bg-muted/50 p-8">
             <div className="mx-auto max-w-md space-y-6">
               {/* Success icon */}
               <div className="flex justify-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/20">
-                  <CheckCircle size={32} className="text-emerald-400" />
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50">
+                  <CheckCircle size={32} className="text-emerald-600" />
                 </div>
               </div>
 
               <div className="text-center">
-                <h2 className="text-lg font-semibold text-zinc-100">Import Complete</h2>
+                <h2 className="text-lg font-semibold text-foreground">Import Complete</h2>
                 {results.durationMs != null && (
-                  <p className="mt-1 text-sm text-zinc-400">
+                  <p className="mt-1 text-sm text-muted-foreground">
                     Completed in {(results.durationMs / 1000).toFixed(1)}s
                   </p>
                 )}
@@ -728,13 +728,13 @@ export default function ImportItemsPage() {
               {/* Summary grid */}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {[
-                  { label: "Created", value: results.created, color: "text-emerald-400" },
-                  { label: "Updated", value: results.updated, color: "text-blue-400" },
-                  { label: "Skipped", value: results.skipped, color: "text-zinc-400" },
-                  { label: "Errors", value: results.errors, color: "text-red-400" },
+                  { label: "Created", value: results.created, color: "text-emerald-600" },
+                  { label: "Updated", value: results.updated, color: "text-primary" },
+                  { label: "Skipped", value: results.skipped, color: "text-muted-foreground" },
+                  { label: "Errors", value: results.errors, color: "text-red-600" },
                 ].map((c) => (
-                  <div key={c.label} className="rounded-lg bg-zinc-900/40 px-3 py-2 text-center">
-                    <div className="text-xs text-zinc-400">{c.label}</div>
+                  <div key={c.label} className="rounded-lg bg-muted/50 px-3 py-2 text-center">
+                    <div className="text-xs text-muted-foreground">{c.label}</div>
                     <div className={cn("mt-0.5 text-xl font-semibold", c.color)}>
                       {c.value.toLocaleString()}
                     </div>
@@ -746,7 +746,7 @@ export default function ImportItemsPage() {
               {results.errorLog && results.errorLog.length > 0 && (
                 <button
                   onClick={handleDownloadErrors}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm font-medium text-red-300 transition hover:bg-red-500/20"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
                 >
                   <Download size={14} />
                   Download Error Log ({results.errorLog.length}{" "}
@@ -758,7 +758,7 @@ export default function ImportItemsPage() {
               <div className="flex gap-3">
                 <Link
                   href="/inventory"
-                  className="flex flex-1 items-center justify-center rounded-lg border border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:bg-zinc-800"
+                  className="flex flex-1 items-center justify-center rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted"
                 >
                   Go to Item List
                 </Link>
