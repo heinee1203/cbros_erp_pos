@@ -33,16 +33,34 @@ export async function refreshStockMetrics(orgId: string): Promise<number> {
     const inserted = await tx.execute(sql`
       WITH velocity AS (
         SELECT
-          sl.product_id,
-          COALESCE(SUM(CASE WHEN s.created_at >= NOW() - INTERVAL '30 days' THEN sl.quantity ELSE 0 END)::numeric / 30, 0) AS avg_30d,
-          COALESCE(SUM(CASE WHEN s.created_at >= NOW() - INTERVAL '60 days' THEN sl.quantity ELSE 0 END)::numeric / 60, 0) AS avg_60d,
-          COALESCE(SUM(sl.quantity)::numeric / 90, 0) AS avg_90d
-        FROM sale_lines sl
-        JOIN sales s ON sl.sale_id = s.id
-        WHERE s.org_id = ${orgId}
-          AND s.status = 'COMPLETED'
-          AND s.created_at >= NOW() - INTERVAL '90 days'
-        GROUP BY sl.product_id
+          product_id,
+          COALESCE(SUM(CASE WHEN sale_date >= NOW() - INTERVAL '30 days' THEN qty ELSE 0 END)::numeric / 30, 0) AS avg_30d,
+          COALESCE(SUM(CASE WHEN sale_date >= NOW() - INTERVAL '60 days' THEN qty ELSE 0 END)::numeric / 60, 0) AS avg_60d,
+          COALESCE(SUM(qty)::numeric / 90, 0) AS avg_90d
+        FROM (
+          -- Live Apex sales
+          SELECT sl.product_id, sl.quantity AS qty, s.created_at AS sale_date
+          FROM sale_lines sl
+          JOIN sales s ON sl.sale_id = s.id
+          WHERE s.org_id = ${orgId}
+            AND s.status = 'COMPLETED'
+            AND s.created_at >= NOW() - INTERVAL '90 days'
+
+          UNION ALL
+
+          -- Historical Loyverse sales (SALE positive, REFUND negative)
+          SELECT hs.product_id,
+            CASE WHEN hs.reason_type = 'SALE' THEN hs.quantity
+                 WHEN hs.reason_type = 'REFUND' THEN -hs.quantity
+            END AS qty,
+            hs.movement_date AS sale_date
+          FROM historical_sales hs
+          WHERE hs.org_id = ${orgId}
+            AND hs.reason_type IN ('SALE', 'REFUND')
+            AND hs.product_id IS NOT NULL
+            AND hs.movement_date >= NOW() - INTERVAL '90 days'
+        ) combined
+        GROUP BY product_id
       ),
       stock AS (
         SELECT product_id, SUM(stock_level) AS total_stock

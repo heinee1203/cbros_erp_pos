@@ -32,3 +32,4 @@ export * from "./api-keys";
 export * from "./returns";
 export * from "./supplier-returns";
 export * from "./serial-numbers";
+export * from "./historical-sales";
