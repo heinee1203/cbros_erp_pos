@@ -28,6 +28,11 @@ import {
   updateSupplier,
   deleteSupplier,
 } from "./service";
+import {
+  getRedirectPlan,
+  createRedirectPOs,
+  getSupplierProducts,
+} from "../product-suppliers/service";
 
 function assertProcurementRole(role: string) {
   if (!PROCUREMENT_ROLES.includes(role as any)) {
@@ -613,6 +618,72 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
 
     const entries = await getPOJournal(id, orgId);
     return reply.send({ data: entries });
+  });
+
+  // ─── POST /procurement/purchase-orders/:id/redirect-plan ──
+  // Get redirect suggestions for unfulfilled PO items
+  app.post("/purchase-orders/:id/redirect-plan", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertProcurementRole(role);
+
+    try {
+      const plan = await getRedirectPlan(orgId, id);
+      return reply.send(plan);
+    } catch (err: any) {
+      if (err.message === "Purchase order not found") {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /procurement/purchase-orders/:id/create-redirect-pos ──
+  // Create redirect POs from a redirect plan
+  app.post(
+    "/purchase-orders/:id/create-redirect-pos",
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const { orgId } = request.storeContext!;
+      const { userId, role } = request.user;
+      assertProcurementRole(role);
+
+      const body = request.body as {
+        redirects: Array<{
+          supplierId: string;
+          destinationLocationId: string;
+          lines: Array<{
+            productId: string;
+            qty: number;
+            unitCost: string;
+          }>;
+        }>;
+      };
+
+      if (!body.redirects || !Array.isArray(body.redirects) || body.redirects.length === 0) {
+        return reply.status(400).send({ error: "redirects array is required" });
+      }
+
+      try {
+        const result = await createRedirectPOs(orgId, userId, id, body.redirects);
+        return reply.status(201).send(result);
+      } catch (err: any) {
+        return reply.status(400).send({ error: err.message });
+      }
+    },
+  );
+
+  // ─── GET /procurement/suppliers/:supplierId/products ──
+  // List all products a supplier provides (cursor-paginated)
+  app.get("/suppliers/:supplierId/products", async (request, reply) => {
+    const { supplierId } = request.params as { supplierId: string };
+    const { orgId } = request.storeContext!;
+    const query = request.query as { cursor?: string; limit?: string };
+
+    const limit = Math.min(parseInt(query.limit ?? "50", 10) || 50, 100);
+    const result = await getSupplierProducts(orgId, supplierId, query.cursor, limit);
+    return reply.send(result);
   });
 };
 
