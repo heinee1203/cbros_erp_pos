@@ -26,6 +26,9 @@ import { Product } from '@/db/models';
 import { Q } from '@nozbe/watermelondb';
 import { runFullSync } from '@/sync/sync-manager';
 import { addFavorite, isFavorite } from '@/storage/favorites';
+import { Inventory } from '@/db/models';
+import { storage } from '@/storage/mmkv';
+import { KEYS } from '@/storage/keys';
 import { Button, Chip, Toast } from '@/components/ui';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
@@ -136,32 +139,60 @@ export default function CatalogScreen() {
     showToast(`Added: ${item.name}`);
   }, [addLine, showToast]);
 
+  const locationId = storage.getString(KEYS.AUTH_LOCATION_ID);
+
   const loadVariants = useCallback(async (parent: CatalogItem) => {
     setVariantParent(parent);
     setLoadingVariants(true);
     try {
       const productCollection = database.get<Product>('products');
+      const inventoryCollection = database.get<Inventory>('inventory');
       const children = await productCollection
         .query(Q.where('parent_product_id', parent.serverId))
         .fetch();
 
-      const items: CatalogItem[] = children.map(p => ({
-        id: p.id,
-        serverId: p.serverId,
-        name: p.name,
-        sku: p.sku,
-        mnemonicSku: p.mnemonicSku,
-        barcode: p.barcode,
-        category: p.category,
-        unitPrice: p.unitPrice,
-        isVariablePrice: p.isVariablePrice,
-        isParent: false,
-        parentProductId: p.parentProductId,
-        stockLevel: 0,
-        reservedLevel: 0,
-        reorderPoint: 0,
-        availableForSale: true,
-      }));
+      // Batch fetch inventory for all variants in a single query
+      const childServerIds = children.map(p => p.serverId);
+      const invMap = new Map<string, { stockLevel: number; reservedLevel: number; reorderPoint: number; availableForSale: boolean }>();
+
+      if (locationId && childServerIds.length > 0) {
+        const allInventory = await inventoryCollection
+          .query(
+            Q.where('product_server_id', Q.oneOf(childServerIds)),
+            Q.where('location_id', locationId),
+          )
+          .fetch();
+
+        for (const inv of allInventory) {
+          invMap.set(inv.productServerId, {
+            stockLevel: inv.stockLevel,
+            reservedLevel: inv.reservedLevel,
+            reorderPoint: inv.reorderPoint,
+            availableForSale: inv.availableForSale,
+          });
+        }
+      }
+
+      const items: CatalogItem[] = children.map(p => {
+        const inv = invMap.get(p.serverId);
+        return {
+          id: p.id,
+          serverId: p.serverId,
+          name: p.name,
+          sku: p.sku,
+          mnemonicSku: p.mnemonicSku,
+          barcode: p.barcode,
+          category: p.category,
+          unitPrice: p.unitPrice,
+          isVariablePrice: p.isVariablePrice,
+          isParent: false,
+          parentProductId: p.parentProductId,
+          stockLevel: inv?.stockLevel ?? 0,
+          reservedLevel: inv?.reservedLevel ?? 0,
+          reorderPoint: inv?.reorderPoint ?? 10,
+          availableForSale: inv?.availableForSale ?? true,
+        };
+      });
       setVariantChildren(items);
     } catch (err) {
       console.error('[CatalogScreen] Error loading variants:', err);
@@ -169,7 +200,7 @@ export default function CatalogScreen() {
     } finally {
       setLoadingVariants(false);
     }
-  }, []);
+  }, [locationId]);
 
   const handleVariantSelect = useCallback((variant: CatalogItem) => {
     if (variant.isVariablePrice) {
@@ -396,9 +427,9 @@ export default function CatalogScreen() {
           ) : (
             <View style={styles.emptyState}>
               <Text style={styles.emptyIcon}>{'\uD83D\uDCE6'}</Text>
-              <Text style={styles.emptyTitle}>Catalog Not Loaded</Text>
+              <Text style={styles.emptyTitle}>No products yet</Text>
               <Text style={styles.emptySubtitle}>
-                Sync your product catalog to start ringing up sales
+                Sync your catalog from the server to start selling.
               </Text>
               <Button
                 title="Sync Now"
@@ -406,7 +437,7 @@ export default function CatalogScreen() {
                 fullWidth
                 onPress={handleRefresh}
                 loading={refreshing}
-                style={{ marginTop: spacing.lg, maxWidth: 280 }}
+                style={{ marginTop: spacing.lg, maxWidth: 280, minHeight: 52 }}
               />
             </View>
           )
