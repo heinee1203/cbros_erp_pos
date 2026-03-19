@@ -87,6 +87,8 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
   },
   tab: {
+    minWidth: 64,
+    minHeight: 64,
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
