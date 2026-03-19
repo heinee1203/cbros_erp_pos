@@ -677,46 +677,44 @@ export const transitionJobCardSchema = z.object({
 export type TransitionJobCardInput = z.infer<typeof transitionJobCardSchema>;
 
 // ══════════════════════════════════════════════
-// Phase 10: Inventory Counts / Cycle Counts
+// Inventory Counts
 // ══════════════════════════════════════════════
 
-const COUNT_SCOPES = [
-  "FULL_LOCATION",
-  "CATEGORY",
-  "FAMILY",
-  "SELECTED_SKUS",
-] as const;
+const COUNT_TYPES = ["FULL", "CYCLE"] as const;
 
-// ── Count Session: Create ──
+// ── Count: Create ──
 export const createCountSchema = z.object({
-  locationId: z.string().uuid(),
-  label: z.string().min(1).max(255),
-  scope: z.enum(COUNT_SCOPES),
-  scopeFilter: z.string().max(255).optional(),
-  notes: z.string().max(1000).optional(),
+  countType: z.enum(COUNT_TYPES),
+  title: z.string().min(1).max(255).optional(),
+  notes: z.string().max(2000).optional(),
+  filterCriteria: z.object({
+    categoryId: z.string().uuid().optional(),
+    brandId: z.string().uuid().optional(),
+  }).optional(),
 });
 export type CreateCountInput = z.infer<typeof createCountSchema>;
 
-// ── Count Session: Update (label/notes only while DRAFT) ──
-export const updateCountSchema = z.object({
-  label: z.string().min(1).max(255).optional(),
-  notes: z.string().max(1000).optional(),
+// ── Count: Record items ──
+export const recordCountItemsSchema = z.object({
+  items: z.array(z.object({
+    itemId: z.string().uuid(),
+    countedQty: z.number().int().min(0),
+    notes: z.string().max(1000).optional(),
+  })).min(1).max(500),
 });
-export type UpdateCountInput = z.infer<typeof updateCountSchema>;
+export type RecordCountItemsInput = z.infer<typeof recordCountItemsSchema>;
 
-// ── Count Line: Record a physical count ──
-export const recordCountLineSchema = z.object({
-  countedQty: z.number().int().min(0),
-  notes: z.string().max(500).optional(),
+// ── Count: Complete (requires approval pin) ──
+export const completeCountSchema = z.object({
+  approvalPin: z.string().min(1).max(50),
 });
-export type RecordCountLineInput = z.infer<typeof recordCountLineSchema>;
+export type CompleteCountInput = z.infer<typeof completeCountSchema>;
 
-// ── Count Session: Post variances ──
-export const postCountSchema = z.object({
-  idempotencyKey: z.string().min(1).max(255),
-  notes: z.string().max(1000).optional(),
+// ── Count: Cancel ──
+export const cancelCountSchema = z.object({
+  reason: z.string().min(1).max(1000),
 });
-export type PostCountInput = z.infer<typeof postCountSchema>;
+export type CancelCountInput = z.infer<typeof cancelCountSchema>;
 
 // ══════════════════════════════════════════════
 // Brands

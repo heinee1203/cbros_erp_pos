@@ -1,89 +1,117 @@
 import type { FastifyPluginAsync } from "fastify";
 import {
-  paginationSchema,
   createCountSchema,
-  recordCountLineSchema,
-  postCountSchema,
+  recordCountItemsSchema,
+  completeCountSchema,
+  cancelCountSchema,
 } from "@apex/types";
+import { parseQuery } from "../../lib/validate-query";
+import { z } from "zod";
 import {
-  listCountSessions,
-  createCountSession,
-  getCountDetail,
-  recordLineCount,
+  listCounts,
+  getCount,
+  getCountItems,
+  createCount,
+  deleteCount,
+  startCount,
+  recordItems,
+  submitReview,
   completeCount,
-  reviewCount,
-  postCountVariances,
   cancelCount,
 } from "./service";
 
-const VALID_STATUSES = [
-  "DRAFT",
-  "IN_PROGRESS",
-  "COMPLETED",
-  "REVIEWED",
-  "POSTED",
-  "CANCELLED",
-];
+const MANAGER_ROLES = ["ADMIN", "MANAGER"];
 
-const ALLOWED_ROLES = ["ADMIN", "MANAGER", "WAREHOUSE_STAFF"];
-const REVIEW_ROLES = ["ADMIN", "MANAGER"];
+const countsQuerySchema = z.object({
+  status: z.string().optional(),
+  locationId: z.string().uuid().optional(),
+  countType: z.string().optional(),
+  dateFrom: z.string().datetime({ offset: true }).optional(),
+  dateTo: z.string().datetime({ offset: true }).optional(),
+  search: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().uuid().optional(),
+  allLocations: z.enum(["true", "false"]).optional(),
+});
+
+const countItemsQuerySchema = z.object({
+  status: z.string().optional(),
+  search: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().uuid().optional(),
+});
 
 export const inventoryCountRoutes: FastifyPluginAsync = async (app) => {
-  /**
-   * GET /inventory/counts
-   * List count sessions (paginated, filterable)
-   */
+  // ─── GET / ─── List counts
   app.get("/", async (request, reply) => {
-    const pageParsed = paginationSchema.safeParse(request.query);
-    if (!pageParsed.success) {
-      return reply.status(400).send({
-        error: "Invalid pagination params",
-        details: pageParsed.error.flatten(),
-      });
-    }
+    const q = parseQuery(countsQuerySchema, request.query, reply);
+    if (!q) return;
 
-    const { cursor, limit } = pageParsed.data;
     const { orgId, locationId } = request.storeContext!;
-    const q = request.query as Record<string, string | undefined>;
+    const { role } = request.user;
 
     const allLocations = q.allLocations === "true" || !locationId;
-    if (allLocations) {
-      const userRole = (request.user as any)?.role;
-      if (userRole !== "ADMIN" && userRole !== "MANAGER") {
-        return reply.status(403).send({
-          error: "Cross-location access requires ADMIN or MANAGER role",
-        });
-      }
+    if (allLocations && !MANAGER_ROLES.includes(role)) {
+      return reply
+        .status(403)
+        .send({ error: "Cross-location access requires ADMIN or MANAGER" });
     }
 
-    if (q.status && !VALID_STATUSES.includes(q.status)) {
-      return reply.status(400).send({ error: `Invalid status: ${q.status}` });
-    }
-
-    const result = await listCountSessions({
-      orgId,
-      locationId: locationId ?? "",
-      allLocations,
-      overrideLocationId: q.locationId,
+    const result = await listCounts(orgId, {
+      locationId: allLocations ? q.locationId : (locationId ?? undefined),
       status: q.status,
+      countType: q.countType,
+      dateFrom: q.dateFrom,
+      dateTo: q.dateTo,
       search: q.search,
-      cursor,
-      limit,
+      cursor: q.cursor,
+      limit: q.limit,
     });
 
     return reply.send(result);
   });
 
-  /**
-   * POST /inventory/counts
-   * Create a new count session
-   */
-  app.post("/", async (request, reply) => {
-    const userRole = (request.user as any)?.role;
-    if (!ALLOWED_ROLES.includes(userRole)) {
-      return reply.status(403).send({
-        error: "Insufficient role to create inventory counts",
+  // ─── GET /:id ─── Get count detail
+  app.get("/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+
+    try {
+      const result = await getCount(orgId, id);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(404).send({ error: err.message });
+    }
+  });
+
+  // ─── GET /:id/items ─── Get count items (paginated)
+  app.get("/:id/items", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+
+    const q = parseQuery(countItemsQuerySchema, request.query, reply);
+    if (!q) return;
+
+    try {
+      const result = await getCountItems(orgId, id, {
+        status: q.status,
+        search: q.search,
+        cursor: q.cursor,
+        limit: q.limit,
       });
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(404).send({ error: err.message });
+    }
+  });
+
+  // ─── POST / ─── Create count (ADMIN/MANAGER)
+  app.post("/", async (request, reply) => {
+    const { role, userId } = request.user;
+    if (!MANAGER_ROLES.includes(role)) {
+      return reply
+        .status(403)
+        .send({ error: "Insufficient role to create inventory counts" });
     }
 
     const parsed = createCountSchema.safeParse(request.body);
@@ -94,76 +122,35 @@ export const inventoryCountRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const { orgId } = request.storeContext!;
-    const userId = (request.user as any)?.userId;
+    const { orgId, locationId } = request.storeContext!;
+    if (!locationId) {
+      return reply
+        .status(400)
+        .send({ error: "X-Location-ID header is required to create a count" });
+    }
 
     try {
-      const result = await createCountSession(parsed.data, orgId, userId);
+      const result = await createCount(orgId, locationId, userId, parsed.data);
       return reply.status(201).send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
     }
   });
 
-  /**
-   * GET /inventory/counts/:countId
-   * Get count session detail with paginated lines
-   */
-  app.get("/:countId", async (request, reply) => {
-    const { countId } = request.params as { countId: string };
-    const { orgId } = request.storeContext!;
-    const q = request.query as Record<string, string | undefined>;
-
-    const pageParsed = paginationSchema.safeParse(request.query);
-    const { cursor, limit } = pageParsed.success
-      ? pageParsed.data
-      : { cursor: undefined, limit: 100 };
-
-    try {
-      const result = await getCountDetail({
-        orgId,
-        countId,
-        search: q.search,
-        varianceOnly: q.varianceOnly === "true",
-        uncountedOnly: q.uncountedOnly === "true",
-        cursor,
-        limit,
-      });
-      return reply.send(result);
-    } catch (err: any) {
-      return reply.status(404).send({ error: err.message });
-    }
-  });
-
-  /**
-   * PATCH /inventory/counts/:countId/lines/:lineId
-   * Record a physical count on a line
-   */
-  app.patch("/:countId/lines/:lineId", async (request, reply) => {
-    const { countId, lineId } = request.params as {
-      countId: string;
-      lineId: string;
-    };
-
-    const parsed = recordCountLineSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: "Invalid input",
-        details: parsed.error.flatten(),
-      });
+  // ─── DELETE /:id ─── Delete count (DRAFT only, ADMIN/MANAGER)
+  app.delete("/:id", async (request, reply) => {
+    const { role } = request.user;
+    if (!MANAGER_ROLES.includes(role)) {
+      return reply
+        .status(403)
+        .send({ error: "Insufficient role to delete inventory counts" });
     }
 
+    const { id } = request.params as { id: string };
     const { orgId } = request.storeContext!;
-    const userId = (request.user as any)?.userId;
 
     try {
-      const result = await recordLineCount(
-        countId,
-        lineId,
-        parsed.data,
-        orgId,
-        userId,
-      );
+      const result = await deleteCount(orgId, id);
       return reply.send(result);
     } catch (err: any) {
       const status = err.message.includes("not found") ? 404 : 400;
@@ -171,59 +158,34 @@ export const inventoryCountRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  /**
-   * POST /inventory/counts/:countId/complete
-   * Transition: IN_PROGRESS → COMPLETED
-   */
-  app.post("/:countId/complete", async (request, reply) => {
-    const { countId } = request.params as { countId: string };
+  // ─── POST /:id/start ─── Start count (ADMIN/MANAGER)
+  app.post("/:id/start", async (request, reply) => {
+    const { role } = request.user;
+    if (!MANAGER_ROLES.includes(role)) {
+      return reply
+        .status(403)
+        .send({ error: "Insufficient role to start inventory counts" });
+    }
+
+    const { id } = request.params as { id: string };
     const { orgId } = request.storeContext!;
 
     try {
-      const result = await completeCount(countId, orgId);
+      const result = await startCount(orgId, id);
       return reply.send(result);
     } catch (err: any) {
-      return reply.status(400).send({ error: err.message });
+      const status = err.message.includes("not found") ? 404 : 400;
+      return reply.status(status).send({ error: err.message });
     }
   });
 
-  /**
-   * POST /inventory/counts/:countId/review
-   * Transition: COMPLETED → REVIEWED (ADMIN/MANAGER only)
-   */
-  app.post("/:countId/review", async (request, reply) => {
-    const userRole = (request.user as any)?.role;
-    if (!REVIEW_ROLES.includes(userRole)) {
-      return reply.status(403).send({
-        error: "Only ADMIN or MANAGER can review counts",
-      });
-    }
-
-    const { countId } = request.params as { countId: string };
+  // ─── POST /:id/record ─── Record items (ALL roles)
+  app.post("/:id/record", async (request, reply) => {
+    const { id } = request.params as { id: string };
     const { orgId } = request.storeContext!;
-    const userId = (request.user as any)?.userId;
+    const { userId } = request.user;
 
-    try {
-      const result = await reviewCount(countId, orgId, userId);
-      return reply.send(result);
-    } catch (err: any) {
-      return reply.status(400).send({ error: err.message });
-    }
-  });
-
-  /**
-   * POST /inventory/counts/:countId/post
-   * Transition: REVIEWED → POSTED (creates journal entries for variances)
-   */
-  app.post("/:countId/post", async (request, reply) => {
-    const userRole = (request.user as any)?.role;
-    if (!REVIEW_ROLES.includes(userRole)) {
-      return reply.status(403).send({
-        error: "Only ADMIN or MANAGER can post count variances",
-      });
-    }
-
-    const parsed = postCountSchema.safeParse(request.body);
+    const parsed = recordCountItemsSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({
         error: "Invalid input",
@@ -231,41 +193,91 @@ export const inventoryCountRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const { countId } = request.params as { countId: string };
-    const { orgId } = request.storeContext!;
-    const userId = (request.user as any)?.userId;
-
     try {
-      const result = await postCountVariances(
-        countId,
-        parsed.data,
-        orgId,
-        userId,
-      );
+      const result = await recordItems(orgId, id, userId, parsed.data);
       return reply.send(result);
     } catch (err: any) {
-      if (err.message.includes("idempotency") || err.message.includes("unique")) {
-        return reply.status(409).send({
-          error: "This post operation has already been processed",
-        });
-      }
-      return reply.status(400).send({ error: err.message });
+      const status = err.message.includes("not found") ? 404 : 400;
+      return reply.status(status).send({ error: err.message });
     }
   });
 
-  /**
-   * POST /inventory/counts/:countId/cancel
-   * Cancel a count session
-   */
-  app.post("/:countId/cancel", async (request, reply) => {
-    const { countId } = request.params as { countId: string };
+  // ─── POST /:id/submit-review ─── Submit for review (ADMIN/MANAGER)
+  app.post("/:id/submit-review", async (request, reply) => {
+    const { role } = request.user;
+    if (!MANAGER_ROLES.includes(role)) {
+      return reply
+        .status(403)
+        .send({ error: "Insufficient role to submit for review" });
+    }
+
+    const { id } = request.params as { id: string };
     const { orgId } = request.storeContext!;
 
     try {
-      const result = await cancelCount(countId, orgId);
+      const result = await submitReview(orgId, id);
       return reply.send(result);
     } catch (err: any) {
-      return reply.status(400).send({ error: err.message });
+      const status = err.message.includes("not found") ? 404 : 400;
+      return reply.status(status).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /:id/complete ─── Complete count (ADMIN/MANAGER, requires approvalPin)
+  app.post("/:id/complete", async (request, reply) => {
+    const { role, userId } = request.user;
+    if (!MANAGER_ROLES.includes(role)) {
+      return reply
+        .status(403)
+        .send({ error: "Insufficient role to complete inventory counts" });
+    }
+
+    const parsed = completeCountSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Invalid input",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+
+    try {
+      const result = await completeCount(orgId, id, userId);
+      return reply.send(result);
+    } catch (err: any) {
+      const status = err.message.includes("not found") ? 404 : 400;
+      return reply.status(status).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /:id/cancel ─── Cancel count (ADMIN/MANAGER)
+  app.post("/:id/cancel", async (request, reply) => {
+    const { role, userId } = request.user;
+    if (!MANAGER_ROLES.includes(role)) {
+      return reply
+        .status(403)
+        .send({ error: "Insufficient role to cancel inventory counts" });
+    }
+
+    const parsed = cancelCountSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Invalid input",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+
+    try {
+      const result = await cancelCount(orgId, id, userId, parsed.data.reason);
+      return reply.send(result);
+    } catch (err: any) {
+      const status = err.message.includes("not found") ? 404 : 400;
+      return reply.status(status).send({ error: err.message });
     }
   });
 };

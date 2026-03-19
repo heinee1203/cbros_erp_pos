@@ -1,120 +1,73 @@
-import {
-  pgTable,
-  pgEnum,
-  uuid,
-  varchar,
-  integer,
-  timestamp,
-  index,
-} from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, integer, numeric, timestamp, jsonb, uniqueIndex, index, pgEnum } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
-import { locations } from "./locations";
-import { users } from "./users";
 import { products } from "./products";
-import { inventory } from "./inventory";
+import { locations } from "./locations";
 
-// ── Enums ──
-
-export const countStatusEnum = pgEnum("count_status", [
-  "DRAFT",
-  "IN_PROGRESS",
-  "COMPLETED",
-  "REVIEWED",
-  "POSTED",
-  "CANCELLED",
-]);
-
-export const countScopeEnum = pgEnum("count_scope", [
-  "FULL_LOCATION",
-  "CATEGORY",
-  "FAMILY",
-  "SELECTED_SKUS",
-]);
-
-// ── Count Sessions ──
+export const countTypeEnum = pgEnum("count_type", ["FULL", "CYCLE"]);
+export const countStatusEnum = pgEnum("count_status", ["DRAFT", "IN_PROGRESS", "REVIEW", "COMPLETED", "CANCELLED"]);
+export const countItemStatusEnum = pgEnum("count_item_status", ["PENDING", "COUNTED", "VERIFIED", "SKIPPED"]);
 
 export const inventoryCounts = pgTable(
   "inventory_counts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id")
-      .notNull()
-      .references(() => organizations.id, { onDelete: "cascade" }),
-    locationId: uuid("location_id")
-      .notNull()
-      .references(() => locations.id, { onDelete: "cascade" }),
-    createdByUserId: uuid("created_by_user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "set null" }),
-    reviewedByUserId: uuid("reviewed_by_user_id")
-      .references(() => users.id, { onDelete: "set null" }),
-    postedByUserId: uuid("posted_by_user_id")
-      .references(() => users.id, { onDelete: "set null" }),
-    label: varchar("label", { length: 255 }).notNull(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    locationId: uuid("location_id").notNull().references(() => locations.id, { onDelete: "cascade" }),
+    countNumber: varchar("count_number", { length: 50 }).notNull(),
+    countType: countTypeEnum("count_type").notNull(),
     status: countStatusEnum("status").notNull().default("DRAFT"),
-    scope: countScopeEnum("scope").notNull().default("FULL_LOCATION"),
-    scopeFilter: varchar("scope_filter", { length: 255 }),
-    notes: varchar("notes", { length: 1000 }),
-    // Stats (denormalized for list-view performance)
-    totalLines: integer("total_lines").notNull().default(0),
-    countedLines: integer("counted_lines").notNull().default(0),
-    varianceLines: integer("variance_lines").notNull().default(0),
-    // Timestamps
+    title: varchar("title", { length: 255 }),
+    notes: varchar("notes", { length: 2000 }),
+    filterCriteria: jsonb("filter_criteria"),
+    totalItems: integer("total_items").notNull().default(0),
+    countedItems: integer("counted_items").notNull().default(0),
+    varianceCount: integer("variance_count").notNull().default(0),
+    varianceValue: numeric("variance_value", { precision: 14, scale: 2 }).notNull().default("0"),
     startedAt: timestamp("started_at", { withTimezone: true }),
+    reviewStartedAt: timestamp("review_started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
-    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
-    postedAt: timestamp("posted_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
+    completedBy: uuid("completed_by"),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledBy: uuid("cancelled_by"),
+    cancelReason: varchar("cancel_reason", { length: 1000 }),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
   },
   (table) => [
-    index("idx_counts_org_id").on(table.orgId),
-    index("idx_counts_location_id").on(table.locationId),
-    index("idx_counts_status").on(table.status),
-    index("idx_counts_created_at").on(table.createdAt),
+    uniqueIndex("idx_counts_org_number").on(table.orgId, table.countNumber),
+    index("idx_counts_org_loc_status").on(table.orgId, table.locationId, table.status),
+    index("idx_counts_org_created").on(table.orgId, table.createdAt),
   ],
 );
 
-// ── Count Lines (one per product in a count session) ──
-
-export const inventoryCountLines = pgTable(
-  "inventory_count_lines",
+export const inventoryCountItems = pgTable(
+  "inventory_count_items",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    countId: uuid("count_id")
-      .notNull()
-      .references(() => inventoryCounts.id, { onDelete: "cascade" }),
-    productId: uuid("product_id")
-      .notNull()
-      .references(() => products.id, { onDelete: "cascade" }),
-    inventoryId: uuid("inventory_id")
-      .notNull()
-      .references(() => inventory.id, { onDelete: "cascade" }),
-    // System snapshot at count creation
+    countId: uuid("count_id").notNull().references(() => inventoryCounts.id, { onDelete: "cascade" }),
+    productId: uuid("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+    productName: varchar("product_name", { length: 255 }).notNull(),
+    sku: varchar("sku", { length: 100 }).notNull(),
+    brandName: varchar("brand_name", { length: 100 }),
+    categoryName: varchar("category_name", { length: 100 }),
     systemQty: integer("system_qty").notNull(),
-    // Operator-entered count (null = not yet counted)
     countedQty: integer("counted_qty"),
-    // Derived: countedQty - systemQty (null if not counted)
     variance: integer("variance"),
-    countedByUserId: uuid("counted_by_user_id")
-      .references(() => users.id, { onDelete: "set null" }),
+    varianceCost: numeric("variance_cost", { precision: 12, scale: 2 }),
+    costPrice: numeric("cost_price", { precision: 12, scale: 2 }).notNull(),
+    status: countItemStatusEnum("status").notNull().default("PENDING"),
+    countedBy: uuid("counted_by"),
     countedAt: timestamp("counted_at", { withTimezone: true }),
-    notes: varchar("notes", { length: 500 }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
+    notes: varchar("notes", { length: 1000 }),
   },
   (table) => [
-    index("idx_count_lines_count_id").on(table.countId),
-    index("idx_count_lines_product_id").on(table.productId),
+    uniqueIndex("idx_count_items_count_product").on(table.countId, table.productId),
+    index("idx_count_items_count_status").on(table.countId, table.status),
   ],
 );
+
+export const countNumberSequence = pgTable("count_number_sequence", {
+  orgId: uuid("org_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  lastNumber: integer("last_number").notNull().default(0),
+});
