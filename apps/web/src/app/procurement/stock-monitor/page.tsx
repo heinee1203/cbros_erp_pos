@@ -55,7 +55,9 @@ type SortField =
   | "daysOfStock"
   | "stockoutDays90d"
   | "lastPoDate"
-  | "status";
+  | "status"
+  | "brandName"
+  | "categoryName";
 
 type SortDir = "asc" | "desc";
 
@@ -336,8 +338,8 @@ export default function StockMonitorPage() {
                 <tr>
                   <SortHeader label="Status" field="status" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
                   <SortHeader label="Product" field="productName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">Brand</th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">Category</th>
+                  <SortHeader label="Brand" field="brandName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
+                  <SortHeader label="Category" field="categoryName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
                   <SortHeader label="Total Stock" field="totalStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                   <SortHeader label="Avg Sales/Day" field="avgDailySales30d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                   <SortHeader label="Days of Stock" field="daysOfStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />

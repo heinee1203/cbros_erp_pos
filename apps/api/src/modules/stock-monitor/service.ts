@@ -17,6 +17,7 @@ import {
   sql,
   asc,
   desc,
+  inArray,
   type SQL,
 } from "drizzle-orm";
 
@@ -248,12 +249,17 @@ export interface StockMonitorPage {
 const SORT_COLUMNS: Record<string, any> = {
   status: stockMetrics.status,
   name: products.name,
+  productName: products.name,
   totalStock: stockMetrics.totalStock,
   avgDailySales30d: stockMetrics.avgDailySales30d,
   daysOfStock: stockMetrics.daysOfStock,
   stockoutDays90d: stockMetrics.stockoutDays90d,
   lastPoDate: stockMetrics.lastPoDate,
   lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
+  brand: brands.name,
+  brandName: brands.name,
+  category: categories.name,
+  categoryName: categories.name,
 };
 
 const STATUS_ORDER = sql`CASE ${stockMetrics.status}
@@ -369,6 +375,7 @@ export async function queryStockMonitor(
       productId: stockMetrics.productId,
       productName: products.name,
       productSku: products.sku,
+      parentProductId: products.parentProductId,
       brandName: brands.name,
       categoryName: categories.name,
       familyName: productFamilies.name,
@@ -393,14 +400,36 @@ export async function queryStockMonitor(
     .orderBy(...orderCols, asc(stockMetrics.id))
     .limit(limit + 1);
 
+  // Batch-fetch parent names for variants
+  const parentIds = [...new Set(rows.filter(r => r.parentProductId).map(r => r.parentProductId!))];
+  const parentNameMap = new Map<string, string>();
+  if (parentIds.length > 0) {
+    const parentRows = await db
+      .select({ id: products.id, name: products.name })
+      .from(products)
+      .where(inArray(products.id, parentIds));
+    for (const p of parentRows) {
+      parentNameMap.set(p.id, p.name);
+    }
+  }
+
   const hasMore = rows.length > limit;
   const data = hasMore ? rows.slice(0, limit) : rows;
   const nextCursor = hasMore ? data[data.length - 1]!.id : null;
 
-  const enriched: StockMonitorRow[] = data.map((r) => ({
+  const enriched: StockMonitorRow[] = data.map((r) => {
+    // Build display name: "Parent Name (Variant)" for variants, plain name for standalone
+    let displayName = r.productName;
+    if (r.parentProductId) {
+      const parentName = parentNameMap.get(r.parentProductId);
+      if (parentName) {
+        displayName = `${parentName} (${r.productName})`;
+      }
+    }
+    return {
     id: r.id,
     productId: r.productId,
-    productName: r.productName,
+    productName: displayName,
     productSku: r.productSku,
     brandName: r.brandName,
     categoryName: r.categoryName,
@@ -416,7 +445,8 @@ export async function queryStockMonitor(
     lastLeadTimeDays: r.lastLeadTimeDays,
     status: r.status,
     computedAt: r.computedAt.toISOString(),
-  }));
+  };
+  });
 
   const summary = await queryStockMonitorSummary(params.orgId);
 
@@ -475,6 +505,7 @@ export async function exportStockMonitorCSV(
       productId: stockMetrics.productId,
       productName: products.name,
       productSku: products.sku,
+      parentProductId: products.parentProductId,
       brandName: brands.name,
       categoryName: categories.name,
       familyName: productFamilies.name,
@@ -498,10 +529,24 @@ export async function exportStockMonitorCSV(
     .where(and(...conditions))
     .orderBy(...orderCols, asc(stockMetrics.id));
 
-  return rows.map((r) => ({
+  // Batch-fetch parent names for variants
+  const csvParentIds = [...new Set(rows.filter(r => r.parentProductId).map(r => r.parentProductId!))];
+  const csvParentMap = new Map<string, string>();
+  if (csvParentIds.length > 0) {
+    const parents = await db.select({ id: products.id, name: products.name }).from(products).where(inArray(products.id, csvParentIds));
+    for (const p of parents) csvParentMap.set(p.id, p.name);
+  }
+
+  return rows.map((r) => {
+    let displayName = r.productName;
+    if (r.parentProductId) {
+      const parentName = csvParentMap.get(r.parentProductId);
+      if (parentName) displayName = `${parentName} (${r.productName})`;
+    }
+    return {
     id: r.id,
     productId: r.productId,
-    productName: r.productName,
+    productName: displayName,
     productSku: r.productSku,
     brandName: r.brandName,
     categoryName: r.categoryName,
@@ -517,7 +562,8 @@ export async function exportStockMonitorCSV(
     lastLeadTimeDays: r.lastLeadTimeDays,
     status: r.status,
     computedAt: r.computedAt.toISOString(),
-  }));
+  };
+  });
 }
 
 // ── Supplier Metrics Query ──
