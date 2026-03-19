@@ -48,17 +48,27 @@ interface LocationMatch {
 
 interface PreviewResponse {
   previewToken: string;
-  summary: {
-    totalRows: number;
-    creates: number;
-    updates: number;
-    skips: number;
-    errors: number;
-  };
-  rows: PreviewRow[];
-  errors: PreviewError[];
-  locations: LocationMatch[];
-  newCategories: string[];
+  format: string;
+  totalRows: number;
+  createCount: number;
+  updateCount: number;
+  skipCount: number;
+  errorCount: number;
+  locationMapping: Array<{
+    csvName: string;
+    apexLocationId: string | null;
+    apexLocationName: string | null;
+    autoMatched: boolean;
+  }>;
+  errors: Array<{ rowIndex: number; field?: string; message: string }>;
+  preview: Array<{
+    rowIndex: number;
+    name: string;
+    sku: string;
+    action: "CREATE" | "UPDATE" | "SKIP";
+    changes?: string[];
+    errors?: string[];
+  }>;
 }
 
 interface ProgressResponse {
@@ -111,11 +121,11 @@ export default function ImportItemsPage() {
 
   /* ── Initialize location mapping from preview ── */
   useEffect(() => {
-    if (preview?.locations) {
+    if (preview?.locationMapping) {
       const mapping: Record<string, string> = {};
-      for (const loc of preview.locations) {
-        if (loc.matched && loc.apexId) {
-          mapping[loc.csvName] = loc.apexId;
+      for (const loc of preview.locationMapping) {
+        if (loc.autoMatched && loc.apexLocationId) {
+          mapping[loc.csvName] = loc.apexLocationId;
         }
       }
       setLocationMapping(mapping);
@@ -271,7 +281,7 @@ export default function ImportItemsPage() {
       ? Math.round(((progress.total - progress.processed) / progress.processed) * elapsed)
       : null;
 
-  const unmatchedLocations = preview?.locations.filter((l) => !l.matched) ?? [];
+  const unmatchedLocations = preview?.locationMapping?.filter((l) => !l.autoMatched) ?? [];
   const hasUnmappedLocations = unmatchedLocations.some((l) => !locationMapping[l.csvName]);
 
   /* ─────────────────────────────────────────────
@@ -452,10 +462,10 @@ export default function ImportItemsPage() {
           {/* Summary cards */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { label: "Total Rows", value: preview.summary.totalRows, color: "text-foreground" },
-              { label: "Creates", value: preview.summary.creates, color: "text-emerald-600" },
-              { label: "Updates", value: preview.summary.updates, color: "text-primary" },
-              { label: "Errors", value: preview.summary.errors, color: "text-red-600" },
+              { label: "Total Rows", value: preview.totalRows, color: "text-foreground" },
+              { label: "Creates", value: preview.createCount, color: "text-emerald-600" },
+              { label: "Updates", value: preview.updateCount, color: "text-primary" },
+              { label: "Errors", value: preview.errorCount, color: "text-red-600" },
             ].map((card) => (
               <div
                 key={card.label}
@@ -470,11 +480,11 @@ export default function ImportItemsPage() {
           </div>
 
           {/* Location mapping */}
-          {preview.locations.length > 0 && (
+          {(preview.locationMapping?.length ?? 0) > 0 && (
             <div className="rounded-lg border border-border bg-muted/50 p-5">
               <h3 className="mb-3 text-sm font-medium text-foreground">Location Mapping</h3>
               <div className="space-y-2">
-                {preview.locations.map((loc) => (
+                {preview.locationMapping.map((loc) => (
                   <div
                     key={loc.csvName}
                     className="flex items-center gap-3 rounded-md bg-muted/50 px-3 py-2"
@@ -483,10 +493,10 @@ export default function ImportItemsPage() {
                       {loc.csvName}
                     </span>
                     <span className="text-muted-foreground">&#8594;</span>
-                    {loc.matched ? (
+                    {loc.autoMatched ? (
                       <span className="flex items-center gap-1.5 text-sm text-emerald-600">
                         <CheckCircle size={14} />
-                        {loc.apexName}
+                        {loc.apexLocationName}
                       </span>
                     ) : (
                       <select
@@ -514,16 +524,16 @@ export default function ImportItemsPage() {
           )}
 
           {/* New categories notice */}
-          {preview.newCategories.length > 0 && (
+          {((preview as any).newCategories?.length ?? 0) > 0 && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
               <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
               <div>
                 <div className="text-sm font-medium text-amber-700">
-                  {preview.newCategories.length} new{" "}
-                  {preview.newCategories.length === 1 ? "category" : "categories"} will be created
+                  {(preview as any).newCategories?.length ?? 0} new{" "}
+                  {(preview as any).newCategories?.length === 1 ? "category" : "categories"} will be created
                 </div>
                 <div className="mt-1 text-xs text-amber-600">
-                  {preview.newCategories.join(", ")}
+                  {(preview as any).newCategories?.join(", ") ?? ""}
                 </div>
               </div>
             </div>
@@ -535,7 +545,7 @@ export default function ImportItemsPage() {
               <h3 className="text-sm font-medium text-foreground">
                 Preview{" "}
                 <span className="font-normal text-muted-foreground">
-                  (first {Math.min(preview.rows.length, 100)} rows)
+                  (first {Math.min(preview.preview?.length ?? 0, 100)} rows)
                 </span>
               </h3>
             </div>
@@ -551,12 +561,12 @@ export default function ImportItemsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.rows.slice(0, 100).map((row) => (
+                  {(preview.preview ?? []).slice(0, 100).map((row) => (
                     <tr
-                      key={row.row}
+                      key={row.rowIndex}
                       className="border-b border-border hover:bg-accent"
                     >
-                      <td className="px-4 py-2 text-muted-foreground">{row.row}</td>
+                      <td className="px-4 py-2 text-muted-foreground">{row.rowIndex}</td>
                       <td className="px-4 py-2 font-mono text-xs text-foreground">{row.sku}</td>
                       <td className="max-w-[200px] truncate px-4 py-2 text-foreground">
                         {row.name}
@@ -584,7 +594,7 @@ export default function ImportItemsPage() {
           </div>
 
           {/* Errors (collapsible) */}
-          {preview.errors.length > 0 && (
+          {(preview.errors?.length ?? 0) > 0 && (
             <div className="rounded-lg border border-red-300 bg-red-50">
               <button
                 onClick={() => setErrorsExpanded(!errorsExpanded)}
@@ -604,8 +614,8 @@ export default function ImportItemsPage() {
                   <div className="max-h-60 space-y-1 overflow-y-auto">
                     {preview.errors.map((err, i) => (
                       <div key={i} className="flex gap-3 text-xs">
-                        <span className="shrink-0 text-red-600">Row {err.row}</span>
-                        {err.field && (
+                        <span className="shrink-0 text-red-600">Row {(err as any).row ?? (err as any).rowIndex}</span>
+                        {(err as any).field && (
                           <span className="shrink-0 font-mono text-red-600">{err.field}</span>
                         )}
                         <span className="text-red-700">{err.message}</span>
