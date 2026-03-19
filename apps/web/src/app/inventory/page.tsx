@@ -69,6 +69,70 @@ interface ExportResponse {
 }
 
 /* ─────────────────────────────────────────────
+ * Bulk Dropdown — searchable picker for bulk actions
+ * ───────────────────────────────────────────── */
+function BulkDropdown({ label, options, onSelect }: {
+  label: string;
+  options: { id: string; name: string }[];
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filtered = options.filter(o =>
+    o.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="rounded-md border border-border bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors"
+      >
+        Change {label}
+      </button>
+      {open && (
+        <div className="absolute bottom-full mb-1 w-56 rounded-lg border border-border bg-background shadow-lg z-50">
+          <div className="p-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={`Search ${label.toLowerCase()}...`}
+              className="w-full rounded border border-border px-2 py-1.5 text-xs bg-background text-foreground"
+              autoFocus
+            />
+          </div>
+          <div className="max-h-48 overflow-y-auto">
+            {filtered.length === 0 && (
+              <div className="px-3 py-2 text-xs text-muted-foreground">No results</div>
+            )}
+            {filtered.map(opt => (
+              <button
+                key={opt.id}
+                onClick={() => { onSelect(opt.id); setOpen(false); setSearch(""); }}
+                className="w-full px-3 py-1.5 text-left text-xs hover:bg-accent transition-colors"
+              >
+                {opt.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
  * Page Root
  * ───────────────────────────────────────────── */
 export default function InventoryPage() {
@@ -694,6 +758,31 @@ export default function InventoryPage() {
     setSelectedIds(new Set());
   }, [selectedIds, products, confirm, deleteMut]);
 
+  /* Bulk update (category, brand, family, subcategory) */
+  const handleBulkUpdate = useCallback(async (updates: Record<string, string>) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    const fieldName = Object.keys(updates)[0]?.replace("Id", "") ?? "field";
+    const confirmed = window.confirm(
+      `Update ${fieldName} for ${ids.length} item${ids.length !== 1 ? "s" : ""}?`
+    );
+    if (!confirmed) return;
+
+    try {
+      await apiFetch("/products/bulk-update", {
+        method: "PATCH",
+        token,
+        locationId: apiLocationId,
+        body: JSON.stringify({ productIds: ids, updates }),
+      });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      setSelectedIds(new Set());
+    } catch (err: any) {
+      alert(err.message || "Bulk update failed");
+    }
+  }, [selectedIds, token, apiLocationId, queryClient]);
+
   /* Single item delete (from row actions menu) */
   const handleDeleteSingle = useCallback(async (productId: string, productName: string, isParent?: boolean) => {
     const message = isParent
@@ -889,6 +978,27 @@ export default function InventoryPage() {
             <ArrowUpDown size={12} />
             Adjust
           </button>
+          <div className="h-3.5 w-px bg-border" />
+          <BulkDropdown
+            label="Category"
+            options={filteredCategories.map(c => ({ id: c.id, name: c.name }))}
+            onSelect={(id) => handleBulkUpdate({ categoryId: id })}
+          />
+          <BulkDropdown
+            label="Brand"
+            options={brandsList.map(b => ({ id: b.id, name: b.name }))}
+            onSelect={(id) => handleBulkUpdate({ brandId: id })}
+          />
+          <BulkDropdown
+            label="Family"
+            options={families.map(f => ({ id: f.id, name: f.name }))}
+            onSelect={(id) => handleBulkUpdate({ familyId: id })}
+          />
+          <BulkDropdown
+            label="Subcategory"
+            options={filteredSubcategories.map(s => ({ id: s.id, name: s.name }))}
+            onSelect={(id) => handleBulkUpdate({ subcategoryId: id })}
+          />
           <div className="flex-1" />
           <button
             onClick={clearSelection}

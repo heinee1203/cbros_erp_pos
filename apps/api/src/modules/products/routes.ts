@@ -653,6 +653,80 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
+   * PATCH /products/bulk-update
+   * Bulk update category, brand, family, or subcategory for multiple products.
+   * Supports two modes: explicit productIds list, or filter-based update.
+   * Admin/Manager only.
+   */
+  app.patch("/bulk-update", async (request, reply) => {
+    const role = (request.user as any)?.role;
+    if (!MANAGE_ROLES.includes(role)) {
+      return reply.status(403).send({ error: "Admin or Manager role required" });
+    }
+
+    const { orgId } = request.storeContext!;
+    const body = request.body as {
+      productIds?: string[];
+      filter?: { search?: string; familyId?: string; categoryId?: string; brandId?: string };
+      updates: {
+        categoryId?: string;
+        brandId?: string;
+        familyId?: string;
+        subcategoryId?: string;
+      };
+    };
+
+    if (!body.updates || Object.keys(body.updates).length === 0) {
+      return reply.status(400).send({ error: "No updates provided" });
+    }
+
+    // Build the SET clause from provided updates only
+    const updateFields: Record<string, unknown> = {};
+    if (body.updates.categoryId !== undefined) updateFields.categoryId = body.updates.categoryId;
+    if (body.updates.brandId !== undefined) updateFields.brandId = body.updates.brandId;
+    if (body.updates.familyId !== undefined) updateFields.familyId = body.updates.familyId;
+    if (body.updates.subcategoryId !== undefined) updateFields.subcategoryId = body.updates.subcategoryId;
+
+    let updated = 0;
+
+    if (body.productIds && body.productIds.length > 0) {
+      // Mode 1: Update specific product IDs (max 500)
+      if (body.productIds.length > 500) {
+        return reply.status(400).send({ error: "Maximum 500 items per request" });
+      }
+
+      const result = await db
+        .update(products)
+        .set(updateFields)
+        .where(and(
+          eq(products.orgId, orgId),
+          inArray(products.id, body.productIds),
+        ));
+      updated = (result as any).rowCount ?? body.productIds.length;
+    } else if (body.filter) {
+      // Mode 2: Update all products matching filter
+      const conditions: SQL[] = [eq(products.orgId, orgId), eq(products.isActive, true)];
+      if (body.filter.search && body.filter.search.length >= 2) {
+        conditions.push(ilike(products.name, `%${body.filter.search}%`));
+      }
+      if (body.filter.familyId) conditions.push(eq(products.familyId, body.filter.familyId));
+      if (body.filter.categoryId) conditions.push(eq(products.categoryId, body.filter.categoryId));
+      if (body.filter.brandId) conditions.push(eq(products.brandId, body.filter.brandId));
+
+      const result = await db
+        .update(products)
+        .set(updateFields)
+        .where(and(...conditions));
+
+      updated = (result as any).rowCount ?? 0;
+    } else {
+      return reply.status(400).send({ error: "Provide productIds or filter" });
+    }
+
+    return reply.send({ updated });
+  });
+
+  /**
    * PATCH /products/:id
    * Update a product's editable fields. Admin/Manager only.
    */
