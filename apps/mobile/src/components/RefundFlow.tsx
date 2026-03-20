@@ -43,6 +43,7 @@ interface RefundItem {
 export function RefundFlow({
   visible, onClose, saleId, saleNo, lines, onRefunded, verifyPin,
 }: RefundFlowProps) {
+  const styles = createStyles();
   const [step, setStep] = useState<Step>('select-items');
   // Only show lines that still have refundable quantity
   const refundableLines = useMemo(() =>
@@ -404,7 +405,7 @@ export function RefundFlow({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   stepContent: {
     paddingHorizontal: layout.screenPadding,
     paddingBottom: spacing.lg,

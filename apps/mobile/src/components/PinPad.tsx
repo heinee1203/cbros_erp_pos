@@ -19,6 +19,7 @@ interface PinPadProps {
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
 
 export function PinPad({ visible, onClose, onVerified, verifyPin }: PinPadProps) {
+  const styles = createStyles();
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -132,7 +133,7 @@ export function PinPad({ visible, onClose, onVerified, verifyPin }: PinPadProps)
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.8)',

@@ -1,5 +1,5 @@
 import { db } from "@apex/database";
-import { products, inventory } from "@apex/database/schema";
+import { products, inventory, productFamilies } from "@apex/database/schema";
 import { and, eq, gt, asc, sql } from "drizzle-orm";
 
 interface SyncOpts {
@@ -58,12 +58,14 @@ export async function getCatalogDelta(opts: SyncOpts): Promise<SyncResult<any>> 
       isVariablePrice: products.isVariablePrice,
       isActive: products.isActive,
       familyId: products.familyId,
+      familyName: productFamilies.name,
       brandId: products.brandId,
       parentProductId: products.parentProductId,
       isParent: products.isParent,
       updatedAt: products.updatedAt,
     })
     .from(products)
+    .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
     .where(and(...conditions))
     .orderBy(asc(products.updatedAt), asc(products.id))
     .limit(limit + 1);

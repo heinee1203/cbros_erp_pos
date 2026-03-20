@@ -21,6 +21,7 @@ export function SplitView({
   secondaryCollapsed = false,
   collapsedBadgeCount = 0,
 }: SplitViewProps) {
+  const styles = createStyles();
   return (
     <View style={[styles.container, style]}>
       <View style={[styles.pane, secondaryCollapsed ? { flex: 1 } : { flex: primaryRatio }]}>
@@ -45,7 +46,7 @@ export function SplitView({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     flexDirection: 'row',

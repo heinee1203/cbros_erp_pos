@@ -38,6 +38,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
   returnKeyType,
   onSubmitEditing,
 }, ref) {
+  const styles = createStyles();
   const [focused, setFocused] = useState(false);
 
   const handleFocus = useCallback(() => setFocused(true), []);
@@ -80,7 +81,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
   );
 });
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',

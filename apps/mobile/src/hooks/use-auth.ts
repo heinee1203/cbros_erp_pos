@@ -18,6 +18,7 @@ interface AuthContextValue {
   locationId: string | null;
   locations: LocationInfo[];
   isAuthenticated: boolean;
+  needsLocationSelect: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
@@ -90,13 +91,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw err;
     }
     setLocations(locs);
-    // Auto-select first retail location or first available
-    const retail = locs.find(l => l.type === 'RETAIL_STORE' || l.type === 'STORE');
-    const defaultLoc = retail ?? locs[0];
-    if (defaultLoc) {
-      setLocationService(defaultLoc.id);
-      setLocationId(defaultLoc.id);
-    }
+    // Don't auto-select — let LocationSelectScreen handle it
+    // This ensures the user explicitly picks their store on every fresh login
   }, []);
 
   const logout = useCallback(() => {
@@ -117,7 +113,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     locationId,
     locations,
-    isAuthenticated: !!token && !!user && !!locationId,
+    isAuthenticated: !!token && !!user,
+    needsLocationSelect: !!token && !!user && !locationId,
     isLoading,
     login,
     logout,

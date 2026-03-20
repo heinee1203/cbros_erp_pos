@@ -21,6 +21,8 @@ export default function LoginScreen() {
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const passwordRef = useRef<TextInput>(null);
 
+  const styles = createStyles();
+
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
       setError('Email and password are required');
@@ -94,7 +96,7 @@ export default function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

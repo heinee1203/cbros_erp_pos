@@ -23,6 +23,8 @@ export default function ServerConfigScreen() {
   const [error, setError] = useState('');
   const [testing, setTesting] = useState(false);
 
+  const styles = createStyles();
+
   // If already configured, skip directly to login
   React.useEffect(() => {
     if (existing) {
@@ -109,7 +111,7 @@ export default function ServerConfigScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

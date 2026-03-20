@@ -34,16 +34,6 @@ import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import type { POSStackParamList } from '@/app/MainTabs';
 
-const CATEGORIES = ['TIRES', 'LUBRICANTS', 'HARD_PARTS', 'ACCESSORIES', 'LABOR_SERVICES'];
-
-const CATEGORY_LABELS: Record<string, string> = {
-  TIRES: 'Tires',
-  LUBRICANTS: 'Lubricants',
-  HARD_PARTS: 'Hard Parts',
-  ACCESSORIES: 'Accessories',
-  LABOR_SERVICES: 'Services',
-};
-
 type Nav = StackNavigationProp<POSStackParamList, 'Catalog'>;
 
 export default function CatalogScreen() {
@@ -59,6 +49,9 @@ export default function CatalogScreen() {
 
   const [refreshing, setRefreshing] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
+
+  // ── Product family tabs (loaded from DB) ──
+  const [families, setFamilies] = useState<string[]>([]);
 
   // ── Variable price modal state ──
   const [variablePriceItem, setVariablePriceItem] = useState<CatalogItem | null>(null);
@@ -83,6 +76,28 @@ export default function CatalogScreen() {
   const dismissToast = useCallback(() => {
     setToastVisible(false);
   }, []);
+
+  // Dynamic styles (reads mutated colors for light/dark theme)
+  const styles = createStyles();
+
+  // Load distinct product families from local DB for filter tabs
+  useEffect(() => {
+    (async () => {
+      try {
+        const productCollection = database.get<Product>('products');
+        const allProducts = await productCollection
+          .query(Q.where('parent_product_id', Q.eq(null)))
+          .fetch();
+        const familySet = new Set<string>();
+        for (const p of allProducts) {
+          if (p.familyName) familySet.add(p.familyName);
+        }
+        setFamilies(Array.from(familySet).sort());
+      } catch (err) {
+        console.error('[CatalogScreen] Failed to load families:', err);
+      }
+    })();
+  }, [results]); // re-check after results change (e.g. post-sync)
 
   // Start scanner listening when on this screen
   useEffect(() => {
@@ -187,6 +202,7 @@ export default function CatalogScreen() {
           mnemonicSku: p.mnemonicSku,
           barcode: p.barcode,
           category: p.category,
+          familyName: p.familyName,
           unitPrice: p.unitPrice,
           isVariablePrice: p.isVariablePrice,
           isParent: false,
@@ -389,7 +405,7 @@ export default function CatalogScreen() {
         </View>
       </View>
 
-      {/* Category chips */}
+      {/* Product family filter tabs */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -401,12 +417,12 @@ export default function CatalogScreen() {
           active={!category}
           onPress={() => setCategory(null)}
         />
-        {CATEGORIES.map(cat => (
+        {families.map(fam => (
           <Chip
-            key={cat}
-            label={CATEGORY_LABELS[cat] ?? cat}
-            active={category === cat}
-            onPress={() => setCategory(category === cat ? null : cat)}
+            key={fam}
+            label={fam}
+            active={category === fam}
+            onPress={() => setCategory(category === fam ? null : fam)}
           />
         ))}
       </ScrollView>
@@ -585,7 +601,7 @@ export default function CatalogScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

@@ -10,6 +10,7 @@ interface SkeletonProps {
 }
 
 function SkeletonInner({ width, height, borderRadius = 4, style }: SkeletonProps) {
+  const styles = createStyles();
   const opacity = useRef(new Animated.Value(0.3)).current;
 
   useEffect(() => {
@@ -45,7 +46,7 @@ function SkeletonInner({ width, height, borderRadius = 4, style }: SkeletonProps
 
 export const Skeleton = React.memo(SkeletonInner);
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   base: {
     backgroundColor: colors.bg.surface,
   },

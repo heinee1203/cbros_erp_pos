@@ -14,6 +14,7 @@ const TAB_ICONS: Record<string, string> = {
 export const NAV_RAIL_WIDTH = 52;
 
 export function NavRail({ state, navigation }: BottomTabBarProps) {
+  const styles = createStyles();
   const { user, logout, locations, locationId } = useAuth();
 
   const currentLocation = locations?.find((l: any) => l.id === locationId);
@@ -75,7 +76,7 @@ export function NavRail({ state, navigation }: BottomTabBarProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   navRail: {
     position: 'absolute',
     left: 0,

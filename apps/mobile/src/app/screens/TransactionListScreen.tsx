@@ -56,6 +56,8 @@ export default function TransactionListScreen() {
   const { data: activeShift } = useActiveShiftQuery();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  const styles = createStyles();
+
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     await refetch();
@@ -319,7 +321,7 @@ export default function TransactionListScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

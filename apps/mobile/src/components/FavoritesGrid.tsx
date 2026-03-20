@@ -23,6 +23,7 @@ interface FavoritesGridProps {
 }
 
 export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
+  const styles = createStyles();
   const { favoriteColumns, favoriteMax, screenPadding } = useLayout();
   const favoriteIds = getFavoriteIds();
   const [collapsed, setCollapsed] = useState(
@@ -119,7 +120,7 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     paddingTop: spacing.sm,
     paddingBottom: spacing.xs,

@@ -28,6 +28,7 @@ export function BottomSheet({
   children,
   title,
 }: BottomSheetProps) {
+  const styles = createStyles();
   const insets = useSafeAreaInsets();
   const { isTablet } = useLayout();
 
@@ -75,7 +76,7 @@ export function BottomSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',

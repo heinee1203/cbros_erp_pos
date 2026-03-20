@@ -15,6 +15,7 @@ export function Card({
   style,
   padded = true,
 }: CardProps) {
+  const styles = createStyles();
   return (
     <View
       style={[
@@ -29,7 +30,7 @@ export function Card({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   base: {
     backgroundColor: colors.bg.surface,
     borderWidth: 1,

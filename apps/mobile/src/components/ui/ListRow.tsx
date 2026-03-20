@@ -17,6 +17,7 @@ function ListRowInner({
   index = 0,
   style,
 }: ListRowProps) {
+  const styles = createStyles();
   const isEven = index % 2 === 0;
 
   return (
@@ -40,7 +41,7 @@ function ListRowInner({
 
 export const ListRow = React.memo(ListRowInner);
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   base: {
     minHeight: layout.productRowMinHeight,
     paddingHorizontal: layout.screenPadding,

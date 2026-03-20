@@ -15,6 +15,7 @@ export default class Product extends Model {
   @field('is_variable_price') isVariablePrice!: boolean;
   @text('image_url') imageUrl!: string | null;
   @text('family_id') familyId!: string | null;
+  @text('family_name') familyName!: string | null;
   @text('brand_id') brandId!: string | null;
   @text('parent_product_id') parentProductId!: string | null;
   @field('is_parent') isParent!: boolean;

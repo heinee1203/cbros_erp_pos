@@ -7,10 +7,11 @@ interface DividerProps {
 }
 
 export function Divider({ style }: DividerProps) {
+  const styles = createStyles();
   return <View style={[styles.divider, style]} />;
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.border.default,

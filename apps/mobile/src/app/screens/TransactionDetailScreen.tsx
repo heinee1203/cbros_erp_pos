@@ -49,6 +49,8 @@ export default function TransactionDetailScreen() {
 
   const [refundVisible, setRefundVisible] = useState(false);
 
+  const styles = createStyles();
+
   const verifyPin = useCallback(async (pin: string): Promise<boolean> => {
     try {
       const res = await apiFetch<{ valid: boolean }>('/auth/verify-pin', {
@@ -263,7 +265,7 @@ export default function TransactionDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

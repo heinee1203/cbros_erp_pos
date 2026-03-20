@@ -8,6 +8,7 @@ import { colors, textStyles, spacing } from '@/theme';
  * Hidden when online — the SyncStatusBar handles reconnection UI.
  */
 export const NetworkBanner: React.FC = () => {
+  const styles = createStyles();
   const { isOnline, isReconnecting } = useNetworkStatus();
 
   // Don't show if online or if SyncStatusBar is already showing "Reconnecting..."
@@ -20,7 +21,7 @@ export const NetworkBanner: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   banner: {
     backgroundColor: colors.status.warningBg,
     paddingVertical: spacing.sm,

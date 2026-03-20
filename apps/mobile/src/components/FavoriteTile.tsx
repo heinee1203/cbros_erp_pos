@@ -14,6 +14,7 @@ interface FavoriteTileProps {
 function FavoriteTileInner({
   name, price, stockLevel, reorderPoint, onPress, onLongPress,
 }: FavoriteTileProps) {
+  const styles = createStyles();
   const stockColor =
     stockLevel <= 0 ? colors.stock.out :
     stockLevel <= reorderPoint ? colors.stock.low :
@@ -43,7 +44,7 @@ function FavoriteTileInner({
 
 export const FavoriteTile = React.memo(FavoriteTileInner);
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   tile: {
     flex: 1,
     backgroundColor: colors.bg.surface,

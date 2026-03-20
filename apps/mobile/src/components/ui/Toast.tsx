@@ -14,13 +14,15 @@ interface ToastProps {
 
 const AUTO_DISMISS_MS = 2000;
 
-const variantColors: Record<ToastVariant, { bg: string; text: string }> = {
+const getVariantColors = (): Record<ToastVariant, { bg: string; text: string }> => ({
   success: { bg: colors.toast.successBg, text: colors.toast.successText },
   error: { bg: colors.toast.errorBg, text: colors.toast.errorText },
   info: { bg: colors.bg.elevated, text: colors.text.primary },
-};
+});
 
 export function Toast({ message, variant, visible, onDismiss }: ToastProps) {
+  const styles = createStyles();
+  const variantColors = getVariantColors();
   const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(-100)).current;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -79,7 +81,7 @@ export function Toast({ message, variant, visible, onDismiss }: ToastProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     position: 'absolute',
     left: layout.screenPadding,

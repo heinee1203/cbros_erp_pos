@@ -63,6 +63,8 @@ export default function ZReadingScreen() {
   const [printing, setPrinting] = useState(false);
   const [notes, setNotes] = useState('');
 
+  const styles = createStyles();
+
   const parsedCash = parseFloat(cashTendered) || 0;
   const expectedCash = parseFloat(zReading?.cashReconciliation.expectedCash ?? '0');
   const variance = parsedCash - expectedCash;
@@ -436,7 +438,7 @@ export default function ZReadingScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

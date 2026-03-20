@@ -41,6 +41,7 @@ const URGENCY_COLORS = {
 };
 
 export default function SyncStatusBar() {
+  const styles = createStyles();
   const { isOnline, isReconnecting } = useNetworkStatus();
   const syncStatus = getSyncStatus();
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -119,7 +120,7 @@ export default function SyncStatusBar() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   bar: {
     flexDirection: 'row',
     alignItems: 'center',

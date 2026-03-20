@@ -21,6 +21,7 @@ interface CustomerLookupProps {
 }
 
 export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupProps) {
+  const styles = createStyles();
   const { query, results, loading, search, fetchVehicles, clear } = useCustomerSearch();
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
@@ -220,7 +221,7 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   searchWrap: {
     paddingHorizontal: layout.screenPadding,
     paddingBottom: spacing.md,

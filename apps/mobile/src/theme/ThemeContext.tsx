@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useMemo } from 'react';
 import { useColorScheme, StatusBar } from 'react-native';
 import { storage } from '../storage/mmkv';
 import { KEYS } from '../storage/keys';
-import { darkColors, lightColors } from './colors';
+import { darkColors, lightColors, _setActiveTheme } from './colors';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -37,6 +37,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   };
 
   const isDark = mode === 'system' ? systemScheme !== 'light' : mode === 'dark';
+
+  // Mutate the shared `colors` singleton so every file that imported it
+  // reads the active palette on its next render / createStyles() call.
+  _setActiveTheme(isDark);
+
   const themeColors = isDark ? darkColors : lightColors;
 
   const value = useMemo(

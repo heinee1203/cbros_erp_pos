@@ -16,6 +16,7 @@ function fmtPrice(amount: number): string {
 }
 
 function ProductListItem({ item, index, onPress, onLongPress }: Props) {
+  const styles = createStyles();
   const available = item.stockLevel - item.reservedLevel;
   const hasVariants = item.isParent;
   const isOOS = available <= 0 && !hasVariants;
@@ -72,7 +73,7 @@ function ProductListItem({ item, index, onPress, onLongPress }: Props) {
 
 export default React.memo(ProductListItem);
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',

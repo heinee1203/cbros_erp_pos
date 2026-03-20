@@ -45,6 +45,8 @@ export default function SettingsScreen() {
 
   const [syncing, setSyncing] = React.useState(false);
 
+  const styles = createStyles();
+
   const handleSync = async () => {
     setSyncing(true);
     await runFullSync();
@@ -92,6 +94,34 @@ export default function SettingsScreen() {
             <Text style={styles.rowLabel}>Location</Text>
             <Text style={styles.rowValue}>{currentLocation?.name || '—'}</Text>
           </View>
+          {locations.length > 1 && (
+            <Pressable
+              style={styles.navRow}
+              onPress={() => {
+                Alert.alert(
+                  'Switch Location',
+                  'Select a different store:',
+                  [
+                    ...locations
+                      .filter(l => l.isActive && l.id !== locationId)
+                      .map(l => ({
+                        text: l.name,
+                        onPress: () => {
+                          setLocationId(l.id);
+                          Alert.alert('Location Changed', `Switched to ${l.name}. Running sync...`);
+                          handleSync();
+                        },
+                      })),
+                    { text: 'Cancel', style: 'cancel' },
+                  ],
+                );
+              }}
+              android_ripple={{ color: colors.accent.glow }}
+            >
+              <Text style={styles.navRowText}>Change Location</Text>
+              <Text style={styles.navArrow}>{'\u2192'}</Text>
+            </Pressable>
+          )}
         </Card>
 
         {/* Appearance */}
@@ -208,7 +238,7 @@ export default function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

@@ -1,7 +1,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 5,
+  version: 6,
   tables: [
     tableSchema({
       name: 'products',
@@ -17,6 +17,7 @@ export const schema = appSchema({
         { name: 'image_url', type: 'string', isOptional: true },
         { name: 'is_variable_price', type: 'boolean' },
         { name: 'family_id', type: 'string', isOptional: true },
+        { name: 'family_name', type: 'string', isOptional: true },
         { name: 'brand_id', type: 'string', isOptional: true },
         { name: 'parent_product_id', type: 'string', isOptional: true },
         { name: 'is_parent', type: 'boolean' },

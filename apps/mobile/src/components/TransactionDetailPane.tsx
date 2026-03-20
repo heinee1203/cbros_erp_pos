@@ -43,6 +43,7 @@ interface TransactionDetailPaneProps {
  * Modals are owned by the parent TransactionListScreen.
  */
 export function TransactionDetailPane({ saleId, onRefunded, onRefundPress }: TransactionDetailPaneProps) {
+  const styles = createStyles();
   const { data: sale, isLoading, refetch } = useSaleDetailQuery(saleId);
   const printer = usePrinter();
   const { user } = useAuth();
@@ -218,7 +219,7 @@ export function TransactionDetailPane({ saleId, onRefunded, onRefundPress }: Tra
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

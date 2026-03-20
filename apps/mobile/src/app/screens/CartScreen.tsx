@@ -110,6 +110,8 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
 
   const swipeableRefs = useRef<Map<string, Swipeable>>(new Map());
 
+  const styles = createStyles();
+
   const handleMinusPress = useCallback((item: CartLine) => {
     if (item.quantity <= 1) {
       // Instant remove at qty 1 — no confirmation for speed
@@ -320,7 +322,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

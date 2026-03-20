@@ -24,10 +24,10 @@ interface ButtonProps {
   textStyle?: TextStyle;
 }
 
-const variantStyles: Record<
+const getVariantStyles = (): Record<
   ButtonVariant,
   { bg: string; text: string; border?: string }
-> = {
+> => ({
   primary: {
     bg: colors.accent.primary,
     text: colors.text.inverse,
@@ -45,11 +45,11 @@ const variantStyles: Record<
     bg: colors.transparent,
     text: colors.text.secondary,
   },
-};
+});
 
-const pressedBgOverrides: Partial<Record<ButtonVariant, string>> = {
+const getPressedBgOverrides = (): Partial<Record<ButtonVariant, string>> => ({
   primary: colors.accent.pressed,
-};
+});
 
 export function Button({
   title,
@@ -62,6 +62,9 @@ export function Button({
   style,
   textStyle: textStyleOverride,
 }: ButtonProps) {
+  const styles = createStyles();
+  const variantStyles = getVariantStyles();
+  const pressedBgOverrides = getPressedBgOverrides();
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = useCallback(() => {
@@ -153,7 +156,7 @@ export function Button({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   base: {
     minHeight: touchTarget.min,
     borderRadius: radius.sm,

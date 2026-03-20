@@ -167,5 +167,23 @@ export const lightColors: typeof darkColors = {
   black: '#000000',
 } as const;
 
-/** Default export — dark theme for backward compatibility with static imports */
-export const colors = darkColors;
+// ─── Mutable runtime palette ───
+// All files import this same object. ThemeContext mutates it in-place
+// so any code that reads colors.bg.primary at render-time gets the active theme.
+function deepAssign(target: any, source: any) {
+  for (const key of Object.keys(source)) {
+    if (typeof source[key] === 'object' && source[key] !== null && !Array.isArray(source[key])) {
+      if (!target[key]) target[key] = {};
+      deepAssign(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+}
+
+export const colors: typeof darkColors = JSON.parse(JSON.stringify(darkColors));
+
+/** Called by ThemeContext to swap the runtime palette in-place */
+export function _setActiveTheme(isDark: boolean) {
+  deepAssign(colors, isDark ? darkColors : lightColors);
+}

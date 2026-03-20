@@ -13,6 +13,7 @@ export interface CatalogItem {
   mnemonicSku: string;
   barcode: string | null;
   category: string;
+  familyName: string | null;
   unitPrice: number;
   isVariablePrice: boolean;
   isParent: boolean;
@@ -57,7 +58,7 @@ export function useCatalogSearch() {
       }
 
       if (filterCategory) {
-        conditions.push(Q.where('category', filterCategory));
+        conditions.push(Q.where('family_name', filterCategory));
       }
 
       const products = await productCollection
@@ -96,6 +97,7 @@ export function useCatalogSearch() {
           mnemonicSku: p.mnemonicSku,
           barcode: p.barcode,
           category: p.category,
+          familyName: p.familyName,
           unitPrice: p.unitPrice,
           isVariablePrice: p.isVariablePrice,
           isParent: p.isParent,
@@ -107,8 +109,12 @@ export function useCatalogSearch() {
         };
       });
 
-      // Filter: only show products available for sale at this location
-      const items = enriched.filter(p => p.availableForSale);
+      // Filter: available for sale + hide unsellable zero-price items (Fix 3)
+      const items = enriched.filter(p =>
+        p.availableForSale &&
+        // Hide items with ₱0 price UNLESS they are variable-price or parent items
+        (p.unitPrice > 0 || p.isVariablePrice || p.isParent)
+      );
 
       setResults(items);
     } catch (err) {
@@ -168,6 +174,7 @@ export function useCatalogSearch() {
       mnemonicSku: p.mnemonicSku,
       barcode: p.barcode,
       category: p.category,
+      familyName: p.familyName,
       unitPrice: p.unitPrice,
       isVariablePrice: p.isVariablePrice,
       isParent: p.isParent,

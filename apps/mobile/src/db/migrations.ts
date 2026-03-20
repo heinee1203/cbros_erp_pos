@@ -41,5 +41,14 @@ export const migrations = schemaMigrations({
         }),
       ],
     },
+    {
+      toVersion: 6,
+      steps: [
+        addColumns({
+          table: 'products',
+          columns: [{ name: 'family_name', type: 'string', isOptional: true }],
+        }),
+      ],
+    },
   ],
 });

@@ -15,6 +15,7 @@ interface ServerProduct {
   unitPrice: string;
   isVariablePrice: boolean;
   familyId: string | null;
+  familyName: string | null;
   brandId: string | null;
   parentProductId: string | null;
   isParent: boolean;
@@ -62,6 +63,7 @@ export async function syncCatalog(): Promise<{ upserted: number }> {
             record.unitPrice = parseFloat(item.unitPrice);
             record.isVariablePrice = item.isVariablePrice;
             record.familyId = item.familyId;
+            record.familyName = item.familyName;
             record.brandId = item.brandId;
             record.parentProductId = item.parentProductId;
             record.isParent = item.isParent;
@@ -82,6 +84,7 @@ export async function syncCatalog(): Promise<{ upserted: number }> {
             record.unitPrice = parseFloat(item.unitPrice);
             record.isVariablePrice = item.isVariablePrice;
             record.familyId = item.familyId;
+            record.familyName = item.familyName;
             record.brandId = item.brandId;
             record.parentProductId = item.parentProductId;
             record.isParent = item.isParent;

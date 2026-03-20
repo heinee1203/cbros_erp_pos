@@ -294,6 +294,8 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     }
   }, [result, buildReceiptData, printer]);
 
+  const styles = createStyles();
+
   const handleNewSale = useCallback(() => {
     clear();
     reset();
@@ -626,7 +628,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

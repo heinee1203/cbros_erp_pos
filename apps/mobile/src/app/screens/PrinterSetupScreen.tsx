@@ -28,6 +28,8 @@ export default function PrinterSetupScreen() {
 
   const paperWidth = storage.getString(KEYS.PRINTER_PAPER_WIDTH) || '80mm';
 
+  const styles = createStyles();
+
   const handleDiscover = useCallback(async () => {
     setScanning(true);
     try {
@@ -192,7 +194,7 @@ export default function PrinterSetupScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,

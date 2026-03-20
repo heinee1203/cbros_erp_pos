@@ -13,11 +13,11 @@ interface IconButtonProps {
   style?: ViewStyle;
 }
 
-const variantBg: Record<IconButtonVariant, string> = {
+const getVariantBg = (): Record<IconButtonVariant, string> => ({
   ghost: colors.transparent,
   surface: colors.bg.surface,
   accent: colors.accent.primary,
-};
+});
 
 export function IconButton({
   children,
@@ -27,6 +27,8 @@ export function IconButton({
   disabled = false,
   style,
 }: IconButtonProps) {
+  const styles = createStyles();
+  const variantBg = getVariantBg();
   return (
     <Pressable
       onPress={onPress}
@@ -48,7 +50,7 @@ export function IconButton({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   base: {
     alignItems: 'center',
     justifyContent: 'center',

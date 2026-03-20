@@ -9,14 +9,16 @@ interface BadgeProps {
   variant: BadgeVariant;
 }
 
-const variantColors: Record<BadgeVariant, { bg: string; text: string }> = {
+const getVariantColors = (): Record<BadgeVariant, { bg: string; text: string }> => ({
   success: { bg: colors.status.successBg, text: colors.status.successText },
   warning: { bg: colors.status.warningBg, text: colors.status.warningText },
   danger: { bg: colors.status.dangerBg, text: colors.status.dangerText },
   info: { bg: colors.status.infoBg, text: colors.status.infoText },
-};
+});
 
 export function Badge({ label, variant }: BadgeProps) {
+  const styles = createStyles();
+  const variantColors = getVariantColors();
   const vc = variantColors[variant];
 
   return (
@@ -28,7 +30,7 @@ export function Badge({ label, variant }: BadgeProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     alignSelf: 'flex-start',
     paddingHorizontal: spacing.sm,
