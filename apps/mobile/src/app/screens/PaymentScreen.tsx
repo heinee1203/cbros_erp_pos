@@ -1,14 +1,15 @@
-import React, { useCallback, useState, useMemo, useEffect } from 'react';
+import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   TextInput,
   Pressable,
   ScrollView,
-  FlatList,
   StyleSheet,
   SafeAreaView,
   Alert,
+  Animated,
+  BackHandler,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import {
@@ -29,41 +30,49 @@ import type { ReceiptData } from '@/hardware/printer/types';
 import { useAuth } from '@/hooks/use-auth';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, fonts, fontSize, touchTarget } from '@/theme';
-import { Button, Card } from '@/components/ui';
+import { Button } from '@/components/ui';
+
+/* ────────────────────────────────────────────────── */
+/*  Helpers                                            */
+/* ────────────────────────────────────────────────── */
 
 function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-const PAYMENT_METHODS = [
+const STANDARD_METHODS = [
   { key: 'CASH', label: 'Cash', needsRef: false },
-  { key: 'CREDIT_CARD', label: 'Credit Card', needsRef: true },
-  { key: 'DEBIT_CARD', label: 'Debit Card', needsRef: true },
-  { key: 'QRPH', label: 'QRPH', needsRef: true },
   { key: 'GCASH', label: 'GCash', needsRef: true },
+  { key: 'CREDIT_CARD', label: 'Card', needsRef: true },
+  { key: 'DEBIT_CARD', label: 'Debit', needsRef: true },
+  { key: 'QRPH', label: 'QRPH', needsRef: true },
   { key: 'MAYA', label: 'Maya', needsRef: true },
-  { key: 'BANK_TRANSFER', label: 'Bank Transfer', needsRef: true },
-  { key: 'CHARGE', label: 'Charge', needsRef: false },
+  { key: 'BANK_TRANSFER', label: 'Bank', needsRef: true },
 ];
 
 const INSTALLMENT_TERMS = [
   { key: 'STRAIGHT', label: 'Straight' },
-  { key: '3_MONTHS', label: '3 Months' },
-  { key: '6_MONTHS', label: '6 Months' },
-  { key: '12_MONTHS', label: '12 Months' },
+  { key: '3_MONTHS', label: '3 Mo' },
+  { key: '6_MONTHS', label: '6 Mo' },
+  { key: '12_MONTHS', label: '12 Mo' },
 ];
 
 const METHODS_NEEDING_REF = new Set(
-  PAYMENT_METHODS.filter(m => m.needsRef).map(m => m.key),
+  STANDARD_METHODS.filter(m => m.needsRef).map(m => m.key),
 );
 
 function methodLabel(key: string): string {
-  return PAYMENT_METHODS.find(m => m.key === key)?.label || key;
+  if (key === 'CHARGE') return 'Charge';
+  return STANDARD_METHODS.find(m => m.key === key)?.label || key;
 }
 
 function installmentLabel(key: string): string {
   return INSTALLMENT_TERMS.find(t => t.key === key)?.label || key;
 }
+
+/* ────────────────────────────────────────────────── */
+/*  Component                                          */
+/* ────────────────────────────────────────────────── */
 
 interface PaymentScreenProps {
   onBack?: () => void;
@@ -75,7 +84,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   const { user, locations, locationId } = useAuth();
   const printer = usePrinter();
 
-  // Cart store
+  // ── Cart store ──
   const lines = useCartStore(s => s.lines);
   const payments = useCartStore(s => s.payments);
   const receiptNumber = useCartStore(s => s.receiptNumber);
@@ -84,6 +93,8 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   const removePayment = useCartStore(s => s.removePayment);
   const clearPayments = useCartStore(s => s.clearPayments);
   const clear = useCartStore(s => s.clear);
+  const customerName = useCartStore(s => s.customerName);
+  const customerId = useCartStore(s => s.customerId);
 
   const allowNegativeStock = useCartStore(s => s.allowNegativeStock);
   const subtotal = useCartStore(selectSubtotal);
@@ -96,7 +107,20 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   const { status, error, result, checkout, reset } = useCheckout();
   const isProcessing = status === 'creating' || status === 'completing';
 
-  // ── Fetch next receipt number from server on mount ──
+  // ── Unit count ──
+  const unitCount = useMemo(() => lines.reduce((s, l) => s + l.quantity, 0), [lines]);
+
+  // ── VAT calculation (12% inclusive) ──
+  const vatAmount = useMemo(() => grandTotal - grandTotal / 1.12, [grandTotal]);
+
+  // ── Item summary text ──
+  const itemSummaryText = useMemo(() => {
+    const names = lines.slice(0, 3).map(l => l.sku || l.name);
+    const extra = lines.length > 3 ? `, +${lines.length - 3} more` : '';
+    return names.join(', ') + extra;
+  }, [lines]);
+
+  // ── Fetch next receipt number ──
   const [receiptLoading, setReceiptLoading] = useState(true);
 
   const fetchNextReceiptNumber = useCallback(async () => {
@@ -104,7 +128,6 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
       const data = await apiFetch<{ receiptNumber: string }>('/sales/next-receipt-number');
       setReceiptNumber(data.receiptNumber);
     } catch {
-      // Offline — generate local receipt number
       setReceiptNumber(`OFFLINE-${Date.now()}`);
     } finally {
       setReceiptLoading(false);
@@ -115,45 +138,84 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     fetchNextReceiptNumber();
   }, [fetchNextReceiptNumber]);
 
-  // ── Form state for composing a new payment entry ──
+  // ── Inline receipt editing ──
+  const [editingReceipt, setEditingReceipt] = useState(false);
+
+  // ── Form state ──
   const [formMethod, setFormMethod] = useState('CASH');
   const [formAmount, setFormAmount] = useState('');
   const [formCashTendered, setFormCashTendered] = useState('');
   const [formReference, setFormReference] = useState('');
   const [formInstallment, setFormInstallment] = useState('STRAIGHT');
 
+  // ── Flash animation for tendered input ──
+  const flashAnim = useRef(new Animated.Value(0)).current;
+  const flashBorder = flashAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [colors.border.medium, colors.accent.primary],
+  });
+
+  const flashTenderedInput = useCallback(() => {
+    flashAnim.setValue(1);
+    Animated.timing(flashAnim, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: false,
+    }).start();
+  }, [flashAnim]);
+
   const isFullyPaid = remaining <= 0 && payments.length > 0;
   const needsRef = METHODS_NEEDING_REF.has(formMethod);
   const isCash = formMethod === 'CASH';
+  const isCharge = formMethod === 'CHARGE';
 
-  // Pre-fill amount with remaining balance (used for non-cash methods)
+  const parsedCashTendered = parseFloat(formCashTendered) || 0;
+
+  // For CASH: payment amount = min(tendered, remaining)
+  // For non-cash: payment amount = explicit amount field (or remaining)
   const defaultAmount = useMemo(() => {
     return remaining > 0 ? remaining.toFixed(2) : '';
   }, [remaining]);
 
-  const parsedCashTendered = parseFloat(formCashTendered) || 0;
-
-  // For CASH: payment amount = min(tendered, remaining). Cashier only enters tendered.
-  // For non-cash: payment amount = explicit amount field (or remaining balance).
   const parsedAmount = isCash
     ? Math.min(parsedCashTendered, remaining > 0 ? remaining : parsedCashTendered)
     : parseFloat(formAmount || defaultAmount) || 0;
 
-  // Cash change: only when tendered covers more than remaining balance
+  // Cash change — real-time as the cashier enters tendered
   const cashChange = isCash && parsedCashTendered > remaining && remaining > 0
     ? parsedCashTendered - remaining
     : 0;
 
+  // Can the cashier add a payment right now?
+  const canAddPayment = isCash ? parsedCashTendered > 0 : parsedAmount > 0;
+
+  // Single payment covers entire remaining? Skip Add Payment → go straight to Complete
+  const singlePaymentCoversAll = payments.length === 0 && (
+    (isCash && parsedCashTendered >= remaining && parsedCashTendered > 0) ||
+    (!isCash && parsedAmount >= remaining && parsedAmount > 0)
+  );
+
+  const receiptMissing = !receiptNumber.trim();
+
+  // ── Auto-checkout after single payment covers all ──
+  const [pendingAutoCheckout, setPendingAutoCheckout] = useState(false);
+
+  // Note: handleCheckout is defined below via useCallback. React evaluates all hooks
+  // in order on each render, so the ref is stable by the time the effect runs.
+  const autoCheckoutRef = useRef<() => void>();
+
+  // ── Undo state for Clear ──
+  const [undoAmount, setUndoAmount] = useState<number | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const resetForm = useCallback(() => {
-    setFormMethod('CASH');
     setFormAmount('');
     setFormCashTendered('');
     setFormReference('');
     setFormInstallment('STRAIGHT');
   }, []);
 
-  const receiptMissing = !receiptNumber.trim();
-
+  // ── Add Payment handler ──
   const handleAddPayment = useCallback(() => {
     if (receiptMissing) {
       Alert.alert('Receipt Required', 'Please enter the receipt number.');
@@ -161,7 +223,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     }
     if (isCash) {
       if (parsedCashTendered <= 0) {
-        Alert.alert('Enter Cash', 'Please enter the cash amount tendered by the customer.');
+        Alert.alert('Enter Cash', 'Please enter the cash amount tendered.');
         return;
       }
     } else {
@@ -174,10 +236,6 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
       Alert.alert('Reference Required', 'Please enter a reference / approval number.');
       return;
     }
-    if (formMethod === 'CREDIT_CARD' && !formInstallment) {
-      Alert.alert('Installment Required', 'Please select an installment term.');
-      return;
-    }
 
     addPayment({
       method: formMethod,
@@ -187,28 +245,116 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     });
 
     // Reset form for next payment
-    setFormMethod('CASH');
-    setFormAmount('');
-    setFormCashTendered('');
-    setFormReference('');
-    setFormInstallment('STRAIGHT');
-  }, [receiptMissing, isCash, parsedAmount, parsedCashTendered, needsRef, formReference, formMethod, formInstallment, addPayment]);
+    resetForm();
+  }, [receiptMissing, isCash, parsedAmount, parsedCashTendered, needsRef, formReference, formMethod, formInstallment, addPayment, resetForm]);
+
+  // ── Single payment complete (skip Add Payment step) ──
+  const handleSinglePaymentComplete = useCallback(() => {
+    if (receiptMissing) {
+      Alert.alert('Receipt Required', 'Please enter the receipt number.');
+      return;
+    }
+    if (isCash && parsedCashTendered <= 0) return;
+    if (!isCash && parsedAmount <= 0) return;
+    if (needsRef && !formReference.trim()) {
+      Alert.alert('Reference Required', 'Please enter a reference / approval number.');
+      return;
+    }
+
+    // Add the payment first, then auto-checkout via useEffect
+    addPayment({
+      method: formMethod,
+      amount: parsedAmount,
+      reference: formReference.trim(),
+      installmentTerm: formMethod === 'CREDIT_CARD' ? formInstallment : 'STRAIGHT',
+    });
+    resetForm();
+    setPendingAutoCheckout(true);
+  }, [receiptMissing, isCash, parsedCashTendered, parsedAmount, needsRef, formReference, formMethod, formInstallment, addPayment, resetForm]);
 
   const handleRemovePayment = useCallback((id: string) => {
     removePayment(id);
   }, [removePayment]);
 
+  // ── Back navigation with confirmation ──
   const handleBack = useCallback(() => {
-    if (onBack) {
-      onBack();
-    } else {
-      navigation.goBack();
-    }
-  }, [onBack, navigation]);
+    const hasProgress = payments.length > 0 || parsedCashTendered > 0 || parseFloat(formAmount) > 0;
 
+    if (!hasProgress) {
+      if (onBack) onBack();
+      else navigation.goBack();
+      return;
+    }
+
+    Alert.alert(
+      'Discard Payment?',
+      'You have payment information entered. Going back will discard it.',
+      [
+        { text: 'Stay', style: 'cancel' },
+        {
+          text: 'Discard & Go Back',
+          style: 'destructive',
+          onPress: () => {
+            clearPayments();
+            resetForm();
+            if (onBack) onBack();
+            else navigation.goBack();
+          },
+        },
+      ],
+    );
+  }, [payments, parsedCashTendered, formAmount, onBack, navigation, clearPayments, resetForm]);
+
+  // ── Android hardware back ──
+  useEffect(() => {
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleBack();
+      return true;
+    });
+    return () => handler.remove();
+  }, [handleBack]);
+
+  // ── Charge method handler ──
+  const handleChargeSelect = useCallback(() => {
+    if (!customerId) {
+      Alert.alert(
+        'Customer Required',
+        'Please add a customer to the order before using Charge payment.',
+        [{ text: 'OK' }],
+      );
+      return;
+    }
+    setFormMethod('CHARGE');
+    setFormAmount(remaining > 0 ? remaining.toFixed(2) : '');
+  }, [customerId, remaining]);
+
+  // ── Quick amount helpers ──
+  const addToTendered = useCallback((amount: number) => {
+    const newAmount = parsedCashTendered + amount;
+    setFormCashTendered(String(newAmount));
+    flashTenderedInput();
+  }, [parsedCashTendered, flashTenderedInput]);
+
+  const handleClearTendered = useCallback(() => {
+    if (parsedCashTendered === 0) return;
+    const prev = parsedCashTendered;
+    setFormCashTendered('');
+    setUndoAmount(prev);
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    undoTimer.current = setTimeout(() => setUndoAmount(null), 4000);
+  }, [parsedCashTendered]);
+
+  const handleUndoClear = useCallback(() => {
+    if (undoAmount !== null) {
+      setFormCashTendered(String(undoAmount));
+      setUndoAmount(null);
+      if (undoTimer.current) clearTimeout(undoTimer.current);
+    }
+  }, [undoAmount]);
+
+  // ── Build receipt data ──
   const buildReceiptData = useCallback((saleNo: string): ReceiptData => {
     const location = locations.find(l => l.id === locationId);
-    // Determine primary payment method for backward compat
     const primaryPayment = payments[0];
     const primaryMethod = primaryPayment?.method || 'CASH';
 
@@ -244,40 +390,48 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     };
   }, [locations, locationId, payments, lines, subtotal, discount, grandTotal, paidTotal, user]);
 
+  // ── Checkout ──
   const handleCheckout = useCallback(async () => {
-    // Retry loop: on 409 Conflict (receipt number collision), fetch next number and retry
     const MAX_RETRIES = 3;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       const res = await checkout({ allowNegativeStock: allowNegativeStock || undefined });
       if (res) {
         const receiptData = buildReceiptData(res.saleNo);
         if (!printer.isConnected) {
-          Alert.alert('Printer Offline', 'Receipt was not printed — no printer connected. You can reprint from the success screen.');
+          Alert.alert('Printer Offline', 'Receipt was not printed — no printer connected.');
         } else {
           const printResult = await printer.printReceipt(receiptData).catch(() => ({ success: false, error: 'Print failed' }));
           if (printResult.success) {
             printer.openCashDrawer().catch(() => {});
           } else {
-            Alert.alert('Print Notice', printResult.error || 'Receipt could not be printed. You can reprint from the success screen.');
+            Alert.alert('Print Notice', printResult.error || 'Receipt could not be printed.');
           }
         }
-        return; // Success — exit retry loop
+        return;
       }
-
-      // Check if the error was a 409 receipt conflict — if so, fetch next number and retry
       if (status === 'error' && error?.includes('409')) {
         try {
           const data = await apiFetch<{ receiptNumber: string }>('/sales/next-receipt-number');
           setReceiptNumber(data.receiptNumber);
-          reset(); // Reset checkout state for retry
-          continue; // Retry with new receipt number
+          reset();
+          continue;
         } catch {
-          break; // Can't fetch next number, stop retrying
+          break;
         }
       }
-      break; // Non-409 error or success=null for other reasons — stop retrying
+      break;
     }
   }, [checkout, buildReceiptData, printer, status, error, setReceiptNumber, reset, allowNegativeStock]);
+
+  // Keep ref in sync for auto-checkout effect
+  autoCheckoutRef.current = handleCheckout;
+
+  useEffect(() => {
+    if (pendingAutoCheckout && isFullyPaid && !isProcessing) {
+      setPendingAutoCheckout(false);
+      autoCheckoutRef.current?.();
+    }
+  }, [pendingAutoCheckout, isFullyPaid, isProcessing]);
 
   const handlePrintReceipt = useCallback(async () => {
     if (!result) return;
@@ -294,501 +448,553 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     }
   }, [result, buildReceiptData, printer]);
 
-  const styles = createStyles();
-
   const handleNewSale = useCallback(() => {
     clear();
     reset();
-    if (onBack) {
-      onBack();
-    } else {
-      navigation.navigate('Catalog' as never);
-    }
+    if (onBack) onBack();
+    else navigation.navigate('Catalog' as never);
   }, [clear, reset, onBack, navigation]);
 
-  // ── Success state ──
+  const s = styles;
+
+  /* ── Success state ── */
   if (status === 'success' && result) {
+    const totalChange = paidTotal > grandTotal ? paidTotal - grandTotal : 0;
     return (
-      <SafeAreaView style={styles.container}>
-        <ScrollView contentContainerStyle={[styles.scrollContent, { padding: screenPadding }]}>
-          <View style={styles.successContainer}>
-            <Text style={styles.successIcon}>{'\u2713'}</Text>
-            <Text style={styles.successTitle}>Sale Complete</Text>
-            <Text style={styles.successReceipt}>{result.saleNo}</Text>
-            <Text style={styles.successTotal}>{fmtPHP(parseFloat(result.grandTotal))}</Text>
-            <View style={styles.successActions}>
-              <Button title="Print Receipt" variant="secondary" fullWidth onPress={handlePrintReceipt} style={styles.successButton} />
-              <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} style={styles.successButton} />
-            </View>
+      <SafeAreaView style={s.container}>
+        <View style={s.successContainer}>
+          <Text style={s.successIcon}>{'\u2713'}</Text>
+          <Text style={s.successTitle}>Sale Complete</Text>
+          <Text style={s.successReceipt}>{result.saleNo}</Text>
+          <Text style={s.successTotal}>{fmtPHP(parseFloat(result.grandTotal))}</Text>
+          {totalChange > 0 && (
+            <Text style={s.successChange}>Change: {fmtPHP(totalChange)}</Text>
+          )}
+          <View style={s.successActions}>
+            <Button title="Print Receipt" variant="secondary" fullWidth onPress={handlePrintReceipt} />
+            <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} style={{ marginTop: 8 }} />
           </View>
-        </ScrollView>
+        </View>
       </SafeAreaView>
     );
   }
 
-  // ── Pending offline state ──
+  /* ── Pending offline state ── */
   if (status === 'pending_offline') {
     const pendingCount = getPendingSales().length;
     return (
-      <SafeAreaView style={styles.container}>
-        <ScrollView contentContainerStyle={[styles.scrollContent, { padding: screenPadding }]}>
-          <View style={styles.successContainer}>
-            <Text style={styles.pendingIcon}>{'\u23F3'}</Text>
-            <Text style={styles.pendingTitle}>Sale Saved Offline</Text>
-            <Text style={styles.pendingText}>
-              Sale saved locally. It will be completed when the device is back online.
+      <SafeAreaView style={s.container}>
+        <View style={s.successContainer}>
+          <Text style={s.pendingIcon}>{'\u23F3'}</Text>
+          <Text style={s.pendingTitle}>Sale Saved Offline</Text>
+          <Text style={s.pendingText}>
+            Sale saved locally. It will sync when back online.
+          </Text>
+          {pendingCount > 0 && (
+            <Text style={s.pendingCount}>
+              {pendingCount} pending sale{pendingCount !== 1 ? 's' : ''} queued
             </Text>
-            {pendingCount > 0 && (
-              <Text style={styles.pendingCount}>
-                {pendingCount} pending sale{pendingCount !== 1 ? 's' : ''} queued
-              </Text>
-            )}
-            <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} style={styles.successButton} />
-          </View>
-        </ScrollView>
+          )}
+          <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} />
+        </View>
       </SafeAreaView>
     );
   }
 
-  // ── Main payment form ──
+  /* ════════════════════════════════════════════════ */
+  /*  MAIN PAYMENT FORM — NO SCROLL LAYOUT           */
+  /* ════════════════════════════════════════════════ */
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
-        <Pressable onPress={handleBack} hitSlop={8}>
-          <Text style={styles.backText}>{'\u2190'} Cart</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>Payment</Text>
-        <View style={{ width: 60 }} />
-      </View>
+    <SafeAreaView style={s.container}>
+      <View style={s.paymentContainer}>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { padding: screenPadding }]}>
-        {/* Order Summary */}
-        <Card style={styles.summaryCard}>
-          <Text style={styles.sectionTitle}>Order Summary</Text>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>{lineCount} item{lineCount !== 1 ? 's' : ''}</Text>
-            <Text style={styles.summaryValue}>{fmtPHP(subtotal)}</Text>
+        {/* ── 1. Order Summary (compressed) ── */}
+        <View style={s.orderSummary}>
+          <View style={s.summaryHeader}>
+            <Pressable onPress={handleBack} hitSlop={8} style={s.backBtn}>
+              <Text style={s.backText}>{'\u2190'} Cart</Text>
+            </Pressable>
+            <Text style={s.summaryTotalAmount}>{fmtPHP(grandTotal)}</Text>
           </View>
-          {discount > 0 && (
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Discount</Text>
-              <Text style={[styles.summaryValue, { color: colors.status.success }]}>-{fmtPHP(discount)}</Text>
-            </View>
-          )}
-          <View style={styles.divider} />
-          <View style={styles.summaryRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalValue}>{fmtPHP(grandTotal)}</Text>
+
+          <Text style={s.summaryLine1}>
+            {lineCount} {lineCount === 1 ? 'product' : 'products'} {'\u00B7'} {unitCount} unit{unitCount !== 1 ? 's' : ''}
+            {discount > 0 ? ` \u00B7 disc. ${fmtPHP(discount)}` : ''}
+          </Text>
+          <Text style={s.summaryLine2} numberOfLines={1}>
+            {itemSummaryText}
+          </Text>
+          <View style={s.summaryMetaRow}>
+            {editingReceipt ? (
+              <TextInput
+                value={receiptNumber}
+                onChangeText={setReceiptNumber}
+                onBlur={() => setEditingReceipt(false)}
+                autoFocus
+                style={s.receiptInlineInput}
+                selectTextOnFocus
+              />
+            ) : (
+              <Text style={s.summaryMeta} onPress={() => setEditingReceipt(true)}>
+                {receiptLoading ? 'Loading...' : `Receipt: ${receiptNumber}`}
+              </Text>
+            )}
+            <Text style={s.summaryMeta}>
+              {' \u00B7 '}incl. VAT {fmtPHP(vatAmount)}
+            </Text>
+            {customerName ? (
+              <Text style={s.summaryMeta}>
+                {' \u00B7 '}{customerName}
+              </Text>
+            ) : null}
           </View>
-        </Card>
+        </View>
 
-        {/* Receipt / Invoice Number */}
-        <Card style={styles.receiptCard}>
-          <Text style={styles.sectionTitle}>Receipt No. (auto-generated)</Text>
-          <TextInput
-            style={[styles.receiptInput, receiptMissing && styles.inputRequired, styles.receiptReadOnly]}
-            placeholder={receiptLoading ? 'Loading...' : 'Receipt number'}
-            placeholderTextColor={colors.text.muted}
-            value={receiptNumber}
-            editable={false}
-          />
-          {receiptMissing && !receiptLoading && (
-            <Text style={styles.refRequiredText}>Receipt number is required</Text>
-          )}
-        </Card>
-
-        {/* ── Added Payments List ── */}
+        {/* ── 2. Applied Payments (split entries) ── */}
         {payments.length > 0 && (
-          <Card style={styles.paymentsListCard}>
-            <Text style={styles.sectionTitle}>Payments</Text>
-            {payments.map((p) => (
-              <View key={p.id} style={styles.paymentRow}>
-                <View style={styles.paymentInfo}>
-                  <Text style={styles.paymentMethod}>
-                    {methodLabel(p.method)}
-                    {p.method === 'CREDIT_CARD' && p.installmentTerm !== 'STRAIGHT'
-                      ? ` \u00B7 ${installmentLabel(p.installmentTerm)}`
-                      : ''}
-                  </Text>
-                  {p.reference ? (
-                    <Text style={styles.paymentRef}>Ref: {p.reference}</Text>
-                  ) : null}
-                </View>
-                <Text style={styles.paymentAmount}>{fmtPHP(p.amount)}</Text>
+          <View style={s.appliedPayments}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={s.appliedRow}>
+                {payments.map(p => (
+                  <View key={p.id} style={s.appliedChip}>
+                    <Text style={s.appliedChipMethod}>
+                      {methodLabel(p.method)}
+                      {p.method === 'CREDIT_CARD' && p.installmentTerm !== 'STRAIGHT'
+                        ? ` ${installmentLabel(p.installmentTerm)}`
+                        : ''}
+                    </Text>
+                    <Text style={s.appliedChipAmount}>{fmtPHP(p.amount)}</Text>
+                    <Pressable
+                      onPress={() => handleRemovePayment(p.id)}
+                      hitSlop={8}
+                      style={s.appliedChipRemove}
+                    >
+                      <Text style={s.appliedChipRemoveText}>{'\u2715'}</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+            <View style={s.appliedSummaryRow}>
+              <Text style={s.appliedPaidLabel}>Paid: {fmtPHP(paidTotal)}</Text>
+              {remaining > 0 && (
+                <Text style={s.appliedRemainingLabel}>Remaining: {fmtPHP(remaining)}</Text>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* ── 3. Payment Method Selector ── */}
+        {!isFullyPaid && (
+          <View style={s.methodsSection}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={s.methodsRow}>
+                {STANDARD_METHODS.map(m => {
+                  const active = formMethod === m.key;
+                  return (
+                    <Pressable
+                      key={m.key}
+                      style={[s.methodBtn, active && s.methodBtnActive]}
+                      onPress={() => {
+                        setFormMethod(m.key);
+                        if (m.key !== 'CASH') {
+                          setFormAmount(remaining > 0 ? remaining.toFixed(2) : '');
+                        } else {
+                          setFormAmount('');
+                        }
+                      }}
+                    >
+                      <Text style={[s.methodBtnText, active && s.methodBtnTextActive]}>
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                {/* Charge — visually distinct */}
                 <Pressable
-                  onPress={() => handleRemovePayment(p.id)}
-                  hitSlop={8}
-                  style={styles.removeBtn}
+                  style={[
+                    s.chargeMethodBtn,
+                    isCharge && s.chargeMethodBtnActive,
+                    !customerId && s.chargeMethodBtnDisabled,
+                  ]}
+                  onPress={handleChargeSelect}
                 >
-                  <Text style={styles.removeBtnText}>{'\u2715'}</Text>
+                  <Text style={[s.chargeMethodText, isCharge && s.chargeMethodTextActive]}>
+                    {'\u26A0'} Charge
+                  </Text>
                 </Pressable>
               </View>
-            ))}
-            <View style={styles.divider} />
-            <View style={styles.summaryRow}>
-              <Text style={styles.paidLabel}>Paid</Text>
-              <Text style={styles.paidValue}>{fmtPHP(paidTotal)}</Text>
-            </View>
-            <View style={styles.summaryRow}>
-              <Text style={styles.remainingLabel}>
-                {remaining > 0 ? 'Remaining' : 'Overpaid'}
-              </Text>
-              <Text style={[
-                styles.remainingValue,
-                { color: remaining > 0 ? colors.status.danger : colors.status.success },
-              ]}>
-                {remaining > 0 ? fmtPHP(remaining) : fmtPHP(Math.abs(remaining))}
-              </Text>
-            </View>
-          </Card>
+            </ScrollView>
+          </View>
         )}
 
-        {/* ── Add Payment Form ── */}
-        {!isFullyPaid && (
-          <Card style={styles.addPaymentCard}>
-            <Text style={styles.sectionTitle}>
-              {payments.length === 0 ? 'Payment Method' : 'Add Split Payment'}
-            </Text>
+        {/* ── 4. Tendered Amount + Change (CASH) ── */}
+        {!isFullyPaid && isCash && (
+          <View style={s.tenderedSection}>
+            <Animated.View style={[s.tenderedInputRow, { borderColor: flashBorder }]}>
+              <Text style={s.tenderedCurrency}>{'\u20B1'}</Text>
+              <TextInput
+                style={s.tenderedInput}
+                value={formCashTendered}
+                onChangeText={setFormCashTendered}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+                placeholderTextColor={colors.text.muted}
+                selectTextOnFocus
+              />
+              {parsedCashTendered > 0 && cashChange > 0 && (
+                <View style={s.changeInline}>
+                  <Text style={s.changeLabel}>Change</Text>
+                  <Text style={s.changeAmount}>{fmtPHP(cashChange)}</Text>
+                </View>
+              )}
+              {parsedCashTendered > 0 && cashChange === 0 && remaining > parsedCashTendered && (
+                <View style={s.changeInline}>
+                  <Text style={s.remainingInlineLabel}>Still due</Text>
+                  <Text style={s.remainingInlineAmount}>{fmtPHP(remaining - parsedCashTendered)}</Text>
+                </View>
+              )}
+            </Animated.View>
+            {/* Undo bar */}
+            {undoAmount !== null && (
+              <Pressable onPress={handleUndoClear} style={s.undoBar}>
+                <Text style={s.undoText}>
+                  Cleared {fmtPHP(undoAmount)} — tap to undo
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        )}
 
-            {/* Method grid */}
-            <View style={styles.methodsGrid}>
-              {PAYMENT_METHODS.map(m => {
-                const active = formMethod === m.key;
-                return (
-                  <Pressable
-                    key={m.key}
-                    style={[styles.methodBtn, active && styles.methodBtnActive]}
-                    onPress={() => {
-                      setFormMethod(m.key);
-                      // Pre-fill amount for non-cash methods
-                      if (m.key !== 'CASH') {
-                        const currentRemaining = grandTotal - paidTotal;
-                        setFormAmount(currentRemaining > 0 ? currentRemaining.toFixed(2) : '');
-                      } else {
-                        setFormAmount('');
-                      }
-                    }}
-                  >
-                    <Text style={[styles.methodBtnText, active && styles.methodBtnTextActive]}>
-                      {m.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+        {/* ── 4b. Amount Input (non-cash, non-charge) ── */}
+        {!isFullyPaid && !isCash && !isCharge && (
+          <View style={s.tenderedSection}>
+            <View style={s.tenderedInputRowStatic}>
+              <Text style={s.tenderedCurrency}>{'\u20B1'}</Text>
+              <TextInput
+                style={s.tenderedInput}
+                value={formAmount}
+                onChangeText={setFormAmount}
+                keyboardType="decimal-pad"
+                placeholder={defaultAmount || '0.00'}
+                placeholderTextColor={colors.text.muted}
+                selectTextOnFocus
+              />
             </View>
-
-            {/* CASH: compact denomination counter */}
-            {isCash && (
-              <View style={styles.formSection}>
-                {/* Row 1: denomination chips — 4 columns */}
-                <View style={styles.denomRow}>
-                  <Pressable
-                    style={[styles.denomChip, styles.denomExact]}
-                    android_ripple={{ color: colors.accent.glow }}
-                    onPress={() => setFormCashTendered(remaining.toFixed(2))}
-                  >
-                    <Text style={styles.denomExactText}>Exact</Text>
-                  </Pressable>
-                  {[1000, 500, 200, 100, 50, 20].map(d => (
-                    <Pressable
-                      key={d}
-                      style={styles.denomChip}
-                      android_ripple={{ color: colors.accent.glow }}
-                      onPress={() => setFormCashTendered(String(parsedCashTendered + d))}
-                    >
-                      <Text style={styles.denomChipText}>+{d >= 1000 ? `${d / 1000}K` : d}</Text>
-                    </Pressable>
-                  ))}
-                  <Pressable
-                    style={[styles.denomChip, styles.denomClear]}
-                    android_ripple={{ color: colors.status.danger + '40' }}
-                    onPress={() => setFormCashTendered('')}
-                  >
-                    <Text style={styles.denomClearText}>C</Text>
-                  </Pressable>
-                </View>
-
-                {/* Row 2: tendered amount + change — single compact row */}
-                <View style={styles.cashRow}>
-                  <View style={styles.cashRowLeft}>
-                    <Text style={styles.cashRowLabel}>Tendered</Text>
-                    <Text style={styles.cashRowAmount}>{fmtPHP(parsedCashTendered)}</Text>
-                  </View>
-                  {parsedCashTendered > 0 && remaining > 0 && (
-                    <View style={styles.cashRowRight}>
-                      {cashChange > 0 ? (
-                        <>
-                          <Text style={styles.cashRowLabel}>Change</Text>
-                          <Text style={styles.cashRowChange}>{fmtPHP(cashChange)}</Text>
-                        </>
-                      ) : (
-                        <>
-                          <Text style={styles.cashRowLabel}>Remaining</Text>
-                          <Text style={styles.cashRowRemaining}>{fmtPHP(remaining - parsedCashTendered)}</Text>
-                        </>
-                      )}
-                    </View>
-                  )}
-                </View>
-              </View>
-            )}
-
-            {/* Non-cash: Amount input */}
-            {!isCash && (
-              <View style={styles.formSection}>
-                <Text style={styles.formLabel}>Amount</Text>
-                <TextInput
-                  style={styles.amountInput}
-                  placeholder={defaultAmount || '0.00'}
-                  placeholderTextColor={colors.text.muted}
-                  keyboardType="numeric"
-                  value={formAmount}
-                  onChangeText={setFormAmount}
-                />
-              </View>
-            )}
-
             {/* Installment term (Credit Card only) */}
             {formMethod === 'CREDIT_CARD' && (
-              <View style={styles.formSection}>
-                <Text style={styles.formLabel}>Installment Term</Text>
-                <View style={styles.installmentGrid}>
-                  {INSTALLMENT_TERMS.map(t => {
-                    const active = formInstallment === t.key;
-                    return (
-                      <Pressable
-                        key={t.key}
-                        style={[styles.installmentChip, active && styles.installmentChipActive]}
-                        onPress={() => setFormInstallment(t.key)}
-                      >
-                        <Text style={[styles.installmentChipText, active && styles.installmentChipTextActive]}>
-                          {t.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
+              <View style={s.installmentRow}>
+                {INSTALLMENT_TERMS.map(t => {
+                  const active = formInstallment === t.key;
+                  return (
+                    <Pressable
+                      key={t.key}
+                      style={[s.installmentChip, active && s.installmentChipActive]}
+                      onPress={() => setFormInstallment(t.key)}
+                    >
+                      <Text style={[s.installmentChipText, active && s.installmentChipTextActive]}>
+                        {t.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </View>
             )}
-
-            {/* Reference number (non-cash methods) */}
+            {/* Reference input */}
             {needsRef && (
-              <View style={styles.formSection}>
-                <Text style={styles.formLabel}>Reference / Approval #</Text>
-                <TextInput
-                  style={[styles.receiptInput, needsRef && !formReference.trim() && styles.inputRequired]}
-                  placeholder="Enter reference number"
-                  placeholderTextColor={colors.text.muted}
-                  value={formReference}
-                  onChangeText={setFormReference}
-                  autoCapitalize="characters"
-                />
-              </View>
+              <TextInput
+                style={[s.refInput, needsRef && !formReference.trim() && s.refInputRequired]}
+                placeholder="Reference / Approval #"
+                placeholderTextColor={colors.text.muted}
+                value={formReference}
+                onChangeText={setFormReference}
+                autoCapitalize="characters"
+              />
             )}
-
-            {/* Add Payment button */}
-            <Button
-              title={payments.length === 0 ? 'Add Payment' : 'Add Split Payment'}
-              variant="secondary"
-              fullWidth
-              onPress={handleAddPayment}
-              style={styles.addPaymentButton}
-            />
-          </Card>
+          </View>
         )}
 
-        {/* Error */}
-        {error && <Text style={styles.errorText}>{error}</Text>}
-
-        {/* Charge Button */}
-        <Button
-          title={
-            isProcessing
-              ? 'Processing...'
-              : isFullyPaid
-                ? `Charge ${fmtPHP(grandTotal)}`
-                : `${fmtPHP(remaining)} remaining`
-          }
-          variant="primary"
-          fullWidth
-          onPress={handleCheckout}
-          disabled={isProcessing || lines.length === 0 || !isFullyPaid || receiptMissing}
-          loading={isProcessing}
-          style={styles.chargeButton}
-          textStyle={styles.chargeButtonText}
-        />
-        {remaining > 0 && !isFullyPaid && (
-          <Text style={styles.remainingHint}>
-            Add payment(s) above to cover the remaining {fmtPHP(remaining)}
-          </Text>
+        {/* ── 4c. Charge summary ── */}
+        {!isFullyPaid && isCharge && (
+          <View style={s.tenderedSection}>
+            <View style={s.chargeSummary}>
+              <Text style={s.chargeCustomerName}>
+                Charging to: {customerName || 'No customer'}
+              </Text>
+              <Text style={s.chargeAmountDisplay}>{fmtPHP(remaining)}</Text>
+            </View>
+          </View>
         )}
-      </ScrollView>
+
+        {/* ── 5. Quick Amount Buttons (CASH only) ── */}
+        {!isFullyPaid && isCash && (
+          <View style={s.quickRow}>
+            <Pressable
+              style={s.quickBtnExact}
+              onPress={() => {
+                const exactAmt = remaining > 0 ? remaining : grandTotal;
+                setFormCashTendered(exactAmt.toFixed(2));
+                flashTenderedInput();
+              }}
+            >
+              <Text style={s.quickBtnExactText}>Exact</Text>
+            </Pressable>
+            <Pressable style={s.quickBtnLg} onPress={() => addToTendered(1000)}>
+              <Text style={s.quickBtnText}>+1K</Text>
+            </Pressable>
+            <Pressable style={s.quickBtnLg} onPress={() => addToTendered(500)}>
+              <Text style={s.quickBtnText}>+500</Text>
+            </Pressable>
+            <Pressable style={s.quickBtnSm} onPress={() => addToTendered(200)}>
+              <Text style={s.quickBtnText}>+200</Text>
+            </Pressable>
+            <Pressable style={s.quickBtnSm} onPress={() => addToTendered(100)}>
+              <Text style={s.quickBtnText}>+100</Text>
+            </Pressable>
+            <Pressable style={s.quickBtnSm} onPress={() => addToTendered(50)}>
+              <Text style={s.quickBtnText}>+50</Text>
+            </Pressable>
+            <Pressable
+              style={[s.quickBtnClear, parsedCashTendered === 0 && { opacity: 0.3 }]}
+              onPress={handleClearTendered}
+              disabled={parsedCashTendered === 0}
+            >
+              <Text style={s.quickBtnClearText}>C</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* Spacer to push action to bottom */}
+        <View style={{ flex: 1 }} />
+
+        {/* ── Error ── */}
+        {error && <Text style={s.errorText}>{error}</Text>}
+
+        {/* ── 6. Action Button — pinned at bottom ── */}
+        <View style={s.actionSection}>
+          {isFullyPaid ? (
+            /* Fully paid via split payments → Complete Sale */
+            <Pressable
+              style={[s.completeSaleBtn, isProcessing && { opacity: 0.6 }]}
+              onPress={handleCheckout}
+              disabled={isProcessing || receiptMissing}
+            >
+              <Text style={s.completeSaleBtnText}>
+                {isProcessing ? 'Processing...' : (
+                  paidTotal > grandTotal
+                    ? `COMPLETE SALE \u00B7 Change: ${fmtPHP(paidTotal - grandTotal)}`
+                    : 'COMPLETE SALE'
+                )}
+              </Text>
+            </Pressable>
+          ) : singlePaymentCoversAll ? (
+            /* Single payment covers everything → Complete Sale shortcut */
+            <Pressable
+              style={[s.completeSaleBtn, isProcessing && { opacity: 0.6 }]}
+              onPress={() => {
+                handleSinglePaymentComplete();
+              }}
+              disabled={isProcessing || receiptMissing}
+            >
+              <Text style={s.completeSaleBtnText}>
+                {isProcessing ? 'Processing...' : (
+                  cashChange > 0
+                    ? `COMPLETE SALE \u00B7 Change: ${fmtPHP(cashChange)}`
+                    : `COMPLETE SALE \u00B7 ${fmtPHP(grandTotal)}`
+                )}
+              </Text>
+            </Pressable>
+          ) : (
+            /* Not fully paid → Add Payment */
+            <>
+              <Pressable
+                style={[
+                  s.addPaymentBtn,
+                  !canAddPayment && s.addPaymentBtnDisabled,
+                ]}
+                onPress={handleAddPayment}
+                disabled={!canAddPayment || receiptMissing}
+              >
+                <Text style={[
+                  s.addPaymentBtnText,
+                  !canAddPayment && s.addPaymentBtnTextDisabled,
+                ]}>
+                  {canAddPayment
+                    ? `ADD PAYMENT \u00B7 ${fmtPHP(parsedAmount)}`
+                    : 'ADD PAYMENT'}
+                </Text>
+              </Pressable>
+              {remaining > 0 && !canAddPayment && (
+                <Text style={s.remainingHint}>
+                  {fmtPHP(remaining)} remaining
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      </View>
     </SafeAreaView>
   );
 }
 
-const createStyles = () => StyleSheet.create({
+/* ════════════════════════════════════════════════════ */
+/*  Styles                                              */
+/* ════════════════════════════════════════════════════ */
+
+const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,
   },
-  header: {
+
+  /* ── No-scroll root layout ── */
+  paymentContainer: {
+    flex: 1,
+    flexDirection: 'column',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+
+  /* ── 1. Order Summary (compressed) ── */
+  orderSummary: {
+    paddingBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle,
+  },
+  summaryHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.default,
+    marginBottom: 4,
+  },
+  backBtn: {
+    paddingVertical: 6,
+    paddingRight: spacing.lg,
+    minHeight: 40,
+    justifyContent: 'center',
   },
   backText: {
-    ...textStyles.bodyMedium,
+    fontFamily: fonts.display.semiBold,
+    fontSize: fontSize.base,
     color: colors.accent.primary,
-    minWidth: 60,
   },
-  headerTitle: {
-    ...textStyles.heading,
-    color: colors.text.primary,
-  },
-  scrollContent: {
-    paddingBottom: spacing['4xl'],
-  },
-
-  // ── Order Summary ──
-  summaryCard: {
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    ...textStyles.subheading,
-    color: colors.text.primary,
-    marginBottom: spacing.md,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  summaryLabel: {
-    ...textStyles.body,
-    color: colors.text.secondary,
-  },
-  summaryValue: {
-    ...textStyles.monoMd,
-    color: colors.text.primary,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border.default,
-    marginVertical: spacing.md,
-  },
-  totalLabel: {
-    ...textStyles.subheading,
-    color: colors.text.primary,
-  },
-  totalValue: {
+  summaryTotalAmount: {
     fontFamily: fonts.mono.semiBold,
-    fontSize: fontSize['3xl'],
+    fontSize: fontSize['4xl'],
     color: colors.accent.primary,
   },
-
-  // ── Receipt Number ──
-  receiptCard: {
-    marginBottom: spacing.md,
+  summaryLine1: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+    color: colors.text.primary,
+    marginBottom: 1,
   },
-  receiptInput: {
-    ...textStyles.body,
+  summaryLine2: {
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.sm,
+    color: colors.text.muted,
+    marginBottom: 2,
+  },
+  summaryMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+  },
+  summaryMeta: {
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.xs,
+    color: colors.text.muted,
+  },
+  receiptInlineInput: {
+    fontFamily: fonts.mono.medium,
+    fontSize: fontSize.xs,
     color: colors.text.primary,
     backgroundColor: colors.bg.input,
-    borderRadius: radius.md,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: colors.border.default,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    fontFamily: fonts.mono.medium,
-  },
-  receiptReadOnly: {
-    backgroundColor: colors.bg.elevated,
-    color: colors.text.secondary,
+    borderColor: colors.border.focus,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    minWidth: 120,
   },
 
-  // ── Payments List ──
-  paymentsListCard: {
-    marginBottom: spacing.md,
-  },
-  paymentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  /* ── 2. Applied Payments ── */
+  appliedPayments: {
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border.default,
+    borderBottomColor: colors.border.subtle,
   },
-  paymentInfo: {
-    flex: 1,
+  appliedRow: {
+    flexDirection: 'row',
+    gap: 8,
   },
-  paymentMethod: {
-    ...textStyles.bodyMedium,
+  appliedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.accent.glow,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    gap: 6,
+  },
+  appliedChipMethod: {
+    fontFamily: fonts.display.medium,
+    fontSize: fontSize.sm,
+    color: colors.text.secondary,
+  },
+  appliedChipAmount: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.md,
     color: colors.text.primary,
   },
-  paymentRef: {
-    ...textStyles.caption,
-    color: colors.text.muted,
-    marginTop: 2,
-  },
-  paymentAmount: {
-    ...textStyles.monoMd,
-    color: colors.text.primary,
-    marginHorizontal: spacing.md,
-  },
-  removeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: radius.sm,
-    backgroundColor: colors.status.danger + '20',
+  appliedChipRemove: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.status.dangerBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  removeBtnText: {
+  appliedChipRemoveText: {
+    fontSize: 9,
+    color: colors.status.danger,
     fontFamily: fonts.display.bold,
-    fontSize: fontSize.md,
+  },
+  appliedSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+  appliedPaidLabel: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    color: colors.text.secondary,
+  },
+  appliedRemainingLabel: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
     color: colors.status.danger,
   },
-  paidLabel: {
-    ...textStyles.bodyMedium,
-    color: colors.text.secondary,
-  },
-  paidValue: {
-    ...textStyles.monoMd,
-    color: colors.text.primary,
-  },
-  remainingLabel: {
-    ...textStyles.bodyMedium,
-    color: colors.text.secondary,
-  },
-  remainingValue: {
-    fontFamily: fonts.mono.semiBold,
-    fontSize: fontSize.xl,
-  },
 
-  // ── Add Payment Form ──
-  addPaymentCard: {
-    marginBottom: spacing.md,
+  /* ── 3. Payment Methods ── */
+  methodsSection: {
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle,
   },
-  methodsGrid: {
+  methodsRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
+    gap: 6,
   },
   methodBtn: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: radius.md,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.border.default,
-    backgroundColor: colors.bg.surface,
-    minWidth: '47%',
-    minHeight: touchTarget.min,
+    backgroundColor: 'transparent',
+    minHeight: 42,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -797,153 +1003,127 @@ const createStyles = () => StyleSheet.create({
     borderColor: colors.accent.primary,
   },
   methodBtnText: {
-    ...textStyles.bodyMedium,
+    fontFamily: fonts.display.semiBold,
+    fontSize: fontSize.md,
     color: colors.text.secondary,
   },
   methodBtnTextActive: {
     color: colors.text.inverse,
     fontFamily: fonts.display.bold,
   },
-  formSection: {
-    marginBottom: spacing.md,
-  },
-  formLabel: {
-    ...textStyles.caption,
-    color: colors.text.secondary,
-    marginBottom: spacing.sm,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  amountInput: {
-    ...textStyles.monoLg,
-    color: colors.text.primary,
-    backgroundColor: colors.bg.input,
+  chargeMethodBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-  },
-  denomRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  denomChip: {
-    width: '23.5%',
-    paddingVertical: spacing.md,
-    minHeight: touchTarget.min,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    backgroundColor: colors.bg.surface,
+    borderWidth: 1.5,
+    borderColor: colors.status.warning,
+    borderStyle: 'dashed' as any,
+    backgroundColor: 'transparent',
+    minHeight: 42,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    marginLeft: 4,
   },
-  denomChipText: {
-    fontFamily: fonts.mono.semiBold,
+  chargeMethodBtnActive: {
+    borderStyle: 'solid' as any,
+    backgroundColor: colors.status.warningBg,
+  },
+  chargeMethodBtnDisabled: {
+    opacity: 0.35,
+  },
+  chargeMethodText: {
+    fontFamily: fonts.display.semiBold,
     fontSize: fontSize.md,
+    color: colors.status.warning,
+  },
+  chargeMethodTextActive: {
     color: colors.text.primary,
-  },
-  denomExact: {
-    borderColor: colors.accent.primary + '60',
-    backgroundColor: colors.accent.primary + '15',
-  },
-  denomExactText: {
     fontFamily: fonts.display.bold,
-    fontSize: fontSize.md,
-    color: colors.accent.primary,
   },
-  denomClear: {
-    borderColor: colors.status.danger + '40',
-    backgroundColor: colors.status.danger + '10',
-  },
-  denomClearText: {
-    fontFamily: fonts.display.bold,
-    fontSize: fontSize.md,
-    color: colors.status.danger,
-  },
-  cashRow: {
-    flexDirection: 'row',
-    backgroundColor: colors.bg.elevated,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
+
+  /* ── 4. Tendered Input ── */
+  tenderedSection: {
     paddingVertical: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border.default,
   },
-  cashRowLeft: {
-    flex: 1,
+  tenderedInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.bg.overlay,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    paddingHorizontal: 14,
+    height: 52,
   },
-  cashRowRight: {
-    flex: 1,
-    alignItems: 'flex-end',
+  tenderedInputRowStatic: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.bg.overlay,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: colors.border.medium,
+    paddingHorizontal: 14,
+    height: 52,
   },
-  cashRowLabel: {
-    ...textStyles.caption,
+  tenderedCurrency: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['3xl'],
     color: colors.text.muted,
+    marginRight: 6,
+  },
+  tenderedInput: {
+    flex: 1,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['4xl'],
+    color: colors.text.primary,
+    padding: 0,
+  },
+  changeInline: {
+    alignItems: 'flex-end',
+    marginLeft: 8,
+  },
+  changeLabel: {
+    fontFamily: fonts.body.medium,
     fontSize: fontSize.xs,
-  },
-  cashRowAmount: {
-    fontFamily: fonts.mono.semiBold,
-    fontSize: fontSize.xl,
-    color: colors.accent.primary,
-  },
-  cashRowChange: {
-    fontFamily: fonts.mono.semiBold,
-    fontSize: fontSize.xl,
     color: colors.status.success,
   },
-  cashRowRemaining: {
+  changeAmount: {
     fontFamily: fonts.mono.semiBold,
+    fontSize: fontSize['2xl'],
+    color: colors.status.success,
+  },
+  remainingInlineLabel: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    color: colors.text.muted,
+  },
+  remainingInlineAmount: {
+    fontFamily: fonts.mono.medium,
     fontSize: fontSize.lg,
     color: colors.text.secondary,
   },
-  cashSummary: {
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.border.default,
-    gap: spacing.sm,
+  undoBar: {
+    marginTop: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.infoBg,
+    alignSelf: 'center',
   },
-  changeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  changeLabel: {
-    ...textStyles.bodyMedium,
-    color: colors.text.secondary,
-  },
-  changeLabelValue: {
-    ...textStyles.monoMd,
-    color: colors.text.primary,
-  },
-  changeValue: {
-    fontFamily: fonts.mono.semiBold,
-    fontSize: fontSize.xl,
-    color: colors.status.success,
-  },
-  inputRequired: {
-    borderColor: colors.status.danger,
-  },
-  refRequiredText: {
-    ...textStyles.caption,
-    color: colors.status.danger,
-    marginTop: spacing.sm,
+  undoText: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    color: colors.status.info,
   },
 
-  // ── Installment Term ──
-  installmentGrid: {
+  /* Installment row */
+  installmentRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: 6,
+    marginTop: 8,
   },
   installmentChip: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.border.default,
@@ -954,50 +1134,176 @@ const createStyles = () => StyleSheet.create({
     borderColor: colors.accent.primary,
   },
   installmentChipText: {
-    ...textStyles.caption,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
     color: colors.text.secondary,
-    fontFamily: fonts.display.medium,
   },
   installmentChipTextActive: {
     color: colors.text.inverse,
     fontFamily: fonts.display.bold,
   },
 
-  // ── Add Payment button ──
-  addPaymentButton: {
-    marginTop: spacing.sm,
+  /* Ref input */
+  refInput: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.base,
+    color: colors.text.primary,
+    backgroundColor: colors.bg.overlay,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 8,
+  },
+  refInputRequired: {
+    borderColor: colors.status.danger,
   },
 
-  // ── Error ──
+  /* Charge summary */
+  chargeSummary: {
+    backgroundColor: colors.status.warningBg,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  chargeCustomerName: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.md,
+    color: colors.status.warning,
+    marginBottom: 4,
+  },
+  chargeAmountDisplay: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['3xl'],
+    color: colors.text.primary,
+  },
+
+  /* ── 5. Quick Amount Buttons ── */
+  quickRow: {
+    flexDirection: 'row',
+    gap: 5,
+    paddingVertical: spacing.xs,
+  },
+  quickBtnLg: {
+    flex: 1.5,
+    paddingVertical: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.overlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  quickBtnSm: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.overlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  quickBtnText: {
+    fontFamily: fonts.mono.semiBold,
+    fontSize: fontSize.md,
+    color: colors.text.secondary,
+  },
+  quickBtnExact: {
+    flex: 1.2,
+    paddingVertical: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent.muted,
+    borderWidth: 1,
+    borderColor: colors.accent.primary + '60',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  quickBtnExactText: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.md,
+    color: colors.accent.primary,
+  },
+  quickBtnClear: {
+    width: 42,
+    paddingVertical: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.dangerBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+  },
+  quickBtnClearText: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.base,
+    color: colors.status.danger,
+  },
+
+  /* ── Error ── */
   errorText: {
-    ...textStyles.caption,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
     color: colors.status.danger,
     textAlign: 'center',
-    marginBottom: spacing.md,
+    marginBottom: 4,
   },
 
-  // ── Charge ──
-  chargeButton: {
-    minHeight: 56,
-    marginTop: spacing.md,
+  /* ── 6. Action Button ── */
+  actionSection: {
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
   },
-  chargeButtonText: {
+  completeSaleBtn: {
+    backgroundColor: colors.status.success,
+    paddingVertical: 16,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    shadowColor: colors.status.success,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  completeSaleBtnText: {
     fontFamily: fonts.display.bold,
     fontSize: fontSize.xl,
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  addPaymentBtn: {
+    backgroundColor: colors.accent.primary,
+    paddingVertical: 16,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+  },
+  addPaymentBtnDisabled: {
+    backgroundColor: colors.bg.overlay,
+  },
+  addPaymentBtnText: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+    color: colors.text.inverse,
+    letterSpacing: 0.5,
+  },
+  addPaymentBtnTextDisabled: {
+    color: colors.text.muted,
   },
   remainingHint: {
-    ...textStyles.caption,
-    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    color: colors.text.muted,
     textAlign: 'center',
-    marginTop: spacing.sm,
+    marginTop: 6,
   },
 
-  // ── Success ──
+  /* ── Success / Pending states ── */
   successContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: spacing['4xl'],
+    paddingHorizontal: spacing.xl,
   },
   successIcon: {
     fontSize: 64,
@@ -1018,14 +1324,18 @@ const createStyles = () => StyleSheet.create({
     fontFamily: fonts.mono.semiBold,
     fontSize: fontSize['5xl'],
     color: colors.accent.primary,
+    marginBottom: spacing.sm,
+  },
+  successChange: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['2xl'],
+    color: colors.status.success,
     marginBottom: spacing['2xl'],
   },
   successActions: {
     width: '100%',
-    gap: spacing.md,
-  },
-  successButton: {
-    marginTop: spacing.sm,
+    marginTop: spacing.xl,
+    gap: spacing.sm,
   },
   pendingIcon: {
     fontSize: 64,
