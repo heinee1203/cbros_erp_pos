@@ -314,7 +314,7 @@ export default function CatalogScreen() {
     <View style={styles.container}>
       {/* Header — hide Cart button on tablet (cart panel is visible) */}
       <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
-        <Text style={styles.headerTitle}>APEX</Text>
+        <Text style={styles.headerTitle}>POINT OF SALE</Text>
         {!isTablet && (
           <Pressable
             style={styles.cartButton}
@@ -347,6 +347,7 @@ export default function CatalogScreen() {
             searchFocused && styles.searchInputContainerFocused,
           ]}
         >
+          <Text style={styles.searchIcon}>{'\u2315'}</Text>
           <TextInput
             style={styles.searchInput}
             value={query}
@@ -583,8 +584,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg.primary,
   },
   headerTitle: {
-    ...textStyles.heading,
-    color: colors.accent.primary,
+    fontSize: 11,
+    fontFamily: 'Outfit-SemiBold',
+    color: '#5A5750',
+    textTransform: 'uppercase',
+    letterSpacing: 2,
   },
   cartButton: {
     flexDirection: 'row',
@@ -617,46 +621,54 @@ const styles = StyleSheet.create({
 
   // ── Search bar ──
   searchBar: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
   },
   searchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.bg.input,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: colors.border.default,
-    borderRadius: radius.md,
-    overflow: 'hidden',
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginVertical: 12,
+    height: 52,
   },
   searchInputContainerFocused: {
-    borderColor: colors.border.focus,
+    borderColor: colors.accent.primary,
+  },
+  searchIcon: {
+    marginRight: 10,
+    color: '#5A5750',
+    fontSize: 18,
   },
   searchInput: {
     flex: 1,
-    ...textStyles.body,
-    color: colors.text.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    fontSize: 15,
+    fontFamily: 'Outfit-Regular',
+    color: '#F2F0ED',
   },
   scanButton: {
-    backgroundColor: colors.accent.primary,
-    paddingHorizontal: spacing.lg,
-    alignSelf: 'stretch',
-    justifyContent: 'center',
+    backgroundColor: '#F5A623',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginLeft: 8,
   },
   scanButtonText: {
-    ...textStyles.caption,
-    color: colors.text.inverse,
-    fontWeight: '700',
-    letterSpacing: 1,
+    color: '#1A1A1A',
+    fontSize: 13,
+    fontFamily: 'Outfit-Bold',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
 
   // ── Category chips ──
   chipRow: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    gap: spacing.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
 
   // ── Empty state ──

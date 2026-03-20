@@ -6,16 +6,16 @@ import {
   StyleSheet,
   ViewStyle,
 } from 'react-native';
-import { colors, textStyles, spacing, radius } from '@/theme';
 
 interface ChipProps {
   label: string;
   active: boolean;
   onPress: () => void;
+  count?: number;
   style?: ViewStyle;
 }
 
-export function Chip({ label, active, onPress, style }: ChipProps) {
+export function Chip({ label, active, onPress, count, style }: ChipProps) {
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = useCallback(() => {
@@ -36,6 +36,8 @@ export function Chip({ label, active, onPress, style }: ChipProps) {
     }).start();
   }, [scaleAnim]);
 
+  const displayText = count != null ? `${label} (${count.toLocaleString()})` : label;
+
   return (
     <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
       <Pressable
@@ -43,19 +45,15 @@ export function Chip({ label, active, onPress, style }: ChipProps) {
         onPressIn={handlePressIn}
         onPressOut={handlePressOut}
         style={[
-          styles.base,
           active ? styles.active : styles.inactive,
           style,
         ]}
       >
         <Text
-          style={[
-            styles.label,
-            { color: active ? colors.text.inverse : colors.text.secondary },
-          ]}
+          style={active ? styles.activeText : styles.inactiveText}
           numberOfLines={1}
         >
-          {label}
+          {displayText}
         </Text>
       </Pressable>
     </Animated.View>
@@ -63,22 +61,32 @@ export function Chip({ label, active, onPress, style }: ChipProps) {
 }
 
 const styles = StyleSheet.create({
-  base: {
-    minHeight: 36,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   active: {
-    backgroundColor: colors.accent.primary,
+    backgroundColor: '#F5A623',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 24,
+    marginRight: 8,
   },
   inactive: {
-    backgroundColor: colors.bg.surface,
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: 1,
-    borderColor: colors.border.default,
+    borderColor: 'rgba(255,255,255,0.12)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 24,
+    marginRight: 8,
   },
-  label: {
-    ...textStyles.caption,
+  activeText: {
+    color: '#1A1A1A',
+    fontSize: 13,
+    fontFamily: 'Outfit-SemiBold',
+    letterSpacing: 0.3,
+  },
+  inactiveText: {
+    color: '#5A5750',
+    fontSize: 13,
+    fontFamily: 'Outfit-Medium',
+    letterSpacing: 0.3,
   },
 });

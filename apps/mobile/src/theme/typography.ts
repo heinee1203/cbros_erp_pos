@@ -1,6 +1,6 @@
 /**
- * Typography system — Industrial Premium.
- * Outfit (display), DM Sans (body), JetBrains Mono (data).
+ * Typography system — Premium.
+ * Outfit (display/prices), DM Sans (body), JetBrains Mono (data).
  *
  * Font filenames match across Android (TTF filename) and iOS (PostScript name).
  */
@@ -46,18 +46,26 @@ export const fontSize = {
 
 /** Pre-built text style presets for consistent usage across screens. */
 export const textStyles = {
-  display: { fontFamily: fonts.display.extraBold, fontSize: fontSize['5xl'] },
-  heading: { fontFamily: fonts.display.bold, fontSize: fontSize['3xl'] },
-  subheading: { fontFamily: fonts.display.semiBold, fontSize: fontSize.xl },
-  body: { fontFamily: fonts.body.regular, fontSize: fontSize.lg },
-  bodyMedium: { fontFamily: fonts.body.medium, fontSize: fontSize.lg },
+  display: { fontFamily: fonts.display.extraBold, fontSize: fontSize['5xl'], letterSpacing: -0.5 },
+  heading: { fontFamily: fonts.display.bold, fontSize: fontSize['3xl'], letterSpacing: -0.3 },
+  subheading: { fontFamily: fonts.display.semiBold, fontSize: fontSize.xl, letterSpacing: -0.2 },
+  body: { fontFamily: fonts.body.regular, fontSize: fontSize.lg, lineHeight: 22 },
+  bodyMedium: { fontFamily: fonts.body.medium, fontSize: fontSize.lg, lineHeight: 22 },
   caption: { fontFamily: fonts.body.medium, fontSize: fontSize.md },
   captionSmall: { fontFamily: fonts.body.regular, fontSize: fontSize.sm },
   monoLg: { fontFamily: fonts.mono.semiBold, fontSize: fontSize['2xl'] },
   monoMd: { fontFamily: fonts.mono.medium, fontSize: fontSize.base },
   monoSm: { fontFamily: fonts.mono.regular, fontSize: fontSize.sm },
-  button: { fontFamily: fonts.display.bold, fontSize: fontSize.lg },
+  button: { fontFamily: fonts.display.bold, fontSize: fontSize.lg, letterSpacing: 0.5 },
   tabLabel: { fontFamily: fonts.body.semiBold, fontSize: fontSize.sm },
+
+  // New premium presets
+  price: { fontFamily: fonts.display.bold, fontSize: fontSize.xl },
+  priceSmall: { fontFamily: fonts.display.semiBold, fontSize: fontSize.md },
+  priceLarge: { fontFamily: fonts.display.bold, fontSize: fontSize['4xl'], letterSpacing: -0.5 },
+  mono: { fontFamily: fonts.mono.regular, fontSize: fontSize.sm },
+  label: { fontFamily: fonts.display.semiBold, fontSize: fontSize.md, letterSpacing: 0.3 },
+  tiny: { fontFamily: fonts.body.medium, fontSize: fontSize.xs, letterSpacing: 0.2 },
 } as const;
 
 export const lineHeight = {

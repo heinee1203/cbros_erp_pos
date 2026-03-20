@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { colors, textStyles, spacing } from '@/theme';
+import { colors } from '@/theme';
 
 const TAB_LABELS: Record<string, string> = {
   POS: 'POS',
@@ -10,9 +10,9 @@ const TAB_LABELS: Record<string, string> = {
 };
 
 const TAB_ICONS: Record<string, string> = {
-  POS: '\uD83D\uDED2',          // 🛒 shopping cart
-  Transactions: '\uD83D\uDCCB', // 📋 clipboard
-  Settings: '\u2699\uFE0F',     // ⚙️ gear
+  POS: '\u229E',           // ⊞
+  Transactions: '\u2630',  // ☰
+  Settings: '\u2699',      // ⚙
 };
 
 /** Width of the navigation rail in dp */
@@ -21,98 +21,105 @@ export const NAV_RAIL_WIDTH = 72;
 /**
  * Vertical navigation rail for tablet layout.
  * Replaces the bottom tab bar when screen width >= 768dp.
- * Material Design 3 style: 72dp wide, icons + labels.
+ * Premium dark design with amber brand mark and active indicators.
  * Receives BottomTabBarProps from the tabBar prop of Tab.Navigator.
  */
 export function NavRail({ state, navigation }: BottomTabBarProps) {
   return (
-    <View style={styles.container}>
+    <View style={styles.navRail}>
       {/* Brand mark */}
-      <View style={styles.brand}>
-        <Text style={styles.brandText}>APEX</Text>
+      <View style={styles.brandMark}>
+        <Text style={styles.brandText}>A</Text>
       </View>
 
       {/* Tab items */}
-      <View style={styles.tabs}>
-        {state.routes.map((route, index) => {
-          const isActive = state.index === index;
-          return (
-            <Pressable
-              key={route.key}
-              style={[styles.tab, isActive && styles.activeTab]}
-              onPress={() => navigation.navigate(route.name)}
-              android_ripple={{ color: colors.accent.glow, borderless: false }}
-            >
-              <Text style={[styles.icon, isActive && styles.activeIcon]}>
-                {TAB_ICONS[route.name] || '\u25CB'}
-              </Text>
-              <Text style={[styles.label, isActive && styles.activeLabel]}>
-                {TAB_LABELS[route.name] || route.name}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {state.routes.map((route, index) => {
+        const isActive = state.index === index;
+        return (
+          <Pressable
+            key={route.key}
+            style={[styles.navTab, isActive && styles.navTabActive]}
+            onPress={() => navigation.navigate(route.name)}
+            android_ripple={{ color: colors.accent.glow, borderless: false }}
+          >
+            {isActive && <View style={styles.activeIndicator} />}
+            <Text style={[styles.navIcon, isActive && styles.navIconActive]}>
+              {TAB_ICONS[route.name] || '\u25CB'}
+            </Text>
+            <Text style={[styles.navLabel, isActive && styles.navLabelActive]}>
+              {TAB_LABELS[route.name] || route.name}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  navRail: {
     position: 'absolute',
     left: 0,
     top: 0,
     bottom: 0,
     width: NAV_RAIL_WIDTH,
-    backgroundColor: colors.bg.surface,
+    backgroundColor: 'rgba(0,0,0,0.3)',
     borderRightWidth: 1,
-    borderRightColor: colors.border.default,
+    borderRightColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 16,
+    alignItems: 'center',
     zIndex: 10,
   },
-  brand: {
-    height: 56,
+  brandMark: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: '#F5A623',
     justifyContent: 'center',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
+    marginBottom: 24,
   },
   brandText: {
-    fontFamily: textStyles.heading.fontFamily,
-    fontSize: 14,
-    color: colors.accent.primary,
-    letterSpacing: 2,
+    fontSize: 20,
+    fontFamily: 'Outfit-Bold',
+    color: '#1A1A1A',
   },
-  tabs: {
-    flex: 1,
-    paddingTop: spacing.lg,
-  },
-  tab: {
-    minWidth: 64,
-    minHeight: 64,
-    paddingVertical: 14,
-    alignItems: 'center',
+  navTab: {
+    width: 64,
+    height: 64,
     justifyContent: 'center',
-    marginHorizontal: 4,
-    borderRadius: 8,
+    alignItems: 'center',
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  navTabActive: {
+    backgroundColor: 'rgba(245,166,35,0.08)',
+  },
+  activeIndicator: {
+    position: 'absolute',
+    left: -4, // offset to align with navRail left edge (navTab is centered in 72px rail)
+    width: 3,
+    height: 32,
+    backgroundColor: '#F5A623',
+    borderTopRightRadius: 3,
+    borderBottomRightRadius: 3,
+  },
+  navIcon: {
+    fontSize: 22,
+    color: '#5A5750',
     marginBottom: 4,
   },
-  activeTab: {
-    backgroundColor: colors.accent.glow,
+  navIconActive: {
+    color: '#F5A623',
   },
-  icon: {
-    fontSize: 28,
-    color: colors.text.muted,
-    marginBottom: 2,
-  },
-  activeIcon: {
-    color: colors.accent.primary,
-  },
-  label: {
-    ...textStyles.captionSmall,
-    color: colors.text.muted,
+  navLabel: {
     fontSize: 10,
+    fontFamily: 'Outfit-Medium',
+    color: '#5A5750',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
-  activeLabel: {
-    color: colors.accent.primary,
+  navLabelActive: {
+    color: '#F5A623',
   },
 });

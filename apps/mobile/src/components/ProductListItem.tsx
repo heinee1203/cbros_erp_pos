@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import StockBadge from './StockBadge';
-import { colors, textStyles, layout } from '@/theme';
 import type { CatalogItem } from '@/hooks/use-catalog-search';
 
 interface Props {
@@ -15,41 +14,40 @@ function fmtPrice(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function getStockColor(available: number, reorderPoint: number): string {
-  if (available <= 0) return colors.stock.out;
-  if (available <= reorderPoint) return colors.stock.low;
-  return colors.stock.ok;
-}
-
 function ProductListItem({ item, index, onPress, onLongPress }: Props) {
   const available = item.stockLevel - item.reservedLevel;
-  const rowBg = index % 2 === 0 ? colors.bg.primary : colors.bg.surface;
-  const stockColor = getStockColor(available, item.reorderPoint);
+  const hasVariants = item.isParent;
+  const priceIsZero = item.unitPrice === 0;
 
   return (
     <Pressable
-      style={[styles.row, { backgroundColor: rowBg }]}
+      style={({ pressed }) => [
+        styles.row,
+        pressed && styles.rowPressed,
+      ]}
       onPress={() => onPress(item)}
       onLongPress={() => onLongPress?.(item)}
-      android_ripple={{ color: colors.accent.glow }}
+      android_ripple={{ color: 'rgba(245,166,35,0.06)' }}
     >
       <View style={styles.left}>
-        <Text style={styles.mnemonicSku} numberOfLines={1}>
-          {item.mnemonicSku}
-        </Text>
-        <Text style={styles.name} numberOfLines={1}>
+        <Text style={styles.productName} numberOfLines={1}>
           {item.name}
         </Text>
-        <Text style={styles.fullSku}>{item.sku}</Text>
+        <Text style={styles.skuText} numberOfLines={1}>
+          {item.sku}
+        </Text>
       </View>
       <View style={styles.right}>
-        <Text style={styles.price}>
-          {item.isParent ? 'Variants' : item.isVariablePrice ? 'Variable' : fmtPrice(item.unitPrice)}
-        </Text>
-        <View style={styles.stockRow}>
-          <StockBadge stockLevel={available} reorderPoint={item.reorderPoint} />
-          <Text style={[styles.stockText, { color: stockColor }]}>{available}</Text>
-        </View>
+        {hasVariants ? (
+          <View style={styles.variantBadge}>
+            <Text style={styles.variantBadgeText}>VARIANTS</Text>
+          </View>
+        ) : (
+          <Text style={[styles.priceText, priceIsZero && styles.priceMuted]}>
+            {item.isVariablePrice ? 'Variable' : fmtPrice(item.unitPrice)}
+          </Text>
+        )}
+        <StockBadge available={available} />
       </View>
     </Pressable>
   );
@@ -61,9 +59,14 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: layout.screenPadding,
-    paddingVertical: 10,
-    minHeight: layout.productRowMinHeight,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    minHeight: 64,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  rowPressed: {
+    backgroundColor: 'rgba(245,166,35,0.06)',
   },
   left: {
     flex: 1,
@@ -71,32 +74,38 @@ const styles = StyleSheet.create({
   },
   right: {
     alignItems: 'flex-end',
-  },
-  mnemonicSku: {
-    ...textStyles.monoMd,
-    color: colors.text.primary,
-  },
-  name: {
-    ...textStyles.caption,
-    color: colors.text.secondary,
-    marginTop: 2,
-  },
-  fullSku: {
-    ...textStyles.captionSmall,
-    color: colors.text.muted,
-    marginTop: 1,
-  },
-  price: {
-    ...textStyles.monoMd,
-    color: colors.accent.primary,
-  },
-  stockRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
     gap: 4,
   },
-  stockText: {
-    ...textStyles.captionSmall,
+  productName: {
+    fontSize: 15,
+    fontFamily: 'Outfit-SemiBold',
+    color: '#F2F0ED',
+  },
+  skuText: {
+    fontSize: 12,
+    fontFamily: 'JetBrainsMono-Regular',
+    color: '#5A5750',
+    marginTop: 2,
+  },
+  priceText: {
+    fontSize: 16,
+    fontFamily: 'Outfit-Bold',
+    color: '#F5A623',
+  },
+  priceMuted: {
+    color: '#5A5750',
+  },
+  variantBadge: {
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  variantBadgeText: {
+    fontSize: 11,
+    fontFamily: 'Outfit-SemiBold',
+    color: '#F5A623',
+    letterSpacing: 0.5,
   },
 });

@@ -22,7 +22,7 @@ import { CustomerLookup } from '@/components/CustomerLookup';
 import type { Customer, Vehicle } from '@/hooks/use-customer-search';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout, fonts, fontSize, touchTarget } from '@/theme';
-import { Button, Card } from '@/components/ui';
+// UI components no longer needed for premium redesign
 
 function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -142,45 +142,45 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         renderRightActions={() => renderRightActions(item.id, item.name)}
         overshootRight={false}
       >
-        <Card style={styles.lineCard} padded={false}>
-          <View style={styles.lineContent}>
-            <View style={styles.lineInfo}>
+        <View style={styles.cartLine}>
+          <View style={{ flex: 1, marginRight: 12 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <Text style={styles.lineName} numberOfLines={1}>{item.name}</Text>
-              <View style={styles.lineMetaRow}>
-                <Text style={styles.lineSku}>{item.mnemonicSku}</Text>
-                {isOutOfStock && (
-                  <View style={styles.stockBadgeOut}>
-                    <Text style={styles.stockBadgeOutText}>OUT OF STOCK</Text>
-                  </View>
-                )}
-                {!isOutOfStock && isLowStock && (
-                  <View style={styles.stockBadgeLow}>
-                    <Text style={styles.stockBadgeLowText}>Only {item.availableStock} avail.</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} x {item.quantity}</Text>
+              <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
             </View>
-            <View style={styles.qtyControls}>
-              <Pressable
-                style={[styles.qtyBtn, item.quantity <= 1 && styles.qtyBtnDanger]}
-                onPress={() => handleMinusPress(item)}
-                hitSlop={8}
-              >
-                <Text style={styles.qtyBtnText}>{item.quantity <= 1 ? '\uD83D\uDDD1' : '\u2212'}</Text>
-              </Pressable>
-              <Text style={styles.qtyText}>{item.quantity}</Text>
-              <Pressable
-                style={styles.qtyBtn}
-                onPress={() => updateQuantity(item.id, item.quantity + 1)}
-                hitSlop={8}
-              >
-                <Text style={styles.qtyBtnText}>+</Text>
-              </Pressable>
+            <View style={styles.lineMetaRow}>
+              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} × {item.quantity}</Text>
+              <Text style={styles.lineSku}>{item.mnemonicSku}</Text>
+              {isOutOfStock && (
+                <View style={styles.stockBadgeOut}>
+                  <Text style={styles.stockBadgeOutText}>OUT OF STOCK</Text>
+                </View>
+              )}
+              {!isOutOfStock && isLowStock && (
+                <View style={styles.stockBadgeLow}>
+                  <Text style={styles.stockBadgeLowText}>Only {item.availableStock} avail.</Text>
+                </View>
+              )}
             </View>
-            <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
           </View>
-        </Card>
+          <View style={styles.qtyControls}>
+            <Pressable
+              style={[styles.qtyBtn, item.quantity <= 1 && styles.qtyBtnDanger]}
+              onPress={() => handleMinusPress(item)}
+              hitSlop={8}
+            >
+              <Text style={styles.qtyBtnText}>{item.quantity <= 1 ? '\uD83D\uDDD1' : '\u2212'}</Text>
+            </Pressable>
+            <Text style={styles.qtyText}>{item.quantity}</Text>
+            <Pressable
+              style={styles.qtyBtn}
+              onPress={() => updateQuantity(item.id, item.quantity + 1)}
+              hitSlop={8}
+            >
+              <Text style={styles.qtyBtnText}>+</Text>
+            </Pressable>
+          </View>
+        </View>
       </Swipeable>
     );
   };
@@ -188,21 +188,24 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   return (
     <SafeAreaView style={styles.container}>
       {/* Header — tablet: no Back button (persistent panel) */}
-      <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
+      <View style={styles.cartHeader}>
         {!isTablet ? (
-          <Pressable
-            onPress={() => navigation.goBack()}
-            hitSlop={8}
-            style={styles.headerTouchTarget}
-          >
-            <Text style={styles.backText}>{'\u2190'} Back</Text>
-          </Pressable>
+          <>
+            <Pressable
+              onPress={() => navigation.goBack()}
+              hitSlop={8}
+              style={styles.headerTouchTarget}
+            >
+              <Text style={styles.backText}>{'\u2190'} Back</Text>
+            </Pressable>
+            <Text style={styles.headerTitle}>Cart ({lineCount})</Text>
+          </>
         ) : (
-          <Text style={styles.panelTitle}>Cart</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={styles.cartHeaderTitle}>Cart</Text>
+            <Text style={styles.cartHeaderCount}>{lineCount} items</Text>
+          </View>
         )}
-        <Text style={isTablet ? styles.cartCount : styles.headerTitle}>
-          {isTablet ? `${lineCount} items` : `Cart (${lineCount})`}
-        </Text>
         <Pressable
           onPress={() => {
             if (lines.length > 0) {
@@ -213,7 +216,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             }
           }}
           hitSlop={8}
-          style={styles.headerTouchTarget}
+          style={styles.clearButton}
         >
           <Text style={styles.clearText}>Clear</Text>
         </Pressable>
@@ -221,19 +224,17 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
 
       {/* Customer bar */}
       {customerName ? (
-        <Card style={styles.customerCard} padded={false}>
-          <View style={styles.customerBar}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.customerName}>{customerName}</Text>
-              {vehicleId && (
-                <Text style={styles.customerVehicle}>Vehicle attached</Text>
-              )}
-            </View>
-            <Pressable onPress={detachCustomer} hitSlop={8}>
-              <Text style={styles.detachText}>✕</Text>
-            </Pressable>
+        <View style={styles.customerSelected}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.customerName}>{customerName}</Text>
+            {vehicleId && (
+              <Text style={styles.customerVehicle}>Vehicle attached</Text>
+            )}
           </View>
-        </Card>
+          <Pressable onPress={detachCustomer} hitSlop={8}>
+            <Text style={styles.detachText}>✕</Text>
+          </Pressable>
+        </View>
       ) : (
         <Pressable
           style={styles.addCustomerButton}
@@ -251,50 +252,50 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         renderItem={renderLine}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>Cart is empty</Text>
+            <Text style={styles.emptyIcon}>{'\uD83D\uDED2'}</Text>
+            <Text style={styles.emptyTitle}>No items in cart</Text>
+            <Text style={styles.emptySubtitle}>Tap a product or scan a barcode to start</Text>
           </View>
         }
         contentContainerStyle={[
-          styles.listContent,
           lines.length === 0 ? { flex: 1 } : undefined,
         ]}
       />
 
       {/* Footer — totals + proceed to payment */}
       {lines.length > 0 && (
-        <View style={styles.footer}>
-          {/* Totals */}
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Subtotal</Text>
-            <Text style={styles.totalValue}>{fmtPHP(subtotal)}</Text>
-          </View>
+        <View style={styles.cartFooter}>
+          {/* Subtotal / discount rows */}
           {discount > 0 && (
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Discount</Text>
-              <Text style={[styles.totalValue, { color: colors.status.danger }]}>-{fmtPHP(discount)}</Text>
-            </View>
+            <>
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Subtotal</Text>
+                <Text style={styles.totalValue}>{fmtPHP(subtotal)}</Text>
+              </View>
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Discount</Text>
+                <Text style={[styles.totalValue, { color: colors.status.danger }]}>-{fmtPHP(discount)}</Text>
+              </View>
+            </>
           )}
+
+          {/* Grand total row */}
           <View style={styles.grandTotalRow}>
-            <Text style={styles.grandTotalLabel}>Total</Text>
+            <Text style={styles.grandTotalLabel}>TOTAL</Text>
             <Text style={styles.grandTotalValue}>{fmtPHP(grandTotal)}</Text>
           </View>
 
           {/* Stock warnings summary */}
           {hasStockWarnings && (
             <Text style={styles.stockWarning}>
-              ⚠ Some items have insufficient stock
+              {'\u26A0'} Some items have insufficient stock
             </Text>
           )}
 
           {/* Proceed to Payment button */}
-          <Button
-            title={`Proceed to Payment  \u2192`}
-            variant="primary"
-            fullWidth
-            onPress={handleProceedToPayment}
-            style={styles.proceedButton}
-            textStyle={styles.proceedButtonText}
-          />
+          <Pressable style={styles.checkoutButton} onPress={handleProceedToPayment}>
+            <Text style={styles.checkoutButtonText}>CHECKOUT</Text>
+          </Pressable>
         </View>
       )}
 
@@ -314,16 +315,27 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg.primary,
   },
 
-  // ── Header ──
-  header: {
+  // ── Cart Header ──
+  cartHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: layout.screenPadding,
-    paddingVertical: spacing.lg,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border.default,
-    minHeight: 56,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  cartHeaderTitle: {
+    fontSize: 18,
+    fontFamily: 'Outfit-Bold',
+    color: '#F2F0ED',
+    letterSpacing: -0.3,
+  },
+  cartHeaderCount: {
+    fontSize: 13,
+    fontFamily: 'Outfit-Medium',
+    color: '#5A5750',
+    marginLeft: 8,
   },
   headerTouchTarget: {
     minWidth: 52,
@@ -332,98 +344,100 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   backText: {
-    ...textStyles.bodyMedium,
-    color: colors.text.primary,
+    fontSize: 14,
+    fontFamily: 'Outfit-Medium',
+    color: '#F2F0ED',
   },
   headerTitle: {
-    ...textStyles.heading,
-    color: colors.text.primary,
+    fontSize: 18,
+    fontFamily: 'Outfit-Bold',
+    color: '#F2F0ED',
+    letterSpacing: -0.3,
   },
-  panelTitle: {
-    ...textStyles.subheading,
-    color: colors.text.primary,
-  },
-  cartCount: {
-    ...textStyles.caption,
-    color: colors.text.secondary,
+  clearButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,59,48,0.1)',
   },
   clearText: {
-    ...textStyles.bodyMedium,
-    color: colors.status.danger,
+    fontSize: 13,
+    fontFamily: 'Outfit-SemiBold',
+    color: '#FF3B30',
   },
 
   // ── Customer bar ──
-  customerCard: {
-    marginHorizontal: layout.screenPadding,
-    marginTop: spacing.sm,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.accent.primary,
-  },
-  customerBar: {
-    padding: spacing.md,
+  customerSelected: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginHorizontal: 20,
+    marginTop: 12,
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
   detachText: {
-    ...textStyles.body,
-    color: colors.text.muted,
+    fontSize: 14,
+    fontFamily: 'Outfit-Medium',
+    color: '#5A5750',
     paddingHorizontal: spacing.sm,
   },
   addCustomerButton: {
-    marginHorizontal: layout.screenPadding,
-    marginTop: spacing.sm,
-    paddingVertical: spacing.md,
     borderWidth: 1,
-    borderColor: colors.border.default,
-    borderRadius: radius.md,
     borderStyle: 'dashed',
+    borderColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginHorizontal: 20,
+    marginTop: 12,
     alignItems: 'center',
   },
   addCustomerText: {
-    ...textStyles.caption,
-    color: colors.text.secondary,
+    fontSize: 13,
+    fontFamily: 'Outfit-Medium',
+    color: '#5A5750',
   },
   customerName: {
-    ...textStyles.bodyMedium,
-    color: colors.text.primary,
+    fontSize: 14,
+    fontFamily: 'Outfit-Medium',
+    color: '#F2F0ED',
   },
   customerVehicle: {
-    ...textStyles.captionSmall,
-    color: colors.text.secondary,
-    marginTop: spacing.xs,
+    fontSize: 12,
+    fontFamily: 'DMSans-Regular',
+    color: '#5A5750',
+    marginTop: 2,
   },
 
-  // ── Line items ──
-  listContent: {
-    paddingHorizontal: layout.screenPadding,
-    paddingTop: spacing.sm,
-    gap: spacing.sm,
-    paddingBottom: spacing.sm,
-  },
-  lineCard: {
-    overflow: 'hidden',
-  },
-  lineContent: {
+  // ── Cart Line Items ──
+  cartLine: {
     flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.md,
-  },
-  lineInfo: {
-    flex: 1,
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
   },
   lineName: {
-    ...textStyles.bodyMedium,
-    color: colors.text.primary,
+    fontSize: 14,
+    fontFamily: 'Outfit-Medium',
+    color: '#F2F0ED',
+    flex: 1,
+    marginRight: 12,
   },
   lineMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: spacing.xs,
+    marginTop: 2,
     gap: spacing.sm,
   },
   lineSku: {
     ...textStyles.monoSm,
-    color: colors.text.muted,
+    color: '#5A5750',
   },
   stockBadgeOut: {
     backgroundColor: colors.status.dangerBg,
@@ -449,14 +463,15 @@ const styles = StyleSheet.create({
     color: colors.status.warning,
   },
   lineUnitPrice: {
-    ...textStyles.captionSmall,
-    color: colors.text.muted,
-    marginTop: spacing.xs,
+    fontSize: 12,
+    fontFamily: 'DMSans-Regular',
+    color: '#5A5750',
+    marginTop: 2,
   },
   qtyControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: spacing.md,
+    marginLeft: spacing.md,
   },
   qtyBtn: {
     minWidth: touchTarget.min,
@@ -476,16 +491,15 @@ const styles = StyleSheet.create({
   },
   qtyText: {
     ...textStyles.monoMd,
-    color: colors.text.primary,
+    color: '#F2F0ED',
     marginHorizontal: spacing.md,
     minWidth: 24,
     textAlign: 'center',
   },
   lineTotal: {
-    ...textStyles.monoMd,
-    color: colors.text.primary,
-    minWidth: 80,
-    textAlign: 'right',
+    fontSize: 14,
+    fontFamily: 'Outfit-Bold',
+    color: '#F5A623',
   },
 
   // ── Empty state ──
@@ -493,19 +507,33 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 32,
   },
-  emptyText: {
-    ...textStyles.body,
-    color: colors.text.secondary,
+  emptyIcon: {
+    fontSize: 48,
+    marginBottom: 16,
+    opacity: 0.3,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontFamily: 'Outfit-SemiBold',
+    color: '#5A5750',
+    marginBottom: 6,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    fontFamily: 'DMSans-Regular',
+    color: 'rgba(255,255,255,0.3)',
+    textAlign: 'center',
+    lineHeight: 18,
   },
 
-  // ── Footer ──
-  footer: {
-    paddingHorizontal: layout.screenPadding,
-    paddingVertical: spacing.md,
+  // ── Cart Footer ──
+  cartFooter: {
     borderTopWidth: 1,
-    borderTopColor: colors.border.default,
-    backgroundColor: colors.bg.surface,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
   },
   totalRow: {
     flexDirection: 'row',
@@ -513,28 +541,52 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   totalLabel: {
-    ...textStyles.body,
-    color: colors.text.secondary,
+    fontSize: 13,
+    fontFamily: 'DMSans-Regular',
+    color: '#5A5750',
   },
   totalValue: {
-    ...textStyles.body,
-    color: colors.text.primary,
+    fontSize: 13,
+    fontFamily: 'Outfit-Medium',
+    color: '#F2F0ED',
   },
   grandTotalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: spacing.sm,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border.default,
+    alignItems: 'center',
+    marginBottom: 16,
   },
   grandTotalLabel: {
-    ...textStyles.subheading,
-    color: colors.text.primary,
+    fontSize: 14,
+    fontFamily: 'Outfit-Medium',
+    color: '#5A5750',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
   grandTotalValue: {
-    ...textStyles.monoLg,
-    color: colors.accent.primary,
+    fontSize: 24,
+    fontFamily: 'Outfit-Bold',
+    color: '#F2F0ED',
+  },
+
+  // ── Checkout button ──
+  checkoutButton: {
+    backgroundColor: '#F5A623',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    shadowColor: '#F5A623',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  checkoutButtonText: {
+    fontSize: 16,
+    fontFamily: 'Outfit-Bold',
+    color: '#1A1A1A',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
 
   // ── Swipe to delete ──
@@ -543,29 +595,19 @@ const styles = StyleSheet.create({
     width: 80,
     justifyContent: 'center',
     alignItems: 'center',
-    borderTopRightRadius: radius.md,
-    borderBottomRightRadius: radius.md,
   },
   swipeDeleteText: {
-    ...textStyles.bodyMedium,
-    color: colors.white,
+    fontSize: 13,
+    fontFamily: 'Outfit-SemiBold',
+    color: '#FFFFFF',
   },
 
   // ── Stock warning ──
   stockWarning: {
-    ...textStyles.caption,
+    fontSize: 12,
+    fontFamily: 'DMSans-Regular',
     color: colors.status.warning,
-    marginTop: spacing.md,
+    marginBottom: 12,
     textAlign: 'center',
-  },
-
-  // ── Proceed to Payment button ──
-  proceedButton: {
-    marginTop: spacing.md,
-    minHeight: 56,
-  },
-  proceedButtonText: {
-    fontFamily: fonts.display.bold,
-    fontSize: fontSize['2xl'],
   },
 });

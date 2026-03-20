@@ -1,59 +1,68 @@
 /**
- * Dark Forge — Industrial Premium color palette.
- * Dark-dominant with amber accents for automotive POS.
+ * Premium Dark — Warm-toned dark palette with amber/gold accents.
+ * Layered depth backgrounds, warm whites, and clear status colors.
  */
 export const colors = {
-  // Backgrounds (dark-dominant)
+  // Backgrounds — layered depth
   bg: {
-    primary: '#0C0C12',
-    surface: '#16161F',
-    elevated: '#1E1E2A',
-    input: '#12121A',
+    base: '#0D0D0F',         // deepest background (behind everything)
+    primary: '#0D0D0F',      // alias for base
+    surface: '#141417',       // main content surface
+    elevated: '#1A1A1F',     // cards, modals, elevated panels
+    overlay: '#222228',       // dropdown menus, popovers
+    input: '#141417',         // input fields
   },
 
   // Borders
   border: {
-    default: '#2A2A3A',
-    focus: '#FF8A00',
-    subtle: '#1E1E2A',
+    default: 'rgba(255,255,255,0.08)',
+    subtle: 'rgba(255,255,255,0.06)',    // hairline dividers
+    light: 'rgba(255,255,255,0.10)',      // input borders, card outlines
+    medium: 'rgba(255,255,255,0.16)',     // focused input borders
+    focus: '#F5A623',                     // kept for existing Input component usage
   },
 
-  // Text
+  // Text — clear hierarchy (warm whites, not blue-tinted)
   text: {
-    primary: '#F0F0F5',
-    secondary: '#8B8B9E',
-    muted: '#5A5A6E',
-    inverse: '#0C0C12',
+    primary: '#F2F0ED',       // warm white
+    secondary: '#9B978F',     // readable but receded
+    muted: '#5A5750',         // labels, hints, timestamps
+    inverse: '#0D0D0F',       // text on accent backgrounds
   },
 
-  // Accent (industrial amber)
+  // Accent — warm amber/gold
   accent: {
-    primary: '#FF8A00',
-    glow: 'rgba(255,138,0,0.15)',
-    pressed: '#E07800',
+    primary: '#F5A623',       // main accent (buttons, active states, prices)
+    pressed: '#E09520',       // slightly darker for pressed states
+    hover: '#E09520',         // alias
+    glow: 'rgba(245,166,35,0.12)',  // subtle background tint
+    muted: 'rgba(245,166,35,0.06)', // very subtle hover/active background
   },
 
   // Status
   status: {
-    success: '#00C853',
-    successBg: 'rgba(0,200,83,0.12)',
-    successText: '#00C853',
+    success: '#34C759',
+    successBg: 'rgba(52,199,89,0.1)',
+    successText: '#34C759',
     warning: '#FFB300',
-    warningBg: 'rgba(255,179,0,0.12)',
+    warningBg: 'rgba(255,179,0,0.1)',
     warningText: '#FFB300',
-    danger: '#FF3D3D',
-    dangerBg: 'rgba(255,61,61,0.12)',
-    dangerText: '#FF3D3D',
+    danger: '#FF3B30',
+    dangerBg: 'rgba(255,59,48,0.1)',
+    dangerText: '#FF3B30',
     info: '#00B8FF',
     infoBg: 'rgba(0,184,255,0.12)',
     infoText: '#00B8FF',
+    ok: '#34C759',       // alias for stock badge compatibility
+    low: '#FFB300',      // alias
+    out: '#FF3B30',      // alias
   },
 
-  // Stock levels
+  // Stock levels (kept for backward compatibility)
   stock: {
-    ok: '#00C853',
+    ok: '#34C759',
     low: '#FFB300',
-    out: '#FF3D3D',
+    out: '#FF3B30',
   },
 
   // Sync status bar
@@ -77,18 +86,18 @@ export const colors = {
 
   // Toast notifications
   toast: {
-    successBg: 'rgba(0,200,83,0.95)',
+    successBg: 'rgba(52,199,89,0.95)',
     successText: '#ffffff',
-    errorBg: 'rgba(255,61,61,0.95)',
+    errorBg: 'rgba(255,59,48,0.95)',
     errorText: '#ffffff',
   },
 
   // Tab bar
   tab: {
-    active: '#FF8A00',
-    inactive: '#5A5A6E',
-    bg: '#0C0C12',
-    border: '#1E1E2A',
+    active: '#F5A623',
+    inactive: '#5A5750',
+    bg: '#0D0D0F',
+    border: '#1A1A1F',
   },
 
   // Primitives
