@@ -63,10 +63,11 @@ export async function refreshStockMetrics(orgId: string): Promise<number> {
         GROUP BY product_id
       ),
       stock AS (
-        SELECT product_id, SUM(stock_level) AS total_stock
-        FROM inventory
-        WHERE org_id = ${orgId}
-        GROUP BY product_id
+        SELECT i.product_id, SUM(i.stock_level) AS total_stock
+        FROM inventory i
+        INNER JOIN locations loc ON loc.id = i.location_id AND loc.is_active = true
+        WHERE i.org_id = ${orgId}
+        GROUP BY i.product_id
       ),
       stockouts AS (
         SELECT product_id, COUNT(DISTINCT DATE(effective_at)) AS stockout_days

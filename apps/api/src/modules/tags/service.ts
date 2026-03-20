@@ -633,6 +633,7 @@ export async function getTagDemandDetail(opts: {
       COALESCE((
         SELECT SUM(inv.stock_level)::int
         FROM inventory inv
+        INNER JOIN locations loc ON loc.id = inv.location_id AND loc.is_active = true
         WHERE inv.product_id = p.id AND inv.org_id = ${orgId}
       ), 0)::text AS current_stock
     FROM product_tags pt

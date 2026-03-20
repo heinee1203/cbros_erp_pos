@@ -120,7 +120,8 @@ export async function querySummary(params: StockLevelsQueryParams): Promise<Stoc
   const conditions: SQL[] = [eq(products.orgId, params.orgId)];
 
   if (params.allLocations) {
-    // All locations for this org — no location filter
+    // All locations for this org — exclude inactive locations
+    conditions.push(eq(locations.isActive, true));
   } else {
     conditions.push(eq(inventory.locationId, locationId));
   }
@@ -150,6 +151,7 @@ export async function querySummary(params: StockLevelsQueryParams): Promise<Stoc
     })
     .from(inventory)
     .innerJoin(products, eq(inventory.productId, products.id))
+    .innerJoin(locations, eq(inventory.locationId, locations.id))
     .where(and(...conditions));
 
   const row = rows[0]!;
@@ -175,7 +177,8 @@ export async function queryStockLevels(
 
   // Location scoping
   if (params.allLocations) {
-    // All locations for this org — no location filter
+    // All locations for this org — exclude inactive locations
+    conditions.push(eq(locations.isActive, true));
   } else {
     conditions.push(eq(inventory.locationId, locationId));
   }

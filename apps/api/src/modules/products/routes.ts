@@ -947,8 +947,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         ? sql`AND i.stock_level > 0 AND i.stock_level <= i.reorder_point`
         : sql``;
 
-    // Location filter — omitted when allLocations=true
-    const locFilter = allLocations ? sql`` : sql`AND i.location_id = ${locationId} AND i.available_for_sale = true`;
+    // Location filter — when allLocations=true, exclude inactive locations
+    const locFilter = allLocations
+      ? sql`AND EXISTS (SELECT 1 FROM locations loc WHERE loc.id = i.location_id AND loc.is_active = true)`
+      : sql`AND i.location_id = ${locationId} AND i.available_for_sale = true`;
 
     if (groupBy === "family") {
       const result = await db.execute(sql`
