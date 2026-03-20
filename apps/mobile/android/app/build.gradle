@@ -93,6 +93,10 @@ android {
             keyPassword 'android'
         }
     }
+    packagingOptions {
+        pickFirst '**/libc++_shared.so'
+        pickFirst '**/libjsi.so'
+    }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
