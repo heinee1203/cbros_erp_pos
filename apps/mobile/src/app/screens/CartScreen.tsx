@@ -145,23 +145,23 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         <View style={styles.cartLine}>
           <View style={{ flex: 1, marginRight: 12 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <Text style={styles.lineName} numberOfLines={1}>{item.name}</Text>
+              <Text style={styles.lineName} numberOfLines={2}>{item.name}</Text>
               <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
             </View>
             <View style={styles.lineMetaRow}>
               <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} × {item.quantity}</Text>
-              <Text style={styles.lineSku}>{item.mnemonicSku}</Text>
-              {isOutOfStock && (
-                <View style={styles.stockBadgeOut}>
-                  <Text style={styles.stockBadgeOutText}>OUT OF STOCK</Text>
-                </View>
-              )}
-              {!isOutOfStock && isLowStock && (
-                <View style={styles.stockBadgeLow}>
-                  <Text style={styles.stockBadgeLowText}>Only {item.availableStock} avail.</Text>
-                </View>
-              )}
+              {item.sku ? <Text style={styles.lineSku}>{item.sku}</Text> : null}
             </View>
+            {isOutOfStock && (
+              <View style={[styles.stockBadgeOut, { marginTop: 4 }]}>
+                <Text style={styles.stockBadgeOutText}>No Stock</Text>
+              </View>
+            )}
+            {!isOutOfStock && isLowStock && (
+              <View style={[styles.stockBadgeLow, { marginTop: 4 }]}>
+                <Text style={styles.stockBadgeLowText}>Only {item.availableStock} avail.</Text>
+              </View>
+            )}
           </View>
           <View style={styles.qtyControls}>
             <Pressable
@@ -444,6 +444,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xs,
     paddingHorizontal: spacing.xs,
     paddingVertical: 2,
+    alignSelf: 'flex-start',
   },
   stockBadgeOutText: {
     fontFamily: fonts.display.bold,
@@ -456,6 +457,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xs,
     paddingHorizontal: spacing.xs,
     paddingVertical: 2,
+    alignSelf: 'flex-start',
   },
   stockBadgeLowText: {
     fontFamily: fonts.display.medium,

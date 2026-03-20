@@ -1,45 +1,35 @@
 /**
  * Premium Dark — Warm-toned dark palette with amber/gold accents.
- * Layered depth backgrounds, warm whites, and clear status colors.
  */
-export const colors = {
-  // Backgrounds — layered depth
+export const darkColors = {
   bg: {
-    base: '#0D0D0F',         // deepest background (behind everything)
-    primary: '#0D0D0F',      // alias for base
-    surface: '#141417',       // main content surface
-    elevated: '#1A1A1F',     // cards, modals, elevated panels
-    overlay: '#222228',       // dropdown menus, popovers
-    input: '#141417',         // input fields
+    base: '#0D0D0F',
+    primary: '#0D0D0F',
+    surface: '#141417',
+    elevated: '#1A1A1F',
+    overlay: '#222228',
+    input: '#141417',
   },
-
-  // Borders
   border: {
     default: 'rgba(255,255,255,0.08)',
-    subtle: 'rgba(255,255,255,0.06)',    // hairline dividers
-    light: 'rgba(255,255,255,0.10)',      // input borders, card outlines
-    medium: 'rgba(255,255,255,0.16)',     // focused input borders
-    focus: '#F5A623',                     // kept for existing Input component usage
+    subtle: 'rgba(255,255,255,0.06)',
+    light: 'rgba(255,255,255,0.10)',
+    medium: 'rgba(255,255,255,0.16)',
+    focus: '#F5A623',
   },
-
-  // Text — clear hierarchy (warm whites, not blue-tinted)
   text: {
-    primary: '#F2F0ED',       // warm white
-    secondary: '#9B978F',     // readable but receded
-    muted: '#5A5750',         // labels, hints, timestamps
-    inverse: '#0D0D0F',       // text on accent backgrounds
+    primary: '#F2F0ED',
+    secondary: '#9B978F',
+    muted: '#5A5750',
+    inverse: '#0D0D0F',
   },
-
-  // Accent — warm amber/gold
   accent: {
-    primary: '#F5A623',       // main accent (buttons, active states, prices)
-    pressed: '#E09520',       // slightly darker for pressed states
-    hover: '#E09520',         // alias
-    glow: 'rgba(245,166,35,0.12)',  // subtle background tint
-    muted: 'rgba(245,166,35,0.06)', // very subtle hover/active background
+    primary: '#F5A623',
+    pressed: '#E09520',
+    hover: '#E09520',
+    glow: 'rgba(245,166,35,0.12)',
+    muted: 'rgba(245,166,35,0.06)',
   },
-
-  // Status
   status: {
     success: '#34C759',
     successBg: 'rgba(52,199,89,0.1)',
@@ -53,19 +43,15 @@ export const colors = {
     info: '#00B8FF',
     infoBg: 'rgba(0,184,255,0.12)',
     infoText: '#00B8FF',
-    ok: '#34C759',       // alias for stock badge compatibility
-    low: '#FFB300',      // alias
-    out: '#FF3B30',      // alias
+    ok: '#34C759',
+    low: '#FFB300',
+    out: '#FF3B30',
   },
-
-  // Stock levels (kept for backward compatibility)
   stock: {
     ok: '#34C759',
     low: '#FFB300',
     out: '#FF3B30',
   },
-
-  // Sync status bar
   sync: {
     offlineBg: 'rgba(255,179,0,0.15)',
     offlineText: '#FFB300',
@@ -74,8 +60,6 @@ export const colors = {
     staleBg: 'rgba(255,179,0,0.10)',
     staleText: '#B0A070',
   },
-
-  // Shift banner
   shift: {
     bannerBg: '#3B2800',
     bannerBorder: '#5C4000',
@@ -83,25 +67,105 @@ export const colors = {
     bannerBtnBg: '#FFB020',
     bannerBtnText: '#1A1000',
   },
-
-  // Toast notifications
   toast: {
     successBg: 'rgba(52,199,89,0.95)',
     successText: '#ffffff',
     errorBg: 'rgba(255,59,48,0.95)',
     errorText: '#ffffff',
   },
-
-  // Tab bar
   tab: {
     active: '#F5A623',
     inactive: '#5A5750',
     bg: '#0D0D0F',
     border: '#1A1A1F',
   },
-
-  // Primitives
   transparent: 'transparent',
   white: '#ffffff',
   black: '#000000',
 } as const;
+
+export const lightColors: typeof darkColors = {
+  bg: {
+    base: '#F5F3EF',
+    primary: '#F5F3EF',
+    surface: '#FFFFFF',
+    elevated: '#FFFFFF',
+    overlay: '#F0EDE8',
+    input: '#FFFFFF',
+  },
+  border: {
+    default: 'rgba(0,0,0,0.08)',
+    subtle: 'rgba(0,0,0,0.06)',
+    light: 'rgba(0,0,0,0.10)',
+    medium: 'rgba(0,0,0,0.16)',
+    focus: '#E8960F',
+  },
+  text: {
+    primary: '#1A1A1A',
+    secondary: '#6B6560',
+    muted: '#A39E96',
+    inverse: '#FFFFFF',
+  },
+  accent: {
+    primary: '#E8960F',
+    pressed: '#D4880E',
+    hover: '#D4880E',
+    glow: 'rgba(232,150,15,0.10)',
+    muted: 'rgba(232,150,15,0.05)',
+  },
+  status: {
+    success: '#2DA44E',
+    successBg: 'rgba(45,164,78,0.08)',
+    successText: '#2DA44E',
+    warning: '#D4880E',
+    warningBg: 'rgba(212,136,14,0.08)',
+    warningText: '#D4880E',
+    danger: '#D1242F',
+    dangerBg: 'rgba(209,36,47,0.08)',
+    dangerText: '#D1242F',
+    info: '#0078D4',
+    infoBg: 'rgba(0,120,212,0.08)',
+    infoText: '#0078D4',
+    ok: '#2DA44E',
+    low: '#D4880E',
+    out: '#D1242F',
+  },
+  stock: {
+    ok: '#2DA44E',
+    low: '#D4880E',
+    out: '#D1242F',
+  },
+  sync: {
+    offlineBg: 'rgba(212,136,14,0.12)',
+    offlineText: '#D4880E',
+    reconnectBg: 'rgba(0,120,212,0.12)',
+    reconnectText: '#0078D4',
+    staleBg: 'rgba(212,136,14,0.08)',
+    staleText: '#8B7A50',
+  },
+  shift: {
+    bannerBg: '#FFF4D6',
+    bannerBorder: '#E8D5A0',
+    bannerText: '#8B6914',
+    bannerBtnBg: '#E8960F',
+    bannerBtnText: '#FFFFFF',
+  },
+  toast: {
+    successBg: 'rgba(45,164,78,0.95)',
+    successText: '#ffffff',
+    errorBg: 'rgba(209,36,47,0.95)',
+    errorText: '#ffffff',
+  },
+  tab: {
+    active: '#E8960F',
+    inactive: '#A39E96',
+    bg: '#F5F3EF',
+    border: '#E8E4DE',
+  },
+  transparent: 'transparent',
+  white: '#ffffff',
+  black: '#000000',
+} as const;
+
+/** Default export — dark theme for backward compatibility with static imports */
+export const colors = darkColors;

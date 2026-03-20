@@ -305,7 +305,7 @@ export default function ZReadingScreen() {
                   <Text style={styles.topItemRank}>{i + 1}.</Text>
                   <View>
                     <Text style={styles.topItemName} numberOfLines={1}>{item.productName}</Text>
-                    <Text style={styles.topItemSku}>{item.mnemonicSku}</Text>
+                    <Text style={styles.topItemSku}>{item.sku || ''}</Text>
                   </View>
                 </View>
                 <View style={styles.topItemRight}>

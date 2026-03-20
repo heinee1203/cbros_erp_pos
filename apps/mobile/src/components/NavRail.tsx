@@ -6,7 +6,7 @@ import { colors } from '@/theme';
 const TAB_LABELS: Record<string, string> = {
   POS: 'POS',
   Transactions: 'Sales',
-  Settings: 'Settings',
+  Settings: 'More',
 };
 
 const TAB_ICONS: Record<string, string> = {
@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5A623',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 32,
   },
   brandText: {
     fontSize: 20,
@@ -90,10 +90,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: 12,
-    marginBottom: 8,
+    marginBottom: 16,
   },
   navTabActive: {
-    backgroundColor: 'rgba(245,166,35,0.08)',
+    backgroundColor: 'rgba(245,166,35,0.12)',
   },
   activeIndicator: {
     position: 'absolute',

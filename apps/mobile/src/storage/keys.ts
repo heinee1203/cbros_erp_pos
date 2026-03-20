@@ -7,6 +7,7 @@ export const KEYS = {
   // Device provisioning
   API_BASE_URL: 'device.apiBaseUrl',
   DEVICE_ID: 'device.id',
+  THEME_MODE: 'device.themeMode',
 
   // Printer
   PRINTER_DEVICE_ID: 'printer.lastDeviceId',

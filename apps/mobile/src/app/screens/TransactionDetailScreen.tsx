@@ -176,7 +176,7 @@ export default function TransactionDetailScreen() {
                 <View style={styles.lineInfo}>
                   <Text style={styles.lineName}>{line.productName}</Text>
                   <Text style={styles.lineMeta}>
-                    {line.mnemonicSku} · {line.quantity} x {fmtPHP(line.unitPrice)}
+                    {line.quantity} x {fmtPHP(line.unitPrice)}
                   </Text>
                 </View>
                 <Text style={styles.lineTotal}>{fmtPHP(line.lineTotal)}</Text>

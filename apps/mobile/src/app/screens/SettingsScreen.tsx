@@ -19,6 +19,7 @@ import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
 import type { SettingsStackParamList } from '@/app/MainTabs';
 import { useLayout } from '@/hooks/use-layout';
+import { useTheme } from '@/theme/ThemeContext';
 import { colors, textStyles, spacing, layout } from '@/theme';
 import { Button, Card } from '@/components/ui';
 
@@ -35,6 +36,7 @@ function fmtSyncTime(ts: string | null): string {
 export default function SettingsScreen() {
   const navigation = useNavigation<Nav>();
   const { isTablet, screenPadding } = useLayout();
+  const { mode, setMode, colors: themeColors } = useTheme();
   const { user, logout, locations, locationId, setLocationId } = useAuth();
   const syncStatus = getSyncStatus();
   const pendingSales = getPendingSales();
@@ -89,6 +91,36 @@ export default function SettingsScreen() {
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Location</Text>
             <Text style={styles.rowValue}>{currentLocation?.name || '—'}</Text>
+          </View>
+        </Card>
+
+        {/* Appearance */}
+        <Card style={styles.card}>
+          <Text style={styles.sectionLabel}>APPEARANCE</Text>
+          <View style={styles.themeOptions}>
+            {(['light', 'dark', 'system'] as const).map((option) => (
+              <Pressable
+                key={option}
+                style={[
+                  styles.themeOption,
+                  mode === option && styles.themeOptionActive,
+                ]}
+                onPress={() => setMode(option)}
+              >
+                <Text style={[
+                  styles.themeOptionIcon,
+                  mode === option && styles.themeOptionIconActive,
+                ]}>
+                  {option === 'light' ? '\u2600' : option === 'dark' ? '\u263E' : '\u2699'}
+                </Text>
+                <Text style={[
+                  styles.themeOptionText,
+                  mode === option && styles.themeOptionTextActive,
+                ]}>
+                  {option.charAt(0).toUpperCase() + option.slice(1)}
+                </Text>
+              </Pressable>
+            ))}
           </View>
         </Card>
 
@@ -243,5 +275,35 @@ const styles = StyleSheet.create({
   signOutContainer: {
     marginTop: spacing.sm,
     marginBottom: spacing.lg,
+  },
+  themeOptions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  themeOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: colors.bg.overlay,
+    gap: 6,
+  },
+  themeOptionActive: {
+    backgroundColor: colors.accent.primary,
+  },
+  themeOptionIcon: {
+    fontSize: 16,
+  },
+  themeOptionIconActive: {},
+  themeOptionText: {
+    fontSize: 13,
+    fontFamily: 'Outfit-SemiBold',
+    color: colors.text.secondary,
+  },
+  themeOptionTextActive: {
+    color: colors.text.inverse,
   },
 });
