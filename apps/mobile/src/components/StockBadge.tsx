@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 
 interface StockBadgeProps {
   available: number;
@@ -7,33 +7,41 @@ interface StockBadgeProps {
 }
 
 export default function StockBadge({ available, lowThreshold = 5 }: StockBadgeProps) {
-  if (available > lowThreshold) {
-    // In stock — show nothing (clean design)
-    return null;
+  if (available <= 0) {
+    return <Text style={styles.out}>Out of Stock</Text>;
   }
-
-  const isOut = available <= 0;
-  const label = isOut ? 'Out of Stock' : `Low: ${available}`;
-  const bgColor = isOut ? 'rgba(255,59,48,0.12)' : 'rgba(255,179,0,0.12)';
-  const textColor = isOut ? '#FF3B30' : '#FFB300';
-
-  return (
-    <View style={[styles.badge, { backgroundColor: bgColor }]}>
-      <Text style={[styles.text, { color: textColor }]}>{label}</Text>
-    </View>
-  );
+  if (available <= lowThreshold) {
+    return <Text style={styles.low}>Low: {available}</Text>;
+  }
+  return <Text style={styles.ok}>{available} in stock</Text>;
 }
 
 const styles = StyleSheet.create({
-  badge: {
+  out: {
+    fontSize: 11,
+    fontFamily: 'Outfit-SemiBold',
+    color: '#FF3B30',
+    backgroundColor: 'rgba(255,59,48,0.12)',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 4,
     overflow: 'hidden',
+    letterSpacing: 0.2,
   },
-  text: {
+  low: {
     fontSize: 11,
     fontFamily: 'Outfit-SemiBold',
+    color: '#FFB300',
+    backgroundColor: 'rgba(255,179,0,0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
     letterSpacing: 0.2,
+  },
+  ok: {
+    fontSize: 11,
+    fontFamily: 'DMSans-Regular',
+    color: '#5A5750',
   },
 });

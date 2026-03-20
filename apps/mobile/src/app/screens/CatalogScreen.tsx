@@ -95,9 +95,19 @@ export default function CatalogScreen() {
           loadVariants(product);
           return;
         }
+        // Block OOS
+        const avail = product.stockLevel - product.reservedLevel;
+        if (avail <= 0 && !product.isParent) {
+          showToast('Out of stock \u2014 cannot add to cart');
+          return;
+        }
         if (product.isVariablePrice) {
           setVariablePriceItem(product);
           setEnteredPrice('');
+          return;
+        }
+        if (!product.unitPrice || product.unitPrice <= 0) {
+          showToast('Price not set \u2014 cannot add to cart');
           return;
         }
         addItemToCart(product);
@@ -203,16 +213,25 @@ export default function CatalogScreen() {
   }, [locationId]);
 
   const handleVariantSelect = useCallback((variant: CatalogItem) => {
+    const variantAvail = variant.stockLevel - variant.reservedLevel;
+    if (variantAvail <= 0) {
+      showToast('Out of stock \u2014 cannot add to cart');
+      return;
+    }
     if (variant.isVariablePrice) {
       setVariantParent(null);
       setVariablePriceItem(variant);
       setEnteredPrice('');
       return;
     }
+    if (!variant.unitPrice || variant.unitPrice <= 0) {
+      showToast('Price not set \u2014 cannot add to cart');
+      return;
+    }
     addItemToCart(variant);
     setVariantParent(null);
     setVariantChildren([]);
-  }, [addItemToCart]);
+  }, [addItemToCart, showToast]);
 
   const handleVariantPickerClose = useCallback(() => {
     setVariantParent(null);
@@ -224,13 +243,24 @@ export default function CatalogScreen() {
       loadVariants(item);
       return;
     }
+    // Block OOS items
+    const available = item.stockLevel - item.reservedLevel;
+    if (available <= 0) {
+      showToast('Out of stock \u2014 cannot add to cart');
+      return;
+    }
     if (item.isVariablePrice) {
       setVariablePriceItem(item);
       setEnteredPrice('');
       return;
     }
+    // Block unpriced items
+    if (!item.unitPrice || item.unitPrice <= 0) {
+      showToast('Price not set \u2014 cannot add to cart');
+      return;
+    }
     addItemToCart(item);
-  }, [addItemToCart, loadVariants]);
+  }, [addItemToCart, loadVariants, showToast]);
 
   const handleProductLongPress = useCallback((item: CatalogItem) => {
     if (isFavorite(item.serverId)) {
@@ -275,9 +305,18 @@ export default function CatalogScreen() {
           loadVariants(product);
           return;
         }
+        const scanAvail = product.stockLevel - product.reservedLevel;
+        if (scanAvail <= 0 && !product.isParent) {
+          showToast('Out of stock \u2014 cannot add to cart');
+          return;
+        }
         if (product.isVariablePrice) {
           setVariablePriceItem(product);
           setEnteredPrice('');
+          return;
+        }
+        if (!product.unitPrice || product.unitPrice <= 0) {
+          showToast('Price not set \u2014 cannot add to cart');
           return;
         }
         addItemToCart(product);

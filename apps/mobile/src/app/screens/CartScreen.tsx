@@ -22,14 +22,13 @@ import { CustomerLookup } from '@/components/CustomerLookup';
 import type { Customer, Vehicle } from '@/hooks/use-customer-search';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout, fonts, fontSize, touchTarget } from '@/theme';
-// UI components no longer needed for premium redesign
 
 function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 interface CartScreenProps {
-  onProceedToPayment?: () => void; // tablet: callback to swap panel to PaymentScreen
+  onProceedToPayment?: () => void;
 }
 
 export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
@@ -48,7 +47,8 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const subtotal = useCartStore(selectSubtotal);
   const discount = useCartStore(selectCartDiscount);
   const grandTotal = useCartStore(selectGrandTotal);
-  const lineCount = useCartStore(selectLineCount);
+  const unitCount = useCartStore(selectLineCount);
+  const productCount = lines.length;
 
   const attachCustomer = useCartStore(s => s.attachCustomer);
   const detachCustomer = useCartStore(s => s.detachCustomer);
@@ -78,8 +78,8 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
           const avail = l.availableStock ?? 0;
           const deficit = l.quantity - avail;
           return avail <= 0
-            ? `• ${l.name} — OUT OF STOCK (qty ${l.quantity})`
-            : `• ${l.name} — need ${l.quantity}, only ${avail} avail (−${deficit})`;
+            ? `\u2022 ${l.name} \u2014 OUT OF STOCK (qty ${l.quantity})`
+            : `\u2022 ${l.name} \u2014 need ${l.quantity}, only ${avail} avail (\u2212${deficit})`;
         })
         .join('\n');
 
@@ -101,19 +101,19 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
     proceedToPayment();
   }, [lines, proceedToPayment, setAllowNegativeStock]);
 
-  // Check for stock warnings
   const hasStockWarnings = lines.some(
     l => l.availableStock !== null && l.availableStock < l.quantity,
   );
+
+  // VAT calculation (12% inclusive)
+  const vatAmount = grandTotal - (grandTotal / 1.12);
 
   const swipeableRefs = useRef<Map<string, Swipeable>>(new Map());
 
   const handleMinusPress = useCallback((item: CartLine) => {
     if (item.quantity <= 1) {
-      Alert.alert('Remove Item', `Remove ${item.name} from cart?`, [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: () => removeLine(item.id) },
-      ]);
+      // Instant remove at qty 1 — no confirmation for speed
+      removeLine(item.id);
     } else {
       updateQuantity(item.id, item.quantity - 1);
     }
@@ -123,10 +123,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
     <Pressable
       style={styles.swipeDelete}
       onPress={() => {
-        Alert.alert('Remove Item', `Remove ${lineName}?`, [
-          { text: 'Cancel', style: 'cancel', onPress: () => swipeableRefs.current.get(lineId)?.close() },
-          { text: 'Remove', style: 'destructive', onPress: () => removeLine(lineId) },
-        ]);
+        removeLine(lineId);
       }}
     >
       <Text style={styles.swipeDeleteText}>Delete</Text>
@@ -145,12 +142,14 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         <View style={styles.cartLine}>
           <View style={{ flex: 1, marginRight: 12 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <Text style={styles.lineName} numberOfLines={2}>{item.name}</Text>
+              {item.sku ? (
+                <Text style={styles.cartLineSKU} numberOfLines={1}>{item.sku}</Text>
+              ) : null}
               <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
             </View>
+            <Text style={styles.lineName} numberOfLines={2}>{item.name}</Text>
             <View style={styles.lineMetaRow}>
-              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} × {item.quantity}</Text>
-              {item.sku ? <Text style={styles.lineSku}>{item.sku}</Text> : null}
+              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} \u00D7 {item.quantity}</Text>
             </View>
             {isOutOfStock && (
               <View style={[styles.stockBadgeOut, { marginTop: 4 }]}>
@@ -165,11 +164,11 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
           </View>
           <View style={styles.qtyControls}>
             <Pressable
-              style={[styles.qtyBtn, item.quantity <= 1 && styles.qtyBtnDanger]}
+              style={styles.qtyBtn}
               onPress={() => handleMinusPress(item)}
               hitSlop={8}
             >
-              <Text style={styles.qtyBtnText}>{item.quantity <= 1 ? '\uD83D\uDDD1' : '\u2212'}</Text>
+              <Text style={styles.qtyBtnText}>{'\u2212'}</Text>
             </Pressable>
             <Text style={styles.qtyText}>{item.quantity}</Text>
             <Pressable
@@ -187,7 +186,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header — tablet: no Back button (persistent panel) */}
+      {/* Header */}
       <View style={styles.cartHeader}>
         {!isTablet ? (
           <>
@@ -198,12 +197,12 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             >
               <Text style={styles.backText}>{'\u2190'} Back</Text>
             </Pressable>
-            <Text style={styles.headerTitle}>Cart ({lineCount})</Text>
+            <Text style={styles.headerTitle}>Cart ({unitCount})</Text>
           </>
         ) : (
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Text style={styles.cartHeaderTitle}>Cart</Text>
-            <Text style={styles.cartHeaderCount}>{lineCount} items</Text>
+            <Text style={styles.cartHeaderCount}>{productCount} products \u00B7 {unitCount} units</Text>
           </View>
         )}
         <Pressable
@@ -222,34 +221,37 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         </Pressable>
       </View>
 
-      {/* Customer bar */}
-      {customerName ? (
-        <View style={styles.customerSelected}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.customerName}>{customerName}</Text>
-            {vehicleId && (
-              <Text style={styles.customerVehicle}>Vehicle attached</Text>
-            )}
+      {/* Customer bar — only when cart has items */}
+      {lines.length > 0 && (
+        customerName ? (
+          <View style={styles.customerSelected}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.customerName}>{customerName}</Text>
+              {vehicleId && (
+                <Text style={styles.customerVehicle}>Vehicle attached</Text>
+              )}
+            </View>
+            <Pressable onPress={detachCustomer} hitSlop={8}>
+              <Text style={styles.detachText}>{'\u2715'}</Text>
+            </Pressable>
           </View>
-          <Pressable onPress={detachCustomer} hitSlop={8}>
-            <Text style={styles.detachText}>✕</Text>
+        ) : (
+          <Pressable
+            style={styles.addCustomerButton}
+            onPress={() => setCustomerLookupVisible(true)}
+            android_ripple={{ color: colors.accent.glow }}
+          >
+            <Text style={styles.addCustomerText}>+ Add Customer</Text>
           </Pressable>
-        </View>
-      ) : (
-        <Pressable
-          style={styles.addCustomerButton}
-          onPress={() => setCustomerLookupVisible(true)}
-          android_ripple={{ color: colors.accent.glow }}
-        >
-          <Text style={styles.addCustomerText}>+ Add Customer</Text>
-        </Pressable>
+        )
       )}
 
-      {/* Line items */}
+      {/* Scrollable line items */}
       <FlatList
         data={lines}
         keyExtractor={item => item.id}
         renderItem={renderLine}
+        style={styles.cartList}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyIcon}>{'\uD83D\uDED2'}</Text>
@@ -262,9 +264,16 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         ]}
       />
 
-      {/* Footer — totals + proceed to payment */}
+      {/* PINNED footer — always visible, never scrolls */}
       {lines.length > 0 && (
         <View style={styles.cartFooter}>
+          {/* Stock warning */}
+          {hasStockWarnings && (
+            <Text style={styles.stockWarning}>
+              {'\u26A0'} Some items have insufficient stock
+            </Text>
+          )}
+
           {/* Subtotal / discount rows */}
           {discount > 0 && (
             <>
@@ -279,21 +288,24 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             </>
           )}
 
-          {/* Grand total row */}
+          {/* VAT row */}
+          <View style={styles.vatRow}>
+            <Text style={styles.vatLabel}>VAT (12% inclusive)</Text>
+            <Text style={styles.vatAmount}>{fmtPHP(vatAmount)}</Text>
+          </View>
+
+          {/* Grand total */}
           <View style={styles.grandTotalRow}>
             <Text style={styles.grandTotalLabel}>TOTAL</Text>
             <Text style={styles.grandTotalValue}>{fmtPHP(grandTotal)}</Text>
           </View>
 
-          {/* Stock warnings summary */}
-          {hasStockWarnings && (
-            <Text style={styles.stockWarning}>
-              {'\u26A0'} Some items have insufficient stock
-            </Text>
-          )}
-
-          {/* Proceed to Payment button */}
-          <Pressable style={styles.checkoutButton} onPress={handleProceedToPayment}>
+          {/* Checkout button */}
+          <Pressable
+            style={styles.checkoutButton}
+            onPress={handleProceedToPayment}
+            android_ripple={{ color: 'rgba(0,0,0,0.2)' }}
+          >
             <Text style={styles.checkoutButtonText}>CHECKOUT</Text>
           </Pressable>
         </View>
@@ -309,13 +321,15 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  // ── Layout ──
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,
   },
+  cartList: {
+    flex: 1,
+  },
 
-  // ── Cart Header ──
+  // Cart Header
   cartHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -366,7 +380,7 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
   },
 
-  // ── Customer bar ──
+  // Customer bar
   customerSelected: {
     backgroundColor: 'rgba(255,255,255,0.04)',
     borderRadius: 10,
@@ -412,7 +426,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // ── Cart Line Items ──
+  // Cart Line Items
   cartLine: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -422,12 +436,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: 'rgba(255,255,255,0.06)',
   },
+  cartLineSKU: {
+    fontSize: 13,
+    fontFamily: 'JetBrainsMono-Regular',
+    color: '#9B978F',
+    flex: 1,
+  },
   lineName: {
     fontSize: 14,
     fontFamily: 'Outfit-Medium',
     color: '#F2F0ED',
-    flex: 1,
-    marginRight: 12,
+    marginTop: 2,
+    lineHeight: 19,
   },
   lineMetaRow: {
     flexDirection: 'row',
@@ -468,7 +488,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'DMSans-Regular',
     color: '#5A5750',
-    marginTop: 2,
   },
   qtyControls: {
     flexDirection: 'row',
@@ -483,9 +502,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  qtyBtnDanger: {
-    backgroundColor: colors.status.danger,
-  },
   qtyBtnText: {
     fontFamily: fonts.display.bold,
     fontSize: fontSize.xl,
@@ -499,12 +515,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   lineTotal: {
-    fontSize: 14,
+    fontSize: 16,
     fontFamily: 'Outfit-Bold',
     color: '#F5A623',
+    marginLeft: 8,
   },
 
-  // ── Empty state ──
+  // Empty state
   empty: {
     flex: 1,
     justifyContent: 'center',
@@ -530,12 +547,28 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // ── Cart Footer ──
+  // Cart Footer — PINNED
   cartFooter: {
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.08)',
     paddingHorizontal: 20,
     paddingVertical: 16,
+    backgroundColor: colors.bg.elevated,
+  },
+  vatRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  vatLabel: {
+    fontSize: 12,
+    fontFamily: 'DMSans-Regular',
+    color: '#5A5750',
+  },
+  vatAmount: {
+    fontSize: 12,
+    fontFamily: 'Outfit-Medium',
+    color: '#5A5750',
   },
   totalRow: {
     flexDirection: 'row',
@@ -566,15 +599,16 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   grandTotalValue: {
-    fontSize: 24,
+    fontSize: 28,
     fontFamily: 'Outfit-Bold',
     color: '#F2F0ED',
+    letterSpacing: -0.5,
   },
 
-  // ── Checkout button ──
+  // Checkout button
   checkoutButton: {
     backgroundColor: '#F5A623',
-    paddingVertical: 16,
+    paddingVertical: 18,
     borderRadius: 14,
     alignItems: 'center',
     shadowColor: '#F5A623',
@@ -587,11 +621,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Outfit-Bold',
     color: '#1A1A1A',
-    letterSpacing: 0.5,
+    letterSpacing: 1,
     textTransform: 'uppercase',
   },
 
-  // ── Swipe to delete ──
+  // Swipe to delete
   swipeDelete: {
     backgroundColor: colors.status.danger,
     width: 80,
@@ -604,7 +638,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
-  // ── Stock warning ──
+  // Stock warning
   stockWarning: {
     fontSize: 12,
     fontFamily: 'DMSans-Regular',

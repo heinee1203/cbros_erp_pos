@@ -6,6 +6,7 @@ import SyncStatusBar from '@/components/SyncStatusBar';
 import { NetworkBanner } from '@/components/NetworkBanner';
 import { NavRail, NAV_RAIL_WIDTH } from '@/components/NavRail';
 import { SplitView } from '@/components/SplitView';
+import { useCartStore } from '@/stores/cart-store';
 import { useLayout } from '@/hooks/use-layout';
 import { startNetworkMonitor } from '@/services/network-monitor';
 import { colors, textStyles, layout } from '@/theme';
@@ -43,6 +44,8 @@ const POSStack = createStackNavigator<POSStackParamList>();
 /** Tablet: Catalog + Cart/Payment rendered side-by-side */
 function POSSplitScreen() {
   const [showPayment, setShowPayment] = useState(false);
+  const cartLineCount = useCartStore(s => s.lines.length);
+  const cartIsEmpty = cartLineCount === 0 && !showPayment;
 
   const handleProceedToPayment = useCallback(() => {
     setShowPayment(true);
@@ -63,6 +66,7 @@ function POSSplitScreen() {
         )
       }
       primaryRatio={0.6}
+      secondaryCollapsed={cartIsEmpty}
     />
   );
 }
