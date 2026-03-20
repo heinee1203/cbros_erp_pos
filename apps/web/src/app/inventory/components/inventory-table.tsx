@@ -74,16 +74,18 @@ export function SortableHeader({
  * Stock Pill
  * ───────────────────────────────────────────── */
 export function StockPill({ stockLevel, reorderPoint }: { stockLevel: number; reorderPoint: number }) {
+  // Clamp: prevent "-0" or negative display — physical stock can't be negative
+  const display = stockLevel <= 0 ? 0 : stockLevel;
   return (
     <span className={cn(
       "inline-flex min-w-[36px] items-center justify-end rounded-md px-2 py-0.5 text-[12px] font-semibold tabular-nums",
-      stockLevel === 0
+      display === 0
         ? "bg-red-50 text-red-700"
-        : stockLevel <= reorderPoint
+        : display <= reorderPoint
           ? "bg-amber-50 text-amber-700"
           : "text-foreground",
     )}>
-      {stockLevel.toLocaleString()}
+      {display.toLocaleString()}
     </span>
   );
 }
@@ -144,7 +146,7 @@ export function StockPopover({
   }, [data]);
 
   const total = useMemo(
-    () => locations.reduce((sum, loc) => sum + loc.stockLevel, 0),
+    () => Math.max(0, locations.reduce((sum, loc) => sum + Math.max(0, loc.stockLevel), 0)),
     [locations],
   );
 
@@ -176,13 +178,13 @@ export function StockPopover({
       >
         <span className={cn(
           "inline-flex min-w-[36px] items-center justify-end rounded-md px-2 py-0.5 text-[12px] font-semibold tabular-nums cursor-pointer transition-all",
-          stockLevel === 0
+          (stockLevel <= 0)
             ? "bg-red-50 text-red-700 group-hover:bg-red-100"
             : stockLevel <= reorderPoint
               ? "bg-amber-50 text-amber-700 group-hover:bg-amber-100"
               : "text-foreground group-hover:bg-muted",
         )}>
-          {stockLevel.toLocaleString()}
+          {(stockLevel <= 0 ? 0 : stockLevel).toLocaleString()}
         </span>
       </button>
 
@@ -236,27 +238,31 @@ export function StockPopover({
                       </span>
                     </div>
                     <div className="ml-2 shrink-0 text-right">
-                      {hasPkg && loc.stockLevel >= upc ? (() => {
-                        const cases = Math.floor(loc.stockLevel / upc);
-                        const loose = loc.stockLevel % upc;
+                      {(() => {
+                        const s = Math.max(0, loc.stockLevel);
+                        if (hasPkg && s >= upc) {
+                          const cases = Math.floor(s / upc);
+                          const loose = s % upc;
+                          return (
+                            <>
+                              <span className="text-[11px] font-semibold tabular-nums text-foreground">
+                                {s.toLocaleString()}
+                              </span>
+                              <span className="text-[9px] text-muted-foreground ml-1">
+                                ({cases}{loose > 0 ? `.${loose}` : ""} {pkgUnit}{cases !== 1 ? "s" : ""})
+                              </span>
+                            </>
+                          );
+                        }
                         return (
-                          <>
-                            <span className="text-[11px] font-semibold tabular-nums text-foreground">
-                              {loc.stockLevel.toLocaleString()}
-                            </span>
-                            <span className="text-[9px] text-muted-foreground ml-1">
-                              ({cases}{loose > 0 ? `.${loose}` : ""} {pkgUnit}{cases !== 1 ? "s" : ""})
-                            </span>
-                          </>
+                          <span className={cn(
+                            "text-[11px] font-semibold tabular-nums",
+                            s === 0 ? "text-red-600" : "text-foreground",
+                          )}>
+                            {s.toLocaleString()}
+                          </span>
                         );
-                      })() : (
-                        <span className={cn(
-                          "text-[11px] font-semibold tabular-nums",
-                          loc.stockLevel === 0 ? "text-red-600" : "text-foreground",
-                        )}>
-                          {loc.stockLevel.toLocaleString()}
-                        </span>
-                      )}
+                      })()}
                     </div>
                   </div>
                 );

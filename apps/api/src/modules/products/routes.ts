@@ -283,14 +283,14 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         oemNumber: products.oemNumber,
         isVariablePrice: products.isVariablePrice,
         stockLevel: parentOnly
-          ? sql<number>`CASE WHEN ${products.isParent} THEN COALESCE((
+          ? sql<number>`GREATEST(CASE WHEN ${products.isParent} THEN COALESCE((
               SELECT SUM(inv2.stock_level)::int
               FROM inventory inv2
               INNER JOIN products p2 ON inv2.product_id = p2.id
               INNER JOIN locations loc2 ON inv2.location_id = loc2.id AND loc2.is_active = true
               WHERE p2.parent_product_id = ${products.id}
               ${locationId ? sql`AND inv2.location_id = ${locationId}` : sql``}
-            ), 0) ELSE ${inventory.stockLevel} END`.as("stock_level")
+            ), 0) ELSE ${inventory.stockLevel} END, 0)`.as("stock_level")
           : inventory.stockLevel,
         reorderPoint: inventory.reorderPoint,
         familyId: products.familyId,
@@ -2139,8 +2139,8 @@ async function handleGroupedQuery(
         (array_agg(p.barcode ORDER BY p.sku))[1] AS barcode,
         (array_agg(p.oem_number ORDER BY p.sku))[1] AS oem_number,
         bool_or(p.is_variable_price) AS is_variable_price,
-        SUM(i.stock_level)::int AS stock_level,
-        MAX(i.reorder_point)::int AS reorder_point,
+        GREATEST(COALESCE(SUM(i.stock_level), 0), 0)::int AS stock_level,
+        COALESCE(MAX(i.reorder_point), 0)::int AS reorder_point,
         p.family_id AS family_id,
         pf.name AS family_name,
         (array_agg(p.category_id ORDER BY p.sku))[1] AS sub_category_id,
@@ -2183,7 +2183,7 @@ async function handleGroupedQuery(
         p.barcode,
         p.oem_number,
         p.is_variable_price,
-        ${allLocations ? sql`COALESCE(SUM(i.stock_level), 0)::int` : sql`i.stock_level`} AS stock_level,
+        ${allLocations ? sql`GREATEST(COALESCE(SUM(i.stock_level), 0), 0)::int` : sql`GREATEST(i.stock_level, 0)`} AS stock_level,
         ${allLocations ? sql`COALESCE(MAX(i.reorder_point), 0)::int` : sql`i.reorder_point`} AS reorder_point,
         NULL::uuid AS family_id,
         NULL::text AS family_name,
@@ -2357,7 +2357,7 @@ async function handleAllLocationsQuery(
         p.id, p.name, p.sku, p.mnemonic_sku, p.category::text,
         p.unit_price::text, p.cost_price::text, p.barcode, p.oem_number,
         p.is_variable_price,
-        COALESCE(SUM(i.stock_level), 0)::int AS stock_level,
+        GREATEST(COALESCE(SUM(i.stock_level), 0), 0)::int AS stock_level,
         COALESCE(MAX(i.reorder_point), 0)::int AS reorder_point,
         p.family_id, pf.name AS family_name,
         p.category_id AS sub_category_id, cat.name AS sub_category_name,
