@@ -1,4 +1,4 @@
-package com.apexpos
+package com.cbros.apexpos
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

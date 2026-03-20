@@ -1,0 +1,20 @@
+# Gradle
+.gradle/
+build/
+app/build/
+app/.cxx/
+
+# Local config
+local.properties
+
+# Keystore (don't commit release keys)
+*.keystore
+!debug.keystore
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

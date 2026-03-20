@@ -1,4 +1,4 @@
-package com.apexpos
+package com.cbros.apexpos
 
 import android.app.Application
 import com.facebook.react.PackageList
