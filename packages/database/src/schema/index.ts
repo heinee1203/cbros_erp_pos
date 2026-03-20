@@ -37,3 +37,4 @@ export * from "./price-changes";
 export * from "./product-suppliers";
 export * from "./accounts-payable";
 export * from "./tags";
+export * from "./backorders";

@@ -291,6 +291,88 @@ export async function refreshReorderSuggestions(
       WHERE f.priority IS NOT NULL
     `);
 
+    // ── Backorder Integration ──
+    // 1. Boost suggestions that have pending backorders: increase qty + add note
+    await tx.execute(sql`
+      UPDATE reorder_suggestions rs
+      SET
+        suggested_qty = rs.suggested_qty + bo.backorder_qty,
+        notes = COALESCE(rs.notes || E'\n', '') ||
+          'Includes backorder of ' || bo.backorder_qty || ' units from ' || bo.po_numbers
+      FROM (
+        SELECT
+          b.product_id,
+          SUM(b.quantity)::integer AS backorder_qty,
+          STRING_AGG(DISTINCT b.original_po_number, ', ') AS po_numbers
+        FROM backorders b
+        WHERE b.org_id = ${orgId} AND b.status = 'PENDING'
+        GROUP BY b.product_id
+      ) bo
+      WHERE rs.org_id = ${orgId}
+        AND rs.status = 'PENDING'
+        AND rs.product_id = bo.product_id
+    `);
+
+    // 2. Create URGENT suggestions for backordered products NOT already in suggestions
+    await tx.execute(sql`
+      INSERT INTO reorder_suggestions (
+        org_id, product_id, sku, product_name, supplier_id, supplier_name,
+        current_stock, pending_inbound, avg_daily_demand, demand_std_dev,
+        avg_lead_time, service_level_z, safety_stock, reorder_point,
+        suggested_qty, target_stock, abc_class, priority, status, notes, computed_at
+      )
+      SELECT
+        ${orgId},
+        p.id,
+        p.sku,
+        p.name,
+        b.supplier_id,
+        s.name,
+        COALESCE(sm.total_stock, 0),
+        0,
+        COALESCE(sm.avg_daily_sales_30d, 0),
+        0,
+        ${config.defaultLeadTimeDays},
+        1.65,
+        0,
+        0,
+        b.total_qty,
+        b.total_qty,
+        'C',
+        'URGENT'::reorder_priority,
+        'PENDING',
+        'Backorder — ' || b.total_qty || ' units unfulfilled from ' || b.po_numbers || ' on ' || TO_CHAR(b.oldest_date, 'Mon DD'),
+        NOW()
+      FROM (
+        SELECT
+          bo.product_id,
+          bo.supplier_id,
+          SUM(bo.quantity)::integer AS total_qty,
+          STRING_AGG(DISTINCT bo.original_po_number, ', ') AS po_numbers,
+          MIN(bo.created_at) AS oldest_date
+        FROM backorders bo
+        WHERE bo.org_id = ${orgId} AND bo.status = 'PENDING'
+        GROUP BY bo.product_id, bo.supplier_id
+      ) b
+      JOIN products p ON p.id = b.product_id
+      JOIN suppliers s ON s.id = b.supplier_id
+      LEFT JOIN stock_metrics sm ON sm.product_id = b.product_id AND sm.org_id = ${orgId}
+      WHERE NOT EXISTS (
+        SELECT 1 FROM reorder_suggestions rs
+        WHERE rs.org_id = ${orgId} AND rs.status = 'PENDING' AND rs.product_id = b.product_id
+      )
+    `);
+
+    // 3. Auto-escalate aging backorders (>14 days → HIGH)
+    await tx.execute(sql`
+      UPDATE backorders
+      SET priority = 'HIGH', updated_at = NOW()
+      WHERE org_id = ${orgId}
+        AND status = 'PENDING'
+        AND priority != 'HIGH'
+        AND created_at < NOW() - INTERVAL '14 days'
+    `);
+
     const countRows = await tx.execute(
       sql`SELECT COUNT(*)::integer AS cnt FROM reorder_suggestions WHERE org_id = ${orgId} AND status = 'PENDING'`,
     );

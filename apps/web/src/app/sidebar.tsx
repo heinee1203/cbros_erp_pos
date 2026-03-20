@@ -118,6 +118,7 @@ const NAV_TOP: NavEntry[] = [
     children: [
       { label: "Stock Levels", href: "/procurement/stock-levels", match: /^\/procurement\/stock-levels/ },
       { label: "Purchase Orders", href: "/procurement/purchase-orders", match: /^\/procurement\/purchase-orders/ },
+      { label: "Backorders", href: "/procurement/backorders", match: /^\/procurement\/backorders/ },
       { label: "Transfer Orders", href: "/procurement/transfer-orders", match: /^\/procurement\/transfer-orders/ },
       { label: "Stock Adjustments", href: "/procurement/stock-adjustments", match: /^\/procurement\/stock-adjustments/ },
       { label: "Inventory Counts", href: "/procurement/inventory-counts", match: /^\/procurement\/inventory-counts/ },
@@ -441,6 +442,7 @@ function NavGroupItem({
                   )}
                   <span className="truncate">{child.label}</span>
                   {child.label === "Suggested Orders" && <ReorderBadge />}
+                  {child.label === "Backorders" && <BackorderBadge />}
                 </Link>
               );
             })}
@@ -590,6 +592,35 @@ function ReorderBadge() {
   );
 }
 
+/* ─── Backorder Badge (sidebar) ─── */
+function BackorderBadge() {
+  const { token, locationId } = useAuth();
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!token || !locationId) return;
+    const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+    fetch(`${API}/procurement/backorders/summary`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Location-ID": locationId,
+      },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.pendingTotal) setCount(data.pendingTotal);
+      })
+      .catch(() => {});
+  }, [token, locationId]);
+
+  if (count <= 0) return null;
+  return (
+    <span className="ml-auto flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold leading-none text-white">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
 /* ─── Child Link (active state) ─── */
 function NavChildLink({
   child,
@@ -599,7 +630,8 @@ function NavChildLink({
   pathname: string;
 }) {
   const active = isChildActive(child, pathname);
-  const showBadge = child.label === "Suggested Orders";
+  const showReorderBadge = child.label === "Suggested Orders";
+  const showBackorderBadge = child.label === "Backorders";
 
   return (
     <Link
@@ -615,7 +647,8 @@ function NavChildLink({
         <div className="absolute left-[18px] top-1/2 h-1 w-1 -translate-y-1/2 rounded-full bg-sidebar-foreground-active" />
       )}
       <span className="truncate">{child.label}</span>
-      {showBadge && <ReorderBadge />}
+      {showReorderBadge && <ReorderBadge />}
+      {showBackorderBadge && <BackorderBadge />}
     </Link>
   );
 }

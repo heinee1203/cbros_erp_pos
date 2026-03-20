@@ -33,6 +33,7 @@ import { reorderRoutes } from "./modules/reorder/routes";
 import { catalogRoutes } from "./modules/catalog/routes";
 import { returnsRoutes } from "./modules/returns/routes";
 import { supplierReturnsRoutes } from "./modules/supplier-returns/routes";
+import { backorderRoutes } from "./modules/backorders/routes";
 import { serialRoutes } from "./modules/serials/routes";
 import { importRoutes } from "./modules/import/routes";
 import { importHistoryRoutes } from "./modules/import-history/routes";
@@ -101,6 +102,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(catalogRoutes, { prefix: "/api/v1/catalog" });
   await app.register(returnsRoutes, { prefix: "/returns" });
   await app.register(supplierReturnsRoutes, { prefix: "/procurement/supplier-returns" });
+  await app.register(backorderRoutes, { prefix: "/procurement/backorders" });
   await app.register(serialRoutes, { prefix: "/inventory/serials" });
   await app.register(importRoutes, { prefix: "/inventory/import" });
   await app.register(importHistoryRoutes, { prefix: "/inventory/import/history" });

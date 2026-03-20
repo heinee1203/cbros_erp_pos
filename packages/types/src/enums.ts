@@ -250,6 +250,23 @@ export type SupplierReturnStatus =
 /** Roles allowed to manage supplier returns */
 export const SUPPLIER_RETURN_ROLES = [UserRole.ADMIN, UserRole.MANAGER] as const;
 
+export const BackorderStatus = {
+  PENDING: "PENDING",
+  INCLUDED_IN_PO: "INCLUDED_IN_PO",
+  CANCELLED: "CANCELLED",
+} as const;
+export type BackorderStatus = (typeof BackorderStatus)[keyof typeof BackorderStatus];
+
+export const BackorderPriority = {
+  HIGH: "HIGH",
+  NORMAL: "NORMAL",
+  LOW: "LOW",
+} as const;
+export type BackorderPriority = (typeof BackorderPriority)[keyof typeof BackorderPriority];
+
+/** Roles allowed to manage backorders */
+export const BACKORDER_ROLES = [UserRole.ADMIN, UserRole.MANAGER] as const;
+
 /** Valid status transitions for purchase orders */
 export const PO_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrderStatus[]> = {
   [PurchaseOrderStatus.DRAFT]: [PurchaseOrderStatus.SUBMITTED, PurchaseOrderStatus.CANCELLED],
