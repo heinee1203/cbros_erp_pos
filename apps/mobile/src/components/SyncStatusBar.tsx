@@ -104,7 +104,7 @@ export default function SyncStatusBar() {
     <View style={[styles.bar, { backgroundColor: syncColors.bg }]}>
       <Animated.View style={[styles.dot, { backgroundColor: syncColors.dot, opacity: pulseAnim }]} />
       <Text style={[styles.text, { color: syncColors.text }]}>
-        Last sync: {timeAgo}
+        {timeAgo}
       </Text>
       {urgency === 'critical' && (
         <Pressable

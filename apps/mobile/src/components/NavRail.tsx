@@ -118,13 +118,13 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   navTabActive: {
-    backgroundColor: 'rgba(245,166,35,0.12)',
+    backgroundColor: 'rgba(245,166,35,0.15)',
   },
   activeIndicator: {
     position: 'absolute',
     left: -4,
-    width: 3,
-    height: 24,
+    width: 4,
+    height: 28,
     backgroundColor: '#F5A623',
     borderTopRightRadius: 3,
     borderBottomRightRadius: 3,

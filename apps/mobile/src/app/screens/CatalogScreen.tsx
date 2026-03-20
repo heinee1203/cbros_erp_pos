@@ -203,6 +203,14 @@ export default function CatalogScreen() {
           availableForSale: inv?.availableForSale ?? true,
         };
       });
+      // Check if ALL variants are OOS — skip modal if so
+      const allOOS = items.length > 0 && items.every(v => (v.stockLevel - v.reservedLevel) <= 0);
+      if (allOOS) {
+        setVariantParent(null);
+        showToast('All variants out of stock');
+        setLoadingVariants(false);
+        return;
+      }
       setVariantChildren(items);
     } catch (err) {
       console.error('[CatalogScreen] Error loading variants:', err);
@@ -210,7 +218,7 @@ export default function CatalogScreen() {
     } finally {
       setLoadingVariants(false);
     }
-  }, [locationId]);
+  }, [locationId, showToast]);
 
   const handleVariantSelect = useCallback((variant: CatalogItem) => {
     const variantAvail = variant.stockLevel - variant.reservedLevel;
@@ -415,6 +423,7 @@ export default function CatalogScreen() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.chipScroll}
         contentContainerStyle={[styles.chipRow, { paddingHorizontal: screenPadding }]}
       >
         <Chip
@@ -581,19 +590,25 @@ export default function CatalogScreen() {
                   const label = item.name.startsWith(variantParent?.name ?? '')
                     ? item.name.slice((variantParent?.name ?? '').length).replace(/^\s*[-–—]\s*/, '').trim() || item.name
                     : item.name;
+                  const variantOOS = (item.stockLevel - item.reservedLevel) <= 0;
                   return (
                     <Pressable
-                      style={styles.variantRow}
+                      style={[styles.variantRow, variantOOS && styles.variantRowOOS]}
                       onPress={() => handleVariantSelect(item)}
-                      android_ripple={{ color: colors.accent.glow }}
+                      android_ripple={variantOOS ? undefined : { color: colors.accent.glow }}
+                      disabled={variantOOS}
                     >
                       <View style={{ flex: 1 }}>
                         <Text style={styles.variantName} numberOfLines={1}>{label}</Text>
                         <Text style={styles.variantSku}>{item.sku}</Text>
                       </View>
-                      <Text style={styles.variantPrice}>
-                        {item.isVariablePrice ? 'Variable' : `\u20B1${item.unitPrice.toFixed(2)}`}
-                      </Text>
+                      {variantOOS ? (
+                        <Text style={styles.variantOOSBadge}>Out of Stock</Text>
+                      ) : (
+                        <Text style={styles.variantPrice}>
+                          {item.isVariablePrice ? 'Variable' : `\u20B1${item.unitPrice.toFixed(2)}`}
+                        </Text>
+                      )}
                     </Pressable>
                   );
                 }}
@@ -705,9 +720,14 @@ const styles = StyleSheet.create({
   },
 
   // ── Category chips ──
+  chipScroll: {
+    flexGrow: 0,
+    flexShrink: 0,
+  },
   chipRow: {
     paddingHorizontal: 16,
     paddingVertical: 8,
+    paddingRight: 40,
   },
 
   // ── Empty state ──
@@ -869,6 +889,15 @@ const styles = StyleSheet.create({
     ...textStyles.body,
     color: colors.accent.primary,
     fontWeight: '700',
+    marginLeft: spacing.md,
+  },
+  variantRowOOS: {
+    opacity: 0.4,
+  },
+  variantOOSBadge: {
+    fontSize: 11,
+    fontFamily: 'Outfit-SemiBold',
+    color: colors.status.danger,
     marginLeft: spacing.md,
   },
 });

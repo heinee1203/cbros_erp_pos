@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 18,
     minHeight: 64,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: 'rgba(255,255,255,0.06)',
@@ -86,7 +86,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245,166,35,0.06)',
   },
   rowOOS: {
-    opacity: 0.35,
+    opacity: 0.65,
   },
   left: {
     flex: 1,

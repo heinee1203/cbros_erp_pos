@@ -9,6 +9,8 @@ interface SplitViewProps {
   style?: ViewStyle;
   /** When true, the secondary pane collapses to a thin strip */
   secondaryCollapsed?: boolean;
+  /** Badge count to show on collapsed strip */
+  collapsedBadgeCount?: number;
 }
 
 export function SplitView({
@@ -17,6 +19,7 @@ export function SplitView({
   primaryRatio = 0.6,
   style,
   secondaryCollapsed = false,
+  collapsedBadgeCount = 0,
 }: SplitViewProps) {
   return (
     <View style={[styles.container, style]}>
@@ -27,10 +30,11 @@ export function SplitView({
       {secondaryCollapsed ? (
         <View style={styles.collapsedPane}>
           <Text style={styles.collapsedIcon}>{'\uD83D\uDED2'}</Text>
-          <Text style={styles.collapsedLabel}>C</Text>
-          <Text style={styles.collapsedLabel}>a</Text>
-          <Text style={styles.collapsedLabel}>r</Text>
-          <Text style={styles.collapsedLabel}>t</Text>
+          {collapsedBadgeCount > 0 && (
+            <View style={styles.collapsedBadge}>
+              <Text style={styles.collapsedBadgeText}>{collapsedBadgeCount}</Text>
+            </View>
+          )}
         </View>
       ) : (
         <View style={[styles.pane, { flex: 1 - primaryRatio }]}>
@@ -58,17 +62,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg.elevated,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
+    borderLeftWidth: 1,
+    borderLeftColor: colors.border.subtle,
+    gap: 6,
   },
   collapsedIcon: {
-    fontSize: 20,
-    opacity: 0.4,
-    marginBottom: 8,
+    fontSize: 22,
+    opacity: 0.5,
   },
-  collapsedLabel: {
+  collapsedBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#F5A623',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  collapsedBadgeText: {
     fontSize: 11,
-    fontFamily: 'Outfit-Medium',
-    color: colors.text.muted,
-    letterSpacing: 1,
+    fontFamily: 'Outfit-Bold',
+    color: '#1A1A1A',
   },
 });

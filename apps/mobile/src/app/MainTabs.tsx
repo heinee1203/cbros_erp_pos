@@ -67,6 +67,7 @@ function POSSplitScreen() {
       }
       primaryRatio={0.6}
       secondaryCollapsed={cartIsEmpty}
+      collapsedBadgeCount={cartLineCount}
     />
   );
 }
