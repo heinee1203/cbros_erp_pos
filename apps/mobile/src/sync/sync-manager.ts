@@ -1,4 +1,4 @@
-import { syncCatalog } from './catalog-sync';
+import { syncCatalog, type SyncProgress } from './catalog-sync';
 import { syncInventory } from './inventory-sync';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
@@ -8,10 +8,13 @@ export interface SyncStatus {
   lastCatalogSync: string | null;
   lastInventorySync: string | null;
   error: string | null;
+  /** Live progress during sync */
+  progress: SyncProgress | null;
 }
 
 let _isSyncing = false;
 let _listeners: Array<(status: SyncStatus) => void> = [];
+let _currentProgress: SyncProgress | null = null;
 
 function getStatus(): SyncStatus {
   return {
@@ -19,6 +22,7 @@ function getStatus(): SyncStatus {
     lastCatalogSync: storage.getString(KEYS.LAST_CATALOG_SYNC) ?? null,
     lastInventorySync: storage.getString(KEYS.LAST_INVENTORY_SYNC) ?? null,
     error: null,
+    progress: _currentProgress,
   };
 }
 
@@ -37,18 +41,26 @@ export async function runFullSync(): Promise<SyncStatus> {
   if (_isSyncing) return getStatus();
 
   _isSyncing = true;
+  _currentProgress = null;
   notify(getStatus());
 
-  try {
-    await syncCatalog();
-    await syncInventory();
+  const handleProgress = (progress: SyncProgress) => {
+    _currentProgress = progress;
+    notify({ ...getStatus(), progress });
+  };
 
+  try {
+    await syncCatalog(handleProgress);
+    await syncInventory(handleProgress);
+
+    _currentProgress = null;
     const status = getStatus();
     _isSyncing = false;
     notify(status);
     return status;
   } catch (error: any) {
     _isSyncing = false;
+    _currentProgress = null;
     const status = { ...getStatus(), error: error.message };
     notify(status);
     return status;

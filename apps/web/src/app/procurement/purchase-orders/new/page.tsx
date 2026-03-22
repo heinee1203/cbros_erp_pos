@@ -37,6 +37,9 @@ interface POLineInput {
   unitsPerCase: number;
   packagingUnit: string | null;
   entryUnit: "piece" | "case";
+  sellingUnit: string;
+  purchaseUnit: string | null;
+  conversionFactor: number;
 }
 
 interface CSVPreviewRow {
@@ -213,6 +216,9 @@ export default function NewPurchaseOrderPage() {
           unitsPerCase: product.unitsPerCase ?? 1,
           packagingUnit: product.packagingUnit ?? null,
           entryUnit: (product.unitsPerCase ?? 1) > 1 ? "case" : "piece",
+          sellingUnit: product.sellingUnit ?? "piece",
+          purchaseUnit: product.purchaseUnit ?? null,
+          conversionFactor: parseFloat(product.conversionFactor ?? "1") || 1,
         },
       ]);
     }
@@ -530,6 +536,9 @@ export default function NewPurchaseOrderPage() {
             unitsPerCase: product.unitsPerCase ?? 1,
             packagingUnit: product.packagingUnit ?? null,
             entryUnit: "piece" as const,
+            sellingUnit: product.sellingUnit ?? "piece",
+            purchaseUnit: product.purchaseUnit ?? null,
+            conversionFactor: parseFloat(product.conversionFactor ?? "1") || 1,
           },
         ]);
       }
@@ -915,7 +924,7 @@ export default function NewPurchaseOrderPage() {
                                 <option value="case">{line.packagingUnit || "case"} ({line.unitsPerCase}/cs)</option>
                               </select>
                             ) : (
-                              <span className="text-xs text-muted-foreground">pc</span>
+                              <span className="text-xs text-muted-foreground">{line.purchaseUnit || "pc"}</span>
                             )}
                             <input
                               type="number"
@@ -930,6 +939,11 @@ export default function NewPurchaseOrderPage() {
                           {line.entryUnit === "case" && line.unitsPerCase > 1 && (
                             <div className="text-[10px] text-muted-foreground mt-0.5 text-right">
                               = {line.orderedQty * line.unitsPerCase} pieces @ {fmtPeso((parseFloat(line.netCost) / line.unitsPerCase).toFixed(2))}/pc
+                            </div>
+                          )}
+                          {line.purchaseUnit && line.conversionFactor > 1 && (
+                            <div className="text-[10px] text-primary mt-0.5 text-right">
+                              {line.orderedQty} {line.purchaseUnit}{line.orderedQty !== 1 ? "s" : ""} = {line.orderedQty * line.conversionFactor} {line.sellingUnit}s
                             </div>
                           )}
                         </td>

@@ -21,6 +21,7 @@ import { TransactionDetailPane } from '@/components/TransactionDetailPane';
 import { RefundFlow } from '@/components/RefundFlow';
 import { apiFetch } from '@/services/api-client';
 import { colors, textStyles, spacing, layout, fonts } from '@/theme';
+import { useTheme } from '@/theme/ThemeContext';
 import { Badge } from '@/components/ui';
 import type { TransactionsStackParamList } from '@/app/MainTabs';
 
@@ -47,6 +48,7 @@ function formatStatus(status: string): string {
 }
 
 export default function TransactionListScreen() {
+  useTheme(); // Subscribe to theme changes for re-render
   const navigation = useNavigation<Nav>();
   const { isTablet, screenPadding } = useLayout();
   const [searchText, setSearchText] = useState('');

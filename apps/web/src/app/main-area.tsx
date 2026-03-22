@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useSidebar } from "./sidebar-context";
 import { useAuth, ALL_LOCATIONS, type LocationInfo } from "./auth-context";
 import { cn } from "@/lib/utils";
+import { NotificationBell } from "@/components/notification-bell";
 import {
   MapPin,
   ChevronDown,
@@ -233,6 +234,9 @@ export function MainArea({ children }: { children: ReactNode }) {
 
           {/* Separator */}
           <div className="h-6 w-px bg-border" />
+
+          {/* Notification bell */}
+          <NotificationBell />
 
           {/* User avatar */}
           <div className="flex items-center gap-2.5 rounded-lg px-1.5 py-1">

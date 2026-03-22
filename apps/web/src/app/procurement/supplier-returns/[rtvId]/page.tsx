@@ -61,6 +61,117 @@ const TIMELINE_DOT_COLORS: Record<string, string> = {
   CANCELLED: "bg-gray-400",
 };
 
+// ── Print Return Form ──
+
+function printReturnForm(rtv: any) {
+  const date = new Date(rtv.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  const totalItems = rtv.lines.length;
+  const totalUnits = rtv.lines.reduce((s: number, l: any) => s + l.quantity, 0);
+  const totalCost = parseFloat(rtv.totalCost).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const itemRows = rtv.lines
+    .map((l: any, i: number) =>
+      `<tr>
+        <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">${i + 1}</td>
+        <td style="padding:4px 8px;border-bottom:1px solid #e5e5e5;">${l.productName}</td>
+        <td style="padding:4px 8px;font-family:monospace;font-size:11px;border-bottom:1px solid #e5e5e5;">${l.sku || "—"}</td>
+        <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">${l.quantity}</td>
+        <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">
+          <span style="display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;background:${l.condition === "DEFECTIVE" ? "#fee2e2" : l.condition === "DAMAGED" ? "#ffedd5" : "#f3f4f6"};color:${l.condition === "DEFECTIVE" ? "#b91c1c" : l.condition === "DAMAGED" ? "#c2410c" : "#374151"};">${l.condition}</span>
+        </td>
+        <td style="padding:4px 8px;text-align:right;border-bottom:1px solid #e5e5e5;">₱${parseFloat(l.costPerUnit).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+        <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #e5e5e5;">${l.notes || ""}</td>
+      </tr>`)
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html><head><title>Return Form — ${rtv.rtvNo}</title>
+<style>
+  @media print { @page { margin: 15mm; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1a1a1a; max-width: 800px; margin: 0 auto; padding: 20px; }
+  .header { text-align: center; padding: 12px 0; border: 2px solid #1a1a1a; margin-bottom: 16px; }
+  .header h1 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: 1px; }
+  .header p { margin: 2px 0 0; font-size: 11px; color: #666; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+  .meta-label { font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+  .meta-value { font-size: 13px; font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; }
+  th { padding: 6px 8px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #666; background: #f9fafb; border-bottom: 2px solid #e5e5e5; }
+  .sig-section { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 30px; }
+  .sig-block { border-top: 1px solid #ccc; padding-top: 8px; }
+  .sig-label { font-size: 11px; color: #666; }
+</style></head><body onload="window.print()">
+  <div class="header">
+    <h1>SUPPLIER RETURN FORM</h1>
+    <p>For Account Deduction</p>
+  </div>
+
+  <div class="meta">
+    <div><div class="meta-label">RTV No</div><div class="meta-value">${rtv.rtvNo}</div></div>
+    <div><div class="meta-label">Date</div><div class="meta-value">${date}</div></div>
+    <div><div class="meta-label">From</div><div class="meta-value">Apex Auto Parts — ${rtv.locationName}</div></div>
+    <div><div class="meta-label">To (Supplier)</div><div class="meta-value">${rtv.supplierName}</div></div>
+    <div><div class="meta-label">Reason</div><div class="meta-value">${REASON_LABELS[rtv.reason] ?? rtv.reason}</div></div>
+    ${rtv.notes ? `<div><div class="meta-label">Notes</div><div class="meta-value">${rtv.notes}</div></div>` : ""}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="text-align:center;width:30px;">#</th>
+        <th>Item</th>
+        <th>SKU</th>
+        <th style="text-align:center;">Qty</th>
+        <th style="text-align:center;">Condition</th>
+        <th style="text-align:right;">Cost/Unit</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>${itemRows}</tbody>
+    <tfoot>
+      <tr style="background:#f9fafb;">
+        <td colspan="3" style="padding:6px 8px;text-align:right;font-weight:700;">Total</td>
+        <td style="padding:6px 8px;text-align:center;font-weight:700;">${totalUnits}</td>
+        <td></td>
+        <td style="padding:6px 8px;text-align:right;font-weight:700;">₱${totalCost}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div style="margin-top:16px;font-size:11px;color:#666;">
+    ${totalItems} item${totalItems !== 1 ? "s" : ""}, ${totalUnits} unit${totalUnits !== 1 ? "s" : ""} &middot; Total cost value: ₱${totalCost}
+  </div>
+
+  <div class="sig-section">
+    <div>
+      <div style="height:40px;"></div>
+      <div class="sig-block">
+        <div class="sig-label">Returned by (Apex Auto Parts)</div>
+        <div style="margin-top:4px;font-size:11px;color:#aaa;">Name / Signature / Date</div>
+      </div>
+    </div>
+    <div>
+      <div style="height:40px;"></div>
+      <div class="sig-block">
+        <div class="sig-label">Received by (Supplier Representative)</div>
+        <div style="margin-top:4px;font-size:11px;color:#aaa;">Name / Signature / Date</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:24px;padding-top:12px;border-top:1px solid #e5e5e5;">
+    <div style="font-size:11px;color:#666;">
+      Credit Memo / Deduction Reference: ____________________________
+      <span style="margin-left:24px;">Amount: ₱__________________</span>
+    </div>
+  </div>
+</body></html>`;
+
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+}
+
 // ── Page ──
 
 export default function SupplierReturnDetailPage() {
@@ -177,6 +288,14 @@ export default function SupplierReturnDetailPage() {
 
           {/* Contextual Action Buttons */}
           <div className="flex items-center gap-2">
+            {rtv.status !== "CANCELLED" && (
+              <button
+                onClick={() => printReturnForm(rtv)}
+                className="rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent"
+              >
+                Print Return Form
+              </button>
+            )}
             {rtv.status === "DRAFT" && (
               <>
                 <button

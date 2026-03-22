@@ -41,7 +41,9 @@ function ProductListItem({ item, index, onPress, onLongPress }: Props) {
     if (priceIsZero) {
       return <Text style={styles.priceNotSet}>No Price</Text>;
     }
-    return <Text style={styles.priceText}>{fmtPrice(item.unitPrice)}</Text>;
+    const unit = (item as any).sellingUnit;
+    const unitLabel = unit && unit !== "piece" ? `/${unit}` : "";
+    return <Text style={styles.priceText}>{fmtPrice(item.unitPrice)}{unitLabel}</Text>;
   };
 
   return (
@@ -65,7 +67,7 @@ function ProductListItem({ item, index, onPress, onLongPress }: Props) {
       </View>
       <View style={styles.right}>
         {renderPrice()}
-        <StockBadge available={available} />
+        <StockBadge available={available} sellingUnit={(item as any).sellingUnit} />
       </View>
     </Pressable>
   );
@@ -81,7 +83,7 @@ const createStyles = () => StyleSheet.create({
     paddingVertical: 18,
     minHeight: 64,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
+    borderBottomColor: colors.border.subtle,
   },
   rowPressed: {
     backgroundColor: 'rgba(245,166,35,0.06)',
@@ -100,30 +102,30 @@ const createStyles = () => StyleSheet.create({
   productName: {
     fontSize: 15,
     fontFamily: 'Outfit-SemiBold',
-    color: '#F2F0ED',
+    color: colors.text.primary,
     lineHeight: 20,
   },
   skuText: {
     fontSize: 12,
     fontFamily: 'JetBrainsMono-Regular',
-    color: '#5A5750',
+    color: colors.text.muted,
     marginTop: 2,
   },
   priceText: {
     fontSize: 16,
     fontFamily: 'Outfit-Bold',
-    color: '#F5A623',
+    color: colors.accent.primary,
   },
   priceNotSet: {
     fontSize: 14,
     fontFamily: 'Outfit-Medium',
-    color: '#5A5750',
+    color: colors.text.muted,
     fontStyle: 'italic',
   },
   variablePriceBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(245,166,35,0.06)',
+    backgroundColor: colors.accent.glow,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
@@ -131,15 +133,15 @@ const createStyles = () => StyleSheet.create({
   },
   variablePriceIcon: {
     fontSize: 12,
-    color: '#F5A623',
+    color: colors.accent.primary,
   },
   variablePriceText: {
     fontSize: 12,
     fontFamily: 'Outfit-SemiBold',
-    color: '#F5A623',
+    color: colors.accent.primary,
   },
   variantBadge: {
-    backgroundColor: 'rgba(245,166,35,0.12)',
+    backgroundColor: colors.accent.glow,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 4,
@@ -148,7 +150,7 @@ const createStyles = () => StyleSheet.create({
   variantBadgeText: {
     fontSize: 11,
     fontFamily: 'Outfit-SemiBold',
-    color: '#F5A623',
+    color: colors.accent.primary,
     letterSpacing: 0.5,
   },
 });

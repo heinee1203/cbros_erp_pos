@@ -19,6 +19,7 @@ interface UserInfo {
   email: string;
   fullName: string;
   role: string;
+  permissions?: string[];
 }
 
 export interface LocationInfo {
@@ -129,6 +130,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           try {
             const parsed = JSON.parse(cached) as AuthState;
             if (parsed.token && parsed.locationId) {
+              // Enrich user with permissions from JWT if missing (legacy session)
+              if (parsed.user && !parsed.user.permissions) {
+                try {
+                  const jwt = decodeJwtPayload(parsed.token);
+                  if (Array.isArray(jwt.permissions)) {
+                    parsed.user.permissions = jwt.permissions as string[];
+                  }
+                } catch {}
+              }
               setAuth(parsed);
               await fetchLocations(parsed);
 

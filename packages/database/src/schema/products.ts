@@ -71,6 +71,12 @@ export const products = pgTable(
     unitsPerCase: integer("units_per_case").notNull().default(1),
     /** Packaging label: box, case, pack, carton, drum, pail, set */
     packagingUnit: varchar("packaging_unit", { length: 50 }),
+    /** The unit stock is tracked and sold in (piece, meter, foot, liter, kg, etc.) */
+    sellingUnit: varchar("selling_unit", { length: 20 }).notNull().default("piece"),
+    /** The unit used when ordering from suppliers (roll, box, pack, drum, etc.). NULL = same as sellingUnit */
+    purchaseUnit: varchar("purchase_unit", { length: 20 }),
+    /** How many sellingUnits per 1 purchaseUnit. E.g., 1 roll = 50 meters → factor = 50 */
+    conversionFactor: numeric("conversion_factor", { precision: 10, scale: 4 }).notNull().default("1"),
     /** Default supplier for this product — used to pre-fill PO creation */
     primarySupplierId: uuid("primary_supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
     isSerialized: boolean("is_serialized").notNull().default(false),
@@ -93,6 +99,7 @@ export const products = pgTable(
     index("idx_products_name_trgm").using("gin", sql`name gin_trgm_ops`),
     // Enforce exactly 10 characters for mnemonic SKU at DB level
     check("chk_mnemonic_sku_length", sql`char_length(mnemonic_sku) = 10`),
+    check("chk_conversion_factor_positive", sql`conversion_factor > 0`),
     index("idx_products_family_id").on(table.familyId),
     uniqueIndex("idx_products_org_barcode").on(table.orgId, table.barcode).where(sql`barcode IS NOT NULL`),
     index("idx_products_category_id").on(table.categoryId),

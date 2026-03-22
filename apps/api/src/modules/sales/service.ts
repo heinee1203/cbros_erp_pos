@@ -16,6 +16,11 @@ import type { CreateSaleInput, CompleteSaleInput, RefundSaleInput } from "@apex/
 import { SaleStatus, isValidSaleTransition, REFUND_ROLES } from "@apex/types";
 import { getOrCreateShift } from "../shifts/service";
 import { chargeCustomerAccount, CreditLimitError } from "../customers/service";
+import {
+  checkAndNotifyStockout,
+  checkAndNotifyLowStock,
+} from "../notifications/service";
+import { createWarrantyRecordsForSale } from "../warranties/service";
 
 // ── Helpers ──
 
@@ -425,6 +430,9 @@ export async function completeSale(
       }
     }
 
+    // Collect stock alert data during deduction (processed after tx commits)
+    const stockAlerts: { productId: string; productName: string; locationName: string; newBalance: number; reorderPoint: number }[] = [];
+
     // For each line: lock inventory, validate, deduct, journal
     // POS MERGE GUARDRAIL (Phase 7): lines tagged with job_card_part_id
     // skip inventory deduction — stock was already deducted via JOB_CARD_ISSUE.
@@ -479,6 +487,17 @@ export async function completeSale(
         referenceLineId: line.id,
         idempotencyKey: `${input.idempotencyKey}:COMPLETE:${line.id}`,
       });
+
+      // Collect stock alert data (notifications fire after tx commits)
+      if (newBalance <= inv.reorderPoint) {
+        stockAlerts.push({
+          productId: line.productId,
+          productName: line.productName,
+          locationName: "", // filled after tx
+          newBalance,
+          reorderPoint: inv.reorderPoint,
+        });
+      }
     }
 
     // Mark sale as COMPLETED
@@ -532,8 +551,59 @@ export async function completeSale(
       .set({ shiftId: shift.id })
       .where(eq(sales.id, saleId));
 
-    return updated;
+    return {
+      sale: updated,
+      stockAlerts,
+      locationId: sale.location_id as string,
+      saleLines: lines.map((l: any) => ({ id: l.id, productId: l.productId, productName: l.productName, quantity: l.quantity })),
+      customerId: sale.customer_id as string | null,
+      customerName: sale.customer_name as string | null,
+    };
   });
+
+  // Fire-and-forget: create stock notifications after tx commits
+  if (result.stockAlerts.length > 0) {
+    setImmediate(async () => {
+      // Resolve location name once
+      let locationName = "";
+      try {
+        const [loc] = await db
+          .select({ name: locations.name })
+          .from(locations)
+          .where(eq(locations.id, result.locationId))
+          .limit(1);
+        locationName = loc?.name ?? "";
+      } catch {}
+
+      for (const alert of result.stockAlerts) {
+        alert.locationName = locationName;
+        if (alert.newBalance <= 0) {
+          await checkAndNotifyStockout(orgId, alert.productId, alert.productName, locationName, alert.newBalance);
+        } else {
+          await checkAndNotifyLowStock(orgId, alert.productId, alert.productName, locationName, alert.newBalance, alert.reorderPoint);
+        }
+      }
+    });
+  }
+
+  // Fire-and-forget: create warranty records for warranted items
+  if (result.saleLines.length > 0) {
+    setImmediate(async () => {
+      try {
+        await createWarrantyRecordsForSale(
+          orgId,
+          saleId,
+          result.saleLines,
+          result.customerId,
+          result.customerName,
+        );
+      } catch (err) {
+        console.error("[WARRANTY] Auto-creation error:", err);
+      }
+    });
+  }
+
+  return result.sale;
 }
 
 /**

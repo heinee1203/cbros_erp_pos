@@ -23,6 +23,8 @@ import {
   getPOReceiptEvents,
   getPOReceipts,
   getPOJournal,
+  getReceiptsSummary,
+  listPOsReceivedAt,
   listSuppliers,
   createSupplier,
   updateSupplier,
@@ -578,6 +580,31 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // ─── GET /procurement/purchase-orders/received-at/:locationId ──
+  // List POs received at a location (for "Import from PO" on new transfers)
+  app.get(
+    "/purchase-orders/received-at/:locationId",
+    async (request, reply) => {
+      const { locationId } = request.params as { locationId: string };
+      const { orgId } = request.storeContext!;
+      const { role } = request.user;
+      assertProcurementRole(role);
+
+      const { search, limit } = (request.query ?? {}) as {
+        search?: string;
+        limit?: string;
+      };
+
+      const result = await listPOsReceivedAt(
+        orgId,
+        locationId,
+        search,
+        limit ? parseInt(limit) : undefined,
+      );
+      return reply.send(result);
+    },
+  );
+
   // ─── GET /procurement/purchase-orders/:id/receipt-events ──
   // Get receipt events (append-only audit trail)
   app.get(
@@ -604,6 +631,21 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
       assertProcurementRole(role);
 
       const receipts = await getPOReceipts(id, orgId);
+      return reply.send({ data: receipts });
+    },
+  );
+
+  // ─── GET /procurement/purchase-orders/:id/receipts-summary ──
+  // Get receipt summary for expandable rows in PO list
+  app.get(
+    "/purchase-orders/:id/receipts-summary",
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const { orgId } = request.storeContext!;
+      const { role } = request.user;
+      assertProcurementRole(role);
+
+      const receipts = await getReceiptsSummary(id, orgId);
       return reply.send({ data: receipts });
     },
   );

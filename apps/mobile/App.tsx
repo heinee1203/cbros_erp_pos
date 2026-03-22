@@ -7,6 +7,7 @@ import { ScannerProviderComponent } from '@/hardware/scanner/context';
 import { PrinterProviderComponent } from '@/hardware/printer/context';
 import { ThemeProvider } from '@/theme/ThemeContext';
 import RootNavigator from '@/app/RootNavigator';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 export default function App() {
   return (
@@ -16,7 +17,9 @@ export default function App() {
           <AuthProvider>
             <ScannerProviderComponent>
               <PrinterProviderComponent>
-                <RootNavigator />
+                <ErrorBoundary>
+                  <RootNavigator />
+                </ErrorBoundary>
               </PrinterProviderComponent>
             </ScannerProviderComponent>
           </AuthProvider>

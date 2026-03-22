@@ -42,6 +42,7 @@ export interface JwtPayload {
   orgId: string;
   role: string;
   primaryLocationId: string;
+  permissions?: string[];
 }
 
 // ── Store Context ──
@@ -119,10 +120,14 @@ export const createProductSchema = z.object({
   description: z.string().max(2000).optional(),
   unitsPerCase: z.number().int().min(1).default(1),
   packagingUnit: z.string().max(50).nullable().optional(),
+  sellingUnit: z.string().max(20).default("piece"),
+  purchaseUnit: z.string().max(20).nullable().optional(),
+  conversionFactor: z.number().positive().max(999999).default(1),
   primarySupplierId: z.string().uuid().nullable().optional(),
   isSerialized: z.boolean().default(false),
   trackInventory: z.boolean().default(true),
-  reorderPoint: z.number().int().min(0).default(10),
+  reorderPoint: z.number().int().min(0).default(5),
+  optimalStock: z.number().int().min(0).default(0),
   leadTimeDays: z.number().int().min(0).default(7),
   initialStock: z.number().int().min(0).default(0),
   locationIds: z.array(z.string().uuid()).optional(), // locations to seed inventory
@@ -165,6 +170,9 @@ export const updateProductSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   unitsPerCase: z.number().int().min(1).optional(),
   packagingUnit: z.string().max(50).nullable().optional(),
+  sellingUnit: z.string().max(20).optional(),
+  purchaseUnit: z.string().max(20).nullable().optional(),
+  conversionFactor: z.number().positive().max(999999).optional(),
   primarySupplierId: z.string().uuid().nullable().optional(),
   isSerialized: z.boolean().optional(),
   reorderPoint: z.number().int().min(0).optional(),
@@ -477,6 +485,8 @@ export const createPOSchema = z.object({
         unitCost: z.string().min(1), // numeric as string
         listPrice: z.string().optional(),
         discountChain: z.string().max(100).optional(),
+        unit: z.string().max(20).optional(),
+        conversionFactor: z.number().positive().optional(),
       }),
     )
     .min(1, "At least one PO line is required"),
@@ -856,7 +866,7 @@ export const createCustomerSchema = z.object({
   customerType: z.enum(CUSTOMER_TYPES).default("INDIVIDUAL"),
   contactPerson: z.string().max(255).optional(),
   phone: z.string().min(1).max(50),
-  email: z.string().email().max(255).optional(),
+  email: z.union([z.string().email().max(255), z.literal("")]).optional(),
   address: z.string().max(2000).optional(),
   tin: z.string().max(20).optional(),
   creditLimit: z.string().default("0.00").refine(

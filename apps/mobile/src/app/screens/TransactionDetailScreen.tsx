@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   SafeAreaView,
+  Modal,
 } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { useSaleDetailQuery } from '@/hooks/use-transactions';
@@ -48,6 +49,8 @@ export default function TransactionDetailScreen() {
   const { user } = useAuth();
 
   const [refundVisible, setRefundVisible] = useState(false);
+  const [reprinting, setReprinting] = useState(false);
+  const [receiptModalVisible, setReceiptModalVisible] = useState(false);
 
   const styles = createStyles();
 
@@ -73,38 +76,59 @@ export default function TransactionDetailScreen() {
 
   const handleReprint = useCallback(async () => {
     if (!sale) return;
-    const receiptData: ReceiptData = {
-      header: {
-        storeName: sale.location?.name || 'APEX AUTO PARTS',
-        address: sale.location?.address || undefined,
-      },
-      transaction: {
-        receiptNumber: sale.saleNo,
-        date: sale.completedAt ? new Date(sale.completedAt).toLocaleString() : new Date(sale.createdAt).toLocaleString(),
-        cashier: user?.fullName || 'Cashier',
-        lines: sale.lines.map(l => ({
-          name: l.productName,
-          qty: l.quantity,
-          unitPrice: parseFloat(l.unitPrice),
-          total: parseFloat(l.lineTotal),
-        })),
-        subtotal: parseFloat(sale.subtotal),
-        discount: parseFloat(sale.discountTotal),
-        grandTotal: parseFloat(sale.grandTotal),
-        paymentMethod: sale.payments[0]?.method === 'ACCOUNT' ? 'CHARGE' : (sale.payments[0]?.method || 'CASH'),
-        payments: sale.payments.map(p => ({
-          method: p.method === 'ACCOUNT' ? 'CHARGE' : p.method,
-          amount: parseFloat(p.amount),
-          reference: p.reference || undefined,
-          installmentTerm: p.notes?.includes('Installment:') ? p.notes.replace('Installment: ', '').replace(' ', '_').toUpperCase() : undefined,
-        })),
-      },
-      footer: { message: '** REPRINT **' },
-    };
 
-    const result = await printer.printReceipt(receiptData);
-    if (!result.success) {
-      Alert.alert('Print Failed', result.error || 'Could not print receipt');
+    // Check printer connection first
+    if (!printer.isConnected) {
+      Alert.alert(
+        'No Printer Connected',
+        'Connect a Bluetooth printer in Settings, or view the receipt on screen.',
+        [
+          { text: 'View on Screen', onPress: () => setReceiptModalVisible(true) },
+          { text: 'OK', style: 'cancel' },
+        ],
+      );
+      return;
+    }
+
+    setReprinting(true);
+    try {
+      const receiptData: ReceiptData = {
+        header: {
+          storeName: sale.location?.name || 'APEX AUTO PARTS',
+          address: sale.location?.address || undefined,
+        },
+        transaction: {
+          receiptNumber: sale.saleNo,
+          date: sale.completedAt ? new Date(sale.completedAt).toLocaleString() : new Date(sale.createdAt).toLocaleString(),
+          cashier: user?.fullName || 'Cashier',
+          lines: sale.lines.map(l => ({
+            name: l.productName,
+            qty: l.quantity,
+            unitPrice: parseFloat(l.unitPrice),
+            total: parseFloat(l.lineTotal),
+          })),
+          subtotal: parseFloat(sale.subtotal),
+          discount: parseFloat(sale.discountTotal),
+          grandTotal: parseFloat(sale.grandTotal),
+          paymentMethod: sale.payments[0]?.method === 'ACCOUNT' ? 'CHARGE' : (sale.payments[0]?.method || 'CASH'),
+          payments: sale.payments.map(p => ({
+            method: p.method === 'ACCOUNT' ? 'CHARGE' : p.method,
+            amount: parseFloat(p.amount),
+            reference: p.reference || undefined,
+            installmentTerm: p.notes?.includes('Installment:') ? p.notes.replace('Installment: ', '').replace(' ', '_').toUpperCase() : undefined,
+          })),
+        },
+        footer: { message: '** REPRINT **' },
+      };
+
+      const result = await printer.printReceipt(receiptData);
+      if (!result.success) {
+        Alert.alert('Print Failed', result.error || 'Could not print receipt. Check printer connection.');
+      }
+    } catch (err: any) {
+      Alert.alert('Print Error', err.message || 'Could not print receipt.');
+    } finally {
+      setReprinting(false);
     }
   }, [sale, printer, user]);
 
@@ -131,9 +155,10 @@ export default function TransactionDetailScreen() {
         </Pressable>
         <Text style={styles.headerTitle}>{sale.saleNo}</Text>
         <Button
-          title="Reprint"
+          title={reprinting ? "Printing…" : "Reprint"}
           variant="secondary"
           onPress={handleReprint}
+          disabled={reprinting}
           style={styles.reprintButton}
           textStyle={styles.reprintButtonText}
         />
@@ -261,6 +286,47 @@ export default function TransactionDetailScreen() {
           verifyPin={verifyPin}
         />
       )}
+
+      {/* On-screen receipt modal */}
+      <Modal visible={receiptModalVisible} animationType="slide" transparent onRequestClose={() => setReceiptModalVisible(false)}>
+        <View style={receiptStyles.overlay}>
+          <View style={receiptStyles.container}>
+            <ScrollView style={receiptStyles.scroll} contentContainerStyle={receiptStyles.content}>
+              <Text style={receiptStyles.header}>{sale.location?.name || 'APEX AUTO PARTS'}</Text>
+              {sale.location?.address && <Text style={receiptStyles.subheader}>{sale.location.address}</Text>}
+              <Text style={receiptStyles.divider}>{'═'.repeat(32)}</Text>
+              <Text style={receiptStyles.line}>Receipt #: {sale.saleNo}</Text>
+              <Text style={receiptStyles.line}>Date: {sale.completedAt ? new Date(sale.completedAt).toLocaleString() : new Date(sale.createdAt).toLocaleString()}</Text>
+              <Text style={receiptStyles.line}>Cashier: {user?.fullName || 'Cashier'}</Text>
+              {sale.customer?.name && <Text style={receiptStyles.line}>Customer: {sale.customer.name}</Text>}
+              <Text style={receiptStyles.divider}>{'─'.repeat(32)}</Text>
+              {sale.lines.map((l, i) => (
+                <View key={i} style={receiptStyles.itemRow}>
+                  <Text style={receiptStyles.itemName} numberOfLines={2}>{l.productName}</Text>
+                  <Text style={receiptStyles.itemDetail}>  {l.quantity} x {fmtPHP(l.unitPrice)}    {fmtPHP(l.lineTotal)}</Text>
+                </View>
+              ))}
+              <Text style={receiptStyles.divider}>{'─'.repeat(32)}</Text>
+              {parseFloat(sale.discountTotal) > 0 && (
+                <>
+                  <Text style={receiptStyles.totalLine}>Subtotal:         {fmtPHP(sale.subtotal)}</Text>
+                  <Text style={receiptStyles.totalLine}>Discount:        -{fmtPHP(sale.discountTotal)}</Text>
+                </>
+              )}
+              <Text style={receiptStyles.grandTotal}>TOTAL:            {fmtPHP(sale.grandTotal)}</Text>
+              <Text style={receiptStyles.divider}>{'─'.repeat(32)}</Text>
+              {sale.payments.map((p, i) => (
+                <Text key={i} style={receiptStyles.line}>{p.method}: {fmtPHP(p.amount)}{p.reference ? ` (${p.reference})` : ''}</Text>
+              ))}
+              <Text style={receiptStyles.divider}>{'═'.repeat(32)}</Text>
+              <Text style={receiptStyles.reprint}>** REPRINT **</Text>
+            </ScrollView>
+            <Pressable style={receiptStyles.closeBtn} onPress={() => setReceiptModalVisible(false)}>
+              <Text style={receiptStyles.closeBtnText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -414,5 +480,96 @@ const createStyles = () => StyleSheet.create({
   refundButton: {
     marginTop: spacing.md,
     marginBottom: spacing.lg,
+  },
+});
+
+const receiptStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  container: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 340,
+    maxHeight: '80%',
+  },
+  scroll: { padding: 20 },
+  content: { paddingBottom: 8 },
+  header: {
+    fontFamily: 'monospace',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+    color: '#000',
+  },
+  subheader: {
+    fontFamily: 'monospace',
+    fontSize: 10,
+    textAlign: 'center',
+    color: '#444',
+    marginTop: 2,
+  },
+  divider: {
+    fontFamily: 'monospace',
+    fontSize: 10,
+    color: '#999',
+    textAlign: 'center',
+    marginVertical: 6,
+  },
+  line: {
+    fontFamily: 'monospace',
+    fontSize: 11,
+    color: '#333',
+    marginVertical: 1,
+  },
+  itemRow: { marginVertical: 3 },
+  itemName: {
+    fontFamily: 'monospace',
+    fontSize: 11,
+    color: '#000',
+    fontWeight: '600',
+  },
+  itemDetail: {
+    fontFamily: 'monospace',
+    fontSize: 10,
+    color: '#555',
+    marginTop: 1,
+  },
+  totalLine: {
+    fontFamily: 'monospace',
+    fontSize: 11,
+    color: '#333',
+    marginVertical: 1,
+  },
+  grandTotal: {
+    fontFamily: 'monospace',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#000',
+    marginVertical: 4,
+  },
+  reprint: {
+    fontFamily: 'monospace',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+    color: '#666',
+    marginTop: 4,
+  },
+  closeBtn: {
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  closeBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#007AFF',
   },
 });

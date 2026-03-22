@@ -119,20 +119,24 @@ export async function getCustomer(customerId: string, orgId: string) {
  * Create a new customer with AR fields.
  */
 export async function createCustomer(input: CreateCustomerInput, orgId: string) {
+  // Sanitize: empty strings → null for optional fields
+  const nullIfEmpty = (v: string | undefined | null): string | null =>
+    !v || v.trim() === "" ? null : v.trim();
+
   const [customer] = await db
     .insert(customers)
     .values({
       orgId,
-      name: input.name,
-      phone: input.phone,
+      name: input.name.trim(),
+      phone: input.phone.trim(),
       customerType: input.customerType as any,
-      contactPerson: input.contactPerson ?? null,
-      email: input.email ?? null,
-      address: input.address ?? null,
-      tin: input.tin ?? null,
-      creditLimit: input.creditLimit ?? "0.00",
+      contactPerson: nullIfEmpty(input.contactPerson),
+      email: nullIfEmpty(input.email),
+      address: nullIfEmpty(input.address),
+      tin: nullIfEmpty(input.tin),
+      creditLimit: input.creditLimit || "0.00",
       paymentTermsDays: input.paymentTermsDays ?? 30,
-      notes: input.notes ?? null,
+      notes: nullIfEmpty(input.notes),
     })
     .returning();
 

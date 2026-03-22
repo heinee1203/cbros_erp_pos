@@ -204,7 +204,7 @@ export function useStartPickingMutation(token: string, locationId: string, trans
   });
 }
 
-/** Dispatch from source → TRANSIT_BUFFER */
+/** Dispatch from source (deducts stock) */
 export interface DispatchLineInput {
   transferItemId: string;
   dispatchQty: number;
@@ -225,7 +225,7 @@ export function useDispatchMutation(token: string, locationId: string, transferN
   );
 }
 
-/** Receive from TRANSIT_BUFFER → destination */
+/** Receive into destination (adds stock) */
 export interface ReceiveLineInput {
   transferItemId: string;
   receiveQty: number;

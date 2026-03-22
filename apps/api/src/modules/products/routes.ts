@@ -54,6 +54,7 @@ const SORT_COLUMNS: Record<string, any> = {
   stockLevel: inventory.stockLevel,
   reorderPoint: inventory.reorderPoint,
   categoryName: categories.name,
+  subcategoryName: productSubcategories.name,
   brandName: brands.name,
   margin: sql`CASE WHEN CAST(${products.unitPrice} AS numeric) > 0 THEN (CAST(${products.unitPrice} AS numeric) - CAST(${products.costPrice} AS numeric)) / CAST(${products.unitPrice} AS numeric) * 100 ELSE 0 END`,
 };
@@ -131,10 +132,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     // (allLocations check above guarantees locationId is non-null here)
     // Build WHERE conditions
     const conditions: SQL[] = [
-      eq(inventory.locationId, locationId!),
-      eq(inventory.availableForSale, true),
       eq(products.orgId, orgId),
     ];
+
+    // Inventory filter: parents may have no inventory row (stock comes from children)
+    conditions.push(sql`(${inventory.locationId} = ${locationId!} OR (${products.isParent} = true AND ${inventory.locationId} IS NULL))`);
+    conditions.push(sql`(${inventory.availableForSale} = true OR (${products.isParent} = true AND ${inventory.availableForSale} IS NULL))`);
 
     // Default: active products only. ADMIN/MANAGER can include inactive.
     const includeInactive = q.includeInactive === "true" && MANAGE_ROLES.includes(request.user.role);
@@ -156,7 +159,25 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (q.search && q.search.length >= 2) {
       const searchTerm = "%" + q.search + "%";
       conditions.push(
-        sql`(${products.name} ILIKE ${searchTerm} OR ${products.sku} ILIKE ${searchTerm} OR ${products.barcode} ILIKE ${searchTerm} OR ${products.oemNumber} ILIKE ${searchTerm} OR ${categories.name} ILIKE ${searchTerm})`,
+        sql`(
+          ${products.name} ILIKE ${searchTerm}
+          OR ${products.sku} ILIKE ${searchTerm}
+          OR ${products.barcode} ILIKE ${searchTerm}
+          OR ${products.oemNumber} ILIKE ${searchTerm}
+          OR ${categories.name} ILIKE ${searchTerm}
+          OR EXISTS (
+            SELECT 1 FROM vehicle_compatibility vc
+            WHERE vc.product_id = ${products.id}
+            AND (vc.make ILIKE ${searchTerm} OR vc.model ILIKE ${searchTerm}
+                 OR vc.engine ILIKE ${searchTerm} OR vc.notes ILIKE ${searchTerm})
+          )
+          OR EXISTS (
+            SELECT 1 FROM product_tags pt
+            JOIN tags t ON pt.tag_id = t.id
+            WHERE pt.product_id = ${products.id}
+            AND t.name ILIKE ${searchTerm}
+          )
+        )`,
       );
     }
 
@@ -305,6 +326,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         isParent: products.isParent,
         unitsPerCase: products.unitsPerCase,
         packagingUnit: products.packagingUnit,
+        sellingUnit: products.sellingUnit,
+        purchaseUnit: products.purchaseUnit,
+        conversionFactor: products.conversionFactor,
         primarySupplierId: products.primarySupplierId,
         isSerialized: products.isSerialized,
         vehicleModel: q.vehicleMake && q.vehicleMake !== "__none__"
@@ -314,8 +338,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           ? sql<number>`(SELECT COUNT(*)::int FROM vehicle_compatibility vc WHERE vc.product_id = ${products.id})`.as('vehicle_count')
           : sql<number>`0`.as('vehicle_count'),
       })
-      .from(inventory)
-      .innerJoin(products, eq(inventory.productId, products.id))
+      .from(products)
+      .leftJoin(inventory, eq(inventory.productId, products.id))
       .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
       .leftJoin(categories, eq(products.categoryId, categories.id))
       .leftJoin(productSubcategories, eq(products.subcategoryId, productSubcategories.id))
@@ -367,6 +391,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         reorderPoint: inventory.reorderPoint,
         parentProductId: products.parentProductId,
         isParent: products.isParent,
+        sellingUnit: products.sellingUnit,
+        purchaseUnit: products.purchaseUnit,
+        conversionFactor: products.conversionFactor,
       })
       .from(products)
       .innerJoin(inventory, and(
@@ -421,6 +448,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       familyId,
       trackInventory,
       reorderPoint,
+      optimalStock,
       leadTimeDays,
       initialStock,
       locationIds,
@@ -558,6 +586,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           description: parsed.data.description || null,
           unitsPerCase: parsed.data.unitsPerCase ?? 1,
           packagingUnit: parsed.data.packagingUnit || null,
+          sellingUnit: parsed.data.sellingUnit ?? "piece",
+          purchaseUnit: parsed.data.purchaseUnit || null,
+          conversionFactor: String(parsed.data.conversionFactor ?? 1),
           primarySupplierId: parsed.data.primarySupplierId || null,
           isSerialized: parsed.data.isSerialized ?? false,
         })
@@ -605,7 +636,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                 productId: child.id,
                 locationId: locId,
                 stockLevel: 0,
-                reorderPoint: reorderPoint ?? 10,
+                reorderPoint: reorderPoint ?? 5,
+                optimalStock: optimalStock ?? 0,
                 leadTimeDays: leadTimeDays ?? 7,
               });
             }
@@ -625,7 +657,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             productId: product.id,
             locationId: locId,
             stockLevel: locId === locationId ? (initialStock || 0) : 0,
-            reorderPoint: reorderPoint ?? 10,
+            reorderPoint: reorderPoint ?? 5,
+            optimalStock: optimalStock ?? 0,
             leadTimeDays: leadTimeDays ?? 7,
           });
         }
@@ -727,6 +760,108 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
+   * PATCH /products/bulk-available-for-sale
+   * Bulk update available_for_sale on inventory rows for selected products × locations.
+   * Actions: "set" (overwrite), "add" (enable at locations), "remove" (disable at locations).
+   */
+  app.patch("/bulk-available-for-sale", async (request, reply) => {
+    const role = (request.user as any)?.role;
+    if (!MANAGE_ROLES.includes(role)) {
+      return reply.status(403).send({ error: "Admin or Manager role required" });
+    }
+
+    const { orgId } = request.storeContext!;
+    const body = request.body as {
+      productIds?: string[];
+      filter?: { search?: string; familyId?: string; categoryId?: string; brandId?: string };
+      action: "set" | "add" | "remove";
+      locationIds: string[];
+    };
+
+    if (!body.action || !body.locationIds || body.locationIds.length === 0) {
+      return reply.status(400).send({ error: "action and locationIds are required" });
+    }
+
+    // Resolve product IDs
+    let productIds: string[] = [];
+    if (body.productIds && body.productIds.length > 0) {
+      if (body.productIds.length > 500) {
+        return reply.status(400).send({ error: "Maximum 500 items per request" });
+      }
+      productIds = body.productIds;
+    } else if (body.filter) {
+      const conditions: SQL[] = [eq(products.orgId, orgId), eq(products.isActive, true)];
+      if (body.filter.search && body.filter.search.length >= 2) {
+        conditions.push(ilike(products.name, `%${body.filter.search}%`));
+      }
+      if (body.filter.familyId) conditions.push(eq(products.familyId, body.filter.familyId));
+      if (body.filter.categoryId) conditions.push(eq(products.categoryId, body.filter.categoryId));
+      if (body.filter.brandId) conditions.push(eq(products.brandId, body.filter.brandId));
+
+      const rows = await db
+        .select({ id: products.id })
+        .from(products)
+        .where(and(...conditions))
+        .limit(500);
+      productIds = rows.map((r) => r.id);
+    } else {
+      return reply.status(400).send({ error: "Provide productIds or filter" });
+    }
+
+    if (productIds.length === 0) {
+      return reply.send({ updated: 0 });
+    }
+
+    let updated = 0;
+
+    if (body.action === "set") {
+      // Set: checked locations = true, all others = false
+      // First set all inventory rows for these products to false
+      await db
+        .update(inventory)
+        .set({ availableForSale: false })
+        .where(and(
+          eq(inventory.orgId, orgId),
+          inArray(inventory.productId, productIds),
+        ));
+      // Then set checked locations to true
+      const result = await db
+        .update(inventory)
+        .set({ availableForSale: true })
+        .where(and(
+          eq(inventory.orgId, orgId),
+          inArray(inventory.productId, productIds),
+          inArray(inventory.locationId, body.locationIds),
+        ));
+      updated = (result as any).rowCount ?? 0;
+    } else if (body.action === "add") {
+      // Add: set checked locations to true, don't touch others
+      const result = await db
+        .update(inventory)
+        .set({ availableForSale: true })
+        .where(and(
+          eq(inventory.orgId, orgId),
+          inArray(inventory.productId, productIds),
+          inArray(inventory.locationId, body.locationIds),
+        ));
+      updated = (result as any).rowCount ?? 0;
+    } else if (body.action === "remove") {
+      // Remove: set checked locations to false, don't touch others
+      const result = await db
+        .update(inventory)
+        .set({ availableForSale: false })
+        .where(and(
+          eq(inventory.orgId, orgId),
+          inArray(inventory.productId, productIds),
+          inArray(inventory.locationId, body.locationIds),
+        ));
+      updated = (result as any).rowCount ?? 0;
+    }
+
+    return reply.send({ updated, productCount: productIds.length });
+  });
+
+  /**
    * PATCH /products/:id
    * Update a product's editable fields. Admin/Manager only.
    */
@@ -773,7 +908,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // Build product update set (excluding reorderPoint and newVariants which are handled separately)
-    const { reorderPoint, newVariants, ...productUpdates } = updates;
+    const { reorderPoint, newVariants, conversionFactor: rawCF, ...productUpdates } = updates;
+    // Drizzle numeric columns require string values
+    if (rawCF !== undefined) {
+      (productUpdates as any).conversionFactor = String(rawCF);
+    }
     const hasProductUpdates = Object.keys(productUpdates).length > 0;
 
     // Validate new variant SKU uniqueness
@@ -870,7 +1009,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                 productId: child.id,
                 locationId,
                 stockLevel: 0,
-                reorderPoint: 10,
+                reorderPoint: 5,
                 leadTimeDays: 7,
               });
             }
@@ -905,6 +1044,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           brandName: brands.name,
           unitsPerCase: products.unitsPerCase,
           packagingUnit: products.packagingUnit,
+          sellingUnit: products.sellingUnit,
+          purchaseUnit: products.purchaseUnit,
+          conversionFactor: products.conversionFactor,
           primarySupplierId: products.primarySupplierId,
         })
         .from(products)
@@ -1132,6 +1274,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         parentProductId: products.parentProductId,
         unitsPerCase: products.unitsPerCase,
         packagingUnit: products.packagingUnit,
+        sellingUnit: products.sellingUnit,
+        purchaseUnit: products.purchaseUnit,
+        conversionFactor: products.conversionFactor,
         primarySupplierId: products.primarySupplierId,
         isSerialized: products.isSerialized,
       })
@@ -1203,6 +1348,45 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return reply.send({ ...row, vehicleCompatibility: vehicles, variants });
+  });
+
+  /**
+   * GET /products/:id/stock
+   * Cross-location stock for a single product (for mobile product detail).
+   */
+  app.get("/:id/stock", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+
+    const rows = await db
+      .select({
+        locationId: locations.id,
+        locationName: locations.name,
+        locationType: locations.type,
+        stockLevel: sql<number>`COALESCE(${inventory.stockLevel}, 0)`.as("stock_level"),
+        reservedLevel: sql<number>`COALESCE(${inventory.reservedLevel}, 0)`.as("reserved_level"),
+      })
+      .from(locations)
+      .leftJoin(
+        inventory,
+        and(eq(inventory.locationId, locations.id), eq(inventory.productId, id)),
+      )
+      .where(and(eq(locations.orgId, orgId), eq(locations.isActive, true)))
+      .orderBy(asc(locations.name));
+
+    const totalStock = rows.reduce((sum, r) => sum + r.stockLevel, 0);
+
+    return reply.send({
+      productId: id,
+      locations: rows.map((r) => ({
+        locationId: r.locationId,
+        locationName: r.locationName,
+        locationType: r.locationType,
+        quantity: r.stockLevel,
+        reserved: r.reservedLevel,
+      })),
+      totalStock,
+    });
   });
 
   /**
@@ -1333,8 +1517,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         name: productFamilies.name,
         slug: productFamilies.slug,
         productCount: sql<number>`(
-          SELECT count(*)::int FROM products
-          WHERE products.family_id = "product_families"."id"
+          SELECT count(*)::int FROM products p
+          LEFT JOIN categories c ON p.category_id = c.id
+          WHERE (p.family_id = "product_families"."id" OR c.family_id = "product_families"."id")
         )`,
       })
       .from(productFamilies)
@@ -1396,8 +1581,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         slug: productFamilies.slug,
         createdAt: productFamilies.createdAt,
         productCount: sql<number>`(
-          SELECT count(*)::int FROM products
-          WHERE products.family_id = "product_families"."id"
+          SELECT count(*)::int FROM products p
+          LEFT JOIN categories c ON p.category_id = c.id
+          WHERE (p.family_id = "product_families"."id" OR c.family_id = "product_families"."id")
         )`,
       })
       .from(productFamilies)
@@ -1736,6 +1922,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         brandName: brands.name,
         unitsPerCase: products.unitsPerCase,
         packagingUnit: products.packagingUnit,
+        sellingUnit: products.sellingUnit,
+        purchaseUnit: products.purchaseUnit,
+        conversionFactor: products.conversionFactor,
         isSerialized: products.isSerialized,
       })
       .from(products)
@@ -1976,7 +2165,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                   productId: newProduct.id,
                   locationId,
                   stockLevel: 0,
-                  reorderPoint: 10,
+                  reorderPoint: 5,
                 });
               }
 
@@ -2067,7 +2256,24 @@ async function handleGroupedQuery(
     : sql``;
 
   const searchFilter = search && search.length >= 2
-    ? sql`AND (p.name ILIKE ${"%" + search + "%"} OR cat.name ILIKE ${"%" + search + "%"})`
+    ? sql`AND (
+        p.name ILIKE ${"%" + search + "%"}
+        OR p.sku ILIKE ${"%" + search + "%"}
+        OR p.oem_number ILIKE ${"%" + search + "%"}
+        OR cat.name ILIKE ${"%" + search + "%"}
+        OR EXISTS (
+          SELECT 1 FROM vehicle_compatibility vc
+          WHERE vc.product_id = p.id
+          AND (vc.make ILIKE ${"%" + search + "%"} OR vc.model ILIKE ${"%" + search + "%"}
+               OR vc.engine ILIKE ${"%" + search + "%"} OR vc.notes ILIKE ${"%" + search + "%"})
+        )
+        OR EXISTS (
+          SELECT 1 FROM product_tags pt
+          JOIN tags t ON pt.tag_id = t.id
+          WHERE pt.product_id = p.id
+          AND t.name ILIKE ${"%" + search + "%"}
+        )
+      )`
     : sql``;
 
   const categoryFilter = category
@@ -2104,7 +2310,10 @@ async function handleGroupedQuery(
         WHERE ${allLocations ? sql`TRUE` : sql`i2.location_id = ${locationId}`}
           AND p2.org_id = ${orgId}
           AND p2.family_id IS NOT NULL
-          AND (p2.name ILIKE ${"%" + search + "%"} OR p2.sku ILIKE ${"%" + search + "%"})
+          AND (p2.name ILIKE ${"%" + search + "%"} OR p2.sku ILIKE ${"%" + search + "%"} OR p2.oem_number ILIKE ${"%" + search + "%"}
+               OR EXISTS (SELECT 1 FROM vehicle_compatibility vc2 WHERE vc2.product_id = p2.id AND (vc2.make ILIKE ${"%" + search + "%"} OR vc2.model ILIKE ${"%" + search + "%"}))
+               OR EXISTS (SELECT 1 FROM product_tags pt2 JOIN tags t2 ON pt2.tag_id = t2.id WHERE pt2.product_id = p2.id AND t2.name ILIKE ${"%" + search + "%"})
+          )
       )
     `
     : sql``;
@@ -2276,7 +2485,24 @@ async function handleAllLocationsQuery(
 ) {
   // Build filter fragments for raw SQL
   const searchFilter = q.search && q.search.length >= 2
-    ? sql`AND (p.name ILIKE ${"%" + q.search + "%"} OR cat.name ILIKE ${"%" + q.search + "%"})`
+    ? sql`AND (
+        p.name ILIKE ${"%" + q.search + "%"}
+        OR p.sku ILIKE ${"%" + q.search + "%"}
+        OR p.oem_number ILIKE ${"%" + q.search + "%"}
+        OR cat.name ILIKE ${"%" + q.search + "%"}
+        OR EXISTS (
+          SELECT 1 FROM vehicle_compatibility vc
+          WHERE vc.product_id = p.id
+          AND (vc.make ILIKE ${"%" + q.search + "%"} OR vc.model ILIKE ${"%" + q.search + "%"}
+               OR vc.engine ILIKE ${"%" + q.search + "%"} OR vc.notes ILIKE ${"%" + q.search + "%"})
+        )
+        OR EXISTS (
+          SELECT 1 FROM product_tags pt
+          JOIN tags t ON pt.tag_id = t.id
+          WHERE pt.product_id = p.id
+          AND t.name ILIKE ${"%" + q.search + "%"}
+        )
+      )`
     : sql``;
 
   const familyFilter = q.familyId
@@ -2357,7 +2583,13 @@ async function handleAllLocationsQuery(
         p.id, p.name, p.sku, p.mnemonic_sku, p.category::text,
         p.unit_price::text, p.cost_price::text, p.barcode, p.oem_number,
         p.is_variable_price,
-        GREATEST(COALESCE(SUM(i.stock_level), 0), 0)::int AS stock_level,
+        GREATEST(CASE WHEN p.is_parent THEN COALESCE((
+          SELECT SUM(inv2.stock_level)::int
+          FROM inventory inv2
+          INNER JOIN products p2 ON inv2.product_id = p2.id
+          INNER JOIN locations loc2 ON inv2.location_id = loc2.id AND loc2.is_active = true
+          WHERE p2.parent_product_id = p.id
+        ), 0) ELSE COALESCE(SUM(i.stock_level), 0) END, 0)::int AS stock_level,
         COALESCE(MAX(i.reorder_point), 0)::int AS reorder_point,
         p.family_id, pf.name AS family_name,
         p.category_id AS sub_category_id, cat.name AS sub_category_name,

@@ -8,7 +8,7 @@ import {
   Animated,
   SafeAreaView,
 } from 'react-native';
-import { runFullSync } from '@/sync/sync-manager';
+import { runFullSync, onSyncStatus, type SyncStatus } from '@/sync/sync-manager';
 import { colors, textStyles, spacing, radius } from '@/theme';
 
 interface Props {
@@ -22,12 +22,16 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
   const [phase, setPhase] = useState<SyncPhase>('syncing');
   const [errorMsg, setErrorMsg] = useState('');
   const [retrying, setRetrying] = useState(false);
+  const [progressText, setProgressText] = useState('Preparing...');
+  const [syncedCount, setSyncedCount] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const styles = createStyles();
 
   const doSync = async () => {
     setPhase('syncing');
     setErrorMsg('');
+    setProgressText('Preparing...');
+    setSyncedCount(0);
     try {
       const result = await runFullSync();
       if (result.error) {
@@ -35,7 +39,6 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
         setErrorMsg(result.error);
       } else {
         setPhase('success');
-        // Brief pause to show success, then proceed
         setTimeout(onSyncComplete, 800);
       }
     } catch (err: any) {
@@ -50,7 +53,23 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
       duration: 300,
       useNativeDriver: true,
     }).start();
+
+    // Listen for progress updates
+    const unsub = onSyncStatus((status: SyncStatus) => {
+      if (status.progress) {
+        const { phase: syncPhase, synced } = status.progress;
+        setSyncedCount(synced);
+        if (syncPhase === 'catalog') {
+          setProgressText(`Syncing products: ${synced.toLocaleString()}`);
+        } else {
+          setProgressText(`Syncing inventory: ${synced.toLocaleString()}`);
+        }
+      }
+    });
+
     doSync();
+
+    return unsub;
   }, []);
 
   const handleRetry = async () => {
@@ -65,7 +84,7 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
 
   return (
     <SafeAreaView style={styles.container}>
-      <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
+      <Animated.View style={[styles.content, { opacity: fadeAnim } as any]}>
         <View style={styles.iconContainer}>
           {phase === 'syncing' && (
             <ActivityIndicator size="large" color={colors.accent.primary} />
@@ -88,11 +107,20 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
 
         <Text style={styles.subtitle}>
           {phase === 'syncing'
-            ? `Downloading catalog & inventory for ${locationName}`
+            ? progressText
             : phase === 'success'
-              ? 'Catalog and inventory are up to date.'
+              ? `Synced ${syncedCount.toLocaleString()} items for ${locationName}.`
               : errorMsg || 'Could not sync data from server.'}
         </Text>
+
+        {phase === 'syncing' && syncedCount > 0 && (
+          <View style={styles.progressBar}>
+            <View style={styles.progressBarTrack}>
+              <Animated.View style={[styles.progressBarFill, { width: '100%' }]} />
+            </View>
+            <Text style={styles.progressCount}>{syncedCount.toLocaleString()} items synced</Text>
+          </View>
+        )}
 
         {phase === 'error' && (
           <View style={styles.errorActions}>
@@ -163,6 +191,28 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.secondary,
     textAlign: 'center',
     lineHeight: 22,
+  },
+  progressBar: {
+    marginTop: spacing.lg,
+    width: '100%',
+    alignItems: 'center',
+  },
+  progressBarTrack: {
+    width: '100%',
+    height: 4,
+    backgroundColor: colors.border.default,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: colors.accent.primary,
+    borderRadius: 2,
+  },
+  progressCount: {
+    ...textStyles.caption,
+    color: colors.text.muted,
+    marginTop: spacing.xs,
   },
   errorActions: {
     marginTop: spacing.xl,

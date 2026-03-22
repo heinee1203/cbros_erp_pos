@@ -157,14 +157,25 @@ export async function createPO(
       throw new Error("Cannot receive into a TRANSIT_BUFFER location");
     }
 
-    // Validate all products belong to org
+    // Validate all products belong to org and fetch UOM data
+    const productUomMap = new Map<string, { sellingUnit: string; purchaseUnit: string | null; conversionFactor: string }>();
     for (const line of input.lines) {
       const [product] = await tx
-        .select({ id: products.id })
+        .select({
+          id: products.id,
+          sellingUnit: products.sellingUnit,
+          purchaseUnit: products.purchaseUnit,
+          conversionFactor: products.conversionFactor,
+        })
         .from(products)
         .where(and(eq(products.id, line.productId), eq(products.orgId, orgId)))
         .limit(1);
       if (!product) throw new Error(`Product ${line.productId} not found`);
+      productUomMap.set(product.id, {
+        sellingUnit: product.sellingUnit,
+        purchaseUnit: product.purchaseUnit,
+        conversionFactor: product.conversionFactor,
+      });
     }
 
     const poNo = await generatePoNo(tx, orgId);
@@ -186,16 +197,24 @@ export async function createPO(
       })
       .returning();
 
-    // Insert PO lines
-    const lineValues = input.lines.map((line) => ({
-      purchaseOrderId: po.id,
-      orgId,
-      productId: line.productId,
-      orderedQty: line.orderedQty,
-      unitCost: line.unitCost,
-      listPrice: line.listPrice ?? null,
-      discountChain: line.discountChain ?? null,
-    }));
+    // Insert PO lines with UOM snapshot
+    const lineValues = input.lines.map((line) => {
+      const uom = productUomMap.get(line.productId)!;
+      return {
+        purchaseOrderId: po.id,
+        orgId,
+        productId: line.productId,
+        orderedQty: line.orderedQty,
+        unitCost: line.unitCost,
+        listPrice: line.listPrice ?? null,
+        discountChain: line.discountChain ?? null,
+        // Snapshot UOM at PO creation time
+        unit: line.unit ?? uom.purchaseUnit ?? uom.sellingUnit,
+        poConversionFactor: line.conversionFactor
+          ? String(line.conversionFactor)
+          : uom.conversionFactor,
+      };
+    });
 
     const insertedLines = await tx
       .insert(poLines)
@@ -351,7 +370,7 @@ export async function receivePO(
 
     // Lock all referenced PO lines in one sorted query
     const lockedPoLines = await tx.execute(
-      sql`SELECT id, product_id, ordered_qty, received_accepted_qty, rejected_qty, unit_cost
+      sql`SELECT id, product_id, ordered_qty, received_accepted_qty, rejected_qty, unit_cost, unit, conversion_factor
           FROM po_lines
           WHERE purchase_order_id = ${poId}
             AND org_id = ${orgId}
@@ -374,6 +393,8 @@ export async function receivePO(
       rejectedQty: number;
       unitCost: string;
       receiptEventId: string;
+      /** UOM conversion factor from PO line snapshot (1 = no conversion) */
+      conversionFactor: number;
     }
     const receiptResults: ReceiptResult[] = [];
 
@@ -434,6 +455,7 @@ export async function receivePO(
         rejectedQty: rejected,
         unitCost: lineInput.unitCost,
         receiptEventId: receiptEvent.id,
+        conversionFactor: Number(poLine.conversion_factor) || 1,
       });
     }
 
@@ -505,7 +527,17 @@ export async function receivePO(
       const invKey = `${destinationLocationId}:${result.productId}`;
       const inv = invMap.get(invKey)!;
 
-      const newBalance = inv.stockLevel + result.acceptedQty;
+      // Apply UOM conversion: convert purchase units → selling units
+      const convFactor = result.conversionFactor;
+      const inventoryQty = result.acceptedQty * convFactor;
+      if (!Number.isInteger(inventoryQty)) {
+        throw new Error(
+          `UOM conversion produces fractional inventory qty (${result.acceptedQty} × ${convFactor} = ${inventoryQty}). ` +
+          `Conversion factor must produce whole numbers.`,
+        );
+      }
+
+      const newBalance = inv.stockLevel + inventoryQty;
 
       // Update inventory
       await tx
@@ -516,8 +548,11 @@ export async function receivePO(
       // Update local cache for subsequent lines referencing same product
       inv.stockLevel = newBalance;
 
-      // Insert RECEIVING journal entry
+      // Insert RECEIVING journal entry (quantities in selling units)
       // referenceId = po_receipt_event.id (NOT the PO header)
+      const costPerSellingUnit = convFactor > 1
+        ? String((parseFloat(result.unitCost) / convFactor).toFixed(2))
+        : result.unitCost;
       const journalIdempotencyKey = `${input.idempotencyKey}:JOURNAL:${result.receiptEventId}`;
       await tx.insert(stockJournal).values({
         orgId,
@@ -525,14 +560,16 @@ export async function receivePO(
         locationId: destinationLocationId,
         userId,
         actorType: "USER",
-        changeQuantity: result.acceptedQty,
+        changeQuantity: inventoryQty,
         balanceAfter: newBalance,
         referenceType: "RECEIVING",
         referenceId: result.receiptEventId,
         referenceLineId: result.poLineId,
-        unitCostSnapshot: result.unitCost,
+        unitCostSnapshot: costPerSellingUnit,
         idempotencyKey: journalIdempotencyKey,
-        notes: `PO ${po.po_no} receipt`,
+        notes: convFactor > 1
+          ? `PO ${po.po_no} receipt (${result.acceptedQty} × ${convFactor})`
+          : `PO ${po.po_no} receipt`,
       });
     }
 
@@ -542,11 +579,15 @@ export async function receivePO(
       ...new Set(acceptedResults.map((r) => r.productId)),
     ].sort();
 
-    // For each product, find the latest unit cost from this batch
+    // For each product, find the latest unit cost from this batch (per selling unit)
     // (if multiple receipt lines for same product, use the last one)
     const productCostMap = new Map<string, string>();
     for (const result of acceptedResults) {
-      productCostMap.set(result.productId, result.unitCost);
+      const convFactor = result.conversionFactor;
+      const costPerSellingUnit = convFactor > 1
+        ? (parseFloat(result.unitCost) / convFactor).toFixed(2)
+        : result.unitCost;
+      productCostMap.set(result.productId, costPerSellingUnit);
     }
 
     for (const productId of uniqueProductIds) {
@@ -909,8 +950,11 @@ async function buildPODetail(po: typeof purchaseOrders.$inferSelect) {
       unitCost: poLines.unitCost,
       listPrice: poLines.listPrice,
       discountChain: poLines.discountChain,
+      unit: poLines.unit,
+      poConversionFactor: poLines.poConversionFactor,
       createdAt: poLines.createdAt,
       productName: products.name,
+      sellingUnit: products.sellingUnit,
       sku: products.sku,
       mnemonicSku: products.mnemonicSku,
       category: products.category,
@@ -958,9 +1002,20 @@ export async function listPOs(
       createdAt: purchaseOrders.createdAt,
       updatedAt: purchaseOrders.updatedAt,
       supplierName: suppliers.name,
+      destinationLocationName: locations.name,
+      receiptCount: sql<number>`(
+        SELECT COUNT(*)::int FROM po_receipts pr
+        WHERE pr.purchase_order_id = ${purchaseOrders.id}
+      )`,
+      totalReceiptValue: sql<string>`(
+        SELECT COALESCE(SUM(pre.received_accepted_qty * pre.unit_cost), 0)::numeric(14,2)
+        FROM po_receipt_events pre
+        WHERE pre.purchase_order_id = ${purchaseOrders.id}
+      )`,
     })
     .from(purchaseOrders)
     .innerJoin(suppliers, eq(suppliers.id, purchaseOrders.supplierId))
+    .innerJoin(locations, eq(locations.id, purchaseOrders.destinationLocationId))
     .where(
       cursor
         ? and(
@@ -978,6 +1033,130 @@ export async function listPOs(
   const nextCursor = hasMore ? data[data.length - 1].id : null;
 
   return { data, nextCursor, hasMore };
+}
+
+/**
+ * Get receipt summary for a PO (for expandable rows in the list).
+ * Returns receipt headers with line count and total value per receipt.
+ */
+export async function getReceiptsSummary(poId: string, orgId: string) {
+  const receipts = await db
+    .select({
+      id: poReceipts.id,
+      receiptNumber: poReceipts.supplierDrNo,
+      receivedAt: poReceipts.createdAt,
+      receivedByName: users.fullName,
+      lineCount: poReceipts.lineCount,
+      totalAcceptedQty: poReceipts.totalAcceptedQty,
+    })
+    .from(poReceipts)
+    .innerJoin(users, eq(users.id, poReceipts.receivedByUserId))
+    .where(
+      and(
+        eq(poReceipts.purchaseOrderId, poId),
+        eq(poReceipts.orgId, orgId),
+      ),
+    )
+    .orderBy(desc(poReceipts.createdAt));
+
+  if (receipts.length === 0) return [];
+
+  // Get total value per receipt
+  const receiptIds = receipts.map((r) => r.id);
+  const values = await db
+    .select({
+      poReceiptId: poReceiptEvents.poReceiptId,
+      totalValue: sql<string>`SUM(${poReceiptEvents.receivedAcceptedQty} * ${poReceiptEvents.unitCost})::numeric(14,2)`,
+    })
+    .from(poReceiptEvents)
+    .where(inArray(poReceiptEvents.poReceiptId, receiptIds))
+    .groupBy(poReceiptEvents.poReceiptId);
+
+  const valueMap = new Map(values.map((v) => [v.poReceiptId!, v.totalValue]));
+
+  return receipts.map((r) => ({
+    id: r.id,
+    receiptNumber: r.receiptNumber,
+    receivedAt: r.receivedAt.toISOString(),
+    receivedByName: r.receivedByName,
+    lineCount: r.lineCount,
+    totalAcceptedQty: r.totalAcceptedQty,
+    totalValue: parseFloat(valueMap.get(r.id) ?? "0"),
+  }));
+}
+
+/**
+ * List POs received at a specific location, with line items.
+ * Used by the "Import from PO" flow on the New Transfer page.
+ */
+export async function listPOsReceivedAt(
+  orgId: string,
+  locationId: string,
+  search?: string,
+  limit: number = 20,
+) {
+  const conditions = [
+    eq(purchaseOrders.orgId, orgId),
+    eq(purchaseOrders.destinationLocationId, locationId),
+    sql`${purchaseOrders.status} IN ('FULLY_RECEIVED', 'CLOSED_WITH_VARIANCE', 'PARTIALLY_RECEIVED')`,
+  ];
+
+  if (search?.trim()) {
+    conditions.push(
+      sql`${purchaseOrders.poNo} ILIKE ${"%" + search.trim() + "%"}`,
+    );
+  }
+
+  const pos = await db
+    .select({
+      id: purchaseOrders.id,
+      poNo: purchaseOrders.poNo,
+      status: purchaseOrders.status,
+      destinationLocationId: purchaseOrders.destinationLocationId,
+      createdAt: purchaseOrders.createdAt,
+      supplierName: suppliers.name,
+      lineCount: sql<number>`(SELECT COUNT(*)::int FROM po_lines pl WHERE pl.purchase_order_id = ${purchaseOrders.id})`,
+      totalReceivedQty: sql<number>`(SELECT COALESCE(SUM(pl.received_accepted_qty), 0)::int FROM po_lines pl WHERE pl.purchase_order_id = ${purchaseOrders.id})`,
+    })
+    .from(purchaseOrders)
+    .innerJoin(suppliers, eq(suppliers.id, purchaseOrders.supplierId))
+    .where(and(...conditions))
+    .orderBy(desc(purchaseOrders.updatedAt))
+    .limit(limit);
+
+  // For each PO, fetch received line items
+  const results = [];
+  for (const po of pos) {
+    const items = await db
+      .select({
+        productId: poLines.productId,
+        productName: products.name,
+        sku: products.sku,
+        mnemonicSku: products.mnemonicSku,
+        receivedQty: poLines.receivedAcceptedQty,
+        orderedQty: poLines.orderedQty,
+        unitCost: poLines.unitCost,
+      })
+      .from(poLines)
+      .innerJoin(products, eq(products.id, poLines.productId))
+      .where(
+        and(
+          eq(poLines.purchaseOrderId, po.id),
+          sql`${poLines.receivedAcceptedQty} > 0`,
+        ),
+      )
+      .orderBy(asc(poLines.createdAt));
+
+    results.push({
+      ...po,
+      items: items.map((item) => ({
+        ...item,
+        unitCost: Number(item.unitCost),
+      })),
+    });
+  }
+
+  return { data: results };
 }
 
 /**

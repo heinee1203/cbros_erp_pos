@@ -182,13 +182,18 @@ export default function AddItemPage() {
   // ── Section 3: Inventory Behavior ──
   const [trackInventory, setTrackInventory] = useState(true);
   const [unitOfMeasure, setUnitOfMeasure] = useState("Each");
-  const [reorderPoint, setReorderPoint] = useState("10");
+  const [reorderPoint, setReorderPoint] = useState("5");
+  const [optimalStock, setOptimalStock] = useState("0");
   const [leadTimeDays, setLeadTimeDays] = useState("7");
   const [barcode, setBarcode] = useState("");
   const [oemNumber, setOemNumber] = useState("");
   const [initialStock, setInitialStock] = useState("0");
   const [unitsPerCase, setUnitsPerCase] = useState(1);
   const [packagingUnit, setPackagingUnit] = useState<string | null>(null);
+  // UOM Conversion
+  const [sellingUnit, setSellingUnit] = useState("piece");
+  const [purchaseUnit, setPurchaseUnit] = useState("");
+  const [conversionFactor, setConversionFactor] = useState("1");
 
   // ── Section 4: Location Availability ──
   const [selectedLocations, setSelectedLocations] = useState<Set<string>>(() => {
@@ -280,10 +285,14 @@ export default function AddItemPage() {
         isParent: hasInlineVariants || undefined,
         description: description || undefined,
         trackInventory,
-        reorderPoint: parseInt(reorderPoint, 10) || 10,
+        reorderPoint: parseInt(reorderPoint, 10) || 5,
+        optimalStock: parseInt(optimalStock, 10) || 0,
         leadTimeDays: parseInt(leadTimeDays, 10) || 7,
         unitsPerCase: unitsPerCase > 1 ? unitsPerCase : undefined,
         packagingUnit: packagingUnit || undefined,
+        sellingUnit: sellingUnit || "piece",
+        purchaseUnit: purchaseUnit || null,
+        conversionFactor: purchaseUnit ? parseFloat(conversionFactor) || 1 : 1,
         initialStock: hasInlineVariants ? 0 : (trackInventory ? parseInt(initialStock, 10) || 0 : 0),
         locationIds: Array.from(selectedLocations),
         vehicleCompatibility:
@@ -764,6 +773,12 @@ export default function AddItemPage() {
                 <div>
                   <FieldLabel>Reorder Point</FieldLabel>
                   <input type="number" min="0" value={reorderPoint} onChange={(e) => setReorderPoint(e.target.value)} className={fieldClass} />
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">Reorder alert triggers at this level</p>
+                </div>
+                <div>
+                  <FieldLabel>Optimal Stock</FieldLabel>
+                  <input type="number" min="0" value={optimalStock} onChange={(e) => setOptimalStock(e.target.value)} className={fieldClass} />
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">Target stock level to maintain</p>
                 </div>
                 <div>
                   <FieldLabel>Lead Time (Days)</FieldLabel>
@@ -831,6 +846,68 @@ export default function AddItemPage() {
                 {parseFloat(unitPrice || "0") > 0 && (
                   <div>Sell per {packagingUnit || "case"}: ₱{(parseFloat(unitPrice) * unitsPerCase).toFixed(2)}</div>
                 )}
+              </div>
+            )}
+          </div>
+
+          {/* UOM Conversion */}
+          <div className="mt-4">
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Unit of Measure Conversion</h4>
+            <p className="mb-2 text-[10px] text-muted-foreground">For items bought in bulk (rolls, boxes) and sold in smaller units (meters, pieces)</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <FieldLabel>Selling Unit</FieldLabel>
+                <select value={sellingUnit} onChange={(e) => setSellingUnit(e.target.value)} className={fieldClass}>
+                  <option value="piece">Piece</option>
+                  <option value="meter">Meter</option>
+                  <option value="foot">Foot</option>
+                  <option value="liter">Liter</option>
+                  <option value="kg">Kilogram</option>
+                  <option value="gram">Gram</option>
+                  <option value="ml">Milliliter</option>
+                  <option value="set">Set</option>
+                  <option value="pair">Pair</option>
+                </select>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">Unit customers buy in</p>
+              </div>
+              <div>
+                <FieldLabel>Purchase Unit</FieldLabel>
+                <select value={purchaseUnit} onChange={(e) => { setPurchaseUnit(e.target.value); if (!e.target.value) setConversionFactor("1"); }} className={fieldClass}>
+                  <option value="">Same as selling unit</option>
+                  <option value="roll">Roll</option>
+                  <option value="box">Box</option>
+                  <option value="pack">Pack</option>
+                  <option value="case">Case</option>
+                  <option value="drum">Drum</option>
+                  <option value="bag">Bag</option>
+                  <option value="bundle">Bundle</option>
+                  <option value="spool">Spool</option>
+                  <option value="carton">Carton</option>
+                </select>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">Unit suppliers sell in</p>
+              </div>
+              <div>
+                <FieldLabel>Conversion Factor</FieldLabel>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={conversionFactor}
+                  onChange={(e) => setConversionFactor(e.target.value)}
+                  disabled={!purchaseUnit}
+                  className={cn(fieldClass, !purchaseUnit && "opacity-50")}
+                />
+                {purchaseUnit && parseFloat(conversionFactor) > 1 && (
+                  <p className="mt-0.5 text-[10px] font-medium text-primary">
+                    1 {purchaseUnit} = {conversionFactor} {sellingUnit}s
+                  </p>
+                )}
+              </div>
+            </div>
+            {purchaseUnit && parseFloat(conversionFactor) > 1 && parseFloat(costPrice || "0") > 0 && (
+              <div className="mt-2 rounded-md bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+                Cost per {purchaseUnit}: ₱{(parseFloat(costPrice || "0") * parseFloat(conversionFactor)).toFixed(2)}
+                {" → "}Cost per {sellingUnit}: ₱{parseFloat(costPrice || "0").toFixed(2)}
               </div>
             )}
           </div>

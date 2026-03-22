@@ -3,7 +3,7 @@ import { UserRole } from "@apex/types";
 import { db } from "@apex/database";
 import { products, locations } from "@apex/database/schema";
 import { eq, and } from "drizzle-orm";
-import { listSerials, lookupSerial, getSerialsBySale, bulkRegisterSerials } from "./service";
+import { listSerials, lookupSerial, getSerialsBySale, bulkRegisterSerials, getTireAgeReport } from "./service";
 
 const SERIAL_ADMIN_ROLES = [UserRole.ADMIN, UserRole.MANAGER];
 
@@ -63,12 +63,15 @@ export const serialRoutes: FastifyPluginAsync = async (app) => {
     const body = request.body as {
       productId?: string;
       locationId?: string;
-      serialNumbers?: string[];
+      serialNumbers?: (string | { serialNumber: string; dotCode?: string })[];
+      serials?: { serialNumber: string; dotCode?: string }[];
     };
 
-    if (!body.productId || !body.locationId || !Array.isArray(body.serialNumbers) || body.serialNumbers.length === 0) {
+    // Support both legacy string[] and new object[] formats
+    const serialInput = body.serials ?? body.serialNumbers;
+    if (!body.productId || !body.locationId || !Array.isArray(serialInput) || serialInput.length === 0) {
       return reply.status(400).send({
-        error: "productId, locationId, and a non-empty serialNumbers array are required",
+        error: "productId, locationId, and a non-empty serialNumbers/serials array are required",
       });
     }
 
@@ -97,7 +100,22 @@ export const serialRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ error: "Location not found" });
     }
 
-    const result = await bulkRegisterSerials(orgId, body.productId, body.locationId, body.serialNumbers);
+    const result = await bulkRegisterSerials(orgId, body.productId, body.locationId, serialInput);
     return reply.status(201).send(result);
+  });
+
+  // ─── GET /tire-age-report — Tire age report ───────────────────
+  app.get("/tire-age-report", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as Record<string, string | undefined>;
+
+    const result = await getTireAgeReport(orgId, {
+      locationId: q.locationId,
+      status: q.status,
+      cursor: q.cursor,
+      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+    });
+
+    return reply.send(result);
   });
 };

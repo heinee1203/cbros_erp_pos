@@ -20,7 +20,11 @@ export interface StockLevelRow {
   reservedLevel: number;
   available: number;
   reorderPoint: number;
+  optimalStock: number;
   leadTimeDays: number;
+  sellingUnit: string;
+  purchaseUnit: string | null;
+  conversionFactor: string;
   status: "OUT_OF_STOCK" | "LOW_STOCK" | "IN_STOCK";
   updatedAt: string;
 }

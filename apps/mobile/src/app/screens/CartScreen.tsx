@@ -151,7 +151,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             </View>
             <Text style={styles.lineName} numberOfLines={2}>{item.name}</Text>
             <View style={styles.lineMetaRow}>
-              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} \u00D7 {item.quantity}</Text>
+              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} × {item.quantity}</Text>
             </View>
             {isOutOfStock && (
               <View style={[styles.stockBadgeOut, { marginTop: 4 }]}>
@@ -204,7 +204,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         ) : (
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Text style={styles.cartHeaderTitle}>Cart</Text>
-            <Text style={styles.cartHeaderCount}>{productCount} products \u00B7 {unitCount} units</Text>
+            <Text style={styles.cartHeaderCount}>{productCount} products · {unitCount} units</Text>
           </View>
         )}
         <Pressable

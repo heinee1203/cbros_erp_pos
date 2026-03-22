@@ -143,7 +143,14 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       const customer = await createCustomer(parsed.data, orgId);
       return reply.status(201).send(customer);
     } catch (err: any) {
-      if (err.code === "23505" || err.message?.includes("unique")) {
+      // Drizzle wraps PostgreSQL errors — check error, cause, and message
+      const errStr = String(err.message ?? "") + String(err.cause?.message ?? "") + String(err.cause?.code ?? "");
+      const isUnique = err.code === "23505"
+        || err.cause?.code === "23505"
+        || errStr.includes("unique")
+        || errStr.includes("duplicate key")
+        || errStr.includes("23505");
+      if (isUnique) {
         return reply
           .status(409)
           .send({ error: "A customer with this phone number already exists" });

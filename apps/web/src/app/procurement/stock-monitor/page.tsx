@@ -498,7 +498,7 @@ function StockMonitorRow({ row, onClick, onAskAi }: { row: StockMonitorRow; onCl
 
       {/* Total Stock */}
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
-        {row.totalStock.toLocaleString()}
+        {row.totalStock.toLocaleString()}{row.sellingUnit && row.sellingUnit !== "piece" ? ` ${row.sellingUnit}` : ""}
       </td>
 
       {/* Avg Daily Sales (30d) */}

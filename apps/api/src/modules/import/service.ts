@@ -4,6 +4,7 @@ import {
   inventory,
   locations,
   categories,
+  brands,
 } from "@apex/database/schema";
 import { eq, and, ilike, sql } from "drizzle-orm";
 import { generateEan13 } from "@apex/types";
@@ -18,11 +19,21 @@ export interface LocationMapping {
   autoMatched: boolean;
 }
 
+export interface CategoryMapping {
+  csvName: string;
+  apexCategoryId: string | null;
+  apexCategoryName: string | null;
+  autoMatched: boolean;
+  productCount: number;
+}
+
 export interface ParsedRowLocation {
   csvLocationName: string;
   apexLocationId: string | null;
   stockLevel: number;
   available: boolean;
+  reorderPoint: number | null;
+  optimalStock: number | null;
 }
 
 export interface ParsedRow {
@@ -34,6 +45,7 @@ export interface ParsedRow {
   unitPrice: string;
   isVariablePrice: boolean;
   categoryName: string;
+  brandName: string;
   description: string;
   handle: string;
   option1Name: string;
@@ -62,6 +74,7 @@ export interface PreviewResult {
   skipCount: number;
   errorCount: number;
   locationMapping: LocationMapping[];
+  categoryMapping: CategoryMapping[];
   errors: Array<{ row: number; message: string }>;
   preview: Array<{
     rowIndex: number;
@@ -78,6 +91,7 @@ export interface PreviewResult {
 export interface ExecuteOptions {
   previewToken: string;
   locationMapping?: Record<string, string>; // csvName -> apexLocationId overrides
+  categoryMapping?: Record<string, { action: "create" | "map"; targetCategoryId?: string; targetSubcategoryId?: string; familyId?: string; createSubcategory?: boolean }>;
   skipErrors?: boolean;
   createNewCategories?: boolean;
 }
@@ -106,6 +120,7 @@ interface CachedPreview {
   data: ParsedRow[];
   orgId: string;
   locationMapping: LocationMapping[];
+  categoryMapping: CategoryMapping[];
   expiresAt: number;
 }
 
@@ -300,16 +315,33 @@ export async function parseLoyverseCSV(
     .from(locations)
     .where(and(eq(locations.orgId, orgId), eq(locations.isActive, true)));
 
+  // Check saved import location mappings
+  const savedMappingRows = await db.execute(
+    sql`SELECT csv_location_name, apex_location_id FROM import_location_mappings WHERE org_id = ${orgId}`,
+  );
+  const savedMappings = new Map<string, string>();
+  for (const row of savedMappingRows) {
+    savedMappings.set((row as any).csv_location_name.toLowerCase(), (row as any).apex_location_id);
+  }
+
   const locationMapping: LocationMapping[] = [];
   for (const csvName of csvLocationNames) {
+    // Try auto-match by name first
     const match = orgLocations.find(
       (loc) => loc.name.trim().toLowerCase() === csvName.trim().toLowerCase(),
     );
+    // Then check saved mappings
+    const savedId = savedMappings.get(csvName.trim().toLowerCase());
+    const savedLoc = savedId ? orgLocations.find((l) => l.id === savedId) : null;
+
+    const resolvedId = match?.id ?? savedLoc?.id ?? null;
+    const resolvedName = match?.name ?? savedLoc?.name ?? null;
+
     locationMapping.push({
       csvName,
-      apexLocationId: match?.id ?? null,
-      apexLocationName: match?.name ?? null,
-      autoMatched: !!match,
+      apexLocationId: resolvedId,
+      apexLocationName: resolvedName,
+      autoMatched: !!match || !!savedLoc,
     });
   }
 
@@ -352,10 +384,17 @@ export async function parseLoyverseCSV(
 
     const name = getByIdx(row, colIdx.name);
     const sku = getByIdx(row, colIdx.sku);
-    const barcode = getByIdx(row, colIdx.barcode);
+    const rawBarcode = getByIdx(row, colIdx.barcode);
+    // Barcodes in scientific notation (e.g., "4.97579E+12") are unrecoverable —
+    // Excel destroyed the precision. Skip the barcode entirely; keep existing DB value.
+    const barcode = rawBarcode && /[eE]/.test(rawBarcode) ? "" : rawBarcode;
     const costStr = getByIdx(row, colIdx.cost);
     const priceStr = getByIdx(row, colIdx.price);
     const categoryName = getByIdx(row, colIdx.category);
+    // Parse brand from category name: "TIRE #01 - DELIUM" → brand "DELIUM"
+    const brandName = categoryName && categoryName.includes(" - ")
+      ? categoryName.split(" - ").slice(1).join(" - ").trim()
+      : "";
     const description = getByIdx(row, colIdx.description);
     const handle = getByIdx(row, colIdx.handle);
     const option1Name = getByIdx(row, colIdx.option1Name);
@@ -393,6 +432,10 @@ export async function parseLoyverseCSV(
         headerIdx[`in stock [${mapping.csvName}]`.toLowerCase()];
       const availIdx =
         headerIdx[`available for sale [${mapping.csvName}]`.toLowerCase()];
+      const lowStockIdx =
+        headerIdx[`low stock [${mapping.csvName}]`.toLowerCase()];
+      const optimalStockIdx =
+        headerIdx[`optimal stock [${mapping.csvName}]`.toLowerCase()];
 
       const stockLevel = stockIdx !== undefined
         ? parseInt(row[stockIdx] ?? "0", 10) || 0
@@ -400,12 +443,23 @@ export async function parseLoyverseCSV(
       const available = availIdx !== undefined
         ? (row[availIdx] ?? "").trim().toLowerCase() !== "no"
         : true;
+      // Blank reorder point defaults to 0 (no alert), not the schema default of 10
+      const rawLowStock = lowStockIdx !== undefined ? (row[lowStockIdx] ?? "").trim() : "";
+      const reorderPoint = rawLowStock !== ""
+        ? Math.max(0, parseInt(rawLowStock, 10) || 0)
+        : 0;
+      const rawOptimal = optimalStockIdx !== undefined ? (row[optimalStockIdx] ?? "").trim() : "";
+      const optimalStock = rawOptimal !== ""
+        ? Math.max(0, parseInt(rawOptimal, 10) || 0)
+        : 0;
 
       rowLocations.push({
         csvLocationName: mapping.csvName,
         apexLocationId: mapping.apexLocationId,
         stockLevel,
         available,
+        reorderPoint,
+        optimalStock,
       });
     }
 
@@ -447,6 +501,7 @@ export async function parseLoyverseCSV(
       unitPrice: isNaN(unitPrice) ? "0.00" : unitPrice.toFixed(2),
       isVariablePrice,
       categoryName,
+      brandName,
       description,
       handle,
       option1Name,
@@ -507,9 +562,10 @@ export async function parseLoyverseCSV(
         ? `${parentName} (${variantSuffix})`
         : parentName;
 
-      // If the row has an empty name (variant rows in Loyverse), fill it with the variant suffix
-      // so the product name in the DB will be the short variant name (e.g., "FORD RANGER")
-      if (!row.name.trim() && variantSuffix) {
+      // For variant rows, the DB product name should be the short variant name (e.g., "14", "FORD RANGER")
+      // The first row in a Loyverse group has BOTH the parent name AND an option value —
+      // it must use the variant suffix as its name, not the parent name.
+      if (variantSuffix) {
         row.name = variantSuffix;
       }
 
@@ -541,12 +597,42 @@ export async function parseLoyverseCSV(
     }
   }
 
+  // ── Category matching ──
+  // Extract unique category names from parsed rows and match to existing categories
+  const csvCategoryCounts = new Map<string, number>();
+  for (const row of parsedRows) {
+    if (row.categoryName) {
+      const key = row.categoryName.trim();
+      if (key) csvCategoryCounts.set(key, (csvCategoryCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  const orgCategories = await db
+    .select({ id: categories.id, name: categories.name })
+    .from(categories)
+    .where(eq(categories.orgId, orgId));
+
+  const categoryMapping: CategoryMapping[] = [];
+  for (const [csvName, count] of csvCategoryCounts) {
+    const match = orgCategories.find(
+      (c) => c.name.trim().toLowerCase() === csvName.trim().toLowerCase(),
+    );
+    categoryMapping.push({
+      csvName,
+      apexCategoryId: match?.id ?? null,
+      apexCategoryName: match?.name ?? null,
+      autoMatched: !!match,
+      productCount: count,
+    });
+  }
+
   // Generate preview token and cache
   const previewToken = crypto.randomUUID();
   previewCache.set(previewToken, {
     data: parsedRows,
     orgId,
     locationMapping,
+    categoryMapping,
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
 
@@ -559,6 +645,7 @@ export async function parseLoyverseCSV(
     skipCount,
     errorCount: updatedErrors.length,
     locationMapping,
+    categoryMapping,
     errors: updatedErrors,
     preview: parsedRows.slice(0, 100).map((r) => ({
       rowIndex: r.rowIndex,
@@ -634,6 +721,16 @@ export async function executeImport(
     .where(eq(categories.orgId, orgId));
   for (const c of orgCategories) {
     categoryCache.set(c.name.toLowerCase(), c.id);
+  }
+
+  // Brand cache: name → id
+  const brandCache = new Map<string, string>();
+  const orgBrands = await db
+    .select({ id: brands.id, name: brands.name })
+    .from(brands)
+    .where(eq(brands.orgId, orgId));
+  for (const b of orgBrands) {
+    brandCache.set(b.name.toLowerCase(), b.id);
   }
 
   // Pre-create parent products for variant groups
@@ -725,26 +822,133 @@ export async function executeImport(
           }
 
           try {
-            // Resolve category
+            // SAVEPOINT for row-level error isolation — allows rollback without aborting batch transaction
+            await tx.execute(sql`SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
+
+            // Resolve category — check user mapping first, then cache, then auto-create
             let categoryId: string | null = null;
             if (row.categoryName) {
-              categoryId = categoryCache.get(row.categoryName.toLowerCase()) ?? null;
-              if (!categoryId && options.createNewCategories) {
-                const slug = row.categoryName
+              const catMapping = options.categoryMapping?.[row.categoryName];
+              if (catMapping) {
+                if (catMapping.action === "map" && catMapping.targetCategoryId) {
+                  categoryId = catMapping.targetCategoryId;
+                } else if (catMapping.action === "create") {
+                  // Check cache first (may have been created for a previous row)
+                  categoryId = categoryCache.get(row.categoryName.toLowerCase()) ?? null;
+                  if (!categoryId) {
+                    if (!catMapping.familyId) {
+                      throw new Error(`Cannot create category "${row.categoryName}" without a family. Please select a family in the category mapping.`);
+                    }
+                    const slug = row.categoryName
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, "-")
+                      .replace(/^-|-$/g, "");
+                    const catSlugVal = slug || `cat-${Date.now()}`;
+                    const [newCat] = await tx
+                      .insert(categories)
+                      .values({
+                        orgId,
+                        name: row.categoryName,
+                        slug: catSlugVal,
+                        familyId: catMapping.familyId,
+                      })
+                      .onConflictDoNothing()
+                      .returning({ id: categories.id });
+                    if (newCat) {
+                      categoryId = newCat.id;
+                      categoryCache.set(row.categoryName.toLowerCase(), newCat.id);
+                    } else {
+                      // Already exists — fetch it
+                      const [existCat] = await tx
+                        .select({ id: categories.id })
+                        .from(categories)
+                        .where(and(eq(categories.orgId, orgId), eq(categories.slug, catSlugVal)))
+                        .limit(1);
+                      if (existCat) {
+                        categoryId = existCat.id;
+                        categoryCache.set(row.categoryName.toLowerCase(), existCat.id);
+                      }
+                    }
+                  }
+                }
+              } else {
+                // No explicit mapping — try auto-match by name
+                categoryId = categoryCache.get(row.categoryName.toLowerCase()) ?? null;
+                if (!categoryId && options.createNewCategories) {
+                  const autoSlug = row.categoryName
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, "-")
+                    .replace(/^-|-$/g, "");
+                  const autoSlugVal = autoSlug || `cat-${Date.now()}`;
+                  const [newCat] = await tx
+                    .insert(categories)
+                    .values({
+                      orgId,
+                      name: row.categoryName,
+                      slug: autoSlugVal,
+                    })
+                    .onConflictDoNothing()
+                    .returning({ id: categories.id });
+                  if (newCat) {
+                    categoryId = newCat.id;
+                    categoryCache.set(row.categoryName.toLowerCase(), newCat.id);
+                  } else {
+                    const [existCat] = await tx
+                      .select({ id: categories.id })
+                      .from(categories)
+                      .where(and(eq(categories.orgId, orgId), eq(categories.slug, autoSlugVal)))
+                      .limit(1);
+                    if (existCat) {
+                      categoryId = existCat.id;
+                      categoryCache.set(row.categoryName.toLowerCase(), existCat.id);
+                    }
+                  }
+                }
+              }
+            }
+
+            // Resolve sub-category from mapping
+            let subcategoryId: string | null = null;
+            if (row.categoryName) {
+              const catMapping = options.categoryMapping?.[row.categoryName];
+              if (catMapping?.targetSubcategoryId) {
+                subcategoryId = catMapping.targetSubcategoryId;
+              }
+            }
+
+            // Resolve brand from parsed category name
+            let brandId: string | null = null;
+            if (row.brandName) {
+              brandId = brandCache.get(row.brandName.toLowerCase()) ?? null;
+              if (!brandId) {
+                // Create brand — use onConflictDoNothing to avoid aborting transaction
+                const slug = row.brandName
                   .toLowerCase()
                   .replace(/[^a-z0-9]+/g, "-")
                   .replace(/^-|-$/g, "");
-                const [newCat] = await tx
-                  .insert(categories)
+                const [newBrand] = await tx
+                  .insert(brands)
                   .values({
                     orgId,
-                    name: row.categoryName,
-                    slug: slug || `cat-${Date.now()}`,
+                    name: row.brandName,
+                    slug: slug || `brand-${Date.now()}`,
                   })
-                  .returning({ id: categories.id });
-                if (newCat) {
-                  categoryId = newCat.id;
-                  categoryCache.set(row.categoryName.toLowerCase(), newCat.id);
+                  .onConflictDoNothing()
+                  .returning({ id: brands.id });
+                if (newBrand) {
+                  brandId = newBrand.id;
+                  brandCache.set(row.brandName.toLowerCase(), newBrand.id);
+                } else {
+                  // Already exists — fetch it
+                  const [existing] = await tx
+                    .select({ id: brands.id })
+                    .from(brands)
+                    .where(and(eq(brands.orgId, orgId), eq(brands.slug, slug || `brand-${Date.now()}`)))
+                    .limit(1);
+                  if (existing) {
+                    brandId = existing.id;
+                    brandCache.set(row.brandName.toLowerCase(), existing.id);
+                  }
                 }
               }
             }
@@ -777,6 +981,8 @@ export async function executeImport(
                   barcode,
                   category: "HARD_PARTS",
                   categoryId,
+                  subcategoryId,
+                  brandId,
                   description: row.description || null,
                   parentProductId,
                   isParent: false,
@@ -792,6 +998,8 @@ export async function executeImport(
                   locationId: loc.apexLocationId,
                   stockLevel: loc.stockLevel,
                   availableForSale: loc.available,
+                  reorderPoint: loc.reorderPoint ?? 0,
+                  optimalStock: loc.optimalStock ?? 0,
                 });
               }
 
@@ -806,6 +1014,8 @@ export async function executeImport(
               if (row.barcode) updateFields.barcode = row.barcode;
               if (row.description) updateFields.description = row.description;
               if (categoryId) updateFields.categoryId = categoryId;
+              if (subcategoryId) updateFields.subcategoryId = subcategoryId;
+              if (brandId) updateFields.brandId = brandId;
 
               if (Object.keys(updateFields).length > 0) {
                 await tx
@@ -835,6 +1045,8 @@ export async function executeImport(
                     .set({
                       stockLevel: loc.stockLevel,
                       availableForSale: loc.available,
+                      reorderPoint: loc.reorderPoint ?? 0,
+                      optimalStock: loc.optimalStock ?? 0,
                     })
                     .where(eq(inventory.id, existingInv.id));
                 } else {
@@ -844,13 +1056,21 @@ export async function executeImport(
                     locationId: loc.apexLocationId,
                     stockLevel: loc.stockLevel,
                     availableForSale: loc.available,
+                    reorderPoint: loc.reorderPoint ?? 0,
+                    optimalStock: loc.optimalStock ?? 0,
                   });
                 }
               }
 
               updated++;
             }
+            // Release savepoint on success
+            await tx.execute(sql`RELEASE SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
           } catch (rowErr: any) {
+            // Rollback to savepoint — keeps the transaction alive for remaining rows
+            try {
+              await tx.execute(sql`ROLLBACK TO SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
+            } catch {}
             if (options.skipErrors) {
               skipped++;
               importErrors.push({
@@ -895,12 +1115,13 @@ export async function executeImport(
     created,
     updated,
     errors: importErrors.length,
+    errorLog: importErrors,
   });
 
   // Clean up cached preview data (import is done)
   previewCache.delete(options.previewToken);
 
-  return { created, updated, skipped, errors: importErrors, duration };
+  return { created, updated, skipped, errors: importErrors.length, errorLog: importErrors, duration };
 }
 
 // ── getProgress ──────────────────────────────────────────────────────

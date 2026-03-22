@@ -21,6 +21,8 @@ import {
   Activity,
   RotateCcw,
   CreditCard,
+  ShieldCheck,
+  Gift,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,6 +35,7 @@ interface NavChild {
   label: string;
   href: string;
   match?: RegExp;
+  permission?: string;
 }
 
 interface NavGroup {
@@ -40,6 +43,7 @@ interface NavGroup {
   label: string;
   icon: LucideIcon;
   match: RegExp;
+  permission?: string;
   children: NavChild[];
 }
 
@@ -49,6 +53,7 @@ interface NavDirect {
   icon: LucideIcon;
   href: string;
   match: RegExp;
+  permission?: string;
 }
 
 type NavEntry = NavGroup | NavDirect;
@@ -67,6 +72,7 @@ const NAV_TOP: NavEntry[] = [
     label: "Reports",
     icon: BarChart3,
     match: /^\/reports/,
+    permission: "bo.view_sales_reports",
     children: [
       { label: "Overview", href: "/reports", match: /^\/reports$/ },
       { label: "Sales by Item", href: "/reports/sales-by-item", match: /^\/reports\/sales-by-item/ },
@@ -83,6 +89,7 @@ const NAV_TOP: NavEntry[] = [
     label: "Sales",
     icon: ShoppingCart,
     match: /^\/(sales|returns)/,
+    permission: "bo.view_sales_reports",
     children: [
       { label: "Receipts", href: "/sales/receipts", match: /^\/sales\/receipts/ },
       { label: "Open Tickets", href: "/sales/open-tickets", match: /^\/sales\/open-tickets/ },
@@ -95,6 +102,7 @@ const NAV_TOP: NavEntry[] = [
     label: "Items / Catalog",
     icon: Package,
     match: /^\/inventory/,
+    permission: "bo.manage_items",
     children: [
       { label: "Item List", href: "/inventory", match: /^\/inventory$/ },
       { label: "Categories", href: "/inventory/categories", match: /^\/inventory\/categories/ },
@@ -103,7 +111,8 @@ const NAV_TOP: NavEntry[] = [
       { label: "Vehicle Lookup", href: "/inventory/vehicle-lookup", match: /^\/inventory\/vehicle-lookup/ },
       { label: "Discounts", href: "/inventory/discounts", match: /^\/inventory\/discounts/ },
       { label: "Barcode Printing", href: "/inventory/barcode-printing", match: /^\/inventory\/barcode-printing/ },
-      { label: "Serial Lookup", href: "/inventory/serials", match: /^\/inventory\/serials/ },
+      { label: "Serial Lookup", href: "/inventory/serials", match: /^\/inventory\/serials$/ },
+      { label: "Tire Age Report", href: "/inventory/serials/tire-age", match: /^\/inventory\/serials\/tire-age/ },
       { label: "Import Items", href: "/inventory/import", match: /^\/inventory\/import/ },
       { label: "Tags / Fitment", href: "/inventory/tags", match: /^\/inventory\/tags/ },
       { label: "Price Management", href: "/inventory/pricing", match: /^\/inventory\/pricing/ },
@@ -115,6 +124,7 @@ const NAV_TOP: NavEntry[] = [
     label: "Inventory",
     icon: Warehouse,
     match: /^\/procurement/,
+    permission: "bo.manage_inventory",
     children: [
       { label: "Stock Levels", href: "/procurement/stock-levels", match: /^\/procurement\/stock-levels/ },
       { label: "Purchase Orders", href: "/procurement/purchase-orders", match: /^\/procurement\/purchase-orders/ },
@@ -145,10 +155,30 @@ const NAV_TOP: NavEntry[] = [
     label: "Customers",
     icon: Users,
     match: /^\/customers/,
+    permission: "bo.manage_customers",
     children: [
       { label: "Customer List", href: "/customers", match: /^\/customers$/ },
       { label: "AR Aging Report", href: "/customers/reports/aging", match: /^\/customers\/reports\/aging/ },
     ],
+  },
+  {
+    kind: "group",
+    label: "Warranty",
+    icon: ShieldCheck,
+    match: /^\/warranties/,
+    children: [
+      { label: "Warranty Lookup", href: "/warranties/lookup", match: /^\/warranties\/lookup/ },
+      { label: "Policies", href: "/warranties/policies", match: /^\/warranties\/policies/ },
+      { label: "Active Warranties", href: "/warranties/records", match: /^\/warranties\/records/ },
+      { label: "Claims", href: "/warranties/claims", match: /^\/warranties\/claims/ },
+    ],
+  },
+  {
+    kind: "direct" as const,
+    label: "Promo Rules",
+    icon: Gift,
+    href: "/promos",
+    match: /^\/promos/,
   },
   {
     kind: "group",
@@ -160,6 +190,8 @@ const NAV_TOP: NavEntry[] = [
       { label: "Check Vouchers", href: "/ap/check-vouchers", match: /^\/ap\/check-vouchers/ },
       { label: "AP Aging Report", href: "/ap/reports/aging", match: /^\/ap\/reports\/aging/ },
       { label: "PDC Report", href: "/ap/reports/pdcs", match: /^\/ap\/reports\/pdcs/ },
+      { label: "Cash Flow Forecast", href: "/cashflow", match: /^\/cashflow$/ },
+      { label: "Recurring Expenses", href: "/cashflow/expenses", match: /^\/cashflow\/expenses/ },
     ],
   },
 ];
@@ -199,6 +231,8 @@ const NAV_BOTTOM: NavEntry[] = [
       { label: "Receipt / Invoice", href: "/settings/receipts", match: /^\/settings\/receipts/ },
       { label: "Stock Alerts", href: "/settings/stock-alerts", match: /^\/settings\/stock-alerts/ },
       { label: "Company Profile", href: "/settings/company", match: /^\/settings\/company/ },
+      { label: "POS Devices", href: "/settings/devices", match: /^\/settings\/devices/, permission: "bo.manage_pos_devices" },
+      { label: "Roles & Permissions", href: "/settings/roles", match: /^\/settings\/roles/, permission: "bo.manage_employees" },
     ],
   },
 ];
@@ -220,6 +254,9 @@ function isChildActive(child: NavChild, pathname: string): boolean {
 export function Sidebar() {
   const pathname = usePathname();
   const { isCollapsed, toggle, isMobileOpen, closeMobile } = useSidebar();
+  const { user } = useAuth();
+  // If no permissions data (legacy session), show everything — don't filter
+  const userPermissions: string[] | null = user?.permissions && user.permissions.length > 0 ? user.permissions : null;
 
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const initial = [
@@ -302,7 +339,12 @@ export function Sidebar() {
       <nav className={cn("flex flex-1 flex-col pt-2 pb-3", isCollapsed ? "px-1.5 overflow-visible" : "px-3 overflow-y-auto")}>
         {/* Top nav */}
         <div className="flex flex-col gap-px">
-          {NAV_TOP.map((entry) =>
+          {NAV_TOP.filter((entry) => {
+            if (!userPermissions) return true; // No permissions data — show all
+            const perm = entry.kind === "group" ? entry.permission : (entry as NavDirect).permission;
+            if (!perm) return true;
+            return userPermissions.includes(perm);
+          }).map((entry) =>
             entry.kind === "group" ? (
               <NavGroupItem
                 key={entry.label}
@@ -311,6 +353,7 @@ export function Sidebar() {
                 isExpanded={expanded.has(entry.label)}
                 onToggle={toggleGroup}
                 isCollapsed={isCollapsed}
+                userPermissions={userPermissions}
               />
             ) : (
               <NavDirectItem
@@ -337,6 +380,7 @@ export function Sidebar() {
                 isExpanded={expanded.has(entry.label)}
                 onToggle={toggleGroup}
                 isCollapsed={isCollapsed}
+                userPermissions={userPermissions}
               />
             ) : (
               <NavDirectItem
@@ -381,13 +425,22 @@ function NavGroupItem({
   isExpanded,
   onToggle,
   isCollapsed,
+  userPermissions = [],
 }: {
   entry: NavGroup;
   pathname: string;
   isExpanded: boolean;
   onToggle: (label: string) => void;
   isCollapsed: boolean;
+  userPermissions?: string[] | null;
 }) {
+  // Filter children by permission (null = show all)
+  const visibleChildren = !userPermissions
+    ? entry.children
+    : entry.children.filter(
+        (child) => !child.permission || userPermissions.includes(child.permission),
+      );
+  if (visibleChildren.length === 0 && entry.children.length > 0) return null;
   const isGroupActive = entry.match.test(pathname);
   const Icon = entry.icon;
 
@@ -424,7 +477,7 @@ function NavGroupItem({
               {entry.label}
             </div>
             {/* Children */}
-            {entry.children.map((child) => {
+            {visibleChildren.map((child) => {
               const active = isChildActive(child, pathname);
               return (
                 <Link
@@ -493,7 +546,7 @@ function NavGroupItem({
       >
         <div className="overflow-hidden">
           <div className="flex flex-col gap-px pt-0.5 pb-1">
-            {entry.children.map((child) => (
+            {visibleChildren.map((child) => (
               <NavChildLink key={child.href} child={child} pathname={pathname} />
             ))}
           </div>

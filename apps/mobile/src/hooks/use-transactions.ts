@@ -64,7 +64,7 @@ export function useSalesListQuery(searchQuery?: string) {
   return useQuery<SaleListItem[]>({
     queryKey: ['sales', 'list', debouncedQ] as const,
     queryFn: async ({ queryKey }) => {
-      const q = queryKey[2]; // Extract search term from query key (avoids stale closure)
+      const q = queryKey[2] as string; // Extract search term from query key (avoids stale closure)
       const searching = q.length > 0;
 
       // Build query string manually — RN's URLSearchParams.set is not implemented
@@ -73,8 +73,17 @@ export function useSalesListQuery(searchQuery?: string) {
         'limit=50',
       ];
       if (!searching) {
-        const today = new Date().toISOString().slice(0, 10);
-        parts.push(`from=${today}`);
+        // Build start-of-day in local timezone as ISO 8601 with offset
+        const now = new Date();
+        const offset = -now.getTimezoneOffset();
+        const sign = offset >= 0 ? '+' : '-';
+        const pad = (n: number) => String(Math.abs(n)).padStart(2, '0');
+        const tz = `${sign}${pad(Math.floor(offset / 60))}:${pad(offset % 60)}`;
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        const todayStart = `${y}-${m}-${d}T00:00:00${tz}`;
+        parts.push(`from=${encodeURIComponent(todayStart)}`);
       }
       if (searching) {
         parts.push(`q=${encodeURIComponent(q)}`);

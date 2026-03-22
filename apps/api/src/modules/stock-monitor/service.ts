@@ -273,6 +273,9 @@ export interface StockMonitorRow {
   lastPoSupplierName: string | null;
   lastLeadTimeDays: number | null;
   lastSaleDate: string | null;
+  sellingUnit: string;
+  purchaseUnit: string | null;
+  conversionFactor: string;
   status: string;
   computedAt: string;
 }
@@ -440,6 +443,9 @@ export async function queryStockMonitor(
       lastPoSupplierName: stockMetrics.lastPoSupplierName,
       lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
       lastSaleDate: stockMetrics.lastSaleDate,
+      sellingUnit: products.sellingUnit,
+      purchaseUnit: products.purchaseUnit,
+      conversionFactor: products.conversionFactor,
       status: stockMetrics.status,
       computedAt: stockMetrics.computedAt,
     })
@@ -498,6 +504,9 @@ export async function queryStockMonitor(
     lastPoSupplierName: r.lastPoSupplierName,
     lastLeadTimeDays: r.lastLeadTimeDays,
     lastSaleDate: r.lastSaleDate ? r.lastSaleDate.toISOString() : null,
+    sellingUnit: r.sellingUnit,
+    purchaseUnit: r.purchaseUnit,
+    conversionFactor: r.conversionFactor,
     status: r.status,
     computedAt: r.computedAt.toISOString(),
   };
@@ -574,6 +583,9 @@ export async function exportStockMonitorCSV(
       lastPoSupplierName: stockMetrics.lastPoSupplierName,
       lastLeadTimeDays: stockMetrics.lastLeadTimeDays,
       lastSaleDate: stockMetrics.lastSaleDate,
+      sellingUnit: products.sellingUnit,
+      purchaseUnit: products.purchaseUnit,
+      conversionFactor: products.conversionFactor,
       status: stockMetrics.status,
       computedAt: stockMetrics.computedAt,
     })
@@ -623,6 +635,9 @@ export async function exportStockMonitorCSV(
     lastPoSupplierName: r.lastPoSupplierName,
     lastLeadTimeDays: r.lastLeadTimeDays,
     lastSaleDate: r.lastSaleDate ? r.lastSaleDate.toISOString() : null,
+    sellingUnit: r.sellingUnit,
+    purchaseUnit: r.purchaseUnit,
+    conversionFactor: r.conversionFactor,
     status: r.status,
     computedAt: r.computedAt.toISOString(),
   };

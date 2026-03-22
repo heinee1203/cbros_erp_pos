@@ -22,6 +22,9 @@ export interface StockMonitorRow {
   lastPoDate: string | null;
   lastPoSupplierName: string | null;
   lastLeadTimeDays: number | null;
+  sellingUnit: string;
+  purchaseUnit: string | null;
+  conversionFactor: string;
   status: string;
   computedAt: string;
 }

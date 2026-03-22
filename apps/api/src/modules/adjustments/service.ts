@@ -1,7 +1,11 @@
 import { db, type DbOrTx } from "@apex/database";
-import { inventory, stockJournal, locations } from "@apex/database/schema";
+import { inventory, stockJournal, locations, products } from "@apex/database/schema";
 import { eq, and, sql } from "drizzle-orm";
 import type { CreateAdjustmentInput } from "@apex/types";
+import {
+  checkAndNotifyStockout,
+  checkAndNotifyLowStock,
+} from "../notifications/service";
 import {
   AdjustmentDirection,
   AdjustmentReasonCode,
@@ -171,6 +175,40 @@ export async function createAdjustment(
       updatedBalance: newBalance,
       locationId: input.locationId,
       productId: input.productId,
+      reorderPoint: inv.reorderPoint,
     };
   });
+
+  // Fire-and-forget stock notifications for OUT adjustments
+  if (
+    direction === AdjustmentDirection.OUT &&
+    result.updatedBalance <= result.reorderPoint
+  ) {
+    setImmediate(async () => {
+      try {
+        const [product] = await db
+          .select({ name: products.name })
+          .from(products)
+          .where(eq(products.id, result.productId))
+          .limit(1);
+        const [loc] = await db
+          .select({ name: locations.name })
+          .from(locations)
+          .where(eq(locations.id, result.locationId))
+          .limit(1);
+        const pName = product?.name ?? "Unknown Product";
+        const lName = loc?.name ?? "";
+
+        if (result.updatedBalance <= 0) {
+          await checkAndNotifyStockout(orgId, result.productId, pName, lName, result.updatedBalance);
+        } else {
+          await checkAndNotifyLowStock(orgId, result.productId, pName, lName, result.updatedBalance, result.reorderPoint);
+        }
+      } catch (err) {
+        console.error("[NOTIFICATION] Adjustment notification error:", err);
+      }
+    });
+  }
+
+  return result;
 }

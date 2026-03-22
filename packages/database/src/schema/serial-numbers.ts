@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, boolean, timestamp, uniqueIndex, index, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, boolean, timestamp, uniqueIndex, index, pgEnum, integer, date } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
 import { products } from "./products";
 import { locations } from "./locations";
@@ -30,6 +30,14 @@ export const serialNumbers = pgTable(
     returnedAt: timestamp("returned_at", { withTimezone: true }),
     returnedViaReturnId: uuid("returned_via_return_id"),
     notes: varchar("notes", { length: 1000 }),
+    /** DOT date code for tires — 4-digit WWYY format (e.g., "1724" = week 17, 2024) */
+    dotCode: varchar("dot_code", { length: 4 }),
+    /** Parsed manufacture week (1-52) from DOT code */
+    manufactureWeek: integer("manufacture_week"),
+    /** Parsed full manufacture year (e.g., 2024) from DOT code */
+    manufactureYear: integer("manufacture_year"),
+    /** Approximate manufacture date (first day of that week) */
+    manufactureDate: date("manufacture_date"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
   },

@@ -3,6 +3,7 @@ import {
   inventory,
   products,
   productFamilies,
+  categories,
   locations,
 } from "@apex/database/schema";
 import {
@@ -38,6 +39,9 @@ export interface StockLevelRow {
   optimalStock: number;
   leadTimeDays: number;
   availableForSale: boolean;
+  sellingUnit: string;
+  purchaseUnit: string | null;
+  conversionFactor: string;
   status: "OUT_OF_STOCK" | "LOW_STOCK" | "IN_STOCK";
   updatedAt: string;
 }
@@ -94,10 +98,10 @@ const availableCol = sql<number>`(${inventory.stockLevel} - ${inventory.reserved
 
 // ── Sort helper ──
 
-const SORT_COLUMN_MAP: Record<SortField, SQL | typeof products.name> = {
+const SORT_COLUMN_MAP: Record<SortField, SQL | { getSQL(): SQL }> = {
   name: products.name,
   sku: products.sku,
-  category: products.category,
+  category: categories.name,
   location: locations.name,
   stockLevel: inventory.stockLevel,
   reservedLevel: inventory.reservedLevel,
@@ -137,7 +141,7 @@ export async function querySummary(params: StockLevelsQueryParams): Promise<Stoc
   }
 
   if (params.category) {
-    conditions.push(eq(products.category, params.category as any));
+    conditions.push(eq(categories.name, params.category));
   }
 
   const rows = await db
@@ -152,6 +156,7 @@ export async function querySummary(params: StockLevelsQueryParams): Promise<Stoc
     .from(inventory)
     .innerJoin(products, eq(inventory.productId, products.id))
     .innerJoin(locations, eq(inventory.locationId, locations.id))
+    .leftJoin(categories, eq(products.categoryId, categories.id))
     .where(and(...conditions));
 
   const row = rows[0]!;
@@ -196,7 +201,7 @@ export async function queryStockLevels(
 
   // Category filter
   if (params.category) {
-    conditions.push(eq(products.category, params.category as any));
+    conditions.push(eq(categories.name, params.category));
   }
 
   // Stock status filter
@@ -230,7 +235,7 @@ export async function queryStockLevels(
         productName: products.name,
         productSku: products.sku,
         mnemonicSku: products.mnemonicSku,
-        category: products.category,
+        category: sql<string>`coalesce(${categories.name}, 'Uncategorized')`.as("category_name"),
         familyName: productFamilies.name,
         locationId: inventory.locationId,
         locationName: locations.name,
@@ -242,12 +247,16 @@ export async function queryStockLevels(
         optimalStock: inventory.optimalStock,
         leadTimeDays: inventory.leadTimeDays,
         availableForSale: inventory.availableForSale,
+        sellingUnit: products.sellingUnit,
+        purchaseUnit: products.purchaseUnit,
+        conversionFactor: products.conversionFactor,
         updatedAt: inventory.updatedAt,
       })
       .from(inventory)
       .innerJoin(products, eq(inventory.productId, products.id))
       .innerJoin(locations, eq(inventory.locationId, locations.id))
       .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+      .leftJoin(categories, eq(products.categoryId, categories.id))
       .where(and(...conditions))
       .orderBy(
         ...getSortOrder(params.sortBy, params.sortDir),
@@ -278,6 +287,9 @@ export async function queryStockLevels(
     optimalStock: row.optimalStock,
     leadTimeDays: row.leadTimeDays,
     availableForSale: row.availableForSale,
+    sellingUnit: row.sellingUnit,
+    purchaseUnit: row.purchaseUnit,
+    conversionFactor: row.conversionFactor,
     status:
       row.stockLevel === 0
         ? "OUT_OF_STOCK"

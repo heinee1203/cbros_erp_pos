@@ -23,6 +23,12 @@
     @com.facebook.react.uimanager.annotations.ReactProp *;
 }
 
+# MMKV
+-keep class com.tencent.mmkv.** { *; }
+
+# BLE (react-native-ble-plx)
+-keep class com.polidea.rxandroidble2.** { *; }
+
 # Hermes engine
 -keep class com.facebook.hermes.unicode.** { *; }
 -keep class com.facebook.jni.** { *; }

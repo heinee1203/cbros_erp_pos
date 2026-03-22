@@ -32,12 +32,15 @@ import { KEYS } from '@/storage/keys';
 import { Button, Chip, Toast } from '@/components/ui';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
+import { ProductDetailSheet } from '@/components/ProductDetailSheet';
+import { useTheme } from '@/theme/ThemeContext';
 import type { POSStackParamList } from '@/app/MainTabs';
 
 type Nav = StackNavigationProp<POSStackParamList, 'Catalog'>;
 
 export default function CatalogScreen() {
   const navigation = useNavigation<Nav>();
+  useTheme(); // Subscribe to theme changes for re-render
   const { isTablet, screenPadding } = useLayout();
   const scanner = useScanner();
   const addLine = useCartStore(s => s.addLine);
@@ -98,37 +101,6 @@ export default function CatalogScreen() {
       }
     })();
   }, [results]); // re-check after results change (e.g. post-sync)
-
-  // Start scanner listening when on this screen
-  useEffect(() => {
-    scanner.startListening();
-    const unsub = scanner.onScan(async (result) => {
-      if (result.barcode === '__OPEN_CAMERA__') return;
-      const product = await searchByBarcode(result.barcode);
-      if (product) {
-        if (product.isParent) {
-          loadVariants(product);
-          return;
-        }
-        if (product.isVariablePrice) {
-          setVariablePriceItem(product);
-          setEnteredPrice('');
-          return;
-        }
-        if (!product.unitPrice || product.unitPrice <= 0) {
-          showToast('Price not set \u2014 cannot add to cart');
-          return;
-        }
-        addItemToCart(product);
-      } else {
-        Alert.alert('Not Found', `No product found for barcode ${result.barcode}`);
-      }
-    });
-    return () => {
-      scanner.stopListening();
-      unsub();
-    };
-  }, [scanner, searchByBarcode, addItemToCart, loadVariants, showToast]);
 
   // Build product map for FavoritesGrid from current results
   const productMap = useMemo(() => {
@@ -243,6 +215,37 @@ export default function CatalogScreen() {
     setVariantChildren([]);
   }, []);
 
+  // Start scanner listening when on this screen
+  useEffect(() => {
+    scanner.startListening();
+    const unsub = scanner.onScan(async (result) => {
+      if (result.barcode === '__OPEN_CAMERA__') return;
+      const product = await searchByBarcode(result.barcode);
+      if (product) {
+        if (product.isParent) {
+          loadVariants(product);
+          return;
+        }
+        if (product.isVariablePrice) {
+          setVariablePriceItem(product);
+          setEnteredPrice('');
+          return;
+        }
+        if (!product.unitPrice || product.unitPrice <= 0) {
+          showToast('Price not set \u2014 cannot add to cart');
+          return;
+        }
+        addItemToCart(product);
+      } else {
+        Alert.alert('Not Found', `No product found for barcode ${result.barcode}`);
+      }
+    });
+    return () => {
+      scanner.stopListening();
+      unsub();
+    };
+  }, [scanner, searchByBarcode, addItemToCart, loadVariants, showToast]);
+
   const handleProductPress = useCallback((item: CatalogItem) => {
     if (item.isParent) {
       loadVariants(item);
@@ -261,14 +264,12 @@ export default function CatalogScreen() {
     addItemToCart(item);
   }, [addItemToCart, loadVariants, showToast]);
 
+  // Product detail sheet state
+  const [detailProduct, setDetailProduct] = useState<CatalogItem | null>(null);
+
   const handleProductLongPress = useCallback((item: CatalogItem) => {
-    if (isFavorite(item.serverId)) {
-      showToast('Already in favorites');
-      return;
-    }
-    addFavorite(item.serverId);
-    showToast(`★ ${item.name}`);
-  }, [showToast]);
+    setDetailProduct(item);
+  }, []);
 
   const handleFavoriteAddToCart = useCallback((product: { id: string; name: string; retailPrice: number }) => {
     // Find the full CatalogItem from results for sku/barcode info
@@ -405,27 +406,29 @@ export default function CatalogScreen() {
         </View>
       </View>
 
-      {/* Product family filter tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.chipScroll}
-        contentContainerStyle={[styles.chipRow, { paddingHorizontal: screenPadding }]}
-      >
-        <Chip
-          label="All"
-          active={!category}
-          onPress={() => setCategory(null)}
-        />
-        {families.map(fam => (
+      {/* Product family filter tabs — only show when taxonomy is well-populated */}
+      {families.length >= 10 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.chipScroll}
+          contentContainerStyle={[styles.chipRow, { paddingHorizontal: screenPadding }]}
+        >
           <Chip
-            key={fam}
-            label={fam}
-            active={category === fam}
-            onPress={() => setCategory(category === fam ? null : fam)}
+            label="All"
+            active={!category}
+            onPress={() => setCategory(null)}
           />
-        ))}
-      </ScrollView>
+          {families.map(fam => (
+            <Chip
+              key={fam}
+              label={fam}
+              active={category === fam}
+              onPress={() => setCategory(category === fam ? null : fam)}
+            />
+          ))}
+        </ScrollView>
+      )}
 
       {/* Product list with alternating rows */}
       <FlatList
@@ -597,6 +600,14 @@ export default function CatalogScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Product Detail Sheet — opened on long-press */}
+      <ProductDetailSheet
+        product={detailProduct}
+        visible={!!detailProduct}
+        onClose={() => setDetailProduct(null)}
+        onAddToCart={addItemToCart}
+      />
     </View>
   );
 }
@@ -661,10 +672,10 @@ const createStyles = () => StyleSheet.create({
   searchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: colors.bg.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: colors.border.default,
     paddingHorizontal: 16,
     marginHorizontal: 16,
     marginVertical: 12,
@@ -675,14 +686,14 @@ const createStyles = () => StyleSheet.create({
   },
   searchIcon: {
     marginRight: 10,
-    color: '#5A5750',
+    color: colors.text.muted,
     fontSize: 18,
   },
   searchInput: {
     flex: 1,
     fontSize: 15,
     fontFamily: 'Outfit-Regular',
-    color: '#F2F0ED',
+    color: colors.text.primary,
   },
   scanButton: {
     backgroundColor: '#F5A623',

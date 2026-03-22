@@ -84,7 +84,7 @@ export function RefundFlow({
   }, [shakeAnim]);
 
   // Use ref so handlePinKey can call the latest submitRefund without circular deps
-  const submitRef = useRef<() => Promise<void>>();
+  const submitRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
   const handlePinKey = useCallback(async (key: string) => {
     if (pinVerifying) return;

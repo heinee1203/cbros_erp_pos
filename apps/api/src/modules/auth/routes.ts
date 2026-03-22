@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { registerSchema, loginSchema } from "@apex/types";
 import { createOrganizationWithAdmin, authenticateUser, verifyPin } from "./service";
+import { getUserPermissions } from "../rbac/service";
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/register", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
@@ -64,12 +65,15 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const user = await authenticateUser(parsed.data.email, parsed.data.password);
+      // Fetch RBAC permissions for the user
+      const permissions = await getUserPermissions(user.id, user.role);
       const token = app.jwt.sign(
         {
           userId: user.id,
           orgId: user.orgId,
           role: user.role,
           primaryLocationId: user.primaryLocationId ?? "",
+          permissions,
         },
         { expiresIn: "24h" },
       );
@@ -81,6 +85,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           email: user.email,
           fullName: user.fullName,
           role: user.role,
+          permissions,
         },
       });
     } catch {

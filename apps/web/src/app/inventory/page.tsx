@@ -16,9 +16,10 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useProducts, useDeleteProduct, useProductFamilies, type ProductRow, type SortField, type SortDir } from "@/hooks/use-products";
 import { apiFetch } from "@/lib/api";
-import { useCategories } from "@/hooks/use-categories";
-import { useSubcategories } from "@/hooks/use-subcategories";
-import { useBrands } from "@/hooks/use-brands";
+import { useCategories, useCreateCategory } from "@/hooks/use-categories";
+import { useSubcategories, useCreateSubcategory } from "@/hooks/use-subcategories";
+import { useBrands, useCreateBrand } from "@/hooks/use-brands";
+import { useCreateFamily } from "@/hooks/use-families";
 import { useAuth, ALL_LOCATIONS } from "@/app/auth-context";
 import { useLocations, type LocationRow } from "@/hooks/use-locations";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -145,7 +146,7 @@ export default function InventoryPage() {
 
   const isAllLocations = locationId === ALL_LOCATIONS;
 
-  const showFinancials = true;
+  const showFinancials = (user?.permissions ?? []).includes("bo.view_cost");
 
   /* State */
   const [searchQuery, setSearchQuery] = useState("");
@@ -164,6 +165,16 @@ export default function InventoryPage() {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+
+  /* Available for Sale modal */
+  const [showAvailModal, setShowAvailModal] = useState(false);
+
+  /* Inline add modals for filter dropdowns */
+  const [addModal, setAddModal] = useState<"family" | "category" | "subcategory" | "brand" | null>(null);
+  const createFamilyMut = useCreateFamily(token!, apiLocationId!);
+  const createCategoryMut = useCreateCategory(token!, apiLocationId!);
+  const createSubcategoryMut = useCreateSubcategory(token!, apiLocationId!);
+  const createBrandMut = useCreateBrand(token!, apiLocationId!);
 
   /* Import modal state */
   const [showImportModal, setShowImportModal] = useState(false);
@@ -755,8 +766,9 @@ export default function InventoryPage() {
     for (const id of nonParentIds) {
       await deleteMut.mutateAsync(id).catch(() => {});
     }
+    queryClient.invalidateQueries({ queryKey: ["products"] });
     setSelectedIds(new Set());
-  }, [selectedIds, products, confirm, deleteMut]);
+  }, [selectedIds, products, confirm, deleteMut, queryClient]);
 
   /* Bulk update (category, brand, family, subcategory) */
   const handleBulkUpdate = useCallback(async (updates: Record<string, string>) => {
@@ -804,7 +816,7 @@ export default function InventoryPage() {
     : null;
 
   /* Column count for colSpan calculations (arrow + checkbox + name + stock + cat + brand + sell [+ cost + margin] + actions) */
-  const colCount = showFinancials ? 10 : 8;
+  const colCount = showFinancials ? 11 : 9;
 
   return (
     <div className="flex h-full flex-col">
@@ -857,43 +869,81 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* -- Filter Bar -- */}
-      <div className="mb-2 flex items-center gap-2">
-        <select
-          value={familyFilter}
-          onChange={(e) => {
-            setFamilyFilter(e.target.value);
-            setCategoryFilter("");
-            setSubCategoryFilter("");
-          }}
-          className="h-8 rounded-lg border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
-        >
-          <option value="">All Families</option>
-          {families.map((f) => (
-            <option key={f.id} value={f.id}>{f.name}</option>
-          ))}
-        </select>
-
-        <select
-          value={categoryFilter}
-          onChange={(e) => {
-            setCategoryFilter(e.target.value);
-            setSubCategoryFilter("");
-          }}
-          className="h-8 rounded-lg border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
-        >
-          <option value="">All Categories</option>
-          {filteredCategories.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
-
-        <SearchableSelect
-          value={subCategoryFilter}
-          onChange={setSubCategoryFilter}
-          options={filteredSubcategories.map((sc) => ({ value: sc.id, label: sc.name }))}
-          placeholder="All Sub-categories"
+      {/* -- Search Bar -- */}
+      <div className="mb-2 relative">
+        <Search
+          size={15}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
         />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search items, SKU, OEM, or vehicle fitment…"
+          className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-8 text-sm text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none placeholder:text-muted-foreground/50 transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery("")}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+
+      {/* -- Filter Bar -- */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="flex items-center">
+          <select
+            value={familyFilter}
+            onChange={(e) => {
+              setFamilyFilter(e.target.value);
+              setCategoryFilter("");
+              setSubCategoryFilter("");
+            }}
+            className="h-8 rounded-lg rounded-r-none border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+          >
+            <option value="">All Families</option>
+            {families.map((f) => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
+          <button onClick={() => setAddModal("family")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Family">
+            <Plus size={13} />
+          </button>
+        </div>
+
+        <div className="flex items-center">
+          <select
+            value={categoryFilter}
+            onChange={(e) => {
+              setCategoryFilter(e.target.value);
+              setSubCategoryFilter("");
+            }}
+            className="h-8 rounded-lg rounded-r-none border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+          >
+            <option value="">All Categories</option>
+            {filteredCategories.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <button onClick={() => setAddModal("category")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Category">
+            <Plus size={13} />
+          </button>
+        </div>
+
+        <div className="flex items-center">
+          <SearchableSelect
+            value={subCategoryFilter}
+            onChange={setSubCategoryFilter}
+            options={filteredSubcategories.map((sc) => ({ value: sc.id, label: sc.name }))}
+            placeholder="All Sub-categories"
+          />
+          <button onClick={() => setAddModal("subcategory")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Sub-category">
+            <Plus size={13} />
+          </button>
+        </div>
 
         <select
           value={stockStatusFilter}
@@ -905,38 +955,22 @@ export default function InventoryPage() {
           <option value="out">Out of Stock</option>
         </select>
 
-        <select
-          value={brandFilter}
-          onChange={(e) => { setBrandFilter(e.target.value); setPage(1); }}
-          className="h-8 rounded-lg border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
-        >
-          <option value="">All Brands</option>
-          {brandsList.map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
-        </select>
-
-        <div className="relative flex-1">
-          <Search
-            size={13}
-            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-          />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search items..."
-            className="h-8 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none placeholder:text-muted-foreground/50 transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-            >
-              <X size={11} />
-            </button>
-          )}
+        <div className="flex items-center">
+          <select
+            value={brandFilter}
+            onChange={(e) => { setBrandFilter(e.target.value); setPage(1); }}
+            className="h-8 rounded-lg rounded-r-none border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+          >
+            <option value="">All Brands</option>
+            {brandsList.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+          <button onClick={() => setAddModal("brand")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Brand">
+            <Plus size={13} />
+          </button>
         </div>
+
       </div>
 
       {/* -- Active Filter Indicator -- */}
@@ -999,6 +1033,12 @@ export default function InventoryPage() {
             options={filteredSubcategories.map(s => ({ id: s.id, name: s.name }))}
             onSelect={(id) => handleBulkUpdate({ subcategoryId: id })}
           />
+          <button
+            onClick={() => setShowAvailModal(true)}
+            className="rounded bg-muted px-2 py-1 text-[11px] font-medium text-foreground hover:bg-muted/80 transition-colors whitespace-nowrap"
+          >
+            Available for Sale
+          </button>
           <div className="flex-1" />
           <button
             onClick={clearSelection}
@@ -1040,14 +1080,17 @@ export default function InventoryPage() {
                   <th scope="col" className="w-[70px] px-2 py-[7px] text-right">
                     <SortableHeader label="Stock" field="stockLevel" activeField={sortBy} activeDir={sortDir} onSort={handleSort} align="right" />
                   </th>
-                  <th scope="col" className="w-[130px] px-3 py-[7px] text-left">
-                    <SortableHeader label="Category" field="categoryName" activeField={sortBy} activeDir={sortDir} onSort={handleSort} />
+                  <th scope="col" className="w-[85px] px-3 py-[7px] text-right">
+                    <SortableHeader label="Sell" field="unitPrice" activeField={sortBy} activeDir={sortDir} onSort={handleSort} align="right" />
                   </th>
                   <th scope="col" className="w-[110px] px-3 py-[7px] text-left">
                     <SortableHeader label="Brand" field="brandName" activeField={sortBy} activeDir={sortDir} onSort={handleSort} />
                   </th>
-                  <th scope="col" className="w-[85px] px-3 py-[7px] text-right">
-                    <SortableHeader label="Sell" field="unitPrice" activeField={sortBy} activeDir={sortDir} onSort={handleSort} align="right" />
+                  <th scope="col" className="w-[130px] px-3 py-[7px] text-left">
+                    <SortableHeader label="Category" field="categoryName" activeField={sortBy} activeDir={sortDir} onSort={handleSort} />
+                  </th>
+                  <th scope="col" className="w-[120px] px-3 py-[7px] text-left">
+                    <SortableHeader label="Sub-category" field="subcategoryName" activeField={sortBy} activeDir={sortDir} onSort={handleSort} />
                   </th>
                   {showFinancials && (
                     <>
@@ -1146,6 +1189,27 @@ export default function InventoryPage() {
         </div>
       )}
 
+      {/* -- Quick Add Modal for Filter Dropdowns -- */}
+      {addModal && (
+        <QuickAddEntityModal
+          type={addModal}
+          families={families}
+          categories={filteredCategories}
+          onClose={() => setAddModal(null)}
+          onCreated={(type, id) => {
+            setAddModal(null);
+            if (type === "family") setFamilyFilter(id);
+            else if (type === "category") setCategoryFilter(id);
+            else if (type === "subcategory") setSubCategoryFilter(id);
+            else if (type === "brand") setBrandFilter(id);
+          }}
+          createFamily={createFamilyMut}
+          createCategory={createCategoryMut}
+          createSubcategory={createSubcategoryMut}
+          createBrand={createBrandMut}
+        />
+      )}
+
       {/* -- Detail Drawer -- */}
       {selectedProduct && (
         <DetailDrawer
@@ -1158,6 +1222,16 @@ export default function InventoryPage() {
       )}
 
       {showTransferModal && <TransferModal onClose={() => setShowTransferModal(false)} />}
+      {showAvailModal && (
+        <AvailableForSaleModal
+          selectedIds={Array.from(selectedIds)}
+          locations={orgLocations}
+          token={token}
+          locationId={apiLocationId}
+          onClose={() => setShowAvailModal(false)}
+          onDone={() => { queryClient.invalidateQueries({ queryKey: ["products"] }); setShowAvailModal(false); clearSelection(); }}
+        />
+      )}
       {showAdjustModal && selectedProductId && !isAllLocations && (
         <AdjustModal productId={selectedProductId} locationId={apiLocationId} token={token} onClose={() => setShowAdjustModal(false)} />
       )}
@@ -1314,6 +1388,214 @@ export default function InventoryPage() {
           )}
         </ModalShell>
       )}
+    </div>
+  );
+}
+
+// ── Available for Sale Modal ──
+
+function AvailableForSaleModal({
+  selectedIds,
+  locations,
+  token,
+  locationId,
+  onClose,
+  onDone,
+}: {
+  selectedIds: string[];
+  locations: LocationRow[];
+  token: string | null;
+  locationId: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [checkedLocs, setCheckedLocs] = useState<Set<string>>(new Set());
+  const [action, setAction] = useState<"set" | "add" | "remove">("set");
+  const [saving, setSaving] = useState(false);
+
+  const toggleLoc = (id: string) => {
+    setCheckedLocs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleApply = async () => {
+    if (checkedLocs.size === 0) return;
+    setSaving(true);
+    try {
+      await apiFetch("/products/bulk-available-for-sale", {
+        method: "PATCH",
+        token: token!,
+        locationId: locationId!,
+        body: JSON.stringify({
+          productIds: selectedIds,
+          action,
+          locationIds: Array.from(checkedLocs),
+        }),
+      });
+      onDone();
+    } catch {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-full max-w-md rounded-lg bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="mb-1 text-sm font-semibold">Set Availability for {selectedIds.length} Items</h3>
+        <p className="mb-3 text-[11px] text-muted-foreground">Choose which stores these items should be available for sale at</p>
+
+        <div className="mb-3 space-y-1.5">
+          {locations.map((loc) => (
+            <label key={loc.id} className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted/50 cursor-pointer">
+              <input type="checkbox" checked={checkedLocs.has(loc.id)} onChange={() => toggleLoc(loc.id)} />
+              {loc.name}
+            </label>
+          ))}
+        </div>
+
+        <div className="mb-4 space-y-1">
+          <p className="text-[11px] font-medium text-muted-foreground">Action:</p>
+          <label className="flex items-start gap-2 text-xs">
+            <input type="radio" checked={action === "set"} onChange={() => setAction("set")} className="mt-0.5" />
+            <span><strong>Set</strong> — selected stores become available, unchecked stores become unavailable</span>
+          </label>
+          <label className="flex items-start gap-2 text-xs">
+            <input type="radio" checked={action === "add"} onChange={() => setAction("add")} className="mt-0.5" />
+            <span><strong>Add</strong> — enable at selected stores, keep existing availability</span>
+          </label>
+          <label className="flex items-start gap-2 text-xs">
+            <input type="radio" checked={action === "remove"} onChange={() => setAction("remove")} className="mt-0.5" />
+            <span><strong>Remove</strong> — disable at selected stores, keep others</span>
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted">Cancel</button>
+          <button
+            onClick={handleApply}
+            disabled={checkedLocs.size === 0 || saving}
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {saving ? "Applying..." : "Apply"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Quick Add Entity Modal (Family / Category / Subcategory / Brand) ──
+
+function QuickAddEntityModal({
+  type,
+  families,
+  categories,
+  onClose,
+  onCreated,
+  createFamily,
+  createCategory,
+  createSubcategory,
+  createBrand,
+}: {
+  type: "family" | "category" | "subcategory" | "brand";
+  families: Array<{ id: string; name: string }>;
+  categories: Array<{ id: string; name: string }>;
+  onClose: () => void;
+  onCreated: (type: string, id: string) => void;
+  createFamily: any;
+  createCategory: any;
+  createSubcategory: any;
+  createBrand: any;
+}) {
+  const [name, setName] = useState("");
+  const [parentId, setParentId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const titles: Record<string, string> = {
+    family: "Add New Family",
+    category: "Add New Category",
+    subcategory: "Add New Sub-category",
+    brand: "Add New Brand",
+  };
+
+  const handleCreate = async () => {
+    if (!name.trim()) return;
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    setSaving(true);
+    setError("");
+    try {
+      let result: any;
+      if (type === "family") {
+        result = await createFamily.mutateAsync({ name: name.trim() });
+      } else if (type === "category") {
+        result = await createCategory.mutateAsync({ name: name.trim(), slug, familyId: parentId || undefined });
+      } else if (type === "subcategory") {
+        if (!parentId) { setError("Category is required"); setSaving(false); return; }
+        result = await createSubcategory.mutateAsync({ name: name.trim(), slug, categoryId: parentId });
+      } else if (type === "brand") {
+        result = await createBrand.mutateAsync({ name: name.trim(), slug });
+      }
+      onCreated(type, result?.id ?? "");
+    } catch (err: any) {
+      setError(err.message || "Failed to create");
+      setSaving(false);
+    }
+  };
+
+  const fc = "w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-primary";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-lg bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="mb-3 text-sm font-semibold">{titles[type]}</h3>
+        <div className="space-y-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Name *</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+              placeholder={`Enter ${type} name…`}
+              className={fc}
+            />
+          </div>
+          {type === "category" && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Family</label>
+              <select value={parentId} onChange={(e) => setParentId(e.target.value)} className={fc}>
+                <option value="">No family</option>
+                {families.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </div>
+          )}
+          {type === "subcategory" && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Category *</label>
+              <select value={parentId} onChange={(e) => setParentId(e.target.value)} className={fc}>
+                <option value="">Select category…</option>
+                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          )}
+          {error && <p className="text-xs text-destructive">{error}</p>}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted">Cancel</button>
+          <button
+            onClick={handleCreate}
+            disabled={!name.trim() || saving}
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {saving ? "Creating…" : "Create"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

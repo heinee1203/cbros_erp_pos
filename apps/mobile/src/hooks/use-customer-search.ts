@@ -20,7 +20,7 @@ export function useCustomerSearch() {
   const [results, setResults] = useState<Customer[]>([]);
   const [vehicles, setVehicles] = useState<Record<string, Vehicle[]>>({});
   const [loading, setLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const search = useCallback((q: string) => {
     setQuery(q);

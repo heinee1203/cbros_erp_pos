@@ -23,25 +23,6 @@ import {
 
 // ── Helpers ──
 
-async function getTransitBuffer(tx: DbOrTx, orgId: string) {
-  const [buffer] = await tx
-    .select()
-    .from(locations)
-    .where(
-      and(
-        eq(locations.orgId, orgId),
-        eq(locations.type, "TRANSIT_BUFFER"),
-        eq(locations.isSystem, true),
-        eq(locations.isActive, true),
-      ),
-    )
-    .limit(1);
-  if (!buffer) {
-    throw new Error("TRANSIT_BUFFER location not found for this organization");
-  }
-  return buffer;
-}
-
 async function generateTransferNo(tx: DbOrTx, orgId: string): Promise<string> {
   const result = await tx
     .select({ count: sql<number>`count(*)::int` })
@@ -325,8 +306,6 @@ export async function dispatchTransfer(
       );
     }
 
-    const transitBuffer = await getTransitBuffer(tx, orgId);
-
     for (const line of input.lines) {
       // Lock transfer item
       const itemRows = await tx.execute(
@@ -357,15 +336,7 @@ export async function dispatchTransfer(
         );
       }
 
-      // Lock TRANSIT_BUFFER inventory (create if not exists)
-      const transitInv = await lockInventoryRow(
-        tx,
-        orgId,
-        item.product_id,
-        transitBuffer.id,
-      );
-
-      // 1. Decrement source stock_level and reserved_level
+      // Deduct stock and release reservation at source
       const newSourceStock = sourceInv.stockLevel - line.dispatchQty;
       const newSourceReserved = sourceInv.reservedLevel - line.dispatchQty;
       await tx
@@ -376,14 +347,7 @@ export async function dispatchTransfer(
         })
         .where(eq(inventory.id, sourceInv.id));
 
-      // 2. Increment TRANSIT_BUFFER stock_level
-      const newTransitStock = transitInv.stockLevel + line.dispatchQty;
-      await tx
-        .update(inventory)
-        .set({ stockLevel: newTransitStock })
-        .where(eq(inventory.id, transitInv.id));
-
-      // 3. TRANSFER_OUT journal for source
+      // TRANSFER_OUT journal for source
       await insertJournalEntry(tx, {
         orgId,
         productId: item.product_id,
@@ -399,23 +363,7 @@ export async function dispatchTransfer(
         notes: input.notes,
       });
 
-      // 4. TRANSFER_IN journal for TRANSIT_BUFFER
-      await insertJournalEntry(tx, {
-        orgId,
-        productId: item.product_id,
-        locationId: transitBuffer.id,
-        userId,
-        actorType: "SYSTEM",
-        changeQuantity: line.dispatchQty,
-        balanceAfter: newTransitStock,
-        referenceType: "TRANSFER_IN",
-        referenceId: transferId,
-        referenceLineId: line.transferItemId,
-        idempotencyKey: `${input.idempotencyKey}:DISPATCH:IN:${line.transferItemId}`,
-        notes: input.notes,
-      });
-
-      // 5. Update transfer item dispatched_qty
+      // Update transfer item dispatched_qty
       await tx
         .update(stockTransferItems)
         .set({
@@ -462,8 +410,6 @@ export async function receiveTransfer(
       throw new Error(`Cannot receive from ${transfer.status} status`);
     }
 
-    const transitBuffer = await getTransitBuffer(tx, orgId);
-
     for (const line of input.lines) {
       // Lock transfer item
       const itemRows = await tx.execute(
@@ -483,20 +429,7 @@ export async function receiveTransfer(
         );
       }
 
-      // Lock TRANSIT_BUFFER inventory
-      const transitInv = await lockInventoryRow(
-        tx,
-        orgId,
-        item.product_id,
-        transitBuffer.id,
-      );
-      if (transitInv.stockLevel < line.receiveQty) {
-        throw new Error(
-          `Insufficient TRANSIT_BUFFER stock for product ${item.product_id}`,
-        );
-      }
-
-      // Lock destination inventory
+      // Lock destination inventory (create row if it doesn't exist)
       const destInv = await lockInventoryRow(
         tx,
         orgId,
@@ -504,37 +437,14 @@ export async function receiveTransfer(
         transfer.destination_location_id,
       );
 
-      // 1. Decrement TRANSIT_BUFFER
-      const newTransitStock = transitInv.stockLevel - line.receiveQty;
-      await tx
-        .update(inventory)
-        .set({ stockLevel: newTransitStock })
-        .where(eq(inventory.id, transitInv.id));
-
-      // 2. Increment destination
+      // Add stock to destination
       const newDestStock = destInv.stockLevel + line.receiveQty;
       await tx
         .update(inventory)
         .set({ stockLevel: newDestStock })
         .where(eq(inventory.id, destInv.id));
 
-      // 3. TRANSFER_OUT journal for TRANSIT_BUFFER
-      await insertJournalEntry(tx, {
-        orgId,
-        productId: item.product_id,
-        locationId: transitBuffer.id,
-        userId,
-        actorType: "SYSTEM",
-        changeQuantity: -line.receiveQty,
-        balanceAfter: newTransitStock,
-        referenceType: "TRANSFER_OUT",
-        referenceId: transferId,
-        referenceLineId: line.transferItemId,
-        idempotencyKey: `${input.idempotencyKey}:RECEIVE:OUT:${line.transferItemId}`,
-        notes: input.notes,
-      });
-
-      // 4. TRANSFER_IN journal for destination
+      // TRANSFER_IN journal for destination
       await insertJournalEntry(tx, {
         orgId,
         productId: item.product_id,
@@ -550,7 +460,7 @@ export async function receiveTransfer(
         notes: input.notes,
       });
 
-      // 5. Append receipt event
+      // Append receipt event
       await tx.insert(stockTransferReceipts).values({
         orgId,
         transferId,
@@ -561,7 +471,7 @@ export async function receiveTransfer(
         receivedByUserId: userId,
       });
 
-      // 6. Update transfer item
+      // Update transfer item received_qty
       await tx
         .update(stockTransferItems)
         .set({
@@ -627,8 +537,6 @@ export async function reportVariance(
       );
     }
 
-    const transitBuffer = await getTransitBuffer(tx, orgId);
-
     for (const line of input.lines) {
       // Lock transfer item
       const itemRows = await tx.execute(
@@ -648,44 +556,26 @@ export async function reportVariance(
         );
       }
 
-      // Lock TRANSIT_BUFFER inventory
-      const transitInv = await lockInventoryRow(
-        tx,
-        orgId,
-        item.product_id,
-        transitBuffer.id,
-      );
-      if (transitInv.stockLevel < line.varianceQty) {
-        throw new Error(
-          `Insufficient TRANSIT_BUFFER stock to write off variance for product ${item.product_id}`,
-        );
-      }
-
-      // 1. Decrement TRANSIT_BUFFER
-      const newTransitStock = transitInv.stockLevel - line.varianceQty;
-      await tx
-        .update(inventory)
-        .set({ stockLevel: newTransitStock })
-        .where(eq(inventory.id, transitInv.id));
-
-      // 2. ADJUSTMENT journal for TRANSIT_BUFFER (write off)
+      // ADJUSTMENT journal at source location (records write-off — stock was
+      // already deducted from source on dispatch, so this is an audit entry only;
+      // no inventory adjustment needed)
       await insertJournalEntry(tx, {
         orgId,
         productId: item.product_id,
-        locationId: transitBuffer.id,
+        locationId: transfer.source_location_id,
         userId,
         actorType: "USER",
-        changeQuantity: -line.varianceQty,
-        balanceAfter: newTransitStock,
+        changeQuantity: 0, // no stock change — already deducted on dispatch
+        balanceAfter: 0, // informational — actual balance not changed
         referenceType: "ADJUSTMENT",
         referenceId: transferId,
         referenceLineId: line.transferItemId,
         reasonCode: line.reasonCode,
         idempotencyKey: `${input.idempotencyKey}:VARIANCE:${line.transferItemId}`,
-        notes: line.notes,
+        notes: `Transfer variance: ${line.varianceQty} units lost in transit. ${line.notes ?? ""}`.trim(),
       });
 
-      // 3. Increment variance_qty on transfer item
+      // Increment variance_qty on transfer item
       await tx
         .update(stockTransferItems)
         .set({
@@ -1051,6 +941,7 @@ export async function listTransfers(
       updatedAt: stockTransfers.updatedAt,
       sourceLocationName: sql<string>`sl.name`,
       destinationLocationName: sql<string>`dl.name`,
+      lineCount: sql<number>`(SELECT COUNT(*)::int FROM stock_transfer_items sti WHERE sti.transfer_id = ${stockTransfers.id})`,
     })
     .from(stockTransfers)
     .innerJoin(sql`locations sl`, sql`sl.id = ${stockTransfers.sourceLocationId}`)

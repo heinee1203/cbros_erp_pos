@@ -46,13 +46,23 @@ export function useCatalogSearch() {
       ];
 
       if (searchQuery.length >= 2) {
-        const q = Q.sanitizeLikeString(searchQuery);
+        const words = searchQuery.trim().split(/\s+/).filter(w => w.length > 0);
+        const sanitizedFull = Q.sanitizeLikeString(searchQuery.trim());
+
+        // Multi-word: each word must appear somewhere in the name (AND logic)
+        const nameConditions = words.map(word =>
+          Q.where('name', Q.like(`%${Q.sanitizeLikeString(word)}%`)),
+        );
+        const nameQuery = nameConditions.length === 1
+          ? nameConditions[0]
+          : Q.and(...nameConditions);
+
         conditions.push(
           Q.or(
-            Q.where('name', Q.like(`%${q}%`)),
-            Q.where('sku', Q.like(`%${q}%`)),
-            Q.where('mnemonic_sku', Q.like(`%${q}%`)),
-            Q.where('barcode', searchQuery), // Exact match for barcode
+            nameQuery,
+            Q.where('sku', Q.like(`%${sanitizedFull}%`)),
+            Q.where('mnemonic_sku', Q.like(`%${sanitizedFull}%`)),
+            Q.where('barcode', searchQuery.trim()), // Exact match for barcode
           ),
         );
       }
@@ -62,7 +72,7 @@ export function useCatalogSearch() {
       }
 
       const products = await productCollection
-        .query(...conditions, Q.take(100))
+        .query(...conditions, Q.sortBy('name', Q.asc), Q.take(100))
         .fetch();
 
       // Batch inventory lookup — single query instead of N+1

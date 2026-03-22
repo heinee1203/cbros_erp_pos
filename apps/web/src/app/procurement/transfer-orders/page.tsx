@@ -98,7 +98,7 @@ export default function TransferOrdersPage() {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by transfer number or location\u2026"
+          placeholder="Search by transfer number or location…"
           className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-8 text-sm outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/20"
         />
         {search && (
@@ -160,15 +160,12 @@ export default function TransferOrdersPage() {
               <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Items
               </th>
-              <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Action
-              </th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-12 text-center">
+                <td colSpan={7} className="py-12 text-center">
                   <div className="flex flex-col items-center">
                     <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
                       <Package size={16} className="text-muted-foreground" />
@@ -192,7 +189,12 @@ export default function TransferOrdersPage() {
                   )}
                 >
                   <td className="px-3 py-2 font-mono text-sm font-semibold">
-                    {t.transferNo}
+                    <Link
+                      href={`/procurement/transfer-orders/${t.transferNo}`}
+                      className="text-primary hover:underline"
+                    >
+                      {t.transferNo}
+                    </Link>
                   </td>
                   <td className="px-3 py-2 text-sm">{t.sourceLocationName}</td>
                   <td className="px-3 py-2 text-center text-muted-foreground">
@@ -215,16 +217,8 @@ export default function TransferOrdersPage() {
                   <td className="px-3 py-2 text-xs text-muted-foreground">
                     {fmtDate(t.createdAt)}
                   </td>
-                  <td className="px-3 py-2 text-right text-xs text-muted-foreground">
-                    {t.lineCount ?? "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <Link
-                      href={`/procurement/transfer-orders/${t.transferNo}`}
-                      className="text-xs font-medium text-primary hover:underline"
-                    >
-                      View
-                    </Link>
+                  <td className="px-3 py-2 text-right text-xs tabular-nums text-muted-foreground">
+                    {t.lineCount ?? 0}
                   </td>
                 </tr>
               ))

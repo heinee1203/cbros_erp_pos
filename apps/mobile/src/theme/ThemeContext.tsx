@@ -10,7 +10,7 @@ interface ThemeContextType {
   mode: ThemeMode;
   isDark: boolean;
   setMode: (mode: ThemeMode) => void;
-  colors: typeof darkColors;
+  colors: typeof darkColors | typeof lightColors;
 }
 
 const ThemeContext = createContext<ThemeContextType | null>(null);

@@ -176,6 +176,7 @@ export interface CreateProductPayload {
   description?: string;
   trackInventory?: boolean;
   reorderPoint?: number;
+  optimalStock?: number;
   leadTimeDays?: number;
   initialStock?: number;
   locationIds?: string[];

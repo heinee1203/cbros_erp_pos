@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, Trash2 } from "lucide-react";
+import { Search, Trash2, Printer } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useTransferQuery, type TransferDetail, type TransferItem } from "@/hooks/use-transfer-query";
 import {
@@ -19,6 +19,160 @@ import {
   type VarianceLineInput,
 } from "@/hooks/use-transfer-mutations";
 import { useAuth } from "@/app/auth-context";
+
+// ── Print transfer slip ──
+
+function printTransferSlip(transfer: TransferDetail) {
+  const date = new Date(transfer.dispatchedAt ?? transfer.createdAt).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  // Use dispatched qty if available, otherwise requested qty
+  const isDispatched = ["DISPATCHED", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED_WITH_VARIANCE", "DISCREPANCY_REVIEW"].includes(transfer.status);
+  const items = transfer.items.map((item, i) => ({
+    num: i + 1,
+    name: item.productName,
+    sku: item.sku || item.mnemonicSku || "—",
+    qty: isDispatched ? item.dispatchedQty : item.requestedQty,
+  }));
+
+  const totalItems = items.length;
+  const totalUnits = items.reduce((sum, it) => sum + it.qty, 0);
+
+  const itemRows = items
+    .map(
+      (it) =>
+        `<tr>
+          <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">${it.num}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid #e5e5e5;">${it.name}</td>
+          <td style="padding:4px 8px;font-family:monospace;font-size:11px;border-bottom:1px solid #e5e5e5;">${it.sku}</td>
+          <td style="padding:4px 8px;text-align:right;font-weight:600;border-bottom:1px solid #e5e5e5;">${it.qty}</td>
+        </tr>`,
+    )
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Transfer Slip - ${transfer.transferNo}</title>
+  <style>
+    @page { size: A4; margin: 15mm; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; color: #1a1a1a; line-height: 1.5; }
+    .slip { max-width: 700px; margin: 0 auto; }
+    .header { text-align: center; border: 2px solid #1a1a1a; padding: 10px; margin-bottom: 16px; }
+    .header h1 { font-size: 18px; letter-spacing: 2px; font-weight: 700; }
+    .meta { margin-bottom: 16px; }
+    .meta-row { display: flex; margin-bottom: 4px; }
+    .meta-label { width: 100px; font-weight: 600; flex-shrink: 0; }
+    .meta-value { flex: 1; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    thead th { padding: 6px 8px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; border-bottom: 2px solid #1a1a1a; background: #f5f5f5; }
+    thead th:first-child { text-align: center; width: 36px; }
+    thead th:last-child { text-align: right; width: 60px; }
+    .totals { border-top: 2px solid #1a1a1a; padding-top: 8px; margin-bottom: 24px; font-weight: 600; }
+    .sig-section { margin-top: 32px; }
+    .sig-row { display: flex; gap: 40px; margin-bottom: 28px; }
+    .sig-block { flex: 1; }
+    .sig-label { font-weight: 600; margin-bottom: 4px; }
+    .sig-line { border-bottom: 1px solid #666; height: 28px; margin-bottom: 2px; }
+    .sig-hint { font-size: 10px; color: #888; text-align: center; }
+    .notes-section { margin-top: 20px; }
+    .notes-line { border-bottom: 1px solid #ccc; height: 24px; margin-bottom: 8px; }
+    .footer { margin-top: 24px; text-align: center; font-size: 10px; color: #999; border-top: 2px solid #1a1a1a; padding-top: 8px; }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  </style>
+</head>
+<body>
+  <div class="slip">
+    <div class="header">
+      <h1>TRANSFER SLIP</h1>
+    </div>
+
+    <div class="meta">
+      <div class="meta-row">
+        <span class="meta-label">Transfer No:</span>
+        <span class="meta-value" style="font-weight:700;font-family:monospace;font-size:14px;">${transfer.transferNo}</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">Date:</span>
+        <span class="meta-value">${date}</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">From:</span>
+        <span class="meta-value"><strong>${transfer.sourceLocation.name}</strong> (${transfer.sourceLocation.code})</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">To:</span>
+        <span class="meta-value"><strong>${transfer.destinationLocation.name}</strong> (${transfer.destinationLocation.code})</span>
+      </div>
+      ${transfer.notes ? `<div class="meta-row"><span class="meta-label">Notes:</span><span class="meta-value">${transfer.notes}</span></div>` : ""}
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Item</th>
+          <th>SKU</th>
+          <th style="text-align:right">Qty</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemRows}
+      </tbody>
+    </table>
+
+    <div class="totals">
+      Total: ${totalItems} item${totalItems !== 1 ? "s" : ""}, ${totalUnits} unit${totalUnits !== 1 ? "s" : ""}
+    </div>
+
+    <div class="sig-section">
+      <div class="sig-row">
+        <div class="sig-block">
+          <div class="sig-label">Dispatched by:</div>
+          <div class="sig-line"></div>
+          <div class="sig-hint">(Signature over printed name)</div>
+        </div>
+        <div class="sig-block">
+          <div class="sig-label">Date:</div>
+          <div class="sig-line"></div>
+        </div>
+      </div>
+      <div class="sig-row">
+        <div class="sig-block">
+          <div class="sig-label">Received by:</div>
+          <div class="sig-line"></div>
+          <div class="sig-hint">(Signature over printed name)</div>
+        </div>
+        <div class="sig-block">
+          <div class="sig-label">Date:</div>
+          <div class="sig-line"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes-section">
+      <div style="font-weight:600;margin-bottom:8px;">Discrepancies / Notes:</div>
+      <div class="notes-line"></div>
+      <div class="notes-line"></div>
+    </div>
+
+    <div class="footer">
+      ${transfer.transferNo} — Printed ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+    </div>
+  </div>
+  <script>window.onload=function(){window.print();}<\/script>
+</body>
+</html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) return;
+  w.document.write(html);
+  w.document.close();
+}
 
 // ── Status colors ──
 const STATUS_STYLES: Record<string, string> = {
@@ -79,10 +233,17 @@ export default function TransferDetailPage() {
   /**
    * Before opening any action modal, refetch transfer data
    * to guarantee we're not acting on stale quantities.
+   * After refetch, verify the action is still allowed — prevents
+   * opening modals for actions that became invalid (e.g., clicking
+   * Approve when the transfer was already approved in another tab).
    */
   const openModal = useCallback(
     async (action: string) => {
-      await refetch();
+      const { data: fresh } = await refetch();
+      if (fresh && !fresh.allowedActions.includes(action)) {
+        // Action no longer valid — data will re-render with correct buttons
+        return;
+      }
       setActiveModal(action);
     },
     [refetch],
@@ -264,6 +425,15 @@ export default function TransferDetailPage() {
             )}
           </div>
         </div>
+        {transfer.status !== "CANCELLED" && (
+          <button
+            onClick={() => printTransferSlip(transfer)}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+          >
+            <Printer size={14} />
+            Print Slip
+          </button>
+        )}
       </div>
 
       {/* ── Route: Source → Destination ── */}
@@ -867,6 +1037,7 @@ function DispatchModal({
   });
 
   const [notes, setNotes] = useState("");
+  const [printAfter, setPrintAfter] = useState(true);
 
   const { submit, status, statusMessage, isSubmitting, reset } = useDispatchMutation(
     token,
@@ -887,12 +1058,16 @@ function DispatchModal({
     submit(transfer.id, { lines, notes: notes.trim() || undefined });
   };
 
+  // Auto-print after successful dispatch, then close
   useEffect(() => {
     if (status === "success" || status === "already_processed") {
+      if (status === "success" && printAfter) {
+        printTransferSlip(transfer);
+      }
       const timer = setTimeout(() => { reset(); onClose(); }, 1_500);
       return () => clearTimeout(timer);
     }
-  }, [status, reset, onClose]);
+  }, [status, reset, onClose, printAfter, transfer]);
 
   return (
     <ModalShell
@@ -902,7 +1077,7 @@ function DispatchModal({
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          Enter the quantity to dispatch for each line item. Stock will move from source to transit buffer.
+          Enter the quantity to dispatch for each line item. Stock will be deducted from the source location.
         </p>
 
         <div className="overflow-hidden rounded-lg border border-border">
@@ -963,6 +1138,18 @@ function DispatchModal({
             className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
           />
         </div>
+
+        {/* Print after dispatch checkbox */}
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={printAfter}
+            onChange={(e) => setPrintAfter(e.target.checked)}
+            disabled={isSubmitting}
+            className="h-4 w-4 rounded border-border text-primary focus:ring-primary/20"
+          />
+          <span className="text-xs text-muted-foreground">Print transfer slip after dispatch</span>
+        </label>
 
         {statusMessage && <MutationStatusBanner status={status} message={statusMessage} />}
 
@@ -1073,7 +1260,7 @@ function VarianceModal({
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          Report missing or damaged items still in transit buffer. This will write off stock and close the discrepancy.
+          Report missing or damaged items lost in transit. This records the loss and closes the discrepancy.
         </p>
 
         <div className="space-y-3">

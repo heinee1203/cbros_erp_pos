@@ -203,7 +203,7 @@ export default function EditItemPage() {
   }, [modifiedVariants, originalVariants]);
 
   const [isSerialized, setIsSerialized] = useState(false);
-  const [reorderPoint, setReorderPoint] = useState("10");
+  const [reorderPoint, setReorderPoint] = useState("5");
   const [unitsPerCase, setUnitsPerCase] = useState(1);
   const [packagingUnit, setPackagingUnit] = useState<string | null>(null);
   const [primarySupplierId, setPrimarySupplierId] = useState<string | null>(null);

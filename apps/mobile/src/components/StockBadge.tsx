@@ -1,47 +1,53 @@
 import React from 'react';
 import { Text, StyleSheet } from 'react-native';
+import { colors } from '@/theme';
 
 interface StockBadgeProps {
   available: number;
   lowThreshold?: number;
+  sellingUnit?: string;
 }
 
-export default function StockBadge({ available, lowThreshold = 5 }: StockBadgeProps) {
+export default function StockBadge({ available, lowThreshold = 5, sellingUnit }: StockBadgeProps) {
+  const styles = createStyles();
+  const unit = sellingUnit && sellingUnit !== "piece" ? ` ${sellingUnit}` : "";
   if (available <= 0) {
     return <Text style={styles.out}>Out of Stock</Text>;
   }
   if (available <= lowThreshold) {
-    return <Text style={styles.low}>Low: {available}</Text>;
+    return <Text style={styles.low}>Low: {available}{unit}</Text>;
   }
-  return <Text style={styles.ok}>{available} in stock</Text>;
+  return <Text style={styles.ok}>{available}{unit} in stock</Text>;
 }
 
-const styles = StyleSheet.create({
-  out: {
-    fontSize: 11,
-    fontFamily: 'Outfit-SemiBold',
-    color: '#FF3B30',
-    backgroundColor: 'rgba(255,59,48,0.12)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-    overflow: 'hidden',
-    letterSpacing: 0.2,
-  },
-  low: {
-    fontSize: 11,
-    fontFamily: 'Outfit-SemiBold',
-    color: '#FFB300',
-    backgroundColor: 'rgba(255,179,0,0.12)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-    overflow: 'hidden',
-    letterSpacing: 0.2,
-  },
-  ok: {
-    fontSize: 11,
-    fontFamily: 'DMSans-Regular',
-    color: '#5A5750',
-  },
-});
+function createStyles() {
+  return StyleSheet.create({
+    out: {
+      fontSize: 11,
+      fontFamily: 'Outfit-SemiBold',
+      color: colors.status.out,
+      backgroundColor: colors.status.dangerBg,
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+      borderRadius: 4,
+      overflow: 'hidden',
+      letterSpacing: 0.2,
+    },
+    low: {
+      fontSize: 11,
+      fontFamily: 'Outfit-SemiBold',
+      color: colors.status.low,
+      backgroundColor: colors.status.warningBg,
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+      borderRadius: 4,
+      overflow: 'hidden',
+      letterSpacing: 0.2,
+    },
+    ok: {
+      fontSize: 11,
+      fontFamily: 'DMSans-Regular',
+      color: colors.text.secondary,
+    },
+  });
+}

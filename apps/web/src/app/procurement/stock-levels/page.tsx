@@ -30,21 +30,7 @@ import {
  * CONSTANTS
  * ═══════════════════════════════════════════════════════ */
 
-const CATEGORY_LABELS: Record<string, string> = {
-  TIRES: "Tires",
-  LUBRICANTS: "Lubricants",
-  HARD_PARTS: "Hard Parts",
-  ACCESSORIES: "Accessories",
-  LABOR_SERVICES: "Labor & Services",
-};
-
-const CATEGORY_STYLES: Record<string, string> = {
-  TIRES: "bg-slate-100 text-slate-700",
-  LUBRICANTS: "bg-amber-50 text-amber-700",
-  HARD_PARTS: "bg-blue-50 text-blue-700",
-  ACCESSORIES: "bg-violet-50 text-violet-700",
-  LABOR_SERVICES: "bg-emerald-50 text-emerald-700",
-};
+// Category badge uses a single neutral style — category names come from the DB now
 
 const STATUS_LABELS: Record<string, string> = {
   IN_STOCK: "In Stock",
@@ -58,7 +44,6 @@ const STATUS_STYLES: Record<string, string> = {
   OUT_OF_STOCK: "bg-destructive/10 text-destructive",
 };
 
-const ALL_CATEGORIES = Object.keys(CATEGORY_LABELS);
 
 /* ═══════════════════════════════════════════════════════
  * MAIN PAGE
@@ -125,6 +110,12 @@ export default function StockLevelsPage() {
 
   // Summary from the first (most recent) page
   const summary: StockLevelsSummary | null = data?.pages[0]?.summary ?? null;
+
+  // Build dynamic category list from loaded data
+  const uniqueCategories = useMemo(() => {
+    const cats = new Set(rows.map((r) => r.category).filter(Boolean));
+    return Array.from(cats).sort();
+  }, [rows]);
 
   const totalLoaded = rows.length;
 
@@ -194,9 +185,9 @@ export default function StockLevelsPage() {
             onChange={setCategoryFilter}
             options={[
               { value: "all", label: "All Categories" },
-              ...ALL_CATEGORIES.map((c) => ({
+              ...uniqueCategories.map((c) => ({
                 value: c,
-                label: CATEGORY_LABELS[c]!,
+                label: c,
               })),
             ]}
           />
@@ -279,6 +270,7 @@ export default function StockLevelsPage() {
                 <SortHeader label="Reserved" field="reservedLevel" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Available" field="available" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Reorder Pt" field="reorderPoint" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
+                <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Optimal</th>
                 <SortHeader label="Status" field="status" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
               </tr>
             </thead>
@@ -417,13 +409,14 @@ function SummaryChip({
  * ═══════════════════════════════════════════════════════ */
 
 function StockRow({ row }: { row: StockLevelRow }) {
-  const catLabel = CATEGORY_LABELS[row.category] ?? row.category;
-  const catStyle = CATEGORY_STYLES[row.category] ?? "bg-muted text-muted-foreground";
+  const catLabel = row.category || "Uncategorized";
+  const catStyle = "bg-muted text-muted-foreground";
   const statusLabel = STATUS_LABELS[row.status] ?? row.status;
   const statusStyle = STATUS_STYLES[row.status] ?? "bg-muted text-muted-foreground";
 
   const isLow = row.status === "LOW_STOCK";
   const isOut = row.status === "OUT_OF_STOCK";
+  const unitSuffix = row.sellingUnit && row.sellingUnit !== "piece" ? ` ${row.sellingUnit}` : "";
 
   return (
     <tr className="group transition-colors hover:bg-muted/30">
@@ -462,12 +455,12 @@ function StockRow({ row }: { row: StockLevelRow }) {
           isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"
         }`}
       >
-        {row.stockLevel.toLocaleString()}
+        {row.stockLevel.toLocaleString()}{unitSuffix}
       </td>
 
       {/* Reserved */}
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
-        {row.reservedLevel > 0 ? row.reservedLevel.toLocaleString() : "—"}
+        {row.reservedLevel > 0 ? `${row.reservedLevel.toLocaleString()}${unitSuffix}` : "—"}
       </td>
 
       {/* Available */}
@@ -476,12 +469,23 @@ function StockRow({ row }: { row: StockLevelRow }) {
           isOut ? "text-destructive" : isLow ? "text-warning" : "text-foreground"
         }`}
       >
-        {row.available.toLocaleString()}
+        {row.available.toLocaleString()}{unitSuffix}
       </td>
 
       {/* Reorder Point */}
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
-        {row.reorderPoint.toLocaleString()}
+        {row.reorderPoint.toLocaleString()}{unitSuffix}
+      </td>
+
+      {/* Optimal Stock */}
+      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">
+        {row.optimalStock > 0 ? (
+          <span className={row.stockLevel < row.optimalStock ? "text-amber-600 font-medium" : "text-muted-foreground"}>
+            {row.optimalStock.toLocaleString()}{unitSuffix}
+          </span>
+        ) : (
+          <span className="text-muted-foreground/50">—</span>
+        )}
       </td>
 
       {/* Status Badge */}

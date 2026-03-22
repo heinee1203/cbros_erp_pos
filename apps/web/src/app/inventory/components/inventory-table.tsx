@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import {
@@ -123,6 +124,7 @@ export function StockPopover({
   const hasPkg = upc > 1;
   const [open, setOpen] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
+  const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const { token, apiLocationId, locationId } = useAuth();
@@ -150,11 +152,14 @@ export function StockPopover({
     [locations],
   );
 
-  // Outside-click dismiss
+  // Outside-click dismiss (check both portal content and trigger button)
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target)) return;
+      if (triggerRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -169,7 +174,12 @@ export function StockPopover({
           if (!open && triggerRef.current) {
             const rect = triggerRef.current.getBoundingClientRect();
             const spaceBelow = window.innerHeight - rect.bottom;
-            setOpenUpward(spaceBelow < 300);
+            const goUp = spaceBelow < 300;
+            setOpenUpward(goUp);
+            setPopoverPos({
+              top: goUp ? rect.top : rect.bottom + 4,
+              left: rect.right - 224, // 224px = w-56
+            });
           }
           setOpen(!open);
         }}
@@ -188,11 +198,16 @@ export function StockPopover({
         </span>
       </button>
 
-      {open && (
-        <div className={cn(
-          "absolute right-0 z-30 w-56 rounded-lg border border-border bg-background shadow-lg animate-in fade-in duration-100",
-          openUpward ? "bottom-full mb-1 slide-in-from-bottom-1" : "top-full mt-1 slide-in-from-top-1",
-        )}>
+      {open && createPortal(
+        <div
+          className="fixed z-[9999] w-56 rounded-lg border border-border bg-background shadow-lg animate-in fade-in duration-100"
+          style={{
+            top: openUpward ? undefined : popoverPos.top,
+            bottom: openUpward ? window.innerHeight - popoverPos.top + 4 : undefined,
+            left: Math.max(8, popoverPos.left),
+          }}
+          ref={ref}
+        >
           <div className="border-b border-border px-3 py-2">
             <span className="text-[11px] font-semibold text-foreground">Stock by Location</span>
             {hasPkg && (
@@ -211,7 +226,7 @@ export function StockPopover({
               No locations found
             </div>
           ) : (
-            <div className="max-h-[200px] overflow-y-auto py-1">
+            <div className="py-1">
               {locations.map((loc) => {
                 const isCurrent = !isAllLocations && loc.locationId === apiLocationId;
                 return (
@@ -289,7 +304,8 @@ export function StockPopover({
               </div>
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -515,12 +531,14 @@ export function FlatProductRow({
         <td className="px-2 py-[5px] text-right">
           <StockPopover productId={p.id} stockLevel={p.stockLevel} reorderPoint={p.reorderPoint} unitsPerCase={p.unitsPerCase} packagingUnit={p.packagingUnit} />
         </td>
-        {/* Category */}
-        <td className="px-3 py-[5px]">
-          {p.subCategoryName ? (
-            <span className="text-[12px] text-muted-foreground truncate block max-w-[120px]" title={p.subCategoryName}>{p.subCategoryName}</span>
+        {/* Sell */}
+        <td className="px-3 py-[5px] text-right font-medium tabular-nums text-foreground">
+          {p.isParent ? (
+            <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-violet-50/80 text-violet-600">Variable</span>
+          ) : p.isVariablePrice ? (
+            <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-amber-50/80 text-amber-600">Variable</span>
           ) : (
-            <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+            formatPrice(sell)
           )}
         </td>
         {/* Brand */}
@@ -531,14 +549,20 @@ export function FlatProductRow({
             <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
           )}
         </td>
-        {/* Sell */}
-        <td className="px-3 py-[5px] text-right font-medium tabular-nums text-foreground">
-          {p.isParent ? (
-            <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-violet-50/80 text-violet-600">Variable</span>
-          ) : p.isVariablePrice ? (
-            <span className="inline-block rounded px-1.5 py-px text-[10px] font-medium leading-normal bg-amber-50/80 text-amber-600">Variable</span>
+        {/* Category */}
+        <td className="px-3 py-[5px]">
+          {p.subCategoryName ? (
+            <span className="text-[12px] text-muted-foreground truncate block max-w-[120px]" title={p.subCategoryName}>{p.subCategoryName}</span>
           ) : (
-            formatPrice(sell)
+            <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
+          )}
+        </td>
+        {/* Sub-category */}
+        <td className="px-3 py-[5px]">
+          {p.subcategoryName ? (
+            <span className="text-[12px] text-muted-foreground truncate block max-w-[110px]" title={p.subcategoryName}>{p.subcategoryName}</span>
+          ) : (
+            <span className="text-[11px] text-muted-foreground/40">{"\u2014"}</span>
           )}
         </td>
         {/* Cost & Margin */}
@@ -682,10 +706,6 @@ export function VariantSubRows({
             <td className="px-2 py-[4px] text-right">
               <StockPopover productId={v.id} stockLevel={v.stockLevel} reorderPoint={0} />
             </td>
-            {/* Category (empty for variants) */}
-            <td className="px-3 py-[4px]" />
-            {/* Brand (empty for variants) */}
-            <td className="px-3 py-[4px]" />
             {/* Sell */}
             <td className="px-3 py-[4px] text-right font-medium tabular-nums text-foreground">
               {v.isVariablePrice ? (
@@ -694,6 +714,12 @@ export function VariantSubRows({
                 formatPrice(sell)
               )}
             </td>
+            {/* Brand (empty for variants) */}
+            <td className="px-3 py-[4px]" />
+            {/* Category (empty for variants) */}
+            <td className="px-3 py-[4px]" />
+            {/* Sub-category (empty for variants) */}
+            <td className="px-3 py-[4px]" />
             {showFinancials && (
               <>
                 <td className="px-3 py-[4px] text-right tabular-nums text-muted-foreground">

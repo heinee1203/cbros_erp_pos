@@ -202,7 +202,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
 
   // Note: handleCheckout is defined below via useCallback. React evaluates all hooks
   // in order on each render, so the ref is stable by the time the effect runs.
-  const autoCheckoutRef = useRef<() => void>();
+  const autoCheckoutRef = useRef<(() => void) | undefined>(undefined);
 
   // ── Undo state for Clear ──
   const [undoAmount, setUndoAmount] = useState<number | null>(null);
@@ -518,8 +518,8 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
           </View>
 
           <Text style={s.summaryLine1}>
-            {lineCount} {lineCount === 1 ? 'product' : 'products'} {'\u00B7'} {unitCount} unit{unitCount !== 1 ? 's' : ''}
-            {discount > 0 ? ` \u00B7 disc. ${fmtPHP(discount)}` : ''}
+            {lineCount} {lineCount === 1 ? 'product' : 'products'} {'·'} {unitCount} unit{unitCount !== 1 ? 's' : ''}
+            {discount > 0 ? ` · disc. ${fmtPHP(discount)}` : ''}
           </Text>
           <Text style={s.summaryLine2} numberOfLines={1}>
             {itemSummaryText}
@@ -540,11 +540,11 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
               </Text>
             )}
             <Text style={s.summaryMeta}>
-              {' \u00B7 '}incl. VAT {fmtPHP(vatAmount)}
+              {' · '}VATable: {fmtPHP(grandTotal / 1.12)} + VAT: {fmtPHP(vatAmount)}
             </Text>
             {customerName ? (
               <Text style={s.summaryMeta}>
-                {' \u00B7 '}{customerName}
+                {' · '}{customerName}
               </Text>
             ) : null}
           </View>
@@ -782,7 +782,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
               <Text style={s.completeSaleBtnText}>
                 {isProcessing ? 'Processing...' : (
                   paidTotal > grandTotal
-                    ? `COMPLETE SALE \u00B7 Change: ${fmtPHP(paidTotal - grandTotal)}`
+                    ? `COMPLETE SALE · Change: ${fmtPHP(paidTotal - grandTotal)}`
                     : 'COMPLETE SALE'
                 )}
               </Text>
@@ -799,8 +799,8 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
               <Text style={s.completeSaleBtnText}>
                 {isProcessing ? 'Processing...' : (
                   cashChange > 0
-                    ? `COMPLETE SALE \u00B7 Change: ${fmtPHP(cashChange)}`
-                    : `COMPLETE SALE \u00B7 ${fmtPHP(grandTotal)}`
+                    ? `COMPLETE SALE · Change: ${fmtPHP(cashChange)}`
+                    : `COMPLETE SALE · ${fmtPHP(grandTotal)}`
                 )}
               </Text>
             </Pressable>
@@ -820,7 +820,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
                   !canAddPayment && s.addPaymentBtnTextDisabled,
                 ]}>
                   {canAddPayment
-                    ? `ADD PAYMENT \u00B7 ${fmtPHP(parsedAmount)}`
+                    ? `ADD PAYMENT · ${fmtPHP(parsedAmount)}`
                     : 'ADD PAYMENT'}
                 </Text>
               </Pressable>

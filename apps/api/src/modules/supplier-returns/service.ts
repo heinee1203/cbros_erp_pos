@@ -396,6 +396,94 @@ export async function updateSupplierReturn(
 }
 
 /**
+ * Find an existing DRAFT RTV for a supplier at a location.
+ */
+export async function findDraftRTV(orgId: string, supplierId: string, locationId: string) {
+  const [draft] = await db
+    .select({
+      id: supplierReturns.id,
+      rtvNumber: supplierReturns.rtvNumber,
+      lineCount: sql<number>`(SELECT COUNT(*)::int FROM supplier_return_lines srl WHERE srl.supplier_return_id = ${supplierReturns.id})`,
+    })
+    .from(supplierReturns)
+    .where(
+      and(
+        eq(supplierReturns.orgId, orgId),
+        eq(supplierReturns.supplierId, supplierId),
+        eq(supplierReturns.locationId, locationId),
+        eq(supplierReturns.status, "DRAFT"),
+      ),
+    )
+    .orderBy(desc(supplierReturns.createdAt))
+    .limit(1);
+
+  return draft ?? null;
+}
+
+/**
+ * Add a line item to an existing DRAFT RTV.
+ */
+export async function addLineToRTV(
+  rtvId: string,
+  orgId: string,
+  input: {
+    productId: string;
+    quantity: number;
+    costPrice: string;
+    condition: string;
+    notes?: string | null;
+    sourcePoLineId?: string | null;
+  },
+) {
+  return db.transaction(async (tx) => {
+    // Lock and verify DRAFT status
+    const rows = await tx.execute(
+      sql`SELECT * FROM supplier_returns WHERE id = ${rtvId} AND org_id = ${orgId} FOR UPDATE`,
+    );
+    if (rows.length === 0) throw new Error("Supplier return not found");
+    const rtv = rows[0] as any;
+    if (rtv.status !== "DRAFT") throw new Error("Can only add lines to DRAFT RTVs");
+
+    // Fetch product info
+    const [product] = await tx
+      .select({ name: products.name, sku: products.sku })
+      .from(products)
+      .where(eq(products.id, input.productId))
+      .limit(1);
+    if (!product) throw new Error("Product not found");
+
+    const lineTotal = (input.quantity * parseFloat(input.costPrice)).toFixed(2);
+
+    // Insert line
+    const [line] = await tx
+      .insert(supplierReturnLines)
+      .values({
+        supplierReturnId: rtvId,
+        productId: input.productId,
+        productName: product.name,
+        sku: product.sku,
+        quantity: input.quantity,
+        costPrice: input.costPrice,
+        lineTotal,
+        condition: input.condition as any,
+        sourcePoLineId: input.sourcePoLineId ?? null,
+        notes: input.notes ?? null,
+      })
+      .returning();
+
+    // Update total cost
+    const oldTotal = parseFloat(rtv.total_cost || "0");
+    const newTotal = (oldTotal + parseFloat(lineTotal)).toFixed(2);
+    await tx
+      .update(supplierReturns)
+      .set({ totalCost: newTotal })
+      .where(eq(supplierReturns.id, rtvId));
+
+    return { line, rtvNumber: rtv.rtv_number, newTotal };
+  });
+}
+
+/**
  * Delete a DRAFT supplier return.
  */
 export async function deleteSupplierReturn(

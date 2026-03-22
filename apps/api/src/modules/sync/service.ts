@@ -40,7 +40,7 @@ export async function getCatalogDelta(opts: SyncOpts): Promise<SyncResult<any>> 
       .limit(1);
     if (cursorRow) {
       conditions.push(
-        sql`(${products.updatedAt}, ${products.id}) > (${cursorRow.updatedAt}, ${cursor})`,
+        sql`(${products.updatedAt}, ${products.id}) > (${cursorRow.updatedAt.toISOString()}, ${cursor})`,
       );
     }
   }
@@ -103,7 +103,7 @@ export async function getInventoryDelta(opts: SyncOpts): Promise<SyncResult<any>
       .limit(1);
     if (cursorRow) {
       conditions.push(
-        sql`(${inventory.updatedAt}, ${inventory.id}) > (${cursorRow.updatedAt}, ${cursor})`,
+        sql`(${inventory.updatedAt}, ${inventory.id}) > (${cursorRow.updatedAt.toISOString()}, ${cursor})`,
       );
     }
   }

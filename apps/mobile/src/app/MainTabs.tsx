@@ -10,6 +10,8 @@ import { useCartStore } from '@/stores/cart-store';
 import { useLayout } from '@/hooks/use-layout';
 import { startNetworkMonitor } from '@/services/network-monitor';
 import { colors, textStyles, layout } from '@/theme';
+import { useTheme } from '@/theme/ThemeContext';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import CatalogScreen from './screens/CatalogScreen';
 import CartScreen from './screens/CartScreen';
 import PaymentScreen from './screens/PaymentScreen';
@@ -57,12 +59,12 @@ function POSSplitScreen() {
 
   return (
     <SplitView
-      primary={<CatalogScreen />}
+      primary={<ErrorBoundary><CatalogScreen /></ErrorBoundary>}
       secondary={
         showPayment ? (
-          <PaymentScreen onBack={handleBackToCart} />
+          <ErrorBoundary><PaymentScreen onBack={handleBackToCart} /></ErrorBoundary>
         ) : (
-          <CartScreen onProceedToPayment={handleProceedToPayment} />
+          <ErrorBoundary><CartScreen onProceedToPayment={handleProceedToPayment} /></ErrorBoundary>
         )
       }
       primaryRatio={0.6}
@@ -87,9 +89,9 @@ function POSNavigator() {
 
   return (
     <POSStack.Navigator screenOptions={{ headerShown: false }}>
-      <POSStack.Screen name="Catalog" component={CatalogScreen} />
-      <POSStack.Screen name="Cart" component={CartScreen} />
-      <POSStack.Screen name="Payment" component={PaymentScreen} />
+      <POSStack.Screen name="Catalog">{() => <ErrorBoundary><CatalogScreen /></ErrorBoundary>}</POSStack.Screen>
+      <POSStack.Screen name="Cart">{() => <ErrorBoundary><CartScreen /></ErrorBoundary>}</POSStack.Screen>
+      <POSStack.Screen name="Payment">{() => <ErrorBoundary><PaymentScreen /></ErrorBoundary>}</POSStack.Screen>
     </POSStack.Navigator>
   );
 }
@@ -107,9 +109,9 @@ function TransactionsNavigator() {
   return (
     <TabletOffset>
       <TxStack.Navigator screenOptions={{ headerShown: false }}>
-        <TxStack.Screen name="TransactionList" component={TransactionListScreen} />
-        <TxStack.Screen name="TransactionDetail" component={TransactionDetailScreen} />
-        <TxStack.Screen name="ZReading" component={ZReadingScreen} />
+        <TxStack.Screen name="TransactionList">{() => <ErrorBoundary><TransactionListScreen /></ErrorBoundary>}</TxStack.Screen>
+        <TxStack.Screen name="TransactionDetail">{(props: any) => <ErrorBoundary><TransactionDetailScreen {...props} /></ErrorBoundary>}</TxStack.Screen>
+        <TxStack.Screen name="ZReading">{(props: any) => <ErrorBoundary><ZReadingScreen {...props} /></ErrorBoundary>}</TxStack.Screen>
       </TxStack.Navigator>
     </TabletOffset>
   );
@@ -127,8 +129,8 @@ function SettingsNavigator() {
   return (
     <TabletOffset>
       <SettingsStack.Navigator screenOptions={{ headerShown: false }}>
-        <SettingsStack.Screen name="SettingsHome" component={SettingsScreen} />
-        <SettingsStack.Screen name="PrinterSetup" component={PrinterSetupScreen} />
+        <SettingsStack.Screen name="SettingsHome">{() => <ErrorBoundary><SettingsScreen /></ErrorBoundary>}</SettingsStack.Screen>
+        <SettingsStack.Screen name="PrinterSetup">{() => <ErrorBoundary><PrinterSetupScreen /></ErrorBoundary>}</SettingsStack.Screen>
       </SettingsStack.Navigator>
     </TabletOffset>
   );
@@ -149,6 +151,7 @@ function TabletTabBar(props: any) {
 
 export default function MainTabs() {
   const { isTablet } = useLayout();
+  const { isDark } = useTheme(); // Subscribe to theme — triggers re-render of entire tab tree
 
   useEffect(() => {
     const unsub = startNetworkMonitor();
@@ -156,7 +159,7 @@ export default function MainTabs() {
   }, []);
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg.primary }}>
+    <View key={isDark ? 'dark' : 'light'} style={{ flex: 1, backgroundColor: colors.bg.primary }}>
       <SyncStatusBar />
       <NetworkBanner />
       <Tab.Navigator

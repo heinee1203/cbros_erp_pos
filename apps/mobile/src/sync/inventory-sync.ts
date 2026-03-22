@@ -4,6 +4,7 @@ import { apiFetch } from '@/services/api-client';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
 import { Q } from '@nozbe/watermelondb';
+import type { SyncProgress } from './catalog-sync';
 
 interface ServerInventory {
   id: string;
@@ -20,60 +21,95 @@ interface InventorySyncResponse {
   data: ServerInventory[];
   syncedAt: string;
   count: number;
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
-export async function syncInventory(): Promise<{ upserted: number }> {
+const PAGE_SIZE = 1000;
+
+function mapInventoryFields(record: any, item: ServerInventory) {
+  record.productServerId = item.productId;
+  record.locationId = item.locationId;
+  record.stockLevel = item.stockLevel;
+  record.reservedLevel = item.reservedLevel;
+  record.reorderPoint = item.reorderPoint;
+  record.availableForSale = item.availableForSale;
+  record.serverUpdatedAt = new Date(item.updatedAt).getTime();
+}
+
+export async function syncInventory(
+  onProgress?: (progress: SyncProgress) => void,
+): Promise<{ upserted: number }> {
   const since = storage.getString(KEYS.LAST_INVENTORY_SYNC);
-  const qs = since ? `?since=${encodeURIComponent(since)}` : '';
-
-  const response = await apiFetch<InventorySyncResponse>(`/sync/inventory${qs}`);
-
-  if (response.data.length === 0) {
-    storage.set(KEYS.LAST_INVENTORY_SYNC, response.syncedAt);
-    return { upserted: 0 };
-  }
-
   const collection = database.get<Inventory>('inventory');
 
-  await database.write(async () => {
+  let cursor: string | null = null;
+  let totalSynced = 0;
+  let lastSyncedAt: string | null = null;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const params: string[] = [`limit=${PAGE_SIZE}`];
+    if (since) params.push(`since=${encodeURIComponent(since)}`);
+    if (cursor) params.push(`cursor=${cursor}`);
+    const url = `/sync/inventory?${params.join('&')}`;
+
+    const response = await apiFetch<InventorySyncResponse>(url);
+    lastSyncedAt = response.syncedAt;
+
+    if (response.data.length === 0) break;
+
+    // Batch-query existing inventory records (1 query, not N)
+    const serverIds = response.data.map(item => item.id);
+    const existingRows = await collection
+      .query(Q.where('server_id', Q.oneOf(serverIds)))
+      .fetch();
+
+    const existingMap = new Map<string, Inventory>();
+    for (const inv of existingRows) {
+      existingMap.set(inv.serverId, inv);
+    }
+
+    // Build batch operations
     const batchOps: any[] = [];
-
     for (const item of response.data) {
-      const existing = await collection
-        .query(Q.where('server_id', item.id))
-        .fetch();
-
-      if (existing.length > 0) {
+      const existing = existingMap.get(item.id);
+      if (existing) {
         batchOps.push(
-          existing[0].prepareUpdate((record: any) => {
-            record.productServerId = item.productId;
-            record.locationId = item.locationId;
-            record.stockLevel = item.stockLevel;
-            record.reservedLevel = item.reservedLevel;
-            record.reorderPoint = item.reorderPoint;
-            record.availableForSale = item.availableForSale;
-            record.serverUpdatedAt = new Date(item.updatedAt).getTime();
-          }),
+          existing.prepareUpdate((record: any) => mapInventoryFields(record, item)),
         );
       } else {
         batchOps.push(
           collection.prepareCreate((record: any) => {
             record.serverId = item.id;
-            record.productServerId = item.productId;
-            record.locationId = item.locationId;
-            record.stockLevel = item.stockLevel;
-            record.reservedLevel = item.reservedLevel;
-            record.reorderPoint = item.reorderPoint;
-            record.availableForSale = item.availableForSale;
-            record.serverUpdatedAt = new Date(item.updatedAt).getTime();
+            mapInventoryFields(record, item);
           }),
         );
       }
     }
 
-    await database.batch(...batchOps);
-  });
+    await database.write(async () => {
+      await database.batch(...batchOps);
+    });
 
-  storage.set(KEYS.LAST_INVENTORY_SYNC, response.syncedAt);
-  return { upserted: response.data.length };
+    totalSynced += response.data.length;
+
+    onProgress?.({
+      phase: 'inventory',
+      synced: totalSynced,
+      total: null,
+    });
+
+    if (response.hasMore && response.nextCursor) {
+      cursor = response.nextCursor;
+    } else {
+      break;
+    }
+  }
+
+  if (lastSyncedAt) {
+    storage.set(KEYS.LAST_INVENTORY_SYNC, lastSyncedAt);
+  }
+
+  return { upserted: totalSynced };
 }

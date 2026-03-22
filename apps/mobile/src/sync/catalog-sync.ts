@@ -11,6 +11,7 @@ interface ServerProduct {
   sku: string;
   mnemonicSku: string;
   barcode: string | null;
+  oemNumber: string | null;
   category: string;
   unitPrice: string;
   isVariablePrice: boolean;
@@ -26,77 +27,113 @@ interface CatalogSyncResponse {
   data: ServerProduct[];
   syncedAt: string;
   count: number;
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
-export async function syncCatalog(): Promise<{ upserted: number }> {
+export type SyncProgress = {
+  phase: 'catalog' | 'inventory';
+  synced: number;
+  total: number | null;
+};
+
+const PAGE_SIZE = 1000;
+
+function mapProductFields(record: any, item: ServerProduct) {
+  record.name = item.name;
+  record.sku = item.sku;
+  record.mnemonicSku = item.mnemonicSku;
+  record.barcode = item.barcode;
+  record.oemNumber = item.oemNumber;
+  record.category = item.category;
+  record.unitPrice = parseFloat(item.unitPrice);
+  record.isVariablePrice = item.isVariablePrice;
+  record.familyId = item.familyId;
+  record.familyName = item.familyName;
+  record.brandId = item.brandId;
+  record.parentProductId = item.parentProductId;
+  record.isParent = item.isParent;
+  record.serverUpdatedAt = new Date(item.updatedAt).getTime();
+}
+
+export async function syncCatalog(
+  onProgress?: (progress: SyncProgress) => void,
+): Promise<{ upserted: number }> {
   const since = storage.getString(KEYS.LAST_CATALOG_SYNC);
-  const qs = since ? `?since=${encodeURIComponent(since)}` : '';
-
-  const response = await apiFetch<CatalogSyncResponse>(`/sync/catalog${qs}`);
-
-  if (response.data.length === 0) {
-    storage.set(KEYS.LAST_CATALOG_SYNC, response.syncedAt);
-    return { upserted: 0 };
-  }
-
   const collection = database.get<Product>('products');
 
-  await database.write(async () => {
+  let cursor: string | null = null;
+  let totalSynced = 0;
+  let lastSyncedAt: string | null = null;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    // Build paginated URL
+    const params: string[] = [`limit=${PAGE_SIZE}`];
+    if (since) params.push(`since=${encodeURIComponent(since)}`);
+    if (cursor) params.push(`cursor=${cursor}`);
+    const url = `/sync/catalog?${params.join('&')}`;
+
+    const response = await apiFetch<CatalogSyncResponse>(url);
+    lastSyncedAt = response.syncedAt;
+
+    if (response.data.length === 0) break;
+
+    // Batch-query existing products by server_id (1 query, not N)
+    const serverIds = response.data.map(item => item.id);
+    const existingProducts = await collection
+      .query(Q.where('server_id', Q.oneOf(serverIds)))
+      .fetch();
+
+    const existingMap = new Map<string, Product>();
+    for (const p of existingProducts) {
+      existingMap.set(p.serverId, p);
+    }
+
+    // Build batch operations
     const batchOps: any[] = [];
-
     for (const item of response.data) {
-      // Check if product already exists locally
-      const existing = await collection
-        .query(Q.where('server_id', item.id))
-        .fetch();
-
-      if (existing.length > 0) {
-        // Update
+      const existing = existingMap.get(item.id);
+      if (existing) {
         batchOps.push(
-          existing[0].prepareUpdate((record: any) => {
-            record.name = item.name;
-            record.sku = item.sku;
-            record.mnemonicSku = item.mnemonicSku;
-            record.barcode = item.barcode;
-            record.oemNumber = item.oemNumber;
-            record.category = item.category;
-            record.unitPrice = parseFloat(item.unitPrice);
-            record.isVariablePrice = item.isVariablePrice;
-            record.familyId = item.familyId;
-            record.familyName = item.familyName;
-            record.brandId = item.brandId;
-            record.parentProductId = item.parentProductId;
-            record.isParent = item.isParent;
-            record.serverUpdatedAt = new Date(item.updatedAt).getTime();
-          }),
+          existing.prepareUpdate((record: any) => mapProductFields(record, item)),
         );
       } else {
-        // Insert
         batchOps.push(
           collection.prepareCreate((record: any) => {
             record.serverId = item.id;
-            record.name = item.name;
-            record.sku = item.sku;
-            record.mnemonicSku = item.mnemonicSku;
-            record.barcode = item.barcode;
-            record.oemNumber = item.oemNumber;
-            record.category = item.category;
-            record.unitPrice = parseFloat(item.unitPrice);
-            record.isVariablePrice = item.isVariablePrice;
-            record.familyId = item.familyId;
-            record.familyName = item.familyName;
-            record.brandId = item.brandId;
-            record.parentProductId = item.parentProductId;
-            record.isParent = item.isParent;
-            record.serverUpdatedAt = new Date(item.updatedAt).getTime();
+            mapProductFields(record, item);
           }),
         );
       }
     }
 
-    await database.batch(...batchOps);
-  });
+    // Execute batch in a single write transaction
+    await database.write(async () => {
+      await database.batch(...batchOps);
+    });
 
-  storage.set(KEYS.LAST_CATALOG_SYNC, response.syncedAt);
-  return { upserted: response.data.length };
+    totalSynced += response.data.length;
+
+    // Report progress
+    onProgress?.({
+      phase: 'catalog',
+      synced: totalSynced,
+      total: null, // API doesn't return total count
+    });
+
+    // Check for more pages
+    if (response.hasMore && response.nextCursor) {
+      cursor = response.nextCursor;
+    } else {
+      break;
+    }
+  }
+
+  // Save sync timestamp
+  if (lastSyncedAt) {
+    storage.set(KEYS.LAST_CATALOG_SYNC, lastSyncedAt);
+  }
+
+  return { upserted: totalSynced };
 }

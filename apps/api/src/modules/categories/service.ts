@@ -58,12 +58,9 @@ export async function listCategories(opts: {
       createdAt: categories.createdAt,
       updatedAt: categories.updatedAt,
       productCount: sql<number>`COALESCE(
-        (SELECT COUNT(*)::int FROM ${products}
-         WHERE ${products.orgId} = ${categories.orgId}
-         AND (
-           ${products.categoryId} = ${categories.id}
-           OR ${products.category}::text = ${categories.code}
-         )),
+        (SELECT COUNT(*)::int FROM products p
+         WHERE p.org_id = ${categories}.org_id
+         AND p.category_id = ${categories}.id),
         0
       )`,
     })
@@ -100,12 +97,9 @@ export async function getCategoryById(
       createdAt: categories.createdAt,
       updatedAt: categories.updatedAt,
       productCount: sql<number>`COALESCE(
-        (SELECT COUNT(*)::int FROM ${products}
-         WHERE ${products.orgId} = ${categories.orgId}
-         AND (
-           ${products.categoryId} = ${categories.id}
-           OR ${products.category}::text = ${categories.code}
-         )),
+        (SELECT COUNT(*)::int FROM products p
+         WHERE p.org_id = ${categories}.org_id
+         AND p.category_id = ${categories}.id),
         0
       )`,
     })

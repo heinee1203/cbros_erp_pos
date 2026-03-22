@@ -110,6 +110,10 @@ export const poLines = pgTable(
     unitCost: numeric("unit_cost", { precision: 12, scale: 2 }).notNull(),
     listPrice: numeric("list_price", { precision: 12, scale: 2 }),
     discountChain: varchar("discount_chain", { length: 100 }),
+    /** Snapshot of purchase unit at PO creation (e.g., "roll"). NULL for legacy or piece items */
+    unit: varchar("unit", { length: 20 }),
+    /** Snapshot of conversion factor at PO creation. NULL for legacy (treated as 1) */
+    poConversionFactor: numeric("conversion_factor", { precision: 10, scale: 4 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

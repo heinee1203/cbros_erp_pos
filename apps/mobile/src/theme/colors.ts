@@ -84,7 +84,11 @@ export const darkColors = {
   black: '#000000',
 } as const;
 
-export const lightColors: typeof darkColors = {
+/** Shared color palette shape — both themes must match this structure */
+type DeepString<T> = { [K in keyof T]: T[K] extends object ? { [J in keyof T[K]]: string } : string };
+type ColorPalette = DeepString<typeof darkColors>;
+
+export const lightColors: ColorPalette = {
   bg: {
     base: '#F5F3EF',
     primary: '#F5F3EF',

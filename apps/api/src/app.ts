@@ -41,6 +41,12 @@ import { pricingRoutes } from "./modules/pricing/routes";
 import { productSuppliersRoutes } from "./modules/product-suppliers/routes";
 import { accountsPayableRoutes } from "./modules/accounts-payable/routes";
 import { tagRoutes } from "./modules/tags/routes";
+import { notificationRoutes } from "./modules/notifications/routes";
+import { warrantyRoutes } from "./modules/warranties/routes";
+import { cashflowRoutes } from "./modules/cashflow/routes";
+import { promoRoutes } from "./modules/promos/routes";
+import { deviceRoutes } from "./modules/devices/routes";
+import { rbacRoutes } from "./modules/rbac/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const JWT_SECRET = process.env.JWT_SECRET;
@@ -52,6 +58,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     logger: {
       level: process.env.NODE_ENV === "production" ? "info" : "debug",
     },
+    bodyLimit: 50 * 1024 * 1024, // 50 MB — needed for large CSV imports
   });
 
   // ── Global plugins ──
@@ -110,6 +117,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(productSuppliersRoutes, { prefix: "/products" });
   await app.register(accountsPayableRoutes, { prefix: "/ap" });
   await app.register(tagRoutes, { prefix: "/tags" });
+  await app.register(notificationRoutes, { prefix: "/notifications" });
+  await app.register(warrantyRoutes, { prefix: "/warranties" });
+  await app.register(cashflowRoutes, { prefix: "/cashflow" });
+  await app.register(promoRoutes, { prefix: "/promos" });
+  await app.register(deviceRoutes, { prefix: "/devices" });
+  await app.register(rbacRoutes, { prefix: "/rbac" });
 
   return app;
 }

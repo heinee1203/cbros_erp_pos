@@ -1,6 +1,7 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { useAuth } from '@/hooks/use-auth';
+import { useTheme } from '@/theme/ThemeContext';
 import AuthStack from './AuthStack';
 import MainTabs from './MainTabs';
 import LocationSelectScreen from './screens/LocationSelectScreen';
@@ -12,6 +13,22 @@ type AppPhase = 'location-select' | 'syncing' | 'ready';
 
 export default function RootNavigator() {
   const { isAuthenticated, needsLocationSelect, isLoading, setLocationId, locations, locationId } = useAuth();
+  const { isDark } = useTheme();
+
+  // Dynamic navigation theme — follows app theme
+  const navigationTheme = useMemo(() => ({
+    dark: isDark,
+    colors: {
+      primary: colors.accent.primary,
+      background: colors.bg.primary,
+      card: colors.bg.surface,
+      text: colors.text.primary,
+      border: colors.border.default,
+      notification: colors.accent.primary,
+    },
+    fonts: { regular: { fontFamily: 'System', fontWeight: '400' as const }, medium: { fontFamily: 'System', fontWeight: '500' as const }, bold: { fontFamily: 'System', fontWeight: '700' as const }, heavy: { fontFamily: 'System', fontWeight: '900' as const } },
+  }), [isDark]);
+
   const [phase, setPhase] = useState<AppPhase>(
     // If returning user already has a location, skip straight to ready
     'ready',
@@ -36,7 +53,7 @@ export default function RootNavigator() {
 
   if (!isAuthenticated) {
     return (
-      <NavigationContainer>
+      <NavigationContainer theme={navigationTheme}>
         <AuthStack />
       </NavigationContainer>
     );
@@ -60,7 +77,7 @@ export default function RootNavigator() {
 
   // Ready — show the POS
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navigationTheme}>
       <MainTabs />
     </NavigationContainer>
   );

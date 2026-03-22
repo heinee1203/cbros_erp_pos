@@ -57,6 +57,193 @@ const RECEIVABLE_STATES = new Set(["SUBMITTED", "PARTIALLY_RECEIVED"]);
 /** States that allow editing header + lines */
 const EDITABLE_STATES = new Set(["DRAFT", "SUBMITTED", "PARTIALLY_RECEIVED"]);
 
+/** Print a PO receiving slip for a specific receipt */
+function printReceivingSlip(receipt: any, po: any) {
+  const w = window.open("", "_blank");
+  if (!w) return;
+
+  const itemRows = (receipt.lines || []).map((line: any, i: number) => `
+    <tr>
+      <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:center">${i + 1}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #ccc">${line.productName || "\u2014"}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #ccc;font-family:monospace;font-size:10px">${line.sku || line.mnemonicSku || "\u2014"}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right">${line.receivedAcceptedQty ?? 0}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;${(line.rejectedQty ?? 0) > 0 ? "color:#dc2626;font-weight:bold" : ""}">${line.rejectedQty ?? 0}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;font-size:10px">\u20B1${parseFloat(line.unitCost ?? "0").toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+    </tr>`).join("");
+
+  const receiptAmount = (receipt.lines || []).reduce((sum: number, l: any) =>
+    sum + ((l.receivedAcceptedQty ?? 0) * parseFloat(l.unitCost ?? "0")), 0);
+
+  const dateStr = receipt.createdAt
+    ? new Date(receipt.createdAt).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" })
+    : "\u2014";
+
+  const html = `<!DOCTYPE html>
+<html><head><title>Receiving Slip \u2014 ${po.poNo}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Courier New',monospace;font-size:11px;padding:20px;color:#000;max-width:800px;margin:0 auto}
+.hdr{text-align:center;border-top:3px double #000;border-bottom:3px double #000;padding:10px 0;margin-bottom:16px}
+.hdr h1{font-size:15px;letter-spacing:2px;margin-bottom:2px}
+.hdr h2{font-size:10px;font-weight:normal;color:#444}
+.meta{margin-bottom:14px;line-height:1.7}
+.mr{display:flex}.ml{display:inline-block;width:90px;font-weight:bold;color:#333}
+table{width:100%;border-collapse:collapse;margin:10px 0}
+th{text-align:left;border-bottom:2px solid #000;padding:3px 6px;font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.tot{margin:10px 0;padding-top:6px;border-top:2px solid #000;line-height:1.6}
+.tot .amt{font-size:13px;font-weight:bold;margin-top:4px}
+.disc{margin:16px 0;padding:10px;border:1px solid #999}
+.disc h3{font-size:11px;margin-bottom:8px;letter-spacing:1px}
+.cb{display:inline-block;width:14px;height:14px;border:1.5px solid #000;margin-right:6px;vertical-align:middle}
+.cbr{margin-bottom:4px;font-size:11px}
+.nl{border-bottom:1px solid #000;width:100%;height:20px;margin-top:8px}
+.sig{margin-top:24px}
+.sig h3{font-size:11px;margin-bottom:14px;letter-spacing:1px}
+.sl{border-bottom:1px solid #000;width:220px;display:inline-block;margin-right:16px}
+.dl{border-bottom:1px solid #000;width:120px;display:inline-block}
+.slbl{font-size:9px;color:#666;margin-top:2px;padding-left:40px}
+.ftr{border-top:3px double #000;margin-top:20px;padding-top:6px;text-align:center;font-size:9px;color:#666}
+@media print{body{padding:0}@page{margin:15mm;size:A4}}
+</style></head><body>
+<div class="hdr"><h1>PO RECEIVING SLIP</h1><h2>Attach to Supplier Delivery Receipt</h2></div>
+<div class="meta">
+  <div class="mr"><span class="ml">PO No:</span>${po.poNo}</div>
+  <div class="mr"><span class="ml">DR No:</span>${receipt.supplierDrNo || "\u2014"}</div>
+  <div class="mr"><span class="ml">Supplier:</span>${po.supplier?.name || "\u2014"}</div>
+  <div class="mr"><span class="ml">Received at:</span>${po.destination?.name || "\u2014"}${po.destination?.code ? " (" + po.destination.code + ")" : ""}</div>
+  <div class="mr"><span class="ml">Date:</span>${dateStr}</div>
+  <div class="mr"><span class="ml">Received by:</span>${receipt.receivedByName || receipt.receivedBy || "\u2014"}</div>
+</div>
+<h3 style="font-size:11px;letter-spacing:1px;margin-bottom:4px">ITEMS RECEIVED</h3>
+<table><thead><tr>
+  <th style="width:30px;text-align:center">#</th><th>Item</th><th>SKU</th>
+  <th style="width:55px;text-align:right">Accepted</th>
+  <th style="width:55px;text-align:right">Rejected</th>
+  <th style="width:65px;text-align:right">Unit Cost</th>
+</tr></thead><tbody>${itemRows}</tbody></table>
+<div class="tot">
+  <div>Total: ${receipt.lineCount ?? receipt.lines?.length ?? 0} lines, ${receipt.totalAcceptedQty ?? 0} accepted${(receipt.totalRejectedQty ?? 0) > 0 ? ", " + receipt.totalRejectedQty + " rejected" : ""}</div>
+  <div class="amt">Receipt Amount: \u20B1${receiptAmount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+</div>
+<div class="disc">
+  <h3>DISCREPANCIES</h3>
+  <div class="cbr"><span class="cb"></span> All items match DR</div>
+  <div class="cbr"><span class="cb"></span> Short delivery</div>
+  <div class="cbr"><span class="cb"></span> Damaged items</div>
+  <div class="cbr"><span class="cb"></span> Wrong items</div>
+  <div style="margin-top:8px">Notes:</div><div class="nl"></div><div class="nl"></div>
+</div>
+<div class="sig"><h3>ACKNOWLEDGMENT</h3>
+  <div style="margin-bottom:20px">Checked by: <span class="sl"></span> Date: <span class="dl"></span>
+    <div class="slbl">(Warehouse Staff)</div>
+  </div>
+</div>
+<div class="ftr">Printed: ${new Date().toLocaleString("en-PH")} \u2014 Apex Auto Parts</div>
+</body></html>`;
+
+  w.document.write(html);
+  w.document.close();
+}
+
+/** Batch print all receipts for a PO — one page per receipt with CSS page breaks */
+function printAllReceivingSlips(receipts: any[], po: any) {
+  if (receipts.length === 0) return;
+  const w = window.open("", "_blank");
+  if (!w) return;
+
+  const totalReceipts = receipts.length;
+  const slipPages = receipts.map((receipt: any, pageIndex: number) => {
+    const itemRows = (receipt.lines || []).map((line: any, i: number) => `
+      <tr>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:center">${i + 1}</td>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc">${line.productName || "\u2014"}</td>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc;font-family:monospace;font-size:10px">${line.sku || line.mnemonicSku || "\u2014"}</td>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right">${line.receivedAcceptedQty ?? 0}</td>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;${(line.rejectedQty ?? 0) > 0 ? "color:#dc2626;font-weight:bold" : ""}">${line.rejectedQty ?? 0}</td>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;font-size:10px">\u20B1${parseFloat(line.unitCost ?? "0").toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+      </tr>`).join("");
+
+    const receiptAmount = (receipt.lines || []).reduce((sum: number, l: any) =>
+      sum + ((l.receivedAcceptedQty ?? 0) * parseFloat(l.unitCost ?? "0")), 0);
+    const totalAccepted = receipt.totalAcceptedQty ?? (receipt.lines || []).reduce((s: number, l: any) => s + (l.receivedAcceptedQty ?? 0), 0);
+    const totalRejected = receipt.totalRejectedQty ?? (receipt.lines || []).reduce((s: number, l: any) => s + (l.rejectedQty ?? 0), 0);
+    const dateStr = receipt.createdAt
+      ? new Date(receipt.createdAt).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" })
+      : "\u2014";
+
+    return `<div class="slip${pageIndex > 0 ? " page-break" : ""}">
+<div class="hdr"><h1>PO RECEIVING SLIP</h1><h2>Attach to Supplier Delivery Receipt</h2>${totalReceipts > 1 ? `<div style="font-size:10px;color:#666;margin-top:4px">Receipt ${pageIndex + 1} of ${totalReceipts}</div>` : ""}</div>
+<div class="meta">
+  <div class="mr"><span class="ml">PO No:</span>${po.poNo}</div>
+  <div class="mr"><span class="ml">DR No:</span>${receipt.supplierDrNo || "\u2014"}</div>
+  <div class="mr"><span class="ml">Supplier:</span>${po.supplier?.name || "\u2014"}</div>
+  <div class="mr"><span class="ml">Received at:</span>${po.destination?.name || "\u2014"}${po.destination?.code ? " (" + po.destination.code + ")" : ""}</div>
+  <div class="mr"><span class="ml">Date:</span>${dateStr}</div>
+  <div class="mr"><span class="ml">Received by:</span>${receipt.receivedByName || "\u2014"}</div>
+</div>
+<h3 style="font-size:11px;letter-spacing:1px;margin-bottom:4px">ITEMS RECEIVED</h3>
+<table><thead><tr>
+  <th style="width:30px;text-align:center">#</th><th>Item</th><th>SKU</th>
+  <th style="width:55px;text-align:right">Accepted</th>
+  <th style="width:55px;text-align:right">Rejected</th>
+  <th style="width:65px;text-align:right">Unit Cost</th>
+</tr></thead><tbody>${itemRows}</tbody></table>
+<div class="tot">
+  <div>Total: ${receipt.lines?.length ?? 0} lines, ${totalAccepted} accepted${totalRejected > 0 ? ", " + totalRejected + " rejected" : ""}</div>
+  <div class="amt">Receipt Amount: \u20B1${receiptAmount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+</div>
+<div class="disc">
+  <h3>DISCREPANCIES</h3>
+  <div class="cbr"><span class="cb"></span> All items match DR</div>
+  <div class="cbr"><span class="cb"></span> Short delivery</div>
+  <div class="cbr"><span class="cb"></span> Damaged items</div>
+  <div class="cbr"><span class="cb"></span> Wrong items</div>
+  <div style="margin-top:8px">Notes:</div><div class="nl"></div><div class="nl"></div>
+</div>
+<div class="sig"><h3>ACKNOWLEDGMENT</h3>
+  <div style="margin-bottom:20px">Checked by: <span class="sl"></span> Date: <span class="dl"></span>
+    <div class="slbl">(Warehouse Staff)</div>
+  </div>
+</div>
+<div class="ftr">Printed: ${new Date().toLocaleString("en-PH")} \u2014 Apex Auto Parts</div>
+</div>`;
+  }).join("");
+
+  const html = `<!DOCTYPE html>
+<html><head><title>Receiving Slips \u2014 ${po.poNo}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Courier New',monospace;font-size:11px;padding:20px;color:#000;max-width:800px;margin:0 auto}
+.slip{padding-bottom:20px}
+.page-break{page-break-before:always}
+.hdr{text-align:center;border-top:3px double #000;border-bottom:3px double #000;padding:10px 0;margin-bottom:16px}
+.hdr h1{font-size:15px;letter-spacing:2px;margin-bottom:2px}
+.hdr h2{font-size:10px;font-weight:normal;color:#444}
+.meta{margin-bottom:14px;line-height:1.7}
+.mr{display:flex}.ml{display:inline-block;width:90px;font-weight:bold;color:#333}
+table{width:100%;border-collapse:collapse;margin:10px 0}
+th{text-align:left;border-bottom:2px solid #000;padding:3px 6px;font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.tot{margin:10px 0;padding-top:6px;border-top:2px solid #000;line-height:1.6}
+.tot .amt{font-size:13px;font-weight:bold;margin-top:4px}
+.disc{margin:16px 0;padding:10px;border:1px solid #999}
+.disc h3{font-size:11px;margin-bottom:8px;letter-spacing:1px}
+.cb{display:inline-block;width:14px;height:14px;border:1.5px solid #000;margin-right:6px;vertical-align:middle}
+.cbr{margin-bottom:4px;font-size:11px}
+.nl{border-bottom:1px solid #000;width:100%;height:20px;margin-top:8px}
+.sig{margin-top:24px}
+.sig h3{font-size:11px;margin-bottom:14px;letter-spacing:1px}
+.sl{border-bottom:1px solid #000;width:220px;display:inline-block;margin-right:16px}
+.dl{border-bottom:1px solid #000;width:120px;display:inline-block}
+.slbl{font-size:9px;color:#666;margin-top:2px;padding-left:40px}
+.ftr{border-top:3px double #000;margin-top:20px;padding-top:6px;text-align:center;font-size:9px;color:#666}
+@media print{body{padding:0}@page{margin:15mm;size:A4}.page-break{page-break-before:always}}
+</style></head><body>${slipPages}</body></html>`;
+
+  w.document.write(html);
+  w.document.close();
+}
+
 /** Calculate net cost from list price through a chain of trade discounts */
 function calculateNetCost(listPrice: number, discountChain: string): number {
   if (!listPrice || listPrice <= 0) return 0;
@@ -132,6 +319,8 @@ function PODetailView({
   refetch: () => void;
 }) {
   const { token, locationId } = useAuth();
+  const receiptsQuery = usePOReceipts(po.id, token, locationId);
+  const allReceipts = receiptsQuery.data?.data ?? [];
   const isTerminal = TERMINAL_STATES.has(po.status);
   const canReceive = RECEIVABLE_STATES.has(po.status);
   const canEdit = EDITABLE_STATES.has(po.status);
@@ -464,6 +653,15 @@ function PODetailView({
                   Print Barcodes
                 </Link>
               )}
+              {allReceipts.length > 0 && (
+                <button
+                  onClick={() => printAllReceivingSlips(allReceipts, po)}
+                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Printer size={14} />
+                  Print Receiving Slip{allReceipts.length > 1 ? `s (${allReceipts.length})` : ""}
+                </button>
+              )}
               {canEdit && (
                 <button
                   onClick={enterEditMode}
@@ -489,6 +687,14 @@ function PODetailView({
                 >
                   <ArrowRightLeft size={14} /> Redirect Unfulfilled
                 </button>
+              )}
+              {(po.status === "FULLY_RECEIVED" || po.status === "CLOSED_WITH_VARIANCE") && (
+                <Link
+                  href={`/procurement/transfer-orders/new?fromPoId=${po.id}&sourceLocationId=${po.destinationLocationId}`}
+                  className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/10"
+                >
+                  <ArrowRightLeft size={14} /> Transfer to Another Location
+                </Link>
               )}
             </>
           )}
@@ -654,7 +860,7 @@ function PODetailView({
 
       {/* ── Receipt Event History ── */}
       {(po.receiptEvents.length > 0 || !isDraft) && (
-        <ReceiptHistory po={po} />
+        <ReceiptHistory po={po} receipts={allReceipts} />
       )}
 
       {/* ── Notes ── */}
@@ -1839,10 +2045,7 @@ function ReadOnlyGrid({
 /* ══════════════════════════════════════════════════════════
  * RECEIPT HISTORY — Grouped by DR number, collapsible cards
  * ══════════════════════════════════════════════════════════ */
-function ReceiptHistory({ po }: { po: PODetail }) {
-  const { token, locationId } = useAuth();
-  const receiptsQuery = usePOReceipts(po.id, token, locationId);
-  const receipts = receiptsQuery.data?.data ?? [];
+function ReceiptHistory({ po, receipts = [] }: { po: PODetail; receipts?: any[] }) {
 
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
@@ -1878,10 +2081,11 @@ function ReceiptHistory({ po }: { po: PODetail }) {
           const isExpanded = expandedIds.has(receipt.id);
           return (
             <div key={receipt.id} className="overflow-hidden rounded-lg border border-border">
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => toggleReceipt(receipt.id)}
-                className="flex w-full items-center justify-between bg-muted/40 px-4 py-2.5 text-left transition-colors hover:bg-muted/60"
+                className="flex w-full cursor-pointer items-center justify-between bg-muted/40 px-4 py-2.5 text-left transition-colors hover:bg-muted/60"
               >
                 <div>
                   <span className="text-sm font-bold text-foreground">{receipt.supplierDrNo}</span>
@@ -1891,6 +2095,13 @@ function ReceiptHistory({ po }: { po: PODetail }) {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); printReceivingSlip(receipt, po); }}
+                    className="rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    Print Slip
+                  </button>
                   <span className="text-xs tabular-nums text-muted-foreground">
                     {new Date(receipt.createdAt).toLocaleDateString("en-US", {
                       month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit",
@@ -1900,7 +2111,7 @@ function ReceiptHistory({ po }: { po: PODetail }) {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </div>
-              </button>
+              </div>
 
               {isExpanded && (
                 <div className="border-t border-border">

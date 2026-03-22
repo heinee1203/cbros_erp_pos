@@ -17,6 +17,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useCategories } from "@/hooks/use-categories";
+import { useSubcategories } from "@/hooks/use-subcategories";
+import { useProductFamilies } from "@/hooks/use-products";
 
 /* ─────────────────────────────────────────────
  * Types
@@ -60,6 +63,13 @@ interface PreviewResponse {
     apexLocationName: string | null;
     autoMatched: boolean;
   }>;
+  categoryMapping: Array<{
+    csvName: string;
+    apexCategoryId: string | null;
+    apexCategoryName: string | null;
+    autoMatched: boolean;
+    productCount: number;
+  }>;
   errors: Array<{ rowIndex: number; field?: string; message: string }>;
   preview: Array<{
     rowIndex: number;
@@ -72,7 +82,7 @@ interface PreviewResponse {
 }
 
 interface ProgressResponse {
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "completed" | "error" | "failed";
   processed: number;
   total: number;
   created: number;
@@ -101,6 +111,7 @@ export default function ImportItemsPage() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [locationMapping, setLocationMapping] = useState<Record<string, string>>({});
+  const [catMapping, setCatMapping] = useState<Record<string, { action: "create" | "map"; targetCategoryId?: string; targetSubcategoryId?: string; familyId?: string; createSubcategory?: boolean }>>({});
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [results, setResults] = useState<ProgressResponse | null>(null);
   const [errorsExpanded, setErrorsExpanded] = useState(false);
@@ -119,6 +130,14 @@ export default function ImportItemsPage() {
 
   const orgLocations = locationsData?.data ?? [];
 
+  /* ── Fetch categories + families for category mapping ── */
+  const categoriesQuery = useCategories(token, locationId, { activeOnly: true });
+  const orgCategories = categoriesQuery.data?.data ?? [];
+  const familiesQuery = useProductFamilies(token, locationId);
+  const orgFamilies = familiesQuery.data?.data ?? [];
+  const subcategoriesQuery = useSubcategories(token!, locationId!);
+  const allSubcategories = subcategoriesQuery.data?.data ?? [];
+
   /* ── Initialize location mapping from preview ── */
   useEffect(() => {
     if (preview?.locationMapping) {
@@ -129,6 +148,16 @@ export default function ImportItemsPage() {
         }
       }
       setLocationMapping(mapping);
+    }
+    // Initialize category mapping — auto-matched stay as-is, unmatched default to "create"
+    if (preview?.categoryMapping) {
+      const cm: Record<string, { action: "create" | "map"; targetCategoryId?: string; familyId?: string }> = {};
+      for (const cat of preview.categoryMapping) {
+        if (!cat.autoMatched) {
+          cm[cat.csvName] = { action: "create" };
+        }
+      }
+      setCatMapping(cm);
     }
   }, [preview]);
 
@@ -187,8 +216,20 @@ export default function ImportItemsPage() {
   );
 
   /* ── Execute import ── */
+  const hasMissingFamilies = Object.values(catMapping).some(
+    (m) => m.action === "create" && !m.familyId,
+  );
+
   const handleExecute = useCallback(async () => {
     if (!preview) return;
+    // Validate: all "Create New" categories must have a family
+    const missing = Object.entries(catMapping).filter(
+      ([, m]) => m.action === "create" && !m.familyId,
+    );
+    if (missing.length > 0) {
+      setError(`Please select a family for: ${missing.map(([name]) => name).join(", ")}`);
+      return;
+    }
     setStep("progress");
     setStartTime(Date.now());
     setProgress(null);
@@ -200,6 +241,7 @@ export default function ImportItemsPage() {
         body: JSON.stringify({
           previewToken: preview.previewToken,
           locationMapping,
+          categoryMapping: Object.keys(catMapping).length > 0 ? catMapping : undefined,
           importMode,
           skipErrors: true,
           createNewCategories: true,
@@ -207,11 +249,24 @@ export default function ImportItemsPage() {
       });
       setResults(resp);
       setStep("results");
+      // Save location mappings for future imports
+      if (Object.keys(locationMapping).length > 0) {
+        try {
+          await apiFetch("/inventory/import/save-location-mappings", {
+            method: "POST",
+            token,
+            locationId,
+            body: JSON.stringify({ mappings: locationMapping }),
+          });
+        } catch {
+          // Non-critical — don't block on save failure
+        }
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Import failed";
       setError(message);
     }
-  }, [preview, token, locationId, locationMapping, importMode]);
+  }, [preview, token, locationId, locationMapping, catMapping, importMode]);
 
   /* ── Poll progress ── */
   useEffect(() => {
@@ -223,7 +278,7 @@ export default function ImportItemsPage() {
           { token, locationId },
         );
         setProgress(prog);
-        if (prog.status === "done" || prog.status === "error") {
+        if (prog.status === "done" || prog.status === "completed" || prog.status === "error" || prog.status === "failed") {
           clearInterval(interval);
           setResults(prog);
           setStep("results");
@@ -253,6 +308,7 @@ export default function ImportItemsPage() {
     setProgress(null);
     setResults(null);
     setLocationMapping({});
+    setCatMapping({});
     setElapsed(0);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
@@ -281,8 +337,8 @@ export default function ImportItemsPage() {
       ? Math.round(((progress.total - progress.processed) / progress.processed) * elapsed)
       : null;
 
-  const unmatchedLocations = preview?.locationMapping?.filter((l) => !l.autoMatched) ?? [];
-  const hasUnmappedLocations = unmatchedLocations.some((l) => !locationMapping[l.csvName]);
+  const allLocations = preview?.locationMapping ?? [];
+  const hasUnmappedLocations = allLocations.some((l) => !locationMapping[l.csvName]);
 
   /* ─────────────────────────────────────────────
    * Render
@@ -493,29 +549,25 @@ export default function ImportItemsPage() {
                       {loc.csvName}
                     </span>
                     <span className="text-muted-foreground">&#8594;</span>
-                    {loc.autoMatched ? (
-                      <span className="flex items-center gap-1.5 text-sm text-emerald-600">
-                        <CheckCircle size={14} />
-                        {loc.apexLocationName}
-                      </span>
-                    ) : (
-                      <select
-                        value={locationMapping[loc.csvName] ?? ""}
-                        onChange={(e) =>
-                          setLocationMapping((prev) => ({
-                            ...prev,
-                            [loc.csvName]: e.target.value,
-                          }))
-                        }
-                        className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                      >
-                        <option value="">Select location...</option>
-                        {orgLocations.map((ol) => (
-                          <option key={ol.id} value={ol.id}>
-                            {ol.name}
-                          </option>
-                        ))}
-                      </select>
+                    <select
+                      value={locationMapping[loc.csvName] ?? ""}
+                      onChange={(e) =>
+                        setLocationMapping((prev) => ({
+                          ...prev,
+                          [loc.csvName]: e.target.value,
+                        }))
+                      }
+                      className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="">Select location...</option>
+                      {orgLocations.map((ol) => (
+                        <option key={ol.id} value={ol.id}>
+                          {ol.name}
+                        </option>
+                      ))}
+                    </select>
+                    {loc.autoMatched && locationMapping[loc.csvName] && (
+                      <span className="text-[10px] text-emerald-600 whitespace-nowrap">✓ auto</span>
                     )}
                   </div>
                 ))}
@@ -523,21 +575,135 @@ export default function ImportItemsPage() {
             </div>
           )}
 
-          {/* New categories notice */}
-          {((preview as any).newCategories?.length ?? 0) > 0 && (
-            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
-              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
-              <div>
-                <div className="text-sm font-medium text-amber-700">
-                  {(preview as any).newCategories?.length ?? 0} new{" "}
-                  {(preview as any).newCategories?.length === 1 ? "category" : "categories"} will be created
-                </div>
-                <div className="mt-1 text-xs text-amber-600">
-                  {(preview as any).newCategories?.join(", ") ?? ""}
-                </div>
+          {/* Category Mapping */}
+          {preview.categoryMapping && preview.categoryMapping.length > 0 && (() => {
+            const matched = preview.categoryMapping.filter((c) => c.autoMatched);
+            const unmatched = preview.categoryMapping.filter((c) => !c.autoMatched);
+            return (
+              <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
+                <h3 className="mb-2 text-sm font-medium text-foreground">Category Mapping</h3>
+                {matched.length > 0 && (
+                  <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                    <CheckCircle size={14} className="text-green-500" />
+                    {matched.length} {matched.length === 1 ? "category" : "categories"} matched automatically
+                  </div>
+                )}
+                {unmatched.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-medium text-amber-600">
+                        <AlertTriangle size={14} />
+                        {unmatched.length} {unmatched.length === 1 ? "category needs" : "categories need"} mapping
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Use the first family as default, or prompt
+                          const defaultFamilyId = orgFamilies[0]?.id || "";
+                          const all: typeof catMapping = {};
+                          for (const c of unmatched) all[c.csvName] = { action: "create", familyId: defaultFamilyId };
+                          setCatMapping(all);
+                        }}
+                        className="text-[10px] font-medium text-primary hover:underline"
+                      >
+                        Create All New
+                      </button>
+                    </div>
+                    {unmatched.map((cat) => {
+                      const entry = catMapping[cat.csvName] ?? { action: "create" };
+                      return (
+                        <div key={cat.csvName} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
+                          <div className="min-w-[140px]">
+                            <span className="text-sm font-medium">{cat.csvName}</span>
+                            <span className="ml-1.5 text-[10px] text-muted-foreground">({cat.productCount} items)</span>
+                          </div>
+                          <label className="flex items-center gap-1 text-xs">
+                            <input
+                              type="radio"
+                              checked={entry.action === "create"}
+                              onChange={() => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "create" } }))}
+                            />
+                            Create New
+                          </label>
+                          {entry.action === "create" && (
+                            <select
+                              value={entry.familyId ?? ""}
+                              onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { ...prev[cat.csvName], familyId: e.target.value || undefined } }))}
+                              className={cn(
+                                "rounded border bg-background px-2 py-0.5 text-xs",
+                                !entry.familyId ? "border-red-400 ring-1 ring-red-200" : "border-border",
+                              )}
+                            >
+                              <option value="">Select family…</option>
+                              {orgFamilies.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                            </select>
+                          )}
+                          <label className="flex items-center gap-1 text-xs">
+                            <input
+                              type="radio"
+                              checked={entry.action === "map"}
+                              onChange={() => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "map", targetCategoryId: "" } }))}
+                            />
+                            Map to
+                          </label>
+                          {entry.action === "map" && (
+                            <>
+                              <select
+                                value={entry.targetCategoryId ?? ""}
+                                onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "map", targetCategoryId: e.target.value, targetSubcategoryId: undefined } }))}
+                                className="rounded border border-border bg-background px-2 py-0.5 text-xs"
+                              >
+                                <option value="">Select category…</option>
+                                {orgCategories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                              </select>
+                              {entry.targetCategoryId && (() => {
+                                const subs = allSubcategories.filter((s: any) => s.categoryId === entry.targetCategoryId);
+                                return subs.length > 0 ? (
+                                  <select
+                                    value={entry.targetSubcategoryId ?? ""}
+                                    onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { ...prev[cat.csvName], targetSubcategoryId: e.target.value || undefined } }))}
+                                    className="rounded border border-border bg-background px-2 py-0.5 text-xs"
+                                  >
+                                    <option value="">No sub-category</option>
+                                    {subs.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                  </select>
+                                ) : null;
+                              })()}
+                            </>
+                          )}
+                          {/* Apply to All button — visible when row has a valid mapping */}
+                          {unmatched.length > 1 && (
+                            (entry.action === "map" && entry.targetCategoryId) ||
+                            (entry.action === "create" && entry.familyId)
+                          ) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const source = catMapping[cat.csvName];
+                                if (!source) return;
+                                setCatMapping((prev) => {
+                                  const updated = { ...prev };
+                                  for (const c of unmatched) {
+                                    if (c.csvName === cat.csvName) continue;
+                                    updated[c.csvName] = { ...source };
+                                  }
+                                  return updated;
+                                });
+                              }}
+                              className="text-[10px] font-medium text-primary hover:underline whitespace-nowrap"
+                              title="Apply this mapping to all unmapped categories"
+                            >
+                              Apply to All ↓
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Preview table */}
           <div className="rounded-lg border border-border bg-muted/50">
@@ -641,15 +807,15 @@ export default function ImportItemsPage() {
             </button>
             <button
               onClick={handleExecute}
-              disabled={hasUnmappedLocations}
+              disabled={hasUnmappedLocations || hasMissingFamilies}
               className={cn(
                 "rounded-lg px-5 py-2 text-sm font-medium transition",
-                hasUnmappedLocations
+                hasUnmappedLocations || hasMissingFamilies
                   ? "cursor-not-allowed bg-muted text-muted-foreground"
                   : "bg-blue-600 text-white hover:bg-blue-500",
               )}
             >
-              Start Import
+              {hasMissingFamilies ? "Select families for new categories" : "Start Import"}
             </button>
           </div>
         </div>
@@ -756,16 +922,32 @@ export default function ImportItemsPage() {
                 ))}
               </div>
 
-              {/* Error log download */}
+              {/* Error log download + inline display */}
               {results.errorLog && results.errorLog.length > 0 && (
-                <button
-                  onClick={handleDownloadErrors}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
-                >
-                  <Download size={14} />
-                  Download Error Log ({results.errorLog.length}{" "}
-                  {results.errorLog.length === 1 ? "error" : "errors"})
-                </button>
+                <>
+                  <button
+                    onClick={handleDownloadErrors}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
+                  >
+                    <Download size={14} />
+                    Download Error Log ({results.errorLog.length}{" "}
+                    {results.errorLog.length === 1 ? "error" : "errors"})
+                  </button>
+                  <div className="max-h-40 overflow-y-auto rounded-lg border border-red-200 bg-red-50/50 p-3">
+                    <div className="space-y-1">
+                      {results.errorLog.slice(0, 20).map((err, i) => (
+                        <p key={i} className="text-xs text-red-700 font-mono">
+                          Row {err.row}: {err.message}
+                        </p>
+                      ))}
+                      {results.errorLog.length > 20 && (
+                        <p className="text-xs text-red-500 italic">
+                          ... and {results.errorLog.length - 20} more errors (download CSV for full list)
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </>
               )}
 
               {/* Actions */}

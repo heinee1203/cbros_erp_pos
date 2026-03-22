@@ -37,7 +37,7 @@ function SkeletonInner({ width, height, borderRadius = 4, style }: SkeletonProps
     <Animated.View
       style={[
         styles.base,
-        { width, height, borderRadius, opacity },
+        { width, height, borderRadius, opacity } as any,
         style,
       ]}
     />
