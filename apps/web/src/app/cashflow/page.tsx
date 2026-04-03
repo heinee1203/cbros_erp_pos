@@ -115,21 +115,48 @@ export default function CashFlowForecastPage() {
       )}
 
       {/* Chart */}
-      <div className="mb-4 rounded-lg border border-border bg-card p-4">
-        <h3 className="mb-3 text-sm font-semibold">Weekly Cash Flow</h3>
-        <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={weeklyBuckets} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-            <XAxis dataKey="week" tick={{ fontSize: 10 }} />
-            <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => fmtPeso(v)} />
+      <div className="mb-4 rounded-xl border border-border bg-background p-6 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
+        <div className="mb-5 flex items-center justify-between">
+          <h3 className="text-[15px] font-semibold text-foreground">Weekly Cash Flow</h3>
+          <div className="flex items-center gap-4 text-[11px] text-muted-foreground">
+            <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded-sm bg-emerald-500" />Inflows</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block h-3 w-3 rounded-sm bg-rose-500" />Outflows</span>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={320}>
+          <BarChart data={weeklyBuckets} margin={{ top: 8, right: 8, left: 4, bottom: 4 }}>
+            <defs>
+              <linearGradient id="inflowGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#10B981" />
+                <stop offset="100%" stopColor="#059669" />
+              </linearGradient>
+              <linearGradient id="outflowGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#F43F5E" />
+                <stop offset="100%" stopColor="#E11D48" />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" vertical={false} />
+            <XAxis dataKey="week" tick={{ fontSize: 12, fill: "#6B7280" }} axisLine={false} tickLine={false} dy={8} />
+            <YAxis tick={{ fontSize: 11, fill: "#9CA3AF" }} axisLine={false} tickLine={false} tickFormatter={(v) => fmtPeso(v)} width={65} />
             <Tooltip
-              formatter={(value: number, name: string) => [fmtPesoFull(value), name]}
-              labelStyle={{ fontSize: 12, fontWeight: 600 }}
+              cursor={{ fill: "rgba(0,0,0,0.03)" }}
+              content={({ active, payload, label }: any) => {
+                if (!active || !payload?.length) return null;
+                return (
+                  <div style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 14px", boxShadow: "0 4px 16px rgba(0,0,0,0.10)" }}>
+                    <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 6 }}>{label}</p>
+                    {payload.map((p: any) => (
+                      <p key={p.name} style={{ fontSize: 14, fontWeight: 600, color: p.name === "Inflows" ? "#059669" : "#E11D48", marginBottom: 2 }}>
+                        {p.name}: {fmtPesoFull(Number(p.value))}
+                      </p>
+                    ))}
+                  </div>
+                );
+              }}
             />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
-            <ReferenceLine y={0} stroke="#888" strokeDasharray="3 3" />
-            <Bar dataKey="inflows" name="Inflows" fill="#22c55e" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="outflows" name="Outflows" fill="#ef4444" radius={[4, 4, 0, 0]} />
+            <ReferenceLine y={0} stroke="#D1D5DB" strokeDasharray="3 3" />
+            <Bar dataKey="inflows" name="Inflows" fill="url(#inflowGrad)" radius={[6, 6, 0, 0]} maxBarSize={48} />
+            <Bar dataKey="outflows" name="Outflows" fill="url(#outflowGrad)" radius={[6, 6, 0, 0]} maxBarSize={48} />
           </BarChart>
         </ResponsiveContainer>
       </div>

@@ -20,6 +20,9 @@ interface ServerProduct {
   brandId: string | null;
   parentProductId: string | null;
   isParent: boolean;
+  isSerialized: boolean;
+  isTire: boolean;
+  warrantyMonths: number | null;
   updatedAt: string;
 }
 
@@ -53,6 +56,9 @@ function mapProductFields(record: any, item: ServerProduct) {
   record.brandId = item.brandId;
   record.parentProductId = item.parentProductId;
   record.isParent = item.isParent;
+  record.isSerialized = item.isSerialized ?? false;
+  record.isTire = item.isTire ?? false;
+  record.warrantyMonths = item.warrantyMonths ?? null;
   record.serverUpdatedAt = new Date(item.updatedAt).getTime();
 }
 

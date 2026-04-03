@@ -72,19 +72,31 @@ export async function listVariants(
       .where(eq(productVariantOptions.productId, v.id))
       .orderBy(productOptionTypes.sortOrder);
 
-    const [inv] = await db
-      .select({ stockLevel: inventory.stockLevel })
-      .from(inventory)
-      .where(and(
-        eq(inventory.productId, v.id),
-        ...(locationId ? [eq(inventory.locationId, locationId)] : []),
-      ))
-      .limit(1);
+    let stockLevel = 0;
+    if (locationId) {
+      // Specific location: get stock at that location
+      const [inv] = await db
+        .select({ stockLevel: inventory.stockLevel })
+        .from(inventory)
+        .where(and(
+          eq(inventory.productId, v.id),
+          eq(inventory.locationId, locationId),
+        ))
+        .limit(1);
+      stockLevel = inv?.stockLevel ?? 0;
+    } else {
+      // All locations: SUM across all locations
+      const [inv] = await db
+        .select({ totalStock: sql<number>`COALESCE(SUM(${inventory.stockLevel}), 0)::int` })
+        .from(inventory)
+        .where(eq(inventory.productId, v.id));
+      stockLevel = inv?.totalStock ?? 0;
+    }
 
     result.push({
       ...v,
       options,
-      stockLevel: inv?.stockLevel ?? 0,
+      stockLevel,
     });
   }
 

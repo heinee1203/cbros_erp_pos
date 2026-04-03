@@ -37,6 +37,11 @@ export interface ProductRow {
   reorderEnabled: boolean;
   customReorderPoint: number | null;
   isSerialized: boolean;
+  isTire: boolean;
+  specialOrder: boolean;
+  discontinued: boolean;
+  /** Parent product name — populated for variants via subquery */
+  parentName?: string | null;
 }
 
 export interface ProductsResponse {
@@ -78,6 +83,8 @@ export interface ProductListFilters {
   grouped?: boolean;
   parentOnly?: boolean;
   allLocations?: boolean;
+  excludeSO?: boolean;
+  excludeDC?: boolean;
 }
 
 /* ─────────────────────────────────────────────
@@ -105,6 +112,8 @@ export function useProducts(
     grouped = false,
     parentOnly = false,
     allLocations = false,
+    excludeSO = false,
+    excludeDC = false,
   } = filters;
 
   return useQuery<ProductsResponse>({
@@ -126,6 +135,8 @@ export function useProducts(
       grouped,
       parentOnly,
       allLocations,
+      excludeSO,
+      excludeDC,
     ],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -145,6 +156,8 @@ export function useProducts(
       if (grouped) params.set("grouped", "true");
       if (parentOnly) params.set("parentOnly", "true");
       if (allLocations) params.set("allLocations", "true");
+      if (excludeSO) params.set("excludeSO", "true");
+      if (excludeDC) params.set("excludeDC", "true");
 
       return apiFetch<ProductsResponse>(
         `/products?${params.toString()}`,

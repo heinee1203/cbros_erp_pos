@@ -360,7 +360,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
 
     return {
       header: {
-        storeName: location?.name || 'APEX AUTO PARTS',
+        storeName: location?.name || 'CBROS GENUINE AUTOPARTS',
         address: location?.address || undefined,
       },
       transaction: {

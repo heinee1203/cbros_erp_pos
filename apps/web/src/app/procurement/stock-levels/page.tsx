@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Warehouse,
   Search,
@@ -15,16 +17,39 @@ import {
   PackageX,
   ShieldAlert,
   Archive,
+  ShoppingCart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { timeAgo } from "@/lib/format";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/app/auth-context";
+import { ModalShell } from "@/app/inventory/components/modal-shell";
+import Link from "next/link";
 import {
   useStockLevels,
+  useProductStockLevels,
   type StockLevelRow,
   type StockLevelsSummary,
+  type ProductStockRow,
+  type ProductStockSummary,
   type SortField,
   type SortDir,
 } from "@/hooks/use-stock-levels";
+import { useProductFamilies } from "@/hooks/use-products";
+import { useCategories } from "@/hooks/use-categories";
+import { useSubcategories } from "@/hooks/use-subcategories";
+
+/* ═══════════════════════════════════════════════════════
+ * REORDER TYPES (same as dashboard)
+ * ═══════════════════════════════════════════════════════ */
+
+interface PendingOrdersData {
+  draftPOs: { poId: string; poNumber: string; supplierId: string; supplierName: string; quantity: number; status: string }[];
+  submittedPOs: { poId: string; poNumber: string; supplierId: string; supplierName: string; quantityOrdered: number; quantityReceived: number; quantityRemaining: number; status: string }[];
+  backorders: { backorderId: string; sourcePoNumber: string; supplierId: string; supplierName: string; quantityOutstanding: number; status: string; waitUntil: string | null }[];
+  lastSupplier: { supplierId: string; supplierName: string; lastCost: string; lastPoNumber: string; lastPoDate: string } | null;
+  suggestedQty: number;
+}
 
 /* ═══════════════════════════════════════════════════════
  * CONSTANTS
@@ -50,19 +75,52 @@ const STATUS_STYLES: Record<string, string> = {
  * ═══════════════════════════════════════════════════════ */
 
 export default function StockLevelsPage() {
-  const { token, locationId, loading: authLoading } = useAuth();
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center py-32 text-muted-foreground text-sm">Loading...</div>}>
+      <StockLevelsInner />
+    </Suspense>
+  );
+}
+
+function StockLevelsInner() {
+  const { token, locationId, apiLocationId, loading: authLoading } = useAuth();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
+  const urlBelowReorder = searchParams.get("belowReorder") === "true";
+
+  // ── View mode ──
+  const [viewMode, setViewMode] = useState<"product" | "location">("product");
 
   // ── Filter state ──
   const [allLocations, setAllLocations] = useState(false);
+  const [familyFilter, setFamilyFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [subcategoryFilter, setSubcategoryFilter] = useState("all");
   const [stockStatusFilter, setStockStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [belowReorder, setBelowReorder] = useState(false);
+  const [belowReorder, setBelowReorder] = useState(urlBelowReorder);
 
-  // ── Sort state ──
-  const [sortBy, setSortBy] = useState<SortField>("name");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  // ── Taxonomy data ──
+  const familiesQuery = useProductFamilies(token ?? "", locationId ?? "");
+  const categoriesQuery = useCategories(token ?? "", locationId ?? "", {});
+  const subcategoriesQuery = useSubcategories(token ?? "", locationId ?? "");
+  const allFamilies = familiesQuery.data?.data ?? [];
+  const allCategories = categoriesQuery.data?.data ?? [];
+  const allSubcategories = subcategoriesQuery.data?.data ?? [];
+
+  // Cascading filters
+  const filteredCategories = familyFilter !== "all"
+    ? allCategories.filter((c: any) => c.familyId === familyFilter)
+    : allCategories;
+  const filteredSubcategories = categoryFilter !== "all"
+    ? allSubcategories.filter((s: any) => s.categoryId === categoryFilter)
+    : allSubcategories;
+
+  // ── Sort state — default to last sold (most recent first) when below-reorder filter is active ──
+  const [sortBy, setSortBy] = useState<SortField>(urlBelowReorder ? "lastSoldAt" : "name");
+  const [sortDir, setSortDir] = useState<SortDir>(urlBelowReorder ? "desc" : "asc");
 
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -83,16 +141,8 @@ export default function StockLevelsPage() {
     );
   };
 
-  // ── Query ──
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-    isError,
-    error,
-  } = useStockLevels(token, locationId, {
+  // ── Queries ──
+  const locationQuery = useStockLevels(token, locationId, {
     allLocations,
     search: debouncedSearch || undefined,
     category: categoryFilter !== "all" ? categoryFilter : undefined,
@@ -102,31 +152,127 @@ export default function StockLevelsPage() {
     sortDir,
   });
 
-  // Flatten pages
+  const productQuery = useProductStockLevels(token, locationId, {
+    search: debouncedSearch || undefined,
+    familyId: familyFilter !== "all" ? familyFilter : undefined,
+    categoryId: categoryFilter !== "all" ? categoryFilter : undefined,
+    subcategoryId: subcategoryFilter !== "all" ? subcategoryFilter : undefined,
+    stockStatus: stockStatusFilter !== "all" ? (stockStatusFilter as any) : undefined,
+    belowReorder: belowReorder || undefined,
+    sortBy,
+    sortDir,
+  });
+
+  // Active query based on view mode
+  const activeQuery = viewMode === "product" ? productQuery : locationQuery;
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError, error } = activeQuery;
+  const data = activeQuery.data;
+
+  // Flatten pages — location view rows
   const rows = useMemo(
-    () => data?.pages.flatMap((page) => page.data) ?? [],
-    [data],
+    () => viewMode === "location" ? (locationQuery.data?.pages.flatMap((page) => page.data) ?? []) : [],
+    [locationQuery.data, viewMode],
   );
 
-  // Summary from the first (most recent) page
-  const summary: StockLevelsSummary | null = data?.pages[0]?.summary ?? null;
+  // Flatten pages — product view rows
+  const productRows = useMemo(
+    () => viewMode === "product" ? (productQuery.data?.pages.flatMap((page) => page.data) ?? []) : [],
+    [productQuery.data, viewMode],
+  );
+
+  // Summary
+  const summary: StockLevelsSummary | null = viewMode === "location" ? (locationQuery.data?.pages[0]?.summary ?? null) : null;
+  const productSummary: ProductStockSummary | null = viewMode === "product" ? (productQuery.data?.pages[0]?.summary ?? null) : null;
+
+  // ── Reorder state ──
+  const [reorderModal, setReorderModal] = useState<{ item: { productId: string; productName: string }; data: PendingOrdersData } | null>(null);
+  const [reorderLoading, setReorderLoading] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const handleReorder = useCallback(async (productId: string, productName: string) => {
+    if (!token || !locationId) return;
+    setReorderLoading(productId);
+    try {
+      const pendingData = await apiFetch<PendingOrdersData>(`/products/${productId}/pending-orders`, { token, locationId });
+      const hasExisting = pendingData.draftPOs.length > 0 || pendingData.submittedPOs.length > 0 || pendingData.backorders.length > 0;
+      if (hasExisting) {
+        setReorderModal({ item: { productId, productName }, data: pendingData });
+      } else {
+        await addToDraftPO(productId, productName, pendingData.lastSupplier, pendingData.suggestedQty);
+      }
+    } catch {
+      // user can retry
+    } finally {
+      setReorderLoading(null);
+    }
+  }, [token, locationId]);
+
+  const addToDraftPO = useCallback(async (
+    productId: string,
+    productName: string,
+    lastSupplier: PendingOrdersData["lastSupplier"],
+    suggestedQty: number,
+  ) => {
+    if (!token || !locationId) return;
+    if (!lastSupplier) {
+      router.push(`/procurement/purchase-orders/new?productId=${productId}&qty=${suggestedQty}`);
+      return;
+    }
+    const drafts = await apiFetch<{ data: { id: string; poNo: string }[] }>(
+      `/procurement/purchase-orders?status=DRAFT&supplierId=${lastSupplier.supplierId}&limit=1`,
+      { token, locationId },
+    );
+    if (drafts.data && drafts.data.length > 0) {
+      const draft = drafts.data[0];
+      await apiFetch(`/procurement/purchase-orders/${draft.id}/lines`, {
+        token, locationId,
+        method: "POST",
+        body: JSON.stringify({ productId, orderedQty: suggestedQty, unitCost: lastSupplier.lastCost }),
+      });
+      setReorderModal(null);
+      setSuccessMsg(`Added ${suggestedQty} units to ${draft.poNo}`);
+      setTimeout(() => setSuccessMsg(null), 4000);
+      router.push(`/procurement/purchase-orders/${draft.poNo}`);
+    } else {
+      setReorderModal(null);
+      const params = new URLSearchParams({ productId, qty: String(suggestedQty), supplierId: lastSupplier.supplierId, unitCost: lastSupplier.lastCost });
+      router.push(`/procurement/purchase-orders/new?${params.toString()}`);
+    }
+  }, [token, locationId, router]);
+
+  const handleSnooze = useCallback(async (productId: string, days: number) => {
+    if (!token || !locationId) return;
+    await apiFetch(`/products/${productId}/snooze-reorder`, {
+      token, locationId,
+      method: "POST",
+      body: JSON.stringify({ days }),
+    });
+    setReorderModal(null);
+    setSuccessMsg(`Snoozed for ${days} days`);
+    setTimeout(() => setSuccessMsg(null), 4000);
+    queryClient.invalidateQueries({ queryKey: ["stock-levels"] });
+    queryClient.invalidateQueries({ queryKey: ["stock-levels-product"] });
+  }, [token, locationId, queryClient]);
 
   // Build dynamic category list from loaded data
   const uniqueCategories = useMemo(() => {
-    const cats = new Set(rows.map((r) => r.category).filter(Boolean));
+    const allRows = viewMode === "product" ? productRows : rows;
+    const cats = new Set(allRows.map((r) => r.category).filter(Boolean));
     return Array.from(cats).sort();
-  }, [rows]);
-
-  const totalLoaded = rows.length;
+  }, [rows, productRows, viewMode]);
 
   const hasActiveFilters =
+    familyFilter !== "all" ||
     categoryFilter !== "all" ||
+    subcategoryFilter !== "all" ||
     stockStatusFilter !== "all" ||
     searchQuery !== "" ||
     belowReorder;
 
   const clearFilters = () => {
+    setFamilyFilter("all");
     setCategoryFilter("all");
+    setSubcategoryFilter("all");
     setStockStatusFilter("all");
     setSearchQuery("");
     setDebouncedSearch("");
@@ -142,7 +288,7 @@ export default function StockLevelsPage() {
     );
   }
 
-  return (
+  return (<>
     <div className="flex h-full flex-col">
       {/* ── Page Header ── */}
       <div className="border-b border-border bg-background px-6 py-5">
@@ -162,12 +308,63 @@ export default function StockLevelsPage() {
       </div>
 
       {/* ── Summary Strip ── */}
-      {summary && <SummaryStrip summary={summary} />}
+      {viewMode === "product" && productSummary && (
+        <div className="grid grid-cols-5 border-b border-border bg-muted/30">
+          {([
+            { label: "Products", value: productSummary.totalProducts.toLocaleString() },
+            { label: "In Stock", value: productSummary.inStock.toLocaleString(), color: "text-success" },
+            { label: "Low Stock", value: productSummary.lowStock.toLocaleString(), color: "text-warning" },
+            { label: "Out of Stock", value: productSummary.outOfStock.toLocaleString(), color: "text-destructive" },
+            { label: "Below Reorder", value: productSummary.belowReorder.toLocaleString(), color: "text-orange-500" },
+          ]).map((card) => (
+            <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-3">
+              <div className={`text-lg font-bold tabular-nums ${card.color || "text-foreground"}`}>
+                {card.value}
+              </div>
+              <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{card.label}</div>
+            </div>
+          ))}
+        </div>
+        {productSummary.totalCostValue > 0 && (
+          <div className="grid grid-cols-3 border-b border-border bg-muted/20">
+            {([
+              { label: "Total Cost Value", value: `₱${productSummary.totalCostValue.toLocaleString("en-PH", { maximumFractionDigits: 0 })}` },
+              { label: "Total Sell Value", value: `₱${productSummary.totalSellValue.toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-primary" },
+              { label: "Potential Margin", value: `₱${(productSummary.totalSellValue - productSummary.totalCostValue).toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-success" },
+            ]).map((card) => (
+              <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-2.5">
+                <div className={`text-base font-bold tabular-nums ${card.color || "text-foreground"}`}>
+                  {card.value}
+                </div>
+                <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{card.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      )}
+      {viewMode === "location" && summary && <SummaryStrip summary={summary} />}
 
       {/* ── Filter Bar ── */}
       <div className="border-b border-border bg-background/50 px-6 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          {/* Scope Toggle */}
+          {/* View Toggle */}
+          <div className="flex rounded-md border border-border">
+            <button
+              onClick={() => setViewMode("product")}
+              className={`h-8 px-3 text-xs font-medium transition-colors ${viewMode === "product" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}
+            >
+              By Product
+            </button>
+            <button
+              onClick={() => setViewMode("location")}
+              className={`h-8 px-3 text-xs font-medium border-l border-border transition-colors ${viewMode === "location" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}
+            >
+              By Location
+            </button>
+          </div>
+
+          {/* Scope Toggle (location view only) */}
+          {viewMode === "location" && (
           <button
             onClick={() => setAllLocations(!allLocations)}
             className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
@@ -178,17 +375,35 @@ export default function StockLevelsPage() {
           >
             {allLocations ? "All Locations" : "Current Location"}
           </button>
+          )}
+
+          {/* Family */}
+          <FilterSelect
+            value={familyFilter}
+            onChange={(v) => { setFamilyFilter(v); setCategoryFilter("all"); setSubcategoryFilter("all"); }}
+            options={[
+              { value: "all", label: "All Families" },
+              ...allFamilies.map((f: any) => ({ value: f.id, label: f.name })),
+            ]}
+          />
 
           {/* Category */}
           <FilterSelect
             value={categoryFilter}
-            onChange={setCategoryFilter}
+            onChange={(v) => { setCategoryFilter(v); setSubcategoryFilter("all"); }}
             options={[
               { value: "all", label: "All Categories" },
-              ...uniqueCategories.map((c) => ({
-                value: c,
-                label: c,
-              })),
+              ...filteredCategories.map((c: any) => ({ value: c.id, label: c.name })),
+            ]}
+          />
+
+          {/* Sub-category */}
+          <FilterSelect
+            value={subcategoryFilter}
+            onChange={setSubcategoryFilter}
+            options={[
+              { value: "all", label: "All Sub-categories" },
+              ...filteredSubcategories.map((s: any) => ({ value: s.id, label: s.name })),
             ]}
           />
 
@@ -255,6 +470,94 @@ export default function StockLevelsPage() {
               {(error as any)?.message ?? "Check API connection"}
             </p>
           </div>
+        ) : viewMode === "product" ? (
+          productRows.length === 0 ? (
+            <EmptyState hasFilters={hasActiveFilters} />
+          ) : (
+            <div className={`transition-opacity ${isFetchingNextPage ? "opacity-60" : ""}`}>
+            <table className="w-full text-left text-sm">
+              <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">Item</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">SKU</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">Category</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Stock</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Reorder Pt</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Sell Rate</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Days Left</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Last Sold</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {productRows.map((row, i) => {
+                  const isOut = row.status === "OUT_OF_STOCK";
+                  const isLow = row.status === "LOW_STOCK";
+                  const statusStyle = STATUS_STYLES[row.status] ?? "bg-muted text-muted-foreground";
+                  const daysLeft = row.daysOfStock != null ? Math.round(row.daysOfStock) : null;
+                  return (
+                    <tr key={`${row.productId}-${row.productSku}-${i}`} className="group transition-colors hover:bg-muted/30">
+                      <td className="min-w-[200px] px-4 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <Link href={`/inventory?search=${encodeURIComponent(row.productSku)}`} className="whitespace-normal break-words text-sm font-medium text-foreground hover:underline">
+                            {row.productName}
+                          </Link>
+                          {row.pendingOrderCount > 0 && (
+                            <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">PO</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{row.productSku}</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{row.category}</td>
+                      <td className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm ${isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"}`}>
+                        {row.totalStock.toLocaleString()}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+                        {row.reorderPoint.toLocaleString()}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+                        {row.sold1m > 0 ? `${row.sold1m} /mo` : "\u2014"}
+                      </td>
+                      <td className={cn(
+                        "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium",
+                        daysLeft === null ? "text-muted-foreground/50" :
+                        daysLeft <= 7 ? "text-destructive" :
+                        daysLeft <= 14 ? "text-orange-500" :
+                        daysLeft <= 30 ? "text-amber-500" :
+                        "text-emerald-600",
+                      )}>
+                        {daysLeft === null ? "\u221E" : `${daysLeft}d`}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-muted-foreground">
+                        {row.lastSoldAt ? timeAgo(row.lastSoldAt) : "\u2014"}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5">
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${statusStyle}`}>
+                          {isOut && <PackageX size={11} />}
+                          {isLow && <AlertTriangle size={11} />}
+                          {STATUS_LABELS[row.status] ?? row.status}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right">
+                        {(isLow || isOut) && (
+                          <button
+                            onClick={() => handleReorder(row.productId, row.productName)}
+                            disabled={reorderLoading === row.productId}
+                            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                          >
+                            {reorderLoading === row.productId ? <Loader2 size={11} className="animate-spin" /> : <ShoppingCart size={11} />}
+                            Reorder
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            </div>
+          )
         ) : rows.length === 0 ? (
           <EmptyState hasFilters={hasActiveFilters} />
         ) : (
@@ -270,13 +573,16 @@ export default function StockLevelsPage() {
                 <SortHeader label="Reserved" field="reservedLevel" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Available" field="available" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Reorder Pt" field="reorderPoint" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Optimal</th>
+                <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Sell Rate</th>
+                <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Days Left</th>
+                <SortHeader label="Last Sold" field="lastSoldAt" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Status" field="status" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
+                <th className="px-4 py-2.5" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map((row) => (
-                <StockRow key={row.id} row={row} />
+                <StockRow key={row.id} row={row} onReorder={handleReorder} reorderLoading={reorderLoading} />
               ))}
             </tbody>
           </table>
@@ -288,8 +594,10 @@ export default function StockLevelsPage() {
       <div className="border-t border-border bg-background px-6 py-2.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
-            {totalLoaded}
-            {summary ? ` of ${summary.totalSkus.toLocaleString()}` : ""} item{totalLoaded !== 1 ? "s" : ""} loaded
+            {viewMode === "product"
+              ? `${productRows.length}${productSummary ? ` of ${productSummary.totalProducts.toLocaleString()}` : ""} product${productRows.length !== 1 ? "s" : ""} loaded`
+              : `${rows.length}${summary ? ` of ${summary.totalSkus.toLocaleString()}` : ""} item${rows.length !== 1 ? "s" : ""} loaded`
+            }
             {hasActiveFilters ? " (filtered)" : ""}
             {hasNextPage ? " — more available" : ""}
           </span>
@@ -315,6 +623,113 @@ export default function StockLevelsPage() {
         </div>
       </div>
     </div>
+
+    {/* Success toast */}
+    {successMsg && (
+      <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[13px] font-medium text-emerald-800 shadow-lg animate-in slide-in-from-bottom-2">
+        {successMsg}
+      </div>
+    )}
+
+    {/* Reorder modal */}
+    {reorderModal && (
+      <StockLevelReorderModal
+        item={reorderModal.item}
+        data={reorderModal.data}
+        onDismiss={() => setReorderModal(null)}
+        onAddToExisting={(po) => { setReorderModal(null); router.push(`/procurement/purchase-orders/${po.poNumber}`); }}
+        onCreateNew={() => addToDraftPO(reorderModal.item.productId, reorderModal.item.productName, reorderModal.data.lastSupplier, reorderModal.data.suggestedQty)}
+        onSnooze={(days) => handleSnooze(reorderModal.item.productId, days)}
+      />
+    )}
+  </>);
+}
+
+/* ═══════════════════════════════════════════════════════
+ * REORDER MODAL
+ * ═══════════════════════════════════════════════════════ */
+
+function StockLevelReorderModal({
+  item,
+  data,
+  onDismiss,
+  onAddToExisting,
+  onCreateNew,
+  onSnooze,
+}: {
+  item: { productId: string; productName: string };
+  data: PendingOrdersData;
+  onDismiss: () => void;
+  onAddToExisting: (po: PendingOrdersData["draftPOs"][0]) => void;
+  onCreateNew: () => void;
+  onSnooze: (days: number) => void;
+}) {
+  const [showSnooze, setShowSnooze] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const handleAction = async (fn: () => Promise<void> | void) => {
+    setActionLoading(true);
+    try { await fn(); } catch { /* parent handles */ }
+    setActionLoading(false);
+  };
+
+  return (
+    <ModalShell title={`Reorder: ${item.productName}`} onClose={onDismiss} wide>
+      <div className="space-y-2 mb-4">
+        <p className="text-[12px] font-medium text-amber-600 flex items-center gap-1.5">
+          <AlertTriangle size={13} />
+          This item has pending orders:
+        </p>
+        {data.draftPOs.map((po) => (
+          <div key={po.poId} className="flex justify-between text-[12px] bg-muted/50 p-2 rounded">
+            <span>{po.poNumber} <span className="text-muted-foreground">(Draft)</span> — {po.quantity} units</span>
+            <span className="text-muted-foreground">{po.supplierName}</span>
+          </div>
+        ))}
+        {data.submittedPOs.map((po) => (
+          <div key={po.poId} className="flex justify-between text-[12px] bg-blue-50 dark:bg-blue-950/20 p-2 rounded">
+            <span>{po.poNumber} <span className="text-muted-foreground">({po.status})</span> — {po.quantityRemaining} remaining</span>
+            <span className="text-muted-foreground">{po.supplierName}</span>
+          </div>
+        ))}
+        {data.backorders.map((bo) => (
+          <div key={bo.backorderId} className="flex justify-between text-[12px] bg-orange-50 dark:bg-orange-950/20 p-2 rounded">
+            <span>Backorder{bo.sourcePoNumber ? ` from ${bo.sourcePoNumber}` : ""} — {bo.quantityOutstanding} pending</span>
+            <span className="text-muted-foreground">{bo.supplierName}</span>
+          </div>
+        ))}
+      </div>
+      <div className="text-[12px] text-muted-foreground mb-5">
+        Suggested reorder qty: <strong className="text-foreground">{data.suggestedQty}</strong>
+      </div>
+      <div className="flex items-center gap-2 justify-end flex-wrap">
+        <button onClick={onDismiss} className="px-3 py-1.5 border border-border rounded-md text-[12px] font-medium hover:bg-muted transition-colors">
+          Dismiss
+        </button>
+        <div className="relative">
+          <button onClick={() => setShowSnooze(!showSnooze)} className="flex items-center gap-1 px-3 py-1.5 border border-border rounded-md text-[12px] font-medium hover:bg-muted transition-colors">
+            Snooze <ChevronDown size={12} />
+          </button>
+          {showSnooze && (
+            <div className="absolute bottom-full mb-1 right-0 bg-background border border-border rounded-md shadow-lg z-10 min-w-[100px]">
+              {[7, 14, 30, 90].map((days) => (
+                <button key={days} onClick={() => { setShowSnooze(false); onSnooze(days); }} className="block w-full px-3 py-1.5 text-[12px] text-left hover:bg-muted transition-colors first:rounded-t-md last:rounded-b-md">
+                  {days} days
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {data.draftPOs.length > 0 && (
+          <button onClick={() => onAddToExisting(data.draftPOs[0])} className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-[12px] font-medium hover:bg-blue-700 transition-colors">
+            View {data.draftPOs[0].poNumber}
+          </button>
+        )}
+        <button onClick={() => handleAction(onCreateNew)} disabled={actionLoading} className="px-3 py-1.5 bg-emerald-600 text-white rounded-md text-[12px] font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50">
+          Create New PO
+        </button>
+      </div>
+    </ModalShell>
   );
 }
 
@@ -367,6 +782,29 @@ function SummaryStrip({ summary }: { summary: StockLevelsSummary }) {
           value={summary.totalReserved.toLocaleString()}
           color="text-muted-foreground"
         />
+        {summary.totalCostValue > 0 && (
+          <>
+            <div className="h-5 w-px bg-border" />
+            <SummaryChip
+              icon={<ShoppingCart size={13} />}
+              label="Cost Value"
+              value={`₱${summary.totalCostValue.toLocaleString("en-PH", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+              color="text-foreground"
+            />
+            <SummaryChip
+              icon={<ShoppingCart size={13} />}
+              label="Sell Value"
+              value={`₱${summary.totalSellValue.toLocaleString("en-PH", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+              color="text-primary"
+            />
+            <SummaryChip
+              icon={<ShoppingCart size={13} />}
+              label="Potential Margin"
+              value={`₱${(summary.totalSellValue - summary.totalCostValue).toLocaleString("en-PH", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+              color="text-success"
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -408,7 +846,7 @@ function SummaryChip({
  * TABLE ROW
  * ═══════════════════════════════════════════════════════ */
 
-function StockRow({ row }: { row: StockLevelRow }) {
+function StockRow({ row, onReorder, reorderLoading }: { row: StockLevelRow; onReorder: (productId: string, productName: string) => void; reorderLoading: string | null }) {
   const catLabel = row.category || "Uncategorized";
   const catStyle = "bg-muted text-muted-foreground";
   const statusLabel = STATUS_LABELS[row.status] ?? row.status;
@@ -417,16 +855,22 @@ function StockRow({ row }: { row: StockLevelRow }) {
   const isLow = row.status === "LOW_STOCK";
   const isOut = row.status === "OUT_OF_STOCK";
   const unitSuffix = row.sellingUnit && row.sellingUnit !== "piece" ? ` ${row.sellingUnit}` : "";
+  const daysLeft = row.daysOfStock != null ? Math.round(row.daysOfStock) : null;
 
   return (
     <tr className="group transition-colors hover:bg-muted/30">
       {/* Product */}
-      <td className="max-w-[240px] px-4 py-2.5">
-        <div className="truncate text-sm font-medium text-foreground" title={row.productName}>
-          {row.productName}
+      <td className="min-w-[200px] px-4 py-2.5">
+        <div className="flex items-center gap-1.5">
+          <Link href={`/inventory?search=${encodeURIComponent(row.productSku)}`} className="whitespace-normal break-words text-sm font-medium text-foreground hover:underline">
+            {row.productName}
+          </Link>
+          {row.pendingOrderCount > 0 && (
+            <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">PO</span>
+          )}
         </div>
         {row.familyName && (
-          <div className="truncate text-[10px] text-muted-foreground">{row.familyName}</div>
+          <div className="text-[10px] text-muted-foreground">{row.familyName}</div>
         )}
       </td>
 
@@ -437,9 +881,7 @@ function StockRow({ row }: { row: StockLevelRow }) {
 
       {/* Category Badge */}
       <td className="whitespace-nowrap px-4 py-2.5">
-        <span
-          className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-medium ${catStyle}`}
-        >
+        <span className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-medium ${catStyle}`}>
           {catLabel}
         </span>
       </td>
@@ -450,25 +892,17 @@ function StockRow({ row }: { row: StockLevelRow }) {
       </td>
 
       {/* On Hand */}
-      <td
-        className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm ${
-          isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"
-        }`}
-      >
+      <td className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm ${isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"}`}>
         {row.stockLevel.toLocaleString()}{unitSuffix}
       </td>
 
       {/* Reserved */}
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
-        {row.reservedLevel > 0 ? `${row.reservedLevel.toLocaleString()}${unitSuffix}` : "—"}
+        {row.reservedLevel > 0 ? `${row.reservedLevel.toLocaleString()}${unitSuffix}` : "\u2014"}
       </td>
 
       {/* Available */}
-      <td
-        className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium ${
-          isOut ? "text-destructive" : isLow ? "text-warning" : "text-foreground"
-        }`}
-      >
+      <td className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium ${isOut ? "text-destructive" : isLow ? "text-warning" : "text-foreground"}`}>
         {row.available.toLocaleString()}{unitSuffix}
       </td>
 
@@ -477,26 +911,49 @@ function StockRow({ row }: { row: StockLevelRow }) {
         {row.reorderPoint.toLocaleString()}{unitSuffix}
       </td>
 
-      {/* Optimal Stock */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">
-        {row.optimalStock > 0 ? (
-          <span className={row.stockLevel < row.optimalStock ? "text-amber-600 font-medium" : "text-muted-foreground"}>
-            {row.optimalStock.toLocaleString()}{unitSuffix}
-          </span>
-        ) : (
-          <span className="text-muted-foreground/50">—</span>
-        )}
+      {/* Sell Rate */}
+      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+        {row.sold1m > 0 ? `${row.sold1m} /mo` : "\u2014"}
+      </td>
+
+      {/* Days Left */}
+      <td className={cn(
+        "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium",
+        daysLeft === null ? "text-muted-foreground/50" :
+        daysLeft <= 7 ? "text-destructive" :
+        daysLeft <= 14 ? "text-orange-500" :
+        daysLeft <= 30 ? "text-amber-500" :
+        "text-emerald-600",
+      )}>
+        {daysLeft === null ? "\u221E" : `${daysLeft}d`}
+      </td>
+
+      {/* Last Sold */}
+      <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-muted-foreground">
+        {row.lastSoldAt ? timeAgo(row.lastSoldAt) : "\u2014"}
       </td>
 
       {/* Status Badge */}
       <td className="whitespace-nowrap px-4 py-2.5">
-        <span
-          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${statusStyle}`}
-        >
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${statusStyle}`}>
           {isOut && <PackageX size={11} />}
           {isLow && <AlertTriangle size={11} />}
           {statusLabel}
         </span>
+      </td>
+
+      {/* Reorder */}
+      <td className="whitespace-nowrap px-4 py-2.5 text-right">
+        {(isLow || isOut) && (
+          <button
+            onClick={() => onReorder(row.productId, row.productName)}
+            disabled={reorderLoading === row.productId}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+          >
+            {reorderLoading === row.productId ? <Loader2 size={11} className="animate-spin" /> : <ShoppingCart size={11} />}
+            Reorder
+          </button>
+        )}
       </td>
     </tr>
   );

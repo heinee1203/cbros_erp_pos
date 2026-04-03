@@ -22,6 +22,7 @@ import {
   NEGATIVE_ONLY_REASON_CODES,
   RESTRICTED_REASON_CODES,
 } from "@apex/types";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { useAdjustmentMutation } from "@/hooks/use-adjustment-mutation";
 import type { AdjustmentMutationStatus } from "@/hooks/use-adjustment-mutation";
 import { useAuth } from "@/app/auth-context";
@@ -204,22 +205,10 @@ export default function StockAdjustmentsPage() {
             ]}
           />
 
-          {/* Date From */}
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="h-8 rounded-md border border-border bg-background px-2.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 [&::-webkit-calendar-picker-indicator]:opacity-50"
-            title="From date"
-          />
-
-          {/* Date To */}
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="h-8 rounded-md border border-border bg-background px-2.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 [&::-webkit-calendar-picker-indicator]:opacity-50"
-            title="To date"
+          <DateRangePicker
+            startDate={dateFrom}
+            endDate={dateTo}
+            onChange={(start, end) => { setDateFrom(start); setDateTo(end); }}
           />
 
           {/* Search */}

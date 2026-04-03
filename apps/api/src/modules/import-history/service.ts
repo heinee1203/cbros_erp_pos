@@ -360,19 +360,37 @@ export async function parseLoyverseHistory(
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
 
+  // Collect unmatched SKUs
+  const unmatchedSkuSet = new Set<string>();
+  for (const row of parsedRows) {
+    if (!row.productId && row.sku) unmatchedSkuSet.add(row.sku);
+  }
+
+  // Build reasonBreakdown as array for frontend
+  const reasonBreakdownArray = Object.entries(reasonBreakdown).map(([reason, count]) => ({
+    reason,
+    count: count as number,
+  }));
+
   return {
     previewToken,
-    totalRows: parsedRows.length,
-    dateRange: minDate && maxDate
-      ? { from: minDate.toISOString(), to: maxDate.toISOString() }
-      : null,
-    reasonBreakdown,
-    locationMapping,
-    skuMatchRate: {
-      matched: skuMatched,
-      unmatched: skuUnmatched,
-      total: skuMatched + skuUnmatched,
+    // Nested under 'summary' to match frontend PreviewResponse interface
+    summary: {
+      totalRows: parsedRows.length,
+      dateRange: minDate && maxDate
+        ? { from: minDate.toISOString(), to: maxDate.toISOString() }
+        : { from: "", to: "" },
+      reasonBreakdown: reasonBreakdownArray,
+      skuMatchRate: parsedRows.length > 0 ? skuMatched / (skuMatched + skuUnmatched) : 0,
+      matchedSkus: skuMatched,
+      totalSkus: skuMatched + skuUnmatched,
+      unmatchedSkus: [...unmatchedSkuSet],
     },
+    // Location mapping as 'locations' array
+    locations: locationMapping.map((lm) => ({
+      ...lm,
+      matched: !!lm.apexLocationId,
+    })),
     errors,
     preview: parsedRows.slice(0, 100).map((r) => ({
       rowIndex: r.rowIndex,

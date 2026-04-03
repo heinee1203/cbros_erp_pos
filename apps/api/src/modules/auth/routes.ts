@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { registerSchema, loginSchema } from "@apex/types";
 import { createOrganizationWithAdmin, authenticateUser, verifyPin } from "./service";
 import { getUserPermissions } from "../rbac/service";
+import { logAction } from "../audit/service";
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/register", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
@@ -78,6 +79,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         { expiresIn: "24h" },
       );
 
+      logAction({ orgId: user.orgId, userId: user.id, action: "LOGIN", details: { email: user.email }, ipAddress: request.ip });
       return reply.send({
         token,
         user: {

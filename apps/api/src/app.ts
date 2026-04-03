@@ -35,6 +35,7 @@ import { returnsRoutes } from "./modules/returns/routes";
 import { supplierReturnsRoutes } from "./modules/supplier-returns/routes";
 import { backorderRoutes } from "./modules/backorders/routes";
 import { serialRoutes } from "./modules/serials/routes";
+import { dotBatchRoutes } from "./modules/dot-batches/routes";
 import { importRoutes } from "./modules/import/routes";
 import { importHistoryRoutes } from "./modules/import-history/routes";
 import { pricingRoutes } from "./modules/pricing/routes";
@@ -47,6 +48,9 @@ import { cashflowRoutes } from "./modules/cashflow/routes";
 import { promoRoutes } from "./modules/promos/routes";
 import { deviceRoutes } from "./modules/devices/routes";
 import { rbacRoutes } from "./modules/rbac/routes";
+import { vehicleRoutes } from "./modules/vehicles/routes";
+import { printingRoutes } from "./modules/printing/routes";
+import auditRoutes from "./modules/audit/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const JWT_SECRET = process.env.JWT_SECRET;
@@ -70,7 +74,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
   await app.register(sensible);
   await app.register(rateLimit, {
-    max: 100,
+    max: 500,
     timeWindow: "1 minute",
     keyGenerator: (request) => request.ip,
   });
@@ -111,6 +115,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(supplierReturnsRoutes, { prefix: "/procurement/supplier-returns" });
   await app.register(backorderRoutes, { prefix: "/procurement/backorders" });
   await app.register(serialRoutes, { prefix: "/inventory/serials" });
+  await app.register(dotBatchRoutes, { prefix: "/inventory/dot-batches" });
   await app.register(importRoutes, { prefix: "/inventory/import" });
   await app.register(importHistoryRoutes, { prefix: "/inventory/import/history" });
   await app.register(pricingRoutes, { prefix: "/inventory/pricing" });
@@ -123,6 +128,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(promoRoutes, { prefix: "/promos" });
   await app.register(deviceRoutes, { prefix: "/devices" });
   await app.register(rbacRoutes, { prefix: "/rbac" });
+  await app.register(vehicleRoutes, { prefix: "/vehicles" });
+  await app.register(printingRoutes, { prefix: "/printing" });
+  await app.register(auditRoutes, { prefix: "/audit-log" });
 
   return app;
 }

@@ -2,6 +2,13 @@ import { create } from 'zustand';
 import { storage, getJSON, setJSON } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
 import { v4 as uuid } from 'uuid';
+import {
+  addHeldCart,
+  removeHeldCart,
+  getHeldCarts,
+  getNextHeldLabel,
+  type HeldCart,
+} from '@/storage/held-carts';
 
 /**
  * Cart storage key scoped by active location.
@@ -31,6 +38,17 @@ export interface CartLine {
   discountValue: number;
   lineTotal: number;
   availableStock: number | null; // local stock snapshot at time of add
+  // Serial tracking (batteries, alternators)
+  isSerialized: boolean;
+  serials: string[];
+  warrantyMonths: number | null;
+  warrantyPhotoUri: string | null;
+  // DOT batch tracking (tires)
+  isTire: boolean;
+  dotAllocation: { dotBatchId: string; dotCode: string; quantity: number }[] | null;
+  // Price override
+  overridePrice: number | null;     // null = no override, use unitPrice
+  overrideApprovedBy: string | null; // manager name who approved
 }
 
 export interface PaymentEntry {
@@ -63,6 +81,9 @@ interface CartActions {
     barcode: string | null;
     unitPrice: number;
     availableStock?: number | null;
+    isSerialized?: boolean;
+    isTire?: boolean;
+    warrantyMonths?: number | null;
   }, qty?: number) => void;
   updateQuantity: (lineId: string, qty: number) => void;
   removeLine: (lineId: string) => void;
@@ -77,6 +98,14 @@ interface CartActions {
   setReceiptNumber: (num: string) => void;
   setNote: (note: string) => void;
   setAllowNegativeStock: (allow: boolean) => void;
+  setLineSerials: (lineId: string, serials: string[]) => void;
+  setLineDotAllocation: (lineId: string, allocation: { dotBatchId: string; dotCode: string; quantity: number }[]) => void;
+  setLineWarrantyPhoto: (lineId: string, uri: string | null) => void;
+  setLinePriceOverride: (lineId: string, newPrice: number, approvedBy: string) => void;
+  clearLinePriceOverride: (lineId: string) => void;
+  holdCurrentCart: () => boolean;            // save current cart, clear, return success
+  restoreHeldCart: (heldCartId: string) => void;  // load held cart as active
+  deleteHeldCart: (heldCartId: string) => void;
   clear: () => void;
 }
 
@@ -92,8 +121,9 @@ function getNextReceiptNumber(): string {
   return String(next);
 }
 
-function computeLineTotal(line: Pick<CartLine, 'unitPrice' | 'quantity' | 'discountType' | 'discountValue'>): number {
-  const gross = line.unitPrice * line.quantity;
+function computeLineTotal(line: Pick<CartLine, 'unitPrice' | 'quantity' | 'discountType' | 'discountValue'> & { overridePrice?: number | null }): number {
+  const price = line.overridePrice ?? line.unitPrice;
+  const gross = price * line.quantity;
   if (line.discountType === 'percentage') return gross * (1 - line.discountValue / 100);
   if (line.discountType === 'fixed') return gross - line.discountValue;
   return gross;
@@ -162,8 +192,9 @@ export const useCartStore = create<CartState>((set, get) => ({
 
   addLine: (product, qty = 1) => {
     set(state => {
-      // If product already in cart, increment quantity
-      const existing = state.lines.find(l => l.productId === product.serverId);
+      // Serialized products: don't auto-merge — each unit needs unique serials
+      const canMerge = !(product.isSerialized || product.isTire);
+      const existing = canMerge ? state.lines.find(l => l.productId === product.serverId) : null;
       let newLines: CartLine[];
 
       if (existing) {
@@ -190,6 +221,14 @@ export const useCartStore = create<CartState>((set, get) => ({
           discountValue: 0,
           lineTotal: product.unitPrice * qty,
           availableStock: product.availableStock ?? null,
+          isSerialized: product.isSerialized ?? false,
+          serials: [],
+          warrantyMonths: product.warrantyMonths ?? null,
+          warrantyPhotoUri: null,
+          isTire: product.isTire ?? false,
+          dotAllocation: null,
+          overridePrice: null,
+          overrideApprovedBy: null,
         };
         newLines = [...state.lines, newLine];
       }
@@ -328,6 +367,129 @@ export const useCartStore = create<CartState>((set, get) => ({
     set({ allowNegativeStock: allow });
   },
 
+  setLineSerials: (lineId, serials) => {
+    set(state => {
+      const newLines = state.lines.map(l =>
+        l.id === lineId ? { ...l, serials } : l,
+      );
+      const newState = { ...state, lines: newLines };
+      persist(newState);
+      return newState;
+    });
+  },
+
+  setLineDotAllocation: (lineId, allocation) => {
+    set(state => {
+      const newLines = state.lines.map(l =>
+        l.id === lineId ? { ...l, dotAllocation: allocation } : l,
+      );
+      const newState = { ...state, lines: newLines };
+      persist(newState);
+      return newState;
+    });
+  },
+
+  setLineWarrantyPhoto: (lineId, uri) => {
+    set(state => {
+      const newLines = state.lines.map(l =>
+        l.id === lineId ? { ...l, warrantyPhotoUri: uri } : l,
+      );
+      const newState = { ...state, lines: newLines };
+      persist(newState);
+      return newState;
+    });
+  },
+
+  setLinePriceOverride: (lineId, newPrice, approvedBy) => {
+    set(state => {
+      const newLines = state.lines.map(l => {
+        if (l.id !== lineId) return l;
+        const overridden = { ...l, overridePrice: newPrice, overrideApprovedBy: approvedBy };
+        overridden.lineTotal = computeLineTotal({ ...overridden, unitPrice: newPrice });
+        return overridden;
+      });
+      const newState = { ...state, lines: newLines };
+      persist(newState);
+      return newState;
+    });
+  },
+
+  clearLinePriceOverride: (lineId) => {
+    set(state => {
+      const newLines = state.lines.map(l => {
+        if (l.id !== lineId) return l;
+        const restored = { ...l, overridePrice: null, overrideApprovedBy: null };
+        restored.lineTotal = computeLineTotal(restored);
+        return restored;
+      });
+      const newState = { ...state, lines: newLines };
+      persist(newState);
+      return newState;
+    });
+  },
+
+  holdCurrentCart: () => {
+    const state = get();
+    if (state.lines.length === 0) return false;
+
+    const label = state.customerName || getNextHeldLabel();
+    const totalAmount = state.lines.reduce((sum, l) => sum + l.lineTotal, 0);
+
+    const heldCart: HeldCart = {
+      id: uuid(),
+      label,
+      lines: state.lines,
+      customerId: state.customerId,
+      customerName: state.customerName,
+      vehicleId: state.vehicleId,
+      discountType: state.discountType,
+      discountValue: state.discountValue,
+      heldAt: new Date().toISOString(),
+      totalAmount,
+    };
+
+    const success = addHeldCart(heldCart);
+    if (success) {
+      // Clear the active cart
+      get().clear();
+    }
+    return success;
+  },
+
+  restoreHeldCart: (heldCartId) => {
+    const heldCarts = getHeldCarts();
+    const cart = heldCarts.find(c => c.id === heldCartId);
+    if (!cart) return;
+
+    // If current cart has items, hold it first
+    const currentState = get();
+    if (currentState.lines.length > 0) {
+      currentState.holdCurrentCart();
+    }
+
+    // Restore the held cart
+    const restored: CartStateData = {
+      lines: cart.lines as CartLine[],
+      customerId: cart.customerId,
+      customerName: cart.customerName,
+      vehicleId: cart.vehicleId,
+      discountType: cart.discountType as any,
+      discountValue: cart.discountValue,
+      payments: [],
+      receiptNumber: getNextReceiptNumber(),
+      note: '',
+      allowNegativeStock: false,
+    };
+
+    removeHeldCart(heldCartId);
+    persist(restored);
+    set(restored);
+  },
+
+  deleteHeldCart: (heldCartId) => {
+    removeHeldCart(heldCartId);
+  },
+
   clear: () => {
     const nextReceipt = getNextReceiptNumber();
     const empty: CartStateData = {
@@ -364,6 +526,10 @@ export const selectGrandTotal = (state: CartState): number =>
 
 export const selectPaidTotal = (state: CartState): number =>
   state.payments.reduce((sum, p) => sum + p.amount, 0);
+
+/** Lines with isSerialized=true that don't have enough serials entered */
+export const selectIncompleteSerials = (state: CartState): CartLine[] =>
+  state.lines.filter(l => l.isSerialized && l.serials.length < l.quantity);
 
 export const selectRemainingBalance = (state: CartState): number =>
   selectGrandTotal(state) - selectPaidTotal(state);

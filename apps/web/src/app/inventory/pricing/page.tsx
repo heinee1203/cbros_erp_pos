@@ -20,6 +20,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 
 /* ═══════════════════════════════════════════════════════
  * TYPES
@@ -1074,19 +1075,10 @@ function PriceHistoryTab() {
           </div>
 
           {/* Date range */}
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="h-8 rounded-md border border-border bg-background px-2.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 [&::-webkit-calendar-picker-indicator]:opacity-50"
-            title="From date"
-          />
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="h-8 rounded-md border border-border bg-background px-2.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 [&::-webkit-calendar-picker-indicator]:opacity-50"
-            title="To date"
+          <DateRangePicker
+            startDate={dateFrom}
+            endDate={dateTo}
+            onChange={(start, end) => { setDateFrom(start); setDateTo(end); }}
           />
 
           {/* Batch ID */}

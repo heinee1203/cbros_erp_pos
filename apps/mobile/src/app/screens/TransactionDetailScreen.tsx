@@ -94,7 +94,7 @@ export default function TransactionDetailScreen() {
     try {
       const receiptData: ReceiptData = {
         header: {
-          storeName: sale.location?.name || 'APEX AUTO PARTS',
+          storeName: sale.location?.name || 'CBROS GENUINE AUTOPARTS',
           address: sale.location?.address || undefined,
         },
         transaction: {
@@ -292,7 +292,7 @@ export default function TransactionDetailScreen() {
         <View style={receiptStyles.overlay}>
           <View style={receiptStyles.container}>
             <ScrollView style={receiptStyles.scroll} contentContainerStyle={receiptStyles.content}>
-              <Text style={receiptStyles.header}>{sale.location?.name || 'APEX AUTO PARTS'}</Text>
+              <Text style={receiptStyles.header}>{sale.location?.name || 'CBROS GENUINE AUTOPARTS'}</Text>
               {sale.location?.address && <Text style={receiptStyles.subheader}>{sale.location.address}</Text>}
               <Text style={receiptStyles.divider}>{'═'.repeat(32)}</Text>
               <Text style={receiptStyles.line}>Receipt #: {sale.saleNo}</Text>

@@ -7,6 +7,7 @@ import { Receipt, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso, fmtDate } from "@/lib/format";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 
 /* ─── Types ─── */
 
@@ -202,17 +203,10 @@ export default function CheckVouchersPage() {
           ))}
         </select>
 
-        <input
-          type="date"
-          value={dateFrom}
-          onChange={(e) => setDateFrom(e.target.value)}
-          className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
-        />
-        <input
-          type="date"
-          value={dateTo}
-          onChange={(e) => setDateTo(e.target.value)}
-          className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+        <DateRangePicker
+          startDate={dateFrom}
+          endDate={dateTo}
+          onChange={(start, end) => { setDateFrom(start); setDateTo(end); }}
         />
       </div>
 

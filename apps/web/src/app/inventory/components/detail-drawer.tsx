@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   X,
   Loader2,
@@ -14,10 +15,19 @@ import {
   Plus,
   Maximize2,
   Trash2,
+  Printer,
   Clock,
+  TrendingUp,
+  ShoppingCart,
+  Package,
+  ArrowRightLeft,
+  ClipboardList,
 } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/app/auth-context";
+import { apiFetch } from "@/lib/api";
+import { getProductDisplayName, timeAgo } from "@/lib/format";
+import { buildShelfLabel, encodeCostMnemonic, LABEL_50x30, LABEL_50x40, LABEL_100x70, type ZplLabelConfig } from "@apex/types";
 import { useProductFamilies, useUpdateProduct, type ProductRow } from "@/hooks/use-products";
 import { useCategories, useCreateCategory } from "@/hooks/use-categories";
 import { useSubcategories, useCreateSubcategory } from "@/hooks/use-subcategories";
@@ -55,6 +65,56 @@ export function DetailDrawer({
   const sell = parseFloat(product.unitPrice) || 0;
   const cost = parseFloat(product.costPrice) || 0;
   const { token, apiLocationId: locationId } = useAuth();
+
+  // ── Print Label ──
+  const [showPrintSection, setShowPrintSection] = useState(false);
+  const [printQty, setPrintQty] = useState(1);
+  const [supplierCode, setSupplierCode] = useState(() => {
+    if (!product.brandName) return "";
+    const c = product.brandName.replace(/[aeiou\s]/gi, "");
+    return c.length >= 2 ? c.slice(0, 2).toUpperCase() : product.brandName.slice(0, 2).toUpperCase();
+  });
+  const [selectedLabelSize, setSelectedLabelSize] = useState<"50x30" | "50x40" | "100x70">("50x30");
+  const [printStatus, setPrintStatus] = useState<"idle" | "sending" | "ok" | "fail">("idle");
+
+  const labelConfigs: Record<string, ZplLabelConfig> = { "50x30": LABEL_50x30, "50x40": LABEL_50x40, "100x70": LABEL_100x70 };
+  const costPreview = cost > 0 ? encodeCostMnemonic(cost) + (supplierCode || "") : "";
+
+  const handlePrintLabel = async () => {
+    if (!token || !locationId) return;
+    setPrintStatus("sending");
+    try {
+      const zpl = buildShelfLabel({
+        itemName: getProductDisplayName(product),
+        barcodeData: product.barcode ?? product.sku ?? "",
+        costPrice: cost,
+        supplierCode: supplierCode || undefined,
+        quantity: printQty,
+      }, labelConfigs[selectedLabelSize]);
+      let printed = false;
+      try {
+        const printers = await apiFetch<Array<{ Name: string; DriverName: string }>>("/printing/system-printers", { token, locationId });
+        const zebra = printers.find((p) => p.Name?.includes("ZDesigner") || p.Name?.includes("ZD230") || p.DriverName?.includes("ZDesigner"));
+        if (zebra) {
+          await apiFetch("/printing/system-print", { token, locationId, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ printerName: zebra.Name, zpl }) });
+          printed = true;
+        }
+      } catch { /* fallback */ }
+      if (!printed) {
+        try {
+          const cfgRes = await apiFetch<{ data: Array<{ id: string; isDefault: boolean; connectionType: string; ipAddress: string | null; port: number | null }> }>("/printing/printers", { token, locationId });
+          const dflt = cfgRes.data.find((p) => p.isDefault) ?? cfgRes.data[0];
+          if (dflt?.connectionType === "tcp" && dflt.ipAddress) {
+            await apiFetch("/printing/zpl", { token, locationId, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zpl, printerIp: dflt.ipAddress, port: dflt.port ?? 9100 }) });
+            printed = true;
+          }
+        } catch { /* fallback */ }
+      }
+      if (!printed) { const w = window.open("", "_blank"); if (w) { w.document.write(`<pre>${zpl}</pre>`); w.document.close(); } }
+      setPrintStatus("ok");
+    } catch { setPrintStatus("fail"); }
+    setTimeout(() => setPrintStatus("idle"), 2000);
+  };
   const confirm = useConfirm();
 
   // ── Edit mode ──
@@ -326,12 +386,6 @@ export function DetailDrawer({
                   >
                     <Maximize2 size={12} /> Full Edit
                   </Link>
-                  <Link
-                    href={`/inventory/${product.id}/history`}
-                    className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-                  >
-                    <Clock size={12} /> History
-                  </Link>
                 </div>
               )}
               <button onClick={handleClose} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close drawer"><X size={16} /></button>
@@ -599,6 +653,12 @@ export function DetailDrawer({
             {product.isParent && (
               <OptionTypesAndVariants product={product} token={token} locationId={locationId} showFinancials={showFinancials} />
             )}
+
+            {/* ── Item History ── */}
+            <ItemHistorySection productId={product.id} token={token} locationId={locationId} />
+
+            {/* ── Stock Velocity ── */}
+            <StockVelocitySection productId={product.id} token={token} locationId={locationId} />
           </div>
 
           {/* Sticky save bar — shown when any unsaved changes exist */}
@@ -630,7 +690,52 @@ export function DetailDrawer({
             </div>
           )}
 
+          {/* Print Label expandable section */}
+          {showPrintSection && (
+            <div className="border-t border-border bg-muted/30 px-4 py-3 space-y-2.5">
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-medium text-muted-foreground w-20">Quantity</label>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setPrintQty(Math.max(1, printQty - 1))} className="rounded p-0.5 text-muted-foreground hover:bg-accent disabled:opacity-30" disabled={printQty <= 1}><Minus className="h-3 w-3" /></button>
+                  <input type="number" min={1} max={99} value={printQty} onChange={(e) => setPrintQty(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-12 rounded border border-border bg-background px-1 py-0.5 text-center text-xs font-mono focus:border-primary focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                  <button onClick={() => setPrintQty(Math.min(99, printQty + 1))} className="rounded p-0.5 text-muted-foreground hover:bg-accent disabled:opacity-30" disabled={printQty >= 99}><Plus className="h-3 w-3" /></button>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-medium text-muted-foreground w-20">Supplier</label>
+                <input type="text" value={supplierCode} onChange={(e) => setSupplierCode(e.target.value.toUpperCase().slice(0, 4))} maxLength={4} placeholder="e.g. AZ"
+                  className="w-16 rounded border border-border bg-background px-2 py-0.5 text-center text-xs font-mono uppercase focus:border-primary focus:outline-none" />
+                {costPreview && <span className="text-[10px] font-mono text-muted-foreground">Cost code: <span className="font-semibold text-primary">{costPreview}</span></span>}
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-medium text-muted-foreground w-20">Label Size</label>
+                <div className="flex gap-1.5">
+                  {(["50x30", "50x40", "100x70"] as const).map((size) => (
+                    <button key={size} onClick={() => setSelectedLabelSize(size)}
+                      className={cn("rounded px-2 py-0.5 text-[10px] font-semibold transition-colors",
+                        selectedLabelSize === size ? "bg-primary text-primary-foreground" : "bg-background border border-border text-muted-foreground hover:bg-accent")}>
+                      {size.replace("x", "\u00D7")}mm
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={handlePrintLabel} disabled={printStatus === "sending"}
+                className={cn("w-full flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-semibold",
+                  printStatus === "ok" ? "bg-green-600 text-white" : printStatus === "fail" ? "bg-red-600 text-white" : "bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50")}>
+                <Printer className="h-3.5 w-3.5" />
+                {printStatus === "sending" ? "Sending\u2026" : printStatus === "ok" ? "Sent!" : printStatus === "fail" ? "Failed" : `Print ${printQty} Label${printQty !== 1 ? "s" : ""}`}
+              </button>
+            </div>
+          )}
+
           <div className="flex gap-2 border-t border-border p-4">
+            <button onClick={() => setShowPrintSection(!showPrintSection)}
+              className={cn("flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium",
+                showPrintSection ? "bg-amber-600 text-white" : "bg-amber-500 text-white hover:bg-amber-600")}>
+              <Printer className="h-3.5 w-3.5" />
+              Print Label
+            </button>
             <button onClick={onTransfer} className="flex-1 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">Transfer Stock</button>
             <button onClick={onAdjust} className="flex-1 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent">Adjust Stock</button>
           </div>
@@ -1021,6 +1126,228 @@ function InfoRow({ label, value, mono, statusColor }: { label: string; value: st
       )}>
         {value}
       </span>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+ * Item History Section
+ * ───────────────────────────────────────────── */
+
+const HISTORY_ICONS: Record<string, typeof ShoppingCart> = {
+  SALE: ShoppingCart,
+  RECEIVING: Package,
+  TRANSFER_IN: ArrowRightLeft,
+  TRANSFER_OUT: ArrowRightLeft,
+  ADJUSTMENT: ClipboardList,
+  RETURN: ShoppingCart,
+  STOCKTAKE: ClipboardList,
+  VOID: X,
+  SUPPLIER_RETURN: Package,
+  OPENING_BALANCE: Package,
+};
+
+const HISTORY_LABELS: Record<string, string> = {
+  SALE: "Sale",
+  RECEIVING: "PO Received",
+  TRANSFER_IN: "Transfer In",
+  TRANSFER_OUT: "Transfer Out",
+  ADJUSTMENT: "Adjustment",
+  RETURN: "Return",
+  STOCKTAKE: "Stocktake",
+  VOID: "Voided",
+  SUPPLIER_RETURN: "Supplier Return",
+  SUPPLIER_RETURN_CANCEL: "RTV Cancel",
+  JOB_CARD_ISSUE: "Job Card Issue",
+  JOB_CARD_RETURN: "Job Card Return",
+  OPENING_BALANCE: "Opening Balance",
+};
+
+const HISTORY_COLORS: Record<string, string> = {
+  SALE: "text-blue-600",
+  RECEIVING: "text-emerald-600",
+  TRANSFER_IN: "text-violet-600",
+  TRANSFER_OUT: "text-violet-600",
+  ADJUSTMENT: "text-amber-600",
+  RETURN: "text-orange-600",
+  VOID: "text-red-600",
+  SUPPLIER_RETURN: "text-red-600",
+};
+
+function ItemHistorySection({ productId, token, locationId }: { productId: string; token: string; locationId: string }) {
+  const { data, isLoading } = useQuery<{ data: any[] }>({
+    queryKey: ["item-history", productId],
+    queryFn: () =>
+      apiFetch<{ data: any[] }>(
+        `/inventory/journal?productId=${productId}&allLocations=true&limit=10`,
+        { token, locationId },
+      ),
+    enabled: !!productId && !!token,
+    staleTime: 15_000,
+  });
+
+  const entries = data?.data ?? [];
+
+  return (
+    <section className="mb-5">
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <Clock size={10} className="mb-px mr-1 inline" />
+          Item History
+        </h4>
+        <Link
+          href={`/inventory/${productId}/history`}
+          className="text-[10px] font-medium text-primary hover:underline"
+        >
+          View All &rarr;
+        </Link>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-10 animate-pulse rounded-md bg-muted/30" />
+          ))}
+        </div>
+      ) : entries.length === 0 ? (
+        <p className="py-2 text-xs text-muted-foreground">No history found for this item.</p>
+      ) : (
+        <div className="space-y-1">
+          {entries.map((entry: any) => {
+            const Icon = HISTORY_ICONS[entry.referenceType] ?? ClipboardList;
+            const label = HISTORY_LABELS[entry.referenceType] ?? entry.referenceType;
+            const color = HISTORY_COLORS[entry.referenceType] ?? "text-muted-foreground";
+            const qty = entry.changeQuantity;
+            const price = entry.unitPrice ? parseFloat(entry.unitPrice) : null;
+            const ref = entry.referenceNumber;
+            return (
+              <div key={entry.id} className="flex items-start gap-2 rounded-md px-1 py-1.5 hover:bg-muted/30 transition-colors">
+                <Icon size={12} className={cn("mt-0.5 shrink-0", color)} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className={cn("text-[11px] font-semibold", color)}>{label}</span>
+                    <span className="text-[11px] text-foreground">
+                      {qty > 0 ? "+" : ""}{qty} unit{Math.abs(qty) !== 1 ? "s" : ""}
+                      {price ? ` @ \u20B1${price.toLocaleString("en-PH", { minimumFractionDigits: 2 })}` : ""}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    {entry.locationName}{ref ? ` \u2022 ${ref}` : ""}
+                  </div>
+                </div>
+                <span className="shrink-0 text-[10px] text-muted-foreground whitespace-nowrap">
+                  {timeAgo(entry.effectiveAt)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ─────────────────────────────────────────────
+ * Stock Velocity Section
+ * ───────────────────────────────────────────── */
+
+const VELOCITY_BADGE: Record<string, { bg: string; text: string }> = {
+  FAST_MOVER: { bg: "bg-emerald-500/10", text: "text-emerald-600" },
+  STRATEGIC_STOCK: { bg: "bg-blue-500/10", text: "text-blue-600" },
+  WATCH_LIST: { bg: "bg-amber-500/10", text: "text-amber-600" },
+  DEAD_STOCK: { bg: "bg-red-500/10", text: "text-red-600" },
+  NEW_ITEM: { bg: "bg-violet-500/10", text: "text-violet-600" },
+  UNCATEGORIZED: { bg: "bg-muted", text: "text-muted-foreground" },
+};
+
+const VELOCITY_LABELS: Record<string, string> = {
+  FAST_MOVER: "Fast Mover",
+  STRATEGIC_STOCK: "Strategic Stock",
+  WATCH_LIST: "Watch List",
+  DEAD_STOCK: "Dead Stock",
+  NEW_ITEM: "New Item",
+  UNCATEGORIZED: "Uncategorized",
+};
+
+function StockVelocitySection({ productId, token, locationId }: { productId: string; token: string; locationId: string }) {
+  const { data, isLoading } = useQuery<{ data: any[] }>({
+    queryKey: ["item-velocity", productId],
+    queryFn: () =>
+      apiFetch<{ data: any[] }>(
+        `/inventory/stock-monitor?productId=${productId}&limit=1`,
+        { token, locationId },
+      ),
+    enabled: !!productId && !!token,
+    staleTime: 30_000,
+  });
+
+  const velocity = data?.data?.[0] ?? null;
+
+  return (
+    <section className="mb-5">
+      <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <TrendingUp size={10} className="mb-px mr-1 inline" />
+        Stock Velocity
+      </h4>
+
+      {isLoading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-6 animate-pulse rounded-md bg-muted/30" />
+          ))}
+        </div>
+      ) : !velocity ? (
+        <p className="py-2 text-xs text-muted-foreground">No velocity data available.</p>
+      ) : (
+        <div className="space-y-1.5">
+          <VelocityRow label="Classification">
+            <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold",
+              VELOCITY_BADGE[velocity.velocityClass]?.bg ?? "bg-muted",
+              VELOCITY_BADGE[velocity.velocityClass]?.text ?? "text-muted-foreground",
+            )}>
+              {VELOCITY_LABELS[velocity.velocityClass] ?? velocity.velocityClass}
+            </span>
+          </VelocityRow>
+          <VelocityRow label="Avg Daily Sales">
+            <span className="text-xs font-medium tabular-nums">
+              {parseFloat(velocity.avgDailySales30d ?? "0").toFixed(1)} units/day
+            </span>
+          </VelocityRow>
+          <VelocityRow label="Days of Stock">
+            <span className={cn("text-xs font-medium tabular-nums",
+              velocity.daysOfStock && parseFloat(velocity.daysOfStock) < 14 ? "text-red-500" : "",
+            )}>
+              {velocity.daysOfStock ? `${Math.round(parseFloat(velocity.daysOfStock))} days` : "\u2014"}
+            </span>
+          </VelocityRow>
+          <VelocityRow label="Last Sold">
+            <span className="text-xs font-medium">
+              {velocity.lastSaleDate ? timeAgo(velocity.lastSaleDate) : "Never"}
+            </span>
+          </VelocityRow>
+          <VelocityRow label="Sold (30d / 90d)">
+            <span className="text-xs font-medium tabular-nums">
+              {velocity.sold1m ?? 0} / {velocity.sold3m ?? 0} units
+            </span>
+          </VelocityRow>
+          {velocity.avgSellingPrice && parseFloat(velocity.avgSellingPrice) > 0 && (
+            <VelocityRow label="Avg Sell Price">
+              <span className="text-xs font-medium tabular-nums">
+                {"\u20B1"}{parseFloat(velocity.avgSellingPrice).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+              </span>
+            </VelocityRow>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function VelocityRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between px-1">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      {children}
     </div>
   );
 }

@@ -27,9 +27,10 @@ import {
   TrendingDown,
   Loader2,
 } from "lucide-react";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import {
-  AreaChart,
-  Area,
+  BarChart as RechartsBarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -90,6 +91,7 @@ export default function ReportsOverviewPage() {
   // ── Filter dropdowns ──
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   const [selectedEmployee, setSelectedEmployee] = useState<string>("");
+  const [topItemsSort, setTopItemsSort] = useState<"revenue" | "units">("revenue");
 
   // ── Derived filter object ──
   const effectiveLocationId = selectedLocation || locationId;
@@ -170,7 +172,9 @@ export default function ReportsOverviewPage() {
   const employees = employeesQuery.data?.data ?? [];
 
   const topItems = (itemsQuery.data?.data ?? [])
-    .sort((a, b) => b.unitsSold - a.unitsSold)
+    .sort((a, b) => topItemsSort === "units"
+      ? b.unitsSold - a.unitsSold
+      : parseFloat(b.totalRevenue) - parseFloat(a.totalRevenue))
     .slice(0, 5);
 
   const topEmployees = (employeesReportQuery.data?.data ?? [])
@@ -362,27 +366,17 @@ export default function ReportsOverviewPage() {
         {preset === "custom" && (
           <>
             <div className="hidden h-5 w-px bg-border sm:block" />
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                className="rounded-md border border-border bg-background px-2 py-1 text-[12px]"
-              />
-              <span className="text-[12px] text-muted-foreground">to</span>
-              <input
-                type="date"
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                className="rounded-md border border-border bg-background px-2 py-1 text-[12px]"
-              />
-              <button
-                onClick={applyCustomRange}
-                className="rounded-md bg-primary px-2.5 py-1 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-              >
-                Apply
-              </button>
-            </div>
+            <DateRangePicker
+              startDate={customFrom}
+              endDate={customTo}
+              onChange={(start, end) => {
+                setCustomFrom(start);
+                setCustomTo(end);
+                if (start && end) {
+                  setRange({ from: new Date(start), to: new Date(end) });
+                }
+              }}
+            />
           </>
         )}
 
@@ -441,8 +435,14 @@ export default function ReportsOverviewPage() {
       {/* ═══════════════════════════════════════════
        * Area Chart — Gross Sales Trend
        * ═══════════════════════════════════════════ */}
-      <div className="rounded-xl border border-border bg-background p-5 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
-        <h2 className="mb-4 text-[13px] font-semibold text-foreground">Gross Sales</h2>
+      <div className="rounded-xl border border-border bg-background p-6 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="text-[15px] font-semibold text-foreground">Gross Sales</h2>
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="inline-block h-3 w-3 rounded-sm bg-emerald-500" />
+            Daily Revenue
+          </div>
+        </div>
         {isDataLoading ? (
           <div className="h-[320px] animate-pulse rounded-lg bg-muted/30" />
         ) : chartData.length === 0 ? (
@@ -473,73 +473,60 @@ export default function ReportsOverviewPage() {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={320}>
-            <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 8, bottom: 0 }}>
+            <RechartsBarChart data={chartData} margin={{ top: 8, right: 8, left: 4, bottom: 4 }}>
               <defs>
-                <linearGradient id="colorGross" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#10B981" />
+                  <stop offset="100%" stopColor="#059669" />
                 </linearGradient>
               </defs>
               <CartesianGrid
                 strokeDasharray="3 3"
-                stroke="hsl(var(--border))"
+                stroke="#E5E7EB"
                 vertical={false}
               />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                axisLine={{ stroke: "hsl(var(--border))" }}
+                tick={{ fontSize: 12, fill: "#6B7280" }}
+                axisLine={false}
                 tickLine={false}
                 dy={8}
+                interval={0}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                tick={{ fontSize: 11, fill: "#9CA3AF" }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={(v: number) =>
-                  v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)
+                  v >= 1000000
+                    ? `\u20B1${(v / 1000000).toFixed(1)}M`
+                    : v >= 1000
+                      ? `\u20B1${(v / 1000).toFixed(0)}k`
+                      : `\u20B1${v}`
                 }
-                dx={-4}
+                width={65}
               />
               <Tooltip
-                contentStyle={{
-                  backgroundColor: "hsl(var(--background))",
-                  border: "1px solid hsl(var(--border))",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                cursor={{ fill: "rgba(16, 185, 129, 0.06)" }}
+                content={({ active, payload, label }: any) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 14px", boxShadow: "0 4px 16px rgba(0,0,0,0.10)" }}>
+                      <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>{label}</p>
+                      <p style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>
+                        {"\u20B1"}{Number(payload[0].value).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                  );
                 }}
-                formatter={(value, name) => [
-                  fmtPeso(Number(value)),
-                  name === "priorGrossSales" ? "Prior Period" : "Gross Sales",
-                ]}
-                labelStyle={{ fontSize: "11px", color: "hsl(var(--muted-foreground))", marginBottom: "4px" }}
               />
-              <Area
-                type="monotone"
+              <Bar
                 dataKey="grossSales"
-                stroke="hsl(var(--primary))"
-                strokeWidth={2}
-                fill="url(#colorGross)"
-                dot={false}
-                activeDot={{
-                  r: 4,
-                  stroke: "hsl(var(--primary))",
-                  strokeWidth: 2,
-                  fill: "hsl(var(--background))",
-                }}
+                fill="url(#barGradient)"
+                radius={[6, 6, 0, 0]}
+                maxBarSize={48}
               />
-              <Area
-                type="monotone"
-                dataKey="priorGrossSales"
-                stroke="hsl(var(--muted-foreground))"
-                strokeWidth={1}
-                strokeDasharray="4 4"
-                fill="none"
-                dot={false}
-                name="Prior Period"
-              />
-            </AreaChart>
+            </RechartsBarChart>
           </ResponsiveContainer>
         )}
       </div>
@@ -548,7 +535,7 @@ export default function ReportsOverviewPage() {
        * Ranked Lists — Top Items + Top Employees
        * ═══════════════════════════════════════════ */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <TopItemsTable items={topItems} isLoading={itemsQuery.isLoading} />
+        <TopItemsTable items={topItems} isLoading={itemsQuery.isLoading} sortBy={topItemsSort} onSortChange={setTopItemsSort} />
         <TopEmployeesTable employees={topEmployees} isLoading={employeesReportQuery.isLoading} />
       </div>
 
@@ -737,14 +724,34 @@ export default function ReportsOverviewPage() {
 function TopItemsTable({
   items,
   isLoading,
+  sortBy,
+  onSortChange,
 }: {
   items: SalesByItemRow[];
   isLoading: boolean;
+  sortBy: "revenue" | "units";
+  onSortChange: (v: "revenue" | "units") => void;
 }) {
   return (
     <div className="rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
       <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-        <h2 className="text-[13px] font-semibold text-foreground">Top Selling Items</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-[13px] font-semibold text-foreground">Top Selling Items</h2>
+          <div className="flex rounded-md border border-border text-[10px] font-medium">
+            <button
+              onClick={() => onSortChange("revenue")}
+              className={`px-2 py-0.5 rounded-l-md transition-colors ${sortBy === "revenue" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+            >
+              Revenue
+            </button>
+            <button
+              onClick={() => onSortChange("units")}
+              className={`px-2 py-0.5 rounded-r-md transition-colors ${sortBy === "units" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+            >
+              Units
+            </button>
+          </div>
+        </div>
         <Link
           href="/reports/sales-by-item"
           className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
@@ -899,7 +906,7 @@ function TopEmployeesTable({
             ) : (
               employees.map((emp, i) => (
                 <tr
-                  key={emp.employeeId}
+                  key={emp.employeeId || emp.employeeName || i}
                   className="border-b border-border transition-colors last:border-0 hover:bg-muted/20"
                 >
                   <td className="px-5 py-2.5 text-[12px] font-medium text-muted-foreground">

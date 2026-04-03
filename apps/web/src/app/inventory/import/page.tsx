@@ -26,7 +26,7 @@ import { useProductFamilies } from "@/hooks/use-products";
  * ───────────────────────────────────────────── */
 
 type Step = "upload" | "parsing" | "preview" | "progress" | "results";
-type ImportMode = "smart_sync" | "update_only" | "create_only";
+type ImportMode = "smart_sync" | "update_only" | "create_only" | "inventory_sync";
 
 interface PreviewRow {
   row: number;
@@ -69,6 +69,8 @@ interface PreviewResponse {
     apexCategoryName: string | null;
     autoMatched: boolean;
     productCount: number;
+    createCount: number;
+    updateCount: number;
   }>;
   errors: Array<{ rowIndex: number; field?: string; message: string }>;
   preview: Array<{
@@ -78,6 +80,16 @@ interface PreviewResponse {
     action: "CREATE" | "UPDATE" | "SKIP";
     changes?: string[];
     errors?: string[];
+  }>;
+  createPreview?: Array<{
+    rowIndex: number;
+    name: string;
+    sku: string;
+    action: "CREATE";
+    changes?: string[];
+    errors?: string[];
+    variantName?: string | null;
+    isVariant?: boolean;
   }>;
 }
 
@@ -106,12 +118,14 @@ export default function ImportItemsPage() {
   const { token, apiLocationId: locationId } = useAuth();
 
   const [step, setStep] = useState<Step>("upload");
-  const [importMode, setImportMode] = useState<ImportMode>("smart_sync");
+  const [importMode, setImportMode] = useState<ImportMode>("inventory_sync");
+  const [includeCreates, setIncludeCreates] = useState(true);
+  const [includeUpdates, setIncludeUpdates] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [locationMapping, setLocationMapping] = useState<Record<string, string>>({});
-  const [catMapping, setCatMapping] = useState<Record<string, { action: "create" | "map"; targetCategoryId?: string; targetSubcategoryId?: string; familyId?: string; createSubcategory?: boolean }>>({});
+  const [catMapping, setCatMapping] = useState<Record<string, { action: "create" | "map" | "skip"; targetCategoryId?: string; targetSubcategoryId?: string; familyId?: string; createSubcategory?: boolean }>>({});
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [results, setResults] = useState<ProgressResponse | null>(null);
   const [errorsExpanded, setErrorsExpanded] = useState(false);
@@ -150,16 +164,19 @@ export default function ImportItemsPage() {
       setLocationMapping(mapping);
     }
     // Initialize category mapping — auto-matched stay as-is, unmatched default to "create"
+    // In inventory_sync mode, only map categories that have new items (creates)
     if (preview?.categoryMapping) {
-      const cm: Record<string, { action: "create" | "map"; targetCategoryId?: string; familyId?: string }> = {};
+      const cm: Record<string, { action: "create" | "map" | "skip"; targetCategoryId?: string; familyId?: string }> = {};
       for (const cat of preview.categoryMapping) {
         if (!cat.autoMatched) {
+          // In inventory_sync mode, skip categories that only have updates (no new items)
+          if (importMode === "inventory_sync" && cat.createCount === 0) continue;
           cm[cat.csvName] = { action: "create" };
         }
       }
       setCatMapping(cm);
     }
-  }, [preview]);
+  }, [preview, importMode]);
 
   /* ── File handling ── */
   const handleFileSelect = useCallback(
@@ -176,6 +193,9 @@ export default function ImportItemsPage() {
           body: JSON.stringify({ csvText }),
         });
         setPreview(resp);
+        // Reset toggles based on import mode
+        setIncludeCreates(importMode !== "update_only");
+        setIncludeUpdates(importMode !== "create_only");
         setStep("preview");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Failed to parse CSV";
@@ -242,7 +262,7 @@ export default function ImportItemsPage() {
           previewToken: preview.previewToken,
           locationMapping,
           categoryMapping: Object.keys(catMapping).length > 0 ? catMapping : undefined,
-          importMode,
+          importMode: !includeCreates ? "update_only" : !includeUpdates ? "create_only" : importMode,
           skipErrors: true,
           createNewCategories: true,
         }),
@@ -266,7 +286,7 @@ export default function ImportItemsPage() {
       const message = err instanceof Error ? err.message : "Import failed";
       setError(message);
     }
-  }, [preview, token, locationId, locationMapping, catMapping, importMode]);
+  }, [preview, token, locationId, locationMapping, catMapping, importMode, includeCreates, includeUpdates]);
 
   /* ── Poll progress ── */
   useEffect(() => {
@@ -354,9 +374,9 @@ export default function ImportItemsPage() {
           <ArrowLeft size={16} />
         </Link>
         <div>
-          <h1 className="text-xl font-semibold text-foreground">Import Items</h1>
+          <h1 className="text-xl font-semibold text-foreground">Import Center</h1>
           <p className="text-sm text-muted-foreground">
-            Import items from a Loyverse CSV export
+            Import data from Loyverse CSV exports
           </p>
         </div>
       </div>
@@ -365,18 +385,21 @@ export default function ImportItemsPage() {
       <div className="flex items-center gap-4 border-b border-border">
         <Link
           href="/inventory/import"
-          className={cn(
-            "px-3 py-2 text-sm font-medium border-b-2",
-            "border-primary text-primary",
-          )}
+          className="px-3 py-2 text-sm font-medium border-b-2 border-primary text-primary"
         >
-          Import Items
+          Item Catalog
+        </Link>
+        <Link
+          href="/inventory/import-sales"
+          className="px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground border-b-2 border-transparent"
+        >
+          Sales Receipts
         </Link>
         <Link
           href="/inventory/import/history"
           className="px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground border-b-2 border-transparent"
         >
-          Import History
+          Inventory Movements
         </Link>
       </div>
 
@@ -434,8 +457,9 @@ export default function ImportItemsPage() {
             <h3 className="mb-3 text-sm font-medium text-foreground">Import Mode</h3>
             <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
               {([
-                { value: "smart_sync", label: "Smart Sync", desc: "Create new items, update existing" },
-                { value: "update_only", label: "Update Only", desc: "Only update existing items" },
+                { value: "inventory_sync", label: "Stock & Availability", desc: "Create new items + update stock, prices & store availability (no name/category changes)" },
+                { value: "smart_sync", label: "Smart Sync", desc: "Create new items, update all fields" },
+                { value: "update_only", label: "Update Only", desc: "Only update existing items (all fields)" },
                 { value: "create_only", label: "Create Only", desc: "Only create new items" },
               ] as const).map((mode) => (
                 <label
@@ -515,17 +539,68 @@ export default function ImportItemsPage() {
       {/* ─── Step 2: Preview ─── */}
       {step === "preview" && preview && (
         <div className="space-y-6">
+          {/* Import type toggles */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-muted-foreground">Import:</span>
+            {importMode !== "update_only" && (
+              <button
+                onClick={() => { if (includeUpdates || !includeCreates) setIncludeCreates(!includeCreates); }}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-sm font-medium transition-colors",
+                  includeCreates
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                    : "border-border bg-muted/50 text-muted-foreground line-through",
+                )}
+              >
+                {includeCreates ? "✓" : "✗"} Creates ({preview.createCount.toLocaleString()})
+              </button>
+            )}
+            {importMode !== "create_only" && (
+              <button
+                onClick={() => { if (includeCreates || !includeUpdates) setIncludeUpdates(!includeUpdates); }}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-sm font-medium transition-colors",
+                  includeUpdates
+                    ? "border-primary/30 bg-primary/5 text-primary"
+                    : "border-border bg-muted/50 text-muted-foreground line-through",
+                )}
+              >
+                {includeUpdates ? "✓" : "✗"} Updates ({preview.updateCount.toLocaleString()})
+              </button>
+            )}
+            <span className="rounded-full border border-border bg-muted/50 px-3 py-1 text-sm text-muted-foreground">
+              Errors ({preview.errorCount})
+            </span>
+          </div>
+
           {/* Summary cards */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { label: "Total Rows", value: preview.totalRows, color: "text-foreground" },
-              { label: "Creates", value: preview.createCount, color: "text-emerald-600" },
-              { label: "Updates", value: preview.updateCount, color: "text-primary" },
+              {
+                label: "Will Import",
+                value: (includeCreates ? preview.createCount : 0) + (includeUpdates ? preview.updateCount : 0),
+                color: "text-foreground",
+              },
+              {
+                label: "Creates",
+                value: preview.createCount,
+                color: includeCreates ? "text-emerald-600" : "text-muted-foreground/50",
+                dimmed: !includeCreates,
+              },
+              {
+                label: "Updates",
+                value: preview.updateCount,
+                color: includeUpdates ? "text-primary" : "text-muted-foreground/50",
+                dimmed: !includeUpdates,
+              },
               { label: "Errors", value: preview.errorCount, color: "text-red-600" },
             ].map((card) => (
               <div
                 key={card.label}
-                className="rounded-lg border border-border bg-muted/50 px-4 py-3"
+                className={cn(
+                  "rounded-lg border border-border bg-muted/50 px-4 py-3 transition-opacity",
+                  (card as any).dimmed && "opacity-40",
+                )}
               >
                 <div className="text-xs text-muted-foreground">{card.label}</div>
                 <div className={cn("mt-1 text-2xl font-semibold", card.color)}>
@@ -575,13 +650,24 @@ export default function ImportItemsPage() {
             </div>
           )}
 
-          {/* Category Mapping */}
+          {/* Category Mapping — for inventory_sync mode, only show categories with new items */}
           {preview.categoryMapping && preview.categoryMapping.length > 0 && (() => {
-            const matched = preview.categoryMapping.filter((c) => c.autoMatched);
-            const unmatched = preview.categoryMapping.filter((c) => !c.autoMatched);
+            // In inventory_sync mode, only show categories that have new items (creates)
+            // Existing items keep their current category — no mapping needed
+            const relevantCategories = importMode === "inventory_sync"
+              ? preview.categoryMapping.filter((c) => c.createCount > 0)
+              : preview.categoryMapping;
+            if (relevantCategories.length === 0) return null; // Nothing to map
+            const matched = relevantCategories.filter((c) => c.autoMatched);
+            const unmatched = relevantCategories.filter((c) => !c.autoMatched);
             return (
               <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
                 <h3 className="mb-2 text-sm font-medium text-foreground">Category Mapping</h3>
+                {importMode === "inventory_sync" && (
+                  <div className="mb-2 text-[11px] text-muted-foreground">
+                    Inventory Sync: only new items need category mapping. Existing items keep their current categories.
+                  </div>
+                )}
                 {matched.length > 0 && (
                   <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
                     <CheckCircle size={14} className="text-green-500" />
@@ -608,73 +694,111 @@ export default function ImportItemsPage() {
                       >
                         Create All New
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const all: typeof catMapping = {};
+                          for (const c of unmatched) all[c.csvName] = { action: "skip" };
+                          setCatMapping(all);
+                        }}
+                        className="text-[10px] font-medium text-muted-foreground hover:underline"
+                      >
+                        Skip All
+                      </button>
                     </div>
                     {unmatched.map((cat) => {
                       const entry = catMapping[cat.csvName] ?? { action: "create" };
                       return (
-                        <div key={cat.csvName} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
-                          <div className="min-w-[140px]">
+                        <div key={cat.csvName} className="rounded-md border border-border bg-background px-3 py-2">
+                          {/* Header: category name + counts */}
+                          <div className="mb-2">
                             <span className="text-sm font-medium">{cat.csvName}</span>
-                            <span className="ml-1.5 text-[10px] text-muted-foreground">({cat.productCount} items)</span>
+                            <span className="ml-1.5 text-[10px] text-muted-foreground">
+                              ({cat.productCount} items
+                              {(cat.createCount > 0 || cat.updateCount > 0) && (
+                                <> · {cat.createCount > 0 && <span className="text-primary">{cat.createCount} new</span>}{cat.createCount > 0 && cat.updateCount > 0 && ", "}{cat.updateCount > 0 && <span>{cat.updateCount} updates</span>}</>
+                              )})
+                            </span>
                           </div>
-                          <label className="flex items-center gap-1 text-xs">
-                            <input
-                              type="radio"
-                              checked={entry.action === "create"}
-                              onChange={() => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "create" } }))}
-                            />
-                            Create New
-                          </label>
-                          {entry.action === "create" && (
-                            <select
-                              value={entry.familyId ?? ""}
-                              onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { ...prev[cat.csvName], familyId: e.target.value || undefined } }))}
-                              className={cn(
-                                "rounded border bg-background px-2 py-0.5 text-xs",
-                                !entry.familyId ? "border-red-400 ring-1 ring-red-200" : "border-border",
+                          {/* Radio options — stacked vertically */}
+                          <div className="space-y-1.5 pl-1">
+                            {/* Create New */}
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+                                <input
+                                  type="radio"
+                                  checked={entry.action === "create"}
+                                  onChange={() => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "create" } }))}
+                                />
+                                Create New
+                              </label>
+                              {entry.action === "create" && (
+                                <select
+                                  value={entry.familyId ?? ""}
+                                  onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { ...prev[cat.csvName], familyId: e.target.value || undefined } }))}
+                                  className={cn(
+                                    "rounded border bg-background px-2 py-0.5 text-xs",
+                                    !entry.familyId ? "border-red-400 ring-1 ring-red-200" : "border-border",
+                                  )}
+                                >
+                                  <option value="">Select family…</option>
+                                  {orgFamilies.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                                </select>
                               )}
-                            >
-                              <option value="">Select family…</option>
-                              {orgFamilies.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
-                            </select>
-                          )}
-                          <label className="flex items-center gap-1 text-xs">
-                            <input
-                              type="radio"
-                              checked={entry.action === "map"}
-                              onChange={() => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "map", targetCategoryId: "" } }))}
-                            />
-                            Map to
-                          </label>
-                          {entry.action === "map" && (
-                            <>
-                              <select
-                                value={entry.targetCategoryId ?? ""}
-                                onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "map", targetCategoryId: e.target.value, targetSubcategoryId: undefined } }))}
-                                className="rounded border border-border bg-background px-2 py-0.5 text-xs"
-                              >
-                                <option value="">Select category…</option>
-                                {orgCategories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                              </select>
-                              {entry.targetCategoryId && (() => {
-                                const subs = allSubcategories.filter((s: any) => s.categoryId === entry.targetCategoryId);
-                                return subs.length > 0 ? (
+                            </div>
+                            {/* Map to */}
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+                                <input
+                                  type="radio"
+                                  checked={entry.action === "map"}
+                                  onChange={() => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "map", targetCategoryId: "" } }))}
+                                />
+                                Map to
+                              </label>
+                              {entry.action === "map" && (
+                                <>
                                   <select
-                                    value={entry.targetSubcategoryId ?? ""}
-                                    onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { ...prev[cat.csvName], targetSubcategoryId: e.target.value || undefined } }))}
+                                    value={entry.targetCategoryId ?? ""}
+                                    onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "map", targetCategoryId: e.target.value, targetSubcategoryId: undefined } }))}
                                     className="rounded border border-border bg-background px-2 py-0.5 text-xs"
                                   >
-                                    <option value="">No sub-category</option>
-                                    {subs.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                    <option value="">Select category…</option>
+                                    {orgCategories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
                                   </select>
-                                ) : null;
-                              })()}
-                            </>
-                          )}
+                                  {entry.targetCategoryId && (() => {
+                                    const subs = allSubcategories.filter((s: any) => s.categoryId === entry.targetCategoryId);
+                                    return subs.length > 0 ? (
+                                      <select
+                                        value={entry.targetSubcategoryId ?? ""}
+                                        onChange={(e) => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { ...prev[cat.csvName], targetSubcategoryId: e.target.value || undefined } }))}
+                                        className="rounded border border-border bg-background px-2 py-0.5 text-xs"
+                                      >
+                                        <option value="">No sub-category</option>
+                                        {subs.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                      </select>
+                                    ) : null;
+                                  })()}
+                                </>
+                              )}
+                            </div>
+                            {/* Skip */}
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+                                <input
+                                  type="radio"
+                                  checked={entry.action === "skip"}
+                                  onChange={() => setCatMapping((prev) => ({ ...prev, [cat.csvName]: { action: "skip" } }))}
+                                />
+                                <span className="text-muted-foreground">Skip</span>
+                              </label>
+                            </div>
+                          </div>
                           {/* Apply to All button — visible when row has a valid mapping */}
                           {unmatched.length > 1 && (
                             (entry.action === "map" && entry.targetCategoryId) ||
-                            (entry.action === "create" && entry.familyId)
+                            (entry.action === "create" && entry.familyId) ||
+                            entry.action === "skip"
                           ) && (
                             <button
                               type="button"
@@ -728,7 +852,19 @@ export default function ImportItemsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(preview.preview ?? []).slice(0, 100).map((row) => (
+                  {(() => {
+                    // When updates are off, use createPreview (which has ALL create rows, not just first 100)
+                    if (includeCreates && !includeUpdates) {
+                      return (preview.createPreview ?? []).slice(0, 100);
+                    }
+                    if (!includeCreates && includeUpdates) {
+                      return (preview.preview ?? []).filter((r) => r.action === "UPDATE").slice(0, 100);
+                    }
+                    // Both on — show creates first, then updates
+                    const creates = preview.createPreview ?? [];
+                    const updates = (preview.preview ?? []).filter((r) => r.action === "UPDATE");
+                    return [...creates, ...updates].slice(0, 100);
+                  })().map((row) => (
                     <tr
                       key={row.rowIndex}
                       className="border-b border-border hover:bg-accent"
@@ -933,19 +1069,28 @@ export default function ImportItemsPage() {
                     Download Error Log ({results.errorLog.length}{" "}
                     {results.errorLog.length === 1 ? "error" : "errors"})
                   </button>
-                  <div className="max-h-40 overflow-y-auto rounded-lg border border-red-200 bg-red-50/50 p-3">
-                    <div className="space-y-1">
-                      {results.errorLog.slice(0, 20).map((err, i) => (
-                        <p key={i} className="text-xs text-red-700 font-mono">
-                          Row {err.row}: {err.message}
-                        </p>
-                      ))}
-                      {results.errorLog.length > 20 && (
-                        <p className="text-xs text-red-500 italic">
-                          ... and {results.errorLog.length - 20} more errors (download CSV for full list)
-                        </p>
-                      )}
-                    </div>
+                  <div className="max-h-[300px] overflow-y-auto rounded-lg border border-red-200 bg-background">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-red-50 border-b border-red-200">
+                        <tr>
+                          <th className="px-3 py-1.5 text-left font-semibold text-red-800 w-16">Row</th>
+                          <th className="px-3 py-1.5 text-left font-semibold text-red-800">Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {results.errorLog.slice(0, 100).map((err, i) => (
+                          <tr key={i} className="border-b border-red-100 hover:bg-red-50/50">
+                            <td className="px-3 py-1.5 font-mono text-red-600 tabular-nums">{err.row}</td>
+                            <td className="px-3 py-1.5 text-red-700">{err.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {results.errorLog.length > 100 && (
+                      <div className="px-3 py-2 text-center text-[11px] text-red-500 italic border-t border-red-200 bg-red-50/30">
+                        Showing 100 of {results.errorLog.length} errors — download CSV for full list
+                      </div>
+                    )}
                   </div>
                 </>
               )}

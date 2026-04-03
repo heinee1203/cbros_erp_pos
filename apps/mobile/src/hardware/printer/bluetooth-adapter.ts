@@ -164,7 +164,7 @@ export class BluetoothPrinterAdapter implements PrinterProvider {
 
   async printTestPage(): Promise<PrintResult> {
     return this.printReceipt({
-      header: { storeName: 'APEX AUTO PARTS', address: 'Test Print' },
+      header: { storeName: 'CBROS GENUINE AUTOPARTS', address: 'Test Print' },
       transaction: {
         receiptNumber: 'TEST-001',
         date: new Date().toLocaleString(),

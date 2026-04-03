@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   Search,
   X,
@@ -10,9 +11,17 @@ import {
   ChevronsDown,
   Download,
 } from "lucide-react";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { useAuth } from "@/app/auth-context";
 import { useStockJournal, type JournalEntry } from "@/hooks/use-stock-journal";
 import { downloadCSV } from "@/lib/csv-export";
+
+/** 30 days ago as YYYY-MM-DD */
+function defaultDateFrom(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  return d.toISOString().slice(0, 10);
+}
 
 /* ═══════════════════════════════════════════════════════
  * CONSTANTS
@@ -56,6 +65,7 @@ const ALL_REASONS = Object.keys(REASON_LABELS);
 
 export default function InventoryHistoryPage() {
   const { token, locationId, loading: authLoading } = useAuth();
+  const router = useRouter();
 
   // ── Filters ──
   const [allLocations, setAllLocations] = useState(false);
@@ -64,7 +74,7 @@ export default function InventoryHistoryPage() {
   const [reasonFilter, setReasonFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
+  const [dateFrom, setDateFrom] = useState(defaultDateFrom);
   const [dateTo, setDateTo] = useState("");
 
   // Debounce
@@ -118,7 +128,11 @@ export default function InventoryHistoryPage() {
       <div className="flex items-center justify-between border-b border-border bg-background px-5 py-2.5">
         <div className="flex items-center gap-2.5">
           <h1 className="text-sm font-semibold text-foreground">Inventory History</h1>
-          <span className="text-xs text-muted-foreground">Stock Movement Ledger</span>
+          <span className="text-xs text-muted-foreground">
+            {count > 0
+              ? `Showing ${count} movement${count !== 1 ? "s" : ""}${hasNextPage ? "+" : ""}`
+              : "Stock Movement Ledger"}
+          </span>
         </div>
         <button
           onClick={() =>
@@ -134,7 +148,7 @@ export default function InventoryHistoryPage() {
                 TYPE_LABELS[e.referenceType] ?? e.referenceType,
                 e.reasonCode ? (REASON_LABELS[e.reasonCode] ?? e.reasonCode) : "",
                 e.actorName ?? e.actorType,
-                e.referenceId,
+                e.referenceNumber ?? "",
                 String(e.changeQuantity),
                 String(e.balanceAfter),
               ]),
@@ -155,18 +169,10 @@ export default function InventoryHistoryPage() {
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70 mr-0.5">
             Period
           </span>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary [&::-webkit-calendar-picker-indicator]:opacity-40"
-          />
-          <span className="text-xs text-muted-foreground">to</span>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary [&::-webkit-calendar-picker-indicator]:opacity-40"
+          <DateRangePicker
+            startDate={dateFrom}
+            endDate={dateTo}
+            onChange={(start, end) => { setDateFrom(start); setDateTo(end); }}
           />
 
           <div className="mx-1.5 h-4 w-px bg-border" />
@@ -271,7 +277,7 @@ export default function InventoryHistoryPage() {
             </thead>
             <tbody>
               {entries.map((entry, i) => (
-                <LedgerRow key={entry.id} entry={entry} odd={i % 2 === 1} />
+                <LedgerRow key={entry.id} entry={entry} odd={i % 2 === 1} onNavigate={router.push} />
               ))}
             </tbody>
           </table>
@@ -314,7 +320,18 @@ export default function InventoryHistoryPage() {
  * LEDGER ROW — dense, audit-optimized
  * ═══════════════════════════════════════════════════════ */
 
-function LedgerRow({ entry, odd }: { entry: JournalEntry; odd: boolean }) {
+function getRowHref(entry: JournalEntry): string | null {
+  const type = entry.referenceType;
+  const docId = entry.referenceDocId;
+  const refNum = entry.referenceNumber;
+  if (!docId && !refNum) return null;
+  if (type === "RECEIVING" && refNum) return `/procurement/purchase-orders/${refNum}`;
+  if ((type === "TRANSFER_IN" || type === "TRANSFER_OUT") && docId) return `/procurement/transfer-orders/${docId}`;
+  if ((type === "SALE" || type === "RETURN" || type === "VOID") && docId) return `/sales/receipts?id=${docId}`;
+  return null;
+}
+
+function LedgerRow({ entry, odd, onNavigate }: { entry: JournalEntry; odd: boolean; onNavigate: (url: string) => void }) {
   const d = new Date(entry.effectiveAt);
   const date = d.toLocaleDateString("en-PH", { day: "2-digit", month: "short" });
   const time = d.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -325,8 +342,13 @@ function LedgerRow({ entry, odd }: { entry: JournalEntry; odd: boolean }) {
     ? (REASON_LABELS[entry.reasonCode] ?? entry.reasonCode)
     : null;
 
+  const href = getRowHref(entry);
+
   return (
-    <tr className={`border-b border-border/50 transition-colors hover:bg-primary/[0.03] ${odd ? "bg-muted/20" : ""}`}>
+    <tr
+      className={`border-b border-border/50 transition-colors hover:bg-primary/[0.03] ${odd ? "bg-muted/20" : ""} ${href ? "cursor-pointer" : ""}`}
+      onClick={href ? () => onNavigate(href) : undefined}
+    >
       {/* Date */}
       <td className="whitespace-nowrap px-3 py-1.5 align-top">
         <span className="text-xs text-foreground">{date}</span>
@@ -359,19 +381,19 @@ function LedgerRow({ entry, odd }: { entry: JournalEntry; odd: boolean }) {
         {entry.actorName ?? entry.actorType}
       </td>
 
-      {/* Reference — monospace, compact */}
+      {/* Reference — show PO/Transfer/Sale number, not UUID */}
       <td className="whitespace-nowrap px-3 py-1.5 align-top">
-        <span
-          className="cursor-default font-mono text-xs text-muted-foreground/60"
-          title={entry.referenceId}
-        >
-          {entry.referenceId.slice(0, 8)}
-        </span>
+        {entry.referenceNumber ? (
+          <span className="font-mono text-xs text-primary">
+            {entry.referenceNumber}
+          </span>
+        ) : (
+          <span className="font-mono text-xs text-muted-foreground/40">
+            {"\u2014"}
+          </span>
+        )}
         {entry.notes && (
-          <div
-            className="max-w-[120px] truncate text-xs text-muted-foreground/50"
-            title={entry.notes}
-          >
+          <div className="max-w-[120px] truncate text-xs text-muted-foreground/50" title={entry.notes}>
             {entry.notes}
           </div>
         )}
@@ -380,7 +402,7 @@ function LedgerRow({ entry, odd }: { entry: JournalEntry; odd: boolean }) {
       {/* Adjustment — signed, color-coded, monospace */}
       <td className="whitespace-nowrap px-3 py-1.5 text-right align-top font-mono text-xs tabular-nums">
         <span className={isOut ? "text-red-600" : "text-emerald-600"}>
-          {isOut ? "−" : "+"}
+          {isOut ? "\u2212" : "+"}
           {Math.abs(entry.changeQuantity)}
         </span>
       </td>

@@ -126,6 +126,9 @@ export default function CatalogScreen() {
       barcode: item.barcode,
       unitPrice: overridePrice ?? item.unitPrice,
       availableStock: item.stockLevel - item.reservedLevel,
+      isSerialized: item.isSerialized,
+      isTire: item.isTire,
+      warrantyMonths: item.warrantyMonths,
     });
     showToast(`Added: ${item.name}`);
   }, [addLine, showToast]);
@@ -631,7 +634,7 @@ const createStyles = () => StyleSheet.create({
   headerTitle: {
     fontSize: 11,
     fontFamily: 'Outfit-SemiBold',
-    color: '#5A5750',
+    color: colors.text.muted,
     textTransform: 'uppercase',
     letterSpacing: 2,
   },
@@ -696,14 +699,14 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.primary,
   },
   scanButton: {
-    backgroundColor: '#F5A623',
+    backgroundColor: colors.accent.primary,
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 10,
     marginLeft: 8,
   },
   scanButtonText: {
-    color: '#1A1A1A',
+    color: colors.text.inverse,
     fontSize: 13,
     fontFamily: 'Outfit-Bold',
     letterSpacing: 0.5,

@@ -8,155 +8,56 @@ import {
   Plus,
   Minus,
   X,
-  Barcode,
-  Package,
-  Tag,
-  DollarSign,
-  FileText,
   ArrowLeft,
-  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { PODetail, POLine } from "@/hooks/use-po-query";
-import JsBarcode from "jsbarcode";
 import { cn } from "@/lib/utils";
+import { getProductDisplayName } from "@/lib/format";
 import { useAuth } from "../../auth-context";
 import { apiFetch } from "@/lib/api";
 import type { ProductRow } from "@/hooks/use-products";
-import { generateCostCode, detectBarcodeFormat } from "@apex/types";
+import {
+  buildShelfLabel,
+  encodeCostMnemonic,
+  LABEL_50x30,
+  LABEL_50x40,
+  LABEL_100x70,
+  type ZplLabelConfig,
+} from "@apex/types";
 
-/* ─────────────────────────────────────────────
- * Label Templates
- * ───────────────────────────────────────────── */
-interface LabelTemplate {
-  id: string;
-  name: string;
-  icon: typeof Barcode;
-  description: string;
-  showName: boolean;
-  showSku: boolean;
-  showPrice: boolean;
-  showEmployeeInfo: boolean;
-  widthMm: number;
-  heightMm: number;
-}
-
-const TEMPLATES: LabelTemplate[] = [
-  {
-    id: "barcode-only",
-    name: "Barcode Only",
-    icon: Barcode,
-    description: "Barcode image with digits",
-    showName: false,
-    showSku: false,
-    showPrice: false,
-    showEmployeeInfo: false,
-    widthMm: 50,
-    heightMm: 25,
-  },
-  {
-    id: "barcode-name",
-    name: "Barcode + Name",
-    icon: Tag,
-    description: "Item name above barcode",
-    showName: true,
-    showSku: false,
-    showPrice: false,
-    showEmployeeInfo: false,
-    widthMm: 50,
-    heightMm: 30,
-  },
-  {
-    id: "barcode-sku",
-    name: "Barcode + SKU",
-    icon: Package,
-    description: "SKU code above barcode",
-    showName: false,
-    showSku: true,
-    showPrice: false,
-    showEmployeeInfo: false,
-    widthMm: 50,
-    heightMm: 30,
-  },
-  {
-    id: "barcode-price",
-    name: "Barcode + Price",
-    icon: DollarSign,
-    description: "Barcode with sell price below",
-    showName: false,
-    showSku: false,
-    showPrice: true,
-    showEmployeeInfo: false,
-    widthMm: 50,
-    heightMm: 30,
-  },
-  {
-    id: "barcode-name-price",
-    name: "Name + Barcode + Price",
-    icon: FileText,
-    description: "Full label: name, barcode, price",
-    showName: true,
-    showSku: false,
-    showPrice: true,
-    showEmployeeInfo: false,
-    widthMm: 50,
-    heightMm: 35,
-  },
-  {
-    id: "employee-label",
-    name: "Employee Label",
-    icon: ShieldCheck,
-    description: "Internal: cost code, supplier, date",
-    showName: true,
-    showSku: false,
-    showPrice: false,
-    showEmployeeInfo: true,
-    widthMm: 50,
-    heightMm: 40,
-  },
+/* ── Label Size Options ── */
+const LABEL_SIZES: { id: string; label: string; config: ZplLabelConfig }[] = [
+  { id: "50x30", label: "50\u00D730mm", config: LABEL_50x30 },
+  { id: "50x40", label: "50\u00D740mm", config: LABEL_50x40 },
+  { id: "100x70", label: "100\u00D770mm", config: LABEL_100x70 },
 ];
 
-/* ─────────────────────────────────────────────
- * Label Sizes
- * ───────────────────────────────────────────── */
-interface LabelSize {
-  id: string;
-  label: string;
-  widthMm: number;
-  heightMm: number;
-}
-
-const LABEL_SIZES: LabelSize[] = [
-  { id: "50x30", label: "50 × 30 mm", widthMm: 50, heightMm: 30 },
-  { id: "50x40", label: "50 × 40 mm", widthMm: 50, heightMm: 40 },
-  { id: "100x70", label: "100 × 70 mm", widthMm: 100, heightMm: 70 },
-];
-
-/* ─────────────────────────────────────────────
- * Queue Item
- * ───────────────────────────────────────────── */
+/* ── Queue Item ── */
 interface QueueItem {
   product: ProductRow;
   quantity: number;
-  /** Employee-only fields — populated from PO data */
-  supplierMnemonic?: string | null;
-  mnemonicCostCode?: string | null;
-  dateEncoded?: string; // YYYY-MM-DD
+  supplierCode: string;
 }
 
-/* ─────────────────────────────────────────────
- * Main Page
- * ───────────────────────────────────────────── */
+function deriveSupplierCode(brandName: string | null | undefined): string {
+  if (!brandName) return "";
+  const consonants = brandName.replace(/[aeiou\s]/gi, "");
+  if (consonants.length >= 2) return consonants.slice(0, 2).toUpperCase();
+  return brandName.slice(0, 2).toUpperCase();
+}
+
+function costCodePreview(costPrice: number, supplierCode: string): string {
+  const mnemonic = encodeCostMnemonic(costPrice);
+  if (!mnemonic) return "";
+  return supplierCode ? `${mnemonic}${supplierCode}` : mnemonic;
+}
+
+/* ── Page ── */
 export default function BarcodePrintingPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center py-20 text-muted-foreground">
-          Loading...
-        </div>
-      }
-    >
+    <Suspense fallback={<div className="flex items-center justify-center py-20 text-muted-foreground">Loading...</div>}>
       <BarcodePrintingContent />
     </Suspense>
   );
@@ -165,17 +66,16 @@ export default function BarcodePrintingPage() {
 function BarcodePrintingContent() {
   const { token, locationId } = useAuth();
 
-  // ── State ──
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [templateId, setTemplateId] = useState("barcode-name-price");
-  const [labelSizeId, setLabelSizeId] = useState("50x30");
-  const [printerType, setPrinterType] = useState<"sheet" | "label">("sheet");
+  const [selectedSize, setSelectedSize] = useState("50x30");
+  const [defaultSupplierCode, setDefaultSupplierCode] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ProductRow[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [printStatus, setPrintStatus] = useState<"idle" | "sending" | "ok" | "fail">("idle");
+  const [statusMsg, setStatusMsg] = useState("");
 
-  // ── PO pre-population ──
   const searchParams = useSearchParams();
   const poNo = searchParams.get("poNo");
   const [poLoading, setPOLoading] = useState(false);
@@ -185,38 +85,21 @@ function BarcodePrintingContent() {
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const abortRef = useRef<AbortController>(undefined);
 
-  const template = TEMPLATES.find((t) => t.id === templateId) ?? TEMPLATES[0];
-  const labelSize = LABEL_SIZES.find((s) => s.id === labelSizeId) ?? LABEL_SIZES[0];
-  const isLargeLabel = labelSize.widthMm >= 100;
+  const labelConfig = LABEL_SIZES.find((s) => s.id === selectedSize)?.config ?? LABEL_50x30;
   const totalLabels = queue.reduce((sum, item) => sum + item.quantity, 0);
 
-  // ── Search (debounced 300ms) ──
+  /* ── Search ── */
   const doSearch = useCallback(
     async (q: string) => {
-      if (!token || !locationId || q.length < 2) {
-        setSearchResults([]);
-        return;
-      }
-
+      if (!token || !locationId || q.length < 2) { setSearchResults([]); return; }
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-
       setIsSearching(true);
       try {
-        const res = await apiFetch<{ data: ProductRow[] }>(
-          `/products/search?q=${encodeURIComponent(q)}`,
-          { token, locationId, signal: controller.signal },
-        );
-        if (!controller.signal.aborted) {
-          setSearchResults(res.data);
-          setShowResults(true);
-        }
-      } catch {
-        // Aborted or network error — ignore
-      } finally {
-        if (!controller.signal.aborted) setIsSearching(false);
-      }
+        const res = await apiFetch<{ data: ProductRow[] }>(`/products/search?q=${encodeURIComponent(q)}`, { token, locationId, signal: controller.signal });
+        if (!controller.signal.aborted) { setSearchResults(res.data); setShowResults(true); }
+      } catch { /* aborted */ } finally { if (!controller.signal.aborted) setIsSearching(false); }
     },
     [token, locationId],
   );
@@ -224,801 +107,198 @@ function BarcodePrintingContent() {
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    if (value.length < 2) {
-      setSearchResults([]);
-      setShowResults(false);
-      return;
-    }
+    if (value.length < 2) { setSearchResults([]); setShowResults(false); return; }
     searchTimerRef.current = setTimeout(() => doSearch(value), 300);
   };
 
-  // Close dropdown on outside click
   useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowResults(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    const handler = (e: MouseEvent) => { if (searchRef.current && !searchRef.current.contains(e.target as Node)) setShowResults(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // ── Auto-populate queue from PO ──
+  /* ── PO auto-populate ── */
   useEffect(() => {
     if (!poNo || !token || !locationId) return;
     let cancelled = false;
     setPOLoading(true);
-
     (async () => {
       try {
-        const po = await apiFetch<PODetail>(
-          `/procurement/purchase-orders/by-number/${encodeURIComponent(poNo)}`,
-          { token, locationId },
-        );
+        const po = await apiFetch<PODetail>(`/procurement/purchase-orders/by-number/${encodeURIComponent(poNo)}`, { token, locationId });
         if (cancelled) return;
-
-        const today = new Date().toISOString().slice(0, 10);
-        const items: QueueItem[] = po.lines
-          .filter((line: POLine) => line.barcode)
-          .map((line: POLine) => ({
-            product: {
-              id: line.productId,
-              name: line.productName,
-              sku: line.sku,
-              mnemonicSku: line.mnemonicSku,
-              category: line.category,
-              unitPrice: line.unitPrice,
-              costPrice: line.unitCost,
-              barcode: line.barcode,
-              stockLevel: 0,
-              reorderPoint: 0,
-              familyId: null,
-              familyName: null,
-            } as ProductRow,
-            quantity: line.orderedQty,
-            supplierMnemonic: po.supplier?.mnemonicCode ?? null,
-            mnemonicCostCode: line.mnemonicCostCode || (() => {
-              try { return generateCostCode(line.unitCost); } catch { return null; }
-            })(),
-            dateEncoded: today,
-          }));
-
+        const supplierAbbr = po.supplier?.mnemonicCode?.slice(0, 2)?.toUpperCase() ?? "";
+        setDefaultSupplierCode(supplierAbbr);
+        const items: QueueItem[] = po.lines.filter((line: POLine) => line.barcode).map((line: POLine) => ({
+          product: { id: line.productId, name: line.productName, sku: line.sku, mnemonicSku: line.mnemonicSku, category: line.category, unitPrice: line.unitPrice, costPrice: line.unitCost, barcode: line.barcode, stockLevel: 0, reorderPoint: 0, familyId: null, familyName: null } as ProductRow,
+          quantity: line.orderedQty,
+          supplierCode: supplierAbbr,
+        }));
         setQueue(items);
         const skipped = po.lines.length - items.length;
-        setPOBanner(
-          skipped > 0
-            ? `Loaded ${items.length} item${items.length !== 1 ? "s" : ""} from ${poNo} (${skipped} skipped — no barcode)`
-            : `Loaded ${items.length} item${items.length !== 1 ? "s" : ""} from ${poNo}`,
-        );
-      } catch {
-        setPOBanner(`Failed to load PO ${poNo}`);
-      } finally {
-        if (!cancelled) setPOLoading(false);
-      }
+        setPOBanner(skipped > 0 ? `Loaded ${items.length} item${items.length !== 1 ? "s" : ""} from ${poNo} (${skipped} skipped)` : `Loaded ${items.length} item${items.length !== 1 ? "s" : ""} from ${poNo}`);
+      } catch { setPOBanner(`Failed to load PO ${poNo}`); } finally { if (!cancelled) setPOLoading(false); }
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [poNo, token, locationId]);
 
-  // ── Queue operations ──
+  /* ── Queue ops ── */
   const addToQueue = (product: ProductRow) => {
     setQueue((prev) => {
       const existing = prev.find((item) => item.product.id === product.id);
-      if (existing) {
-        return prev.map((item) =>
-          item.product.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item,
-        );
-      }
-      let costCode: string | null = null;
-      try { costCode = generateCostCode(product.costPrice); } catch { /* ignore */ }
-      return [...prev, {
-        product,
-        quantity: 1,
-        mnemonicCostCode: costCode,
-        dateEncoded: new Date().toISOString().slice(0, 10),
-      }];
+      if (existing) return prev.map((item) => item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
+      return [...prev, { product, quantity: 1, supplierCode: defaultSupplierCode || deriveSupplierCode(product.brandName) }];
     });
-    setSearchQuery("");
-    setSearchResults([]);
-    setShowResults(false);
+    setSearchQuery(""); setSearchResults([]); setShowResults(false);
   };
 
-  const updateQuantity = (productId: string, qty: number) => {
-    if (qty < 1) return;
-    if (qty > 999) return;
-    setQueue((prev) =>
-      prev.map((item) =>
-        item.product.id === productId ? { ...item, quantity: qty } : item,
-      ),
-    );
-  };
-
-  const removeFromQueue = (productId: string) => {
-    setQueue((prev) => prev.filter((item) => item.product.id !== productId));
-  };
-
+  const updateQuantity = (productId: string, qty: number) => { if (qty < 1 || qty > 999) return; setQueue((prev) => prev.map((item) => (item.product.id === productId ? { ...item, quantity: qty } : item))); };
+  const updateSupplierCode = (productId: string, code: string) => { setQueue((prev) => prev.map((item) => item.product.id === productId ? { ...item, supplierCode: code.toUpperCase().slice(0, 4) } : item)); };
+  const removeFromQueue = (productId: string) => { setQueue((prev) => prev.filter((item) => item.product.id !== productId)); };
   const clearQueue = () => setQueue([]);
 
-  // ── Print ──
-  const handlePrint = () => {
-    if (queue.length === 0) return;
-
-    // Inject dynamic @page size for label printers
-    if (printerType === "label") {
-      const id = "__label-printer-page-style";
-      let style = document.getElementById(id) as HTMLStyleElement | null;
-      if (!style) {
-        style = document.createElement("style");
-        style.id = id;
-        document.head.appendChild(style);
+  /* ── Print ── */
+  const handlePrint = async () => {
+    if (queue.length === 0 || !token || !locationId) return;
+    setPrintStatus("sending");
+    setStatusMsg(`Sending ${totalLabels} label${totalLabels !== 1 ? "s" : ""}\u2026`);
+    try {
+      const zplLabels = queue.map((item) => {
+        const displayName = getProductDisplayName(item.product);
+        const labelData = { itemName: displayName, barcodeData: item.product.barcode ?? item.product.sku ?? "", costPrice: parseFloat(item.product.costPrice) || 0, supplierCode: item.supplierCode, quantity: item.quantity };
+        const zpl = buildShelfLabel(labelData, labelConfig);
+        return zpl;
+      });
+      const fullZpl = zplLabels.join("\n");
+      let printed = false;
+      try {
+        const printers = await apiFetch<Array<{ Name: string; DriverName: string }>>("/printing/system-printers", { token, locationId });
+        const zebra = printers.find((p) => p.Name?.includes("ZDesigner") || p.Name?.includes("ZD230") || p.DriverName?.includes("ZDesigner"));
+        if (zebra) { await apiFetch<{ success: boolean }>("/printing/system-print", { token, locationId, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ printerName: zebra.Name, zpl: fullZpl }) }); printed = true; }
+      } catch { /* system print unavailable */ }
+      if (!printed) {
+        try {
+          const cfgRes = await apiFetch<{ data: Array<{ id: string; isDefault: boolean; connectionType: string; ipAddress: string | null; port: number | null }> }>("/printing/printers", { token, locationId });
+          const dflt = cfgRes.data.find((p) => p.isDefault) ?? cfgRes.data[0];
+          if (dflt?.connectionType === "tcp" && dflt.ipAddress) { await apiFetch("/printing/zpl", { token, locationId, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zpl: fullZpl, printerIp: dflt.ipAddress, port: dflt.port ?? 9100 }) }); printed = true; }
+        } catch { /* TCP failed */ }
       }
-      style.textContent = `
-        @page { size: ${labelSize.widthMm}mm ${labelSize.heightMm}mm; margin: 0; }
-        @media print {
-          body { margin: 0; padding: 0; }
-          body > *:not(#print-area) { display: none !important; }
-          #print-area { position: static !important; left: auto !important; top: auto !important; width: auto !important; height: auto !important; overflow: visible !important; display: block !important; }
-          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
-      `;
-    } else {
-      const existing = document.getElementById("__label-printer-page-style");
-      if (existing) existing.remove();
-    }
-
-    window.print();
+      if (!printed) { const w = window.open("", "_blank"); if (w) { w.document.write(`<html><head><title>ZPL Labels</title><style>body{font-family:monospace;white-space:pre-wrap;font-size:12px;margin:20px}</style></head><body>${fullZpl.replace(/</g, "&lt;")}</body></html>`); w.document.close(); } }
+      setPrintStatus("ok"); setStatusMsg(`Sent ${totalLabels} label${totalLabels !== 1 ? "s" : ""}`);
+    } catch (err: unknown) { setPrintStatus("fail"); setStatusMsg(err instanceof Error ? err.message : "Print failed"); }
+    setTimeout(() => { setPrintStatus("idle"); setStatusMsg(""); }, 4000);
   };
 
+  /* ── Render ── */
   return (
-    <>
-      <div className="flex flex-1 flex-col print:hidden">
-        {/* Page Header */}
-        <div className="flex items-center justify-between border-b border-border bg-background px-6 py-4">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/inventory"
-              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-            >
-              <ArrowLeft size={18} />
-            </Link>
-            <div>
-              <h1 className="text-lg font-semibold text-foreground">
-                Barcode Printing
-              </h1>
-              <p className="text-[12px] text-muted-foreground">
-                Search items, build a print queue, and print barcode labels
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handlePrint}
-            disabled={queue.length === 0}
-            className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-[13px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Printer size={15} />
-            Print {totalLabels > 0 ? `${totalLabels} Label${totalLabels !== 1 ? "s" : ""}` : "Labels"}
-          </button>
+    <div className="flex flex-1 flex-col">
+      {/* Row 1: Header */}
+      <div className="flex items-center justify-between border-b border-border bg-background px-6 py-4">
+        <div className="flex items-center gap-3">
+          <Link href="/inventory" className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"><ArrowLeft className="h-5 w-5" /></Link>
+          <h1 className="text-xl font-bold text-foreground">Barcode Printing</h1>
         </div>
-
-        {/* Two-column Layout */}
-        <div className="flex flex-1 flex-col lg:flex-row overflow-hidden">
-          {/* ── Left Panel: Search + Queue ── */}
-          <div className="flex flex-1 flex-col border-b lg:border-b-0 lg:border-r border-border">
-            {/* PO Loading / Banner */}
-            {poLoading && (
-              <div className="flex items-center justify-center border-b border-border bg-muted/30 px-5 py-3 gap-2">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-primary" />
-                <span className="text-[13px] text-muted-foreground">
-                  Loading items from {poNo}…
-                </span>
-              </div>
-            )}
-            {poBanner && !poLoading && (
-              <div className="flex items-center justify-between border-b border-border bg-primary/5 px-5 py-2">
-                <span className="text-[12px] text-primary font-medium">
-                  {poBanner}
-                </span>
-                <button
-                  onClick={() => setPOBanner(null)}
-                  className="rounded p-0.5 text-primary/60 hover:text-primary transition-colors"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            )}
-
-            {/* Search */}
-            <div className="border-b border-border px-5 py-3" ref={searchRef}>
-              <div className="relative">
-                <Search
-                  size={15}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  onFocus={() => searchResults.length > 0 && setShowResults(true)}
-                  placeholder="Search by name, SKU, or barcode…"
-                  className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/50 focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
-                />
-                {isSearching && (
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-primary" />
-                  </div>
-                )}
-
-                {/* Search Results Dropdown */}
-                {showResults && searchResults.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-[320px] overflow-y-auto rounded-lg border border-border bg-background shadow-xl">
-                    {searchResults.map((product) => {
-                      const inQueue = queue.some((q) => q.product.id === product.id);
-                      return (
-                        <button
-                          key={product.id}
-                          onClick={() => addToQueue(product)}
-                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent/60"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <p className="truncate text-[13px] font-medium text-foreground">
-                              {product.name}
-                            </p>
-                            <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                              <span className="font-mono">{product.sku}</span>
-                              {product.barcode && (
-                                <>
-                                  <span className="text-border">·</span>
-                                  <span className="font-mono">{product.barcode}</span>
-                                </>
-                              )}
-                              <span className="text-border">·</span>
-                              <span>{product.stockLevel} in stock</span>
-                            </div>
-                          </div>
-                          {inQueue ? (
-                            <span className="shrink-0 rounded bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                              In Queue
-                            </span>
-                          ) : (
-                            <Plus size={14} className="shrink-0 text-muted-foreground" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {showResults && searchResults.length === 0 && searchQuery.length >= 2 && !isSearching && (
-                  <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-border bg-background p-4 text-center shadow-xl">
-                    <p className="text-[13px] text-muted-foreground">
-                      No products found
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Queue Table */}
-            <div className="flex-1 overflow-y-auto">
-              {queue.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 text-center">
-                  <div className="mb-3 rounded-xl bg-muted p-4">
-                    <Barcode size={28} className="text-muted-foreground/50" />
-                  </div>
-                  <p className="text-sm font-medium text-muted-foreground">
-                    Print queue is empty
-                  </p>
-                  <p className="mt-1 max-w-[260px] text-[12px] text-muted-foreground/70">
-                    Search for products above and click to add them to the print queue
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  {/* Queue Header */}
-                  <div className="flex items-center justify-between border-b border-border bg-muted/30 px-5 py-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Print Queue · {queue.length} item{queue.length !== 1 ? "s" : ""} · {totalLabels} label{totalLabels !== 1 ? "s" : ""}
-                    </span>
-                    <button
-                      onClick={clearQueue}
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-destructive/70 transition-colors hover:bg-destructive/5 hover:text-destructive"
-                    >
-                      <Trash2 size={12} />
-                      Clear All
-                    </button>
-                  </div>
-
-                  {/* Queue Items */}
-                  <table className="w-full text-[13px]">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/20">
-                        <th scope="col" className="px-5 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          #
-                        </th>
-                        <th scope="col" className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Item
-                        </th>
-                        <th scope="col" className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Barcode
-                        </th>
-                        <th scope="col" className="px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Qty
-                        </th>
-                        <th scope="col" className="px-3 py-2 w-10" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {queue.map((item, idx) => (
-                        <tr
-                          key={item.product.id}
-                          className="border-b border-border last:border-0 hover:bg-accent/30 transition-colors"
-                        >
-                          <td className="px-5 py-2 text-muted-foreground tabular-nums">
-                            {idx + 1}
-                          </td>
-                          <td className="px-3 py-2">
-                            <p className="font-medium text-foreground truncate max-w-[240px]">
-                              {item.product.name}
-                            </p>
-                            <p className="text-[11px] text-muted-foreground font-mono">
-                              {item.product.sku}
-                            </p>
-                          </td>
-                          <td className="px-3 py-2 font-mono text-muted-foreground">
-                            {item.product.barcode ?? "—"}
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                onClick={() =>
-                                  updateQuantity(
-                                    item.product.id,
-                                    item.quantity - 1,
-                                  )
-                                }
-                                disabled={item.quantity <= 1}
-                                className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-                              >
-                                <Minus size={13} />
-                              </button>
-                              <input
-                                type="number"
-                                min={1}
-                                max={999}
-                                value={item.quantity}
-                                onChange={(e) =>
-                                  updateQuantity(
-                                    item.product.id,
-                                    parseInt(e.target.value, 10) || 1,
-                                  )
-                                }
-                                className="h-7 w-12 rounded border border-border bg-background text-center text-[12px] font-medium tabular-nums outline-none focus:border-primary/40"
-                              />
-                              <button
-                                onClick={() =>
-                                  updateQuantity(
-                                    item.product.id,
-                                    item.quantity + 1,
-                                  )
-                                }
-                                disabled={item.quantity >= 999}
-                                className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-                              >
-                                <Plus size={13} />
-                              </button>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2">
-                            <button
-                              onClick={() => removeFromQueue(item.product.id)}
-                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                            >
-                              <X size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Right Panel: Templates + Preview ── */}
-          <div className="flex w-full lg:w-[380px] shrink-0 flex-col bg-muted/20">
-            {/* Template Selector */}
-            <div className="border-b border-border px-5 py-3">
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Label Template
-              </h3>
-              <div className="space-y-1">
-                {TEMPLATES.map((t) => {
-                  const Icon = t.icon;
-                  const isActive = t.id === templateId;
-                  return (
-                    <button
-                      key={t.id}
-                      onClick={() => setTemplateId(t.id)}
-                      className={cn(
-                        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all",
-                        isActive
-                          ? "bg-primary/10 text-primary ring-1 ring-primary/20"
-                          : "text-foreground hover:bg-accent/60",
-                      )}
-                    >
-                      <Icon
-                        size={14}
-                        className={cn(
-                          "shrink-0",
-                          isActive
-                            ? "text-primary"
-                            : "text-muted-foreground",
-                        )}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[12px] font-medium truncate">
-                          {t.name}
-                        </p>
-                        <p className="text-[10px] text-muted-foreground truncate">
-                          {t.description}
-                        </p>
-                      </div>
-                      {isActive && (
-                        <div className="h-2 w-2 shrink-0 rounded-full bg-primary" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Label Size Selector */}
-            <div className="border-b border-border px-5 py-3">
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Label Size
-              </h3>
-              <div className="flex gap-1.5">
-                {LABEL_SIZES.map((s) => {
-                  const isActive = s.id === labelSizeId;
-                  return (
-                    <button
-                      key={s.id}
-                      onClick={() => setLabelSizeId(s.id)}
-                      className={cn(
-                        "flex-1 rounded-lg px-2 py-1.5 text-center text-[11px] font-medium transition-all",
-                        isActive
-                          ? "bg-primary/10 text-primary ring-1 ring-primary/20"
-                          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                      )}
-                    >
-                      {s.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Printer Type */}
-            <div className="border-b border-border px-5 py-3">
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Printer Type
-              </h3>
-              <div className="flex gap-1.5">
-                {([
-                  { id: "sheet" as const, label: "Sheet Printer" },
-                  { id: "label" as const, label: "Label Printer" },
-                ]).map((p) => {
-                  const isActive = p.id === printerType;
-                  return (
-                    <button
-                      key={p.id}
-                      onClick={() => setPrinterType(p.id)}
-                      className={cn(
-                        "flex-1 rounded-lg px-2 py-1.5 text-center text-[11px] font-medium transition-all",
-                        isActive
-                          ? "bg-primary/10 text-primary ring-1 ring-primary/20"
-                          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                      )}
-                    >
-                      {p.label}
-                    </button>
-                  );
-                })}
-              </div>
-              {printerType === "label" && (
-                <p className="mt-1.5 text-[10px] text-muted-foreground">
-                  One label per page — for Zebra ZD230 and similar thermal printers
-                </p>
-              )}
-            </div>
-
-            {/* Live Preview */}
-            <div className="flex-1 px-5 py-4">
-              <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Preview
-              </h3>
-              <div className="flex items-center justify-center rounded-xl border border-dashed border-border bg-white p-6 shadow-sm">
-                {queue.length > 0 && queue[0].product.barcode ? (
-                  <LabelPreview
-                    product={queue[0].product}
-                    template={template}
-                    isLargeLabel={isLargeLabel}
-                    supplierMnemonic={queue[0].supplierMnemonic}
-                    mnemonicCostCode={queue[0].mnemonicCostCode}
-                    dateEncoded={queue[0].dateEncoded}
-                  />
-                ) : (
-                  <div className="text-center py-8">
-                    <Barcode
-                      size={32}
-                      className="mx-auto mb-2 text-muted-foreground/30"
-                    />
-                    <p className="text-[12px] text-muted-foreground">
-                      {queue.length === 0
-                        ? "Add items to see preview"
-                        : "No barcode assigned"}
-                    </p>
-                  </div>
-                )}
-              </div>
-              {queue.length > 0 && queue[0].product.barcode && (
-                <p className="mt-2 text-center text-[10px] text-muted-foreground">
-                  Previewing: {queue[0].product.name}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
+        <button onClick={handlePrint} disabled={queue.length === 0 || printStatus === "sending"}
+          className={cn("flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors", printStatus === "ok" ? "bg-green-600 text-white" : printStatus === "fail" ? "bg-red-600 text-white" : "bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50")}>
+          <Printer className="h-4 w-4" />
+          {printStatus === "sending" ? "Sending\u2026" : printStatus === "ok" ? "Sent!" : printStatus === "fail" ? "Failed" : `Print ${totalLabels} Label${totalLabels !== 1 ? "s" : ""}`}
+        </button>
       </div>
 
-      {/* ── Print Area (off-screen so barcodes render; brought back for print) ── */}
-      <div
-        id="print-area"
-        style={{ position: "fixed", left: "-9999px", top: 0, width: "1px", height: "1px", overflow: "hidden" }}
-      >
-        {printerType === "label" ? (
-          /* Label Printer mode: one label per page (for Zebra ZD230, etc.) */
-          <div>
-            {queue.flatMap((item) =>
-              Array.from({ length: item.quantity }, (_, i) => (
-                <div
-                  key={`${item.product.id}-${i}`}
-                  className="flex items-center justify-center"
-                  style={{
-                    width: `${labelSize.widthMm}mm`,
-                    height: `${labelSize.heightMm}mm`,
-                    padding: "1mm",
-                    boxSizing: "border-box",
-                    pageBreakAfter: "always",
-                    overflow: "hidden",
-                  }}
-                >
-                  {item.product.barcode ? (
-                    <PrintLabel
-                      product={item.product}
-                      template={template}
-                      isLargeLabel={isLargeLabel}
-                      supplierMnemonic={item.supplierMnemonic}
-                      mnemonicCostCode={item.mnemonicCostCode}
-                      dateEncoded={item.dateEncoded}
-                    />
-                  ) : (
-                    <span className="text-[8px] text-gray-400">No barcode</span>
-                  )}
-                </div>
-              )),
-            )}
+      {/* Content */}
+      <div className="flex-1 px-6 py-4 space-y-4">
+        {statusMsg && (<div className={cn("rounded-lg px-4 py-2 text-sm font-medium", printStatus === "ok" ? "bg-green-50 text-green-700 border border-green-200" : printStatus === "fail" ? "bg-red-50 text-red-700 border border-red-200" : "bg-blue-50 text-blue-700 border border-blue-200")}>{statusMsg}</div>)}
+        {poBanner && (<div className="rounded-lg bg-blue-50 px-4 py-2 text-sm text-blue-700 border border-blue-200 flex items-center justify-between"><span>{poLoading ? "Loading PO\u2026" : poBanner}</span><button onClick={() => setPOBanner(null)} className="ml-2 text-blue-500 hover:text-blue-700"><X className="h-4 w-4" /></button></div>)}
+
+        {/* Row 2: Search */}
+        <div ref={searchRef} className="relative" style={{ zIndex: 50 }}>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input type="text" placeholder="Search by name, SKU, or barcode\u2026" value={searchQuery} onChange={(e) => handleSearchChange(e.target.value)} onFocus={() => searchResults.length > 0 && setShowResults(true)}
+              className="w-full rounded-lg border border-border bg-background py-2.5 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" />
+            {isSearching && <div className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />}
           </div>
+          {showResults && searchResults.length > 0 && (
+            <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-border bg-background shadow-xl max-h-80 overflow-auto" style={{ zIndex: 50 }}>
+              {searchResults.map((product) => {
+                const inQueue = queue.some((q) => q.product.id === product.id);
+                return (
+                  <button key={product.id} onClick={() => addToQueue(product)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{getProductDisplayName(product)}</p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="font-mono">{product.sku}</span>
+                        {product.barcode && (<><span>&middot;</span><span className="font-mono">{product.barcode}</span></>)}
+                        {product.costPrice && parseFloat(product.costPrice) > 0 && (<><span>&middot;</span><span className="font-mono text-primary/70">{costCodePreview(parseFloat(product.costPrice), defaultSupplierCode || deriveSupplierCode(product.brandName))}</span></>)}
+                      </div>
+                    </div>
+                    {inQueue && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">In Queue</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Row 3: Label Size + Supplier */}
+        <div className="flex items-center gap-4 rounded-lg border border-border bg-muted/30 px-4 py-2.5">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Label Size</span>
+          <div className="flex items-center gap-1.5">
+            {LABEL_SIZES.map((size) => (
+              <button key={size.id} onClick={() => setSelectedSize(size.id)}
+                className={cn("rounded-md px-3 py-1.5 text-xs font-semibold transition-colors", selectedSize === size.id ? "bg-primary text-primary-foreground shadow-sm" : "bg-background text-muted-foreground border border-border hover:bg-accent hover:text-foreground")}>
+                {size.label}
+              </button>
+            ))}
+          </div>
+          <div className="h-5 w-px bg-border" />
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Supplier</span>
+          <input type="text" value={defaultSupplierCode} onChange={(e) => setDefaultSupplierCode(e.target.value.toUpperCase().slice(0, 4))} maxLength={4} placeholder="e.g. AZ"
+            className="w-16 rounded border border-border bg-background px-2 py-1 text-center text-xs font-mono uppercase focus:border-primary focus:outline-none" />
+        </div>
+
+        {/* Row 4: Queue */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">Print Queue</h2>
+            {queue.length > 0 && <span className="text-xs text-muted-foreground">&middot; {queue.length} item{queue.length !== 1 ? "s" : ""} &middot; {totalLabels} label{totalLabels !== 1 ? "s" : ""}</span>}
+          </div>
+          {queue.length > 0 && <button onClick={clearQueue} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 transition-colors"><Trash2 className="h-3 w-3" /> Clear All</button>}
+        </div>
+
+        {queue.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Search for products above to add them to the print queue.</div>
         ) : (
-          /* Sheet Printer mode: grid layout on regular paper */
-          <div
-            className="grid gap-0"
-            style={{
-              gridTemplateColumns: `repeat(${isLargeLabel ? 2 : 3}, 1fr)`,
-            }}
-          >
-            {queue.flatMap((item) =>
-              Array.from({ length: item.quantity }, (_, i) => (
-                <div
-                  key={`${item.product.id}-${i}`}
-                  className="flex items-center justify-center border border-gray-200"
-                  style={{
-                    width: `${labelSize.widthMm}mm`,
-                    height: `${labelSize.heightMm}mm`,
-                    padding: "1mm",
-                    boxSizing: "border-box",
-                    pageBreakInside: "avoid",
-                  }}
-                >
-                  {item.product.barcode ? (
-                    <PrintLabel
-                      product={item.product}
-                      template={template}
-                      isLargeLabel={isLargeLabel}
-                      supplierMnemonic={item.supplierMnemonic}
-                      mnemonicCostCode={item.mnemonicCostCode}
-                      dateEncoded={item.dateEncoded}
-                    />
-                  ) : (
-                    <span className="text-[8px] text-gray-400">No barcode</span>
-                  )}
-                </div>
-              )),
-            )}
+          <div className="rounded-lg border border-border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-muted/50 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <th className="px-3 py-2 text-left w-8">#</th><th className="px-3 py-2 text-left">Item</th><th className="px-3 py-2 text-left w-36">Barcode</th><th className="px-3 py-2 text-center w-24">Cost Code</th><th className="px-3 py-2 text-center w-16">Sup</th><th className="px-3 py-2 text-center w-28">Qty</th><th className="px-3 py-2 text-center w-8" />
+              </tr></thead>
+              <tbody>
+                {queue.map((item, idx) => {
+                  const preview = costCodePreview(parseFloat(item.product.costPrice) || 0, item.supplierCode);
+                  return (
+                    <tr key={item.product.id} className="border-t border-border/50 hover:bg-muted/30 transition-colors">
+                      <td className="px-3 py-2 text-muted-foreground">{idx + 1}</td>
+                      <td className="px-3 py-2"><p className="font-medium text-foreground truncate max-w-[300px]">{getProductDisplayName(item.product)}</p><p className="text-xs text-muted-foreground font-mono">{item.product.sku}</p></td>
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{item.product.barcode || <span className="italic text-muted-foreground/50">none</span>}</td>
+                      <td className="px-3 py-2 text-center"><span className="font-mono text-xs font-semibold text-primary">{preview || "\u2014"}</span></td>
+                      <td className="px-3 py-2 text-center"><input type="text" value={item.supplierCode} onChange={(e) => updateSupplierCode(item.product.id, e.target.value)} maxLength={4} className="w-12 rounded border border-border bg-background px-1 py-0.5 text-center text-xs font-mono uppercase focus:border-primary focus:outline-none" /></td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} disabled={item.quantity <= 1} className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30 transition-colors"><Minus className="h-3 w-3" /></button>
+                          <input type="number" min={1} max={999} value={item.quantity} onChange={(e) => updateQuantity(item.product.id, parseInt(e.target.value) || 1)} className="w-12 rounded border border-border bg-background px-1 py-0.5 text-center text-xs font-mono focus:border-primary focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                          <button onClick={() => updateQuantity(item.product.id, item.quantity + 1)} disabled={item.quantity >= 999} className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30 transition-colors"><Plus className="h-3 w-3" /></button>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-center"><button onClick={() => removeFromQueue(item.product.id)} className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-500 transition-colors"><X className="h-3.5 w-3.5" /></button></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
-    </>
-  );
-}
-
-/* ─────────────────────────────────────────────
- * Label Preview (on-screen)
- * ───────────────────────────────────────────── */
-function LabelPreview({
-  product,
-  template,
-  isLargeLabel,
-  supplierMnemonic,
-  mnemonicCostCode,
-  dateEncoded,
-}: {
-  product: ProductRow;
-  template: LabelTemplate;
-  isLargeLabel: boolean;
-  supplierMnemonic?: string | null;
-  mnemonicCostCode?: string | null;
-  dateEncoded?: string;
-}) {
-  const [barcodeDataUrl, setBarcodeDataUrl] = useState<string>("");
-
-  useEffect(() => {
-    if (product.barcode) {
-      try {
-        const canvas = document.createElement("canvas");
-        JsBarcode(canvas, product.barcode, {
-          format: detectBarcodeFormat(product.barcode),
-          width: isLargeLabel ? 2.2 : 1.5,
-          height: isLargeLabel ? 55 : template.showEmployeeInfo ? 32 : 40,
-          displayValue: true,
-          fontSize: isLargeLabel ? 14 : 11,
-          margin: 0,
-          textMargin: 2,
-          font: "monospace",
-        });
-        setBarcodeDataUrl(canvas.toDataURL("image/png"));
-      } catch {
-        setBarcodeDataUrl("");
-      }
-    } else {
-      setBarcodeDataUrl("");
-    }
-  }, [product.barcode, template.showEmployeeInfo, isLargeLabel]);
-
-  const price = parseFloat(product.unitPrice) || 0;
-  const displayDate = dateEncoded || new Date().toISOString().slice(0, 10);
-
-  return (
-    <div className="flex flex-col items-center gap-1">
-      {template.showName && (
-        <p className={cn(
-          "truncate text-center font-semibold text-gray-900 leading-tight",
-          isLargeLabel ? "max-w-[280px] text-[14px]" : "max-w-[160px] text-[11px]",
-        )}>
-          {product.name}
-        </p>
-      )}
-      {template.showSku && (
-        <p className={cn("font-mono text-gray-600", isLargeLabel ? "text-[13px]" : "text-[10px]")}>{product.sku}</p>
-      )}
-      {barcodeDataUrl ? (
-        <img src={barcodeDataUrl} alt={product.barcode ?? ""} className="max-w-full" />
-      ) : (
-        <span className="text-[8px] text-gray-400">No barcode</span>
-      )}
-      {template.showPrice && price > 0 && (
-        <p className={cn("font-bold text-gray-900", isLargeLabel ? "text-[16px]" : "text-[12px]")}>
-          ₱{price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </p>
-      )}
-      {template.showEmployeeInfo && (
-        <div className="mt-0.5 flex flex-col items-center gap-0.5">
-          <p className={cn("font-mono font-bold tracking-wide text-gray-700", isLargeLabel ? "text-[13px]" : "text-[10px]")} title="Mnemonic Code (Cost + Supplier)">
-            {(mnemonicCostCode || "") + (supplierMnemonic || "") || "————"}
-          </p>
-          <p className={cn("text-gray-400 font-mono", isLargeLabel ? "text-[11px]" : "text-[9px]")} title="Date Encoded">
-            {displayDate}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────
- * Print Label (in print area)
- * ───────────────────────────────────────────── */
-function PrintLabel({
-  product,
-  template,
-  isLargeLabel,
-  supplierMnemonic,
-  mnemonicCostCode,
-  dateEncoded,
-}: {
-  product: ProductRow;
-  template: LabelTemplate;
-  isLargeLabel: boolean;
-  supplierMnemonic?: string | null;
-  mnemonicCostCode?: string | null;
-  dateEncoded?: string;
-}) {
-  const [barcodeDataUrl, setBarcodeDataUrl] = useState<string>("");
-
-  useEffect(() => {
-    if (product.barcode) {
-      try {
-        const canvas = document.createElement("canvas");
-        JsBarcode(canvas, product.barcode, {
-          format: detectBarcodeFormat(product.barcode),
-          width: isLargeLabel ? 2 : 1.2,
-          height: isLargeLabel ? 45 : template.showEmployeeInfo ? 22 : 30,
-          displayValue: true,
-          fontSize: isLargeLabel ? 13 : 9,
-          margin: 0,
-          textMargin: 1,
-          font: "monospace",
-        });
-        setBarcodeDataUrl(canvas.toDataURL("image/png"));
-      } catch {
-        setBarcodeDataUrl("");
-      }
-    } else {
-      setBarcodeDataUrl("");
-    }
-  }, [product.barcode, template.showEmployeeInfo, isLargeLabel]);
-
-  const price = parseFloat(product.unitPrice) || 0;
-  const displayDate = dateEncoded || new Date().toISOString().slice(0, 10);
-
-  return (
-    <div className={cn("flex flex-col items-center text-black", isLargeLabel ? "gap-1" : "gap-0.5")}>
-      {template.showName && (
-        <p className={cn(
-          "max-w-full truncate text-center font-semibold leading-tight",
-          isLargeLabel ? "text-[14px]" : "text-[8px]",
-        )}>
-          {product.name}
-        </p>
-      )}
-      {template.showSku && (
-        <p className={cn("font-mono", isLargeLabel ? "text-[11px]" : "text-[7px]")}>{product.sku}</p>
-      )}
-      {barcodeDataUrl ? (
-        <img src={barcodeDataUrl} alt={product.barcode ?? ""} style={{ width: "95%", height: "auto", maxHeight: "60%" }} />
-      ) : (
-        <span className={cn("text-gray-400", isLargeLabel ? "text-[9px]" : "text-[6px]")}>No barcode</span>
-      )}
-      {template.showPrice && price > 0 && (
-        <p className={cn("font-bold", isLargeLabel ? "text-[14px]" : "text-[9px]")}>
-          ₱{price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </p>
-      )}
-      {template.showEmployeeInfo && (
-        <div className="flex flex-col items-center">
-          <p className={cn("font-mono font-bold tracking-wide", isLargeLabel ? "text-[12px]" : "text-[7px]")}>
-            {(mnemonicCostCode || "") + (supplierMnemonic || "") || "————"}
-          </p>
-          <p className={cn("text-gray-500 font-mono", isLargeLabel ? "text-[10px]" : "text-[6px]")}>
-            {displayDate}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

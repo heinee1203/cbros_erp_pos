@@ -213,6 +213,8 @@ export interface ReceiptLineInput {
   rejectedQty: number;
   unitCost: string;
   notes?: string;
+  serialNumbers?: { serialNumber: string; dotCode?: string }[];
+  dotBatches?: { dotCode: string; quantity: number }[];
 }
 export function useReceivePOMutation(
   token: string,

@@ -3,8 +3,9 @@ import {
   tags,
   productTags,
   products,
+  categories,
 } from "@apex/database/schema";
-import { eq, and, sql, ilike, gt, type SQL, inArray } from "drizzle-orm";
+import { eq, and, or, sql, ilike, gt, type SQL, inArray } from "drizzle-orm";
 
 // ─── Tag CRUD ────────────────────────────────────────────────────────
 
@@ -409,31 +410,43 @@ export async function bulkAssignBySearch(opts: {
 
 // ─── Auto-Tag Tires ──────────────────────────────────────────────────
 
-const TIRE_SIZE_REGEX = /(\d{3})\s*[\/\\]\s*(\d{2,3})\s*[Rr]\s*(\d{2})/;
+// Matches real tire sizes with validated ranges:
+// Width: 125-355  |  Rim: R12-R24  |  Prefixes: LT, P, ST  |  Suffix: C
+// Standard: 205/55R16, 185/65R14   |  No aspect: 185R14, 195R15
+// C suffix: 185R14C, 205/70R15C    |  LT prefix: LT285/70R17
+// Excludes: 129R31 (R31 > R24), 97R25 (width < 125), part numbers like A484R31MM
+const TIRE_SIZE_REGEX = /(?:^|[\s\-])((?:LT|P|ST)?(?:1[2-9]\d|[23]\d{2})(?:[\/X]\d{2,3}(?:\.\d)?)?\s?Z?R(?:1[2-9]|2[0-4])C?)(?:[\s\-]|$)/i;
 
 export async function autoTagTires(orgId: string) {
-  // Find products in TIRES category
+  // Find products likely to be tires — by old enum, category name, or name pattern
   const tireProducts = await db
     .select({ id: products.id, name: products.name })
     .from(products)
+    .leftJoin(categories, eq(products.categoryId, categories.id))
     .where(
       and(
         eq(products.orgId, orgId),
         eq(products.isActive, true),
-        eq(products.category, "TIRES"),
+        eq(products.isParent, false),
+        or(
+          eq(products.category, "TIRES"),
+          ilike(sql`${categories.name}`, "%tire%"),
+          // Also catch any product with a tire size in the name (handles 185R14, 205/70R15C, LT285/70R17)
+          sql`${products.name} ~* '(1[2-9][0-9]|[23][0-9]{2})(/[0-9]{2,3})?R(1[2-9]|2[0-4])'`,
+        ),
       ),
     );
 
   let taggedCount = 0;
+  const sizesFound = new Set<string>();
 
   for (const product of tireProducts) {
     const match = product.name.match(TIRE_SIZE_REGEX);
     if (!match) continue;
 
-    const width = match[1];
-    const aspect = match[2];
-    const rim = match[3];
-    const normalized = `${width}/${aspect}R${rim}`;
+    // Normalize: remove spaces, uppercase
+    const normalized = match[1].replace(/\s+/g, "").toUpperCase();
+    sizesFound.add(normalized);
 
     // Find or create TIRE_SIZE tag
     let tagRow = await db
@@ -476,7 +489,9 @@ export async function autoTagTires(orgId: string) {
 
   return {
     scannedProducts: tireProducts.length,
+    uniqueSizes: sizesFound.size,
     taggedCount,
+    sizes: [...sizesFound].sort(),
   };
 }
 
@@ -526,20 +541,27 @@ export async function getDemandByTag(opts: {
         ${slDateWhere}
       UNION ALL
       SELECT hs.product_id, hs.quantity AS qty,
-             0::numeric AS revenue
+             COALESCE(hs.net_sales::numeric, 0) AS revenue
       FROM historical_sales hs
       WHERE hs.org_id = ${orgId}
         AND hs.reason_type = 'SALE'
-        AND hs.direction = 'OUT'
+        AND hs.product_id IS NOT NULL
         ${hsDateWhere}
     )
     SELECT
       t.id AS tag_id,
       t.name AS tag_name,
       t.tag_type AS tag_type,
-      COALESCE(SUM(sd.qty), 0)::text AS total_qty_sold,
-      COALESCE(SUM(sd.revenue), 0)::text AS total_revenue,
-      COUNT(DISTINCT pt.product_id)::text AS product_count,
+      COALESCE(SUM(sd.qty), 0)::int AS total_qty_sold,
+      COALESCE(SUM(sd.revenue), 0)::numeric(14,2) AS total_revenue,
+      COUNT(DISTINCT pt.product_id)::int AS product_count,
+      (
+        SELECT COALESCE(SUM(inv.stock_level), 0)::int
+        FROM product_tags pt3
+        JOIN inventory inv ON inv.product_id = pt3.product_id
+        JOIN locations loc ON loc.id = inv.location_id AND loc.is_active = true
+        WHERE pt3.tag_id = t.id AND pt3.org_id = ${orgId}
+      ) AS total_stock,
       (
         SELECT b.name FROM products p2
         JOIN brands b ON b.id = p2.brand_id
@@ -562,15 +584,28 @@ export async function getDemandByTag(opts: {
 
   const arrRows = [...rows] as any[];
   const hasMore = arrRows.length > limit;
-  const data = arrRows.slice(0, limit).map((r: any) => ({
-    tagId: r.tag_id,
-    tagName: r.tag_name,
-    tagType: r.tag_type,
-    totalQtySold: Number(r.total_qty_sold),
-    totalRevenue: Number(r.total_revenue),
-    productCount: Number(r.product_count),
-    topBrand: r.top_brand,
-  }));
+  const data = arrRows.slice(0, limit).map((r: any) => {
+    const qtySold = Number(r.total_qty_sold);
+    const stock = Number(r.total_stock ?? 0);
+    // Compute days of stock based on the selected date range
+    const startMs = from ? new Date(from).getTime() : new Date("2022-01-01").getTime();
+    const endMs = to ? new Date(to).getTime() : Date.now();
+    const daysInPeriod = Math.max(1, Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24)));
+    const avgDailyDemand = qtySold / daysInPeriod;
+    const daysOfStock = avgDailyDemand > 0 ? Math.round(stock / avgDailyDemand) : null;
+
+    return {
+      tagId: r.tag_id,
+      tagName: r.tag_name,
+      tagType: r.tag_type,
+      totalQtySold: qtySold,
+      totalRevenue: Number(r.total_revenue),
+      productCount: Number(r.product_count),
+      totalStock: stock,
+      daysOfStock,
+      topBrand: r.top_brand,
+    };
+  });
 
   return {
     data,
@@ -615,11 +650,11 @@ export async function getTagDemandDetail(opts: {
         ${slDateWhere}
       UNION ALL
       SELECT hs.product_id, hs.quantity AS qty,
-             0::numeric AS revenue
+             COALESCE(hs.net_sales::numeric, 0) AS revenue
       FROM historical_sales hs
       WHERE hs.org_id = ${orgId}
         AND hs.reason_type = 'SALE'
-        AND hs.direction = 'OUT'
+        AND hs.product_id IS NOT NULL
         ${hsDateWhere}
     )
     SELECT

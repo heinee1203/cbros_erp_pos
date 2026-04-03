@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Search,
   Plus,
@@ -21,6 +22,7 @@ import { useSubcategories, useCreateSubcategory } from "@/hooks/use-subcategorie
 import { useBrands, useCreateBrand } from "@/hooks/use-brands";
 import { useCreateFamily } from "@/hooks/use-families";
 import { useAuth, ALL_LOCATIONS } from "@/app/auth-context";
+import { useSidebar } from "@/app/sidebar-context";
 import { useLocations, type LocationRow } from "@/hooks/use-locations";
 import { useConfirm } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
@@ -28,6 +30,7 @@ import { DrillDownView } from "./drill-down";
 import { SortableHeader, StockPill, StockPopover, RowActions, ParentAwareCheckbox, FlatProductRow, VariantSubRows } from "./components/inventory-table";
 import { DetailDrawer } from "./components/detail-drawer";
 import { QuickAddDrawer } from "./components/quick-add-drawer";
+import { FindReplaceModal } from "./components/find-replace-modal";
 import { AdjustModal } from "./components/adjust-modal";
 import { TransferModal } from "./components/transfer-modal";
 import { SearchableSelect } from "./components/searchable-select";
@@ -80,29 +83,43 @@ function BulkDropdown({ label, options, onSelect }: {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, bottom: 0 });
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node) && !(btnRef.current && btnRef.current.contains(e.target as Node))) setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  useEffect(() => {
+    if (open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ left: rect.left, bottom: window.innerHeight - rect.top + 4 });
+    }
+  }, [open]);
 
   const filtered = options.filter(o =>
     o.name.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={btnRef}
         onClick={() => setOpen(!open)}
-        className="rounded-md border border-border bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors"
+        className="shrink-0 rounded-md border border-border bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors"
       >
-        Change {label}
+        {label}
       </button>
-      {open && (
-        <div className="absolute bottom-full mb-1 w-56 rounded-lg border border-border bg-background shadow-lg z-50">
+      {open && typeof document !== "undefined" && createPortal(
+        <div
+          ref={ref}
+          style={{ position: "fixed", left: pos.left, bottom: pos.bottom, zIndex: 100000 }}
+          className="w-56 rounded-lg border border-border bg-background shadow-xl"
+        >
           <div className="p-2">
             <input
               type="text"
@@ -127,9 +144,10 @@ function BulkDropdown({ label, options, onSelect }: {
               </button>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }
 
@@ -138,6 +156,7 @@ function BulkDropdown({ label, options, onSelect }: {
  * ───────────────────────────────────────────── */
 export default function InventoryPage() {
   const { token, locationId, apiLocationId, user } = useAuth();
+  const { isCollapsed } = useSidebar();
 
   const locationsQuery = useLocations(token);
   const orgLocations = useMemo(() => {
@@ -164,6 +183,10 @@ export default function InventoryPage() {
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
+  const [showFindReplace, setShowFindReplace] = useState(false);
+  const [showSerialModal, setShowSerialModal] = useState(false);
+  const [hideSO, setHideSO] = useState(() => typeof window !== "undefined" ? localStorage.getItem("item-list-hide-so") === "true" : false);
+  const [hideDC, setHideDC] = useState(() => typeof window !== "undefined" ? localStorage.getItem("item-list-hide-dc") === "true" : false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
 
   /* Available for Sale modal */
@@ -251,6 +274,8 @@ export default function InventoryPage() {
     limit: pageSize,
     parentOnly: true,
     allLocations: isAllLocations,
+    excludeSO: hideSO || undefined,
+    excludeDC: hideDC || undefined,
   });
 
   const products = data?.data ?? [];
@@ -879,7 +904,7 @@ export default function InventoryPage() {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search items, SKU, OEM, or vehicle fitment…"
+          placeholder="Search items, SKU, OEM... (use commas for multiple)"
           className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-8 text-sm text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none placeholder:text-muted-foreground/50 transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
         />
         {searchQuery && (
@@ -924,6 +949,7 @@ export default function InventoryPage() {
             className="h-8 rounded-lg rounded-r-none border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
           >
             <option value="">All Categories</option>
+            <option value="__none__" className="italic text-muted-foreground">— No Category —</option>
             {filteredCategories.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
@@ -937,7 +963,10 @@ export default function InventoryPage() {
           <SearchableSelect
             value={subCategoryFilter}
             onChange={setSubCategoryFilter}
-            options={filteredSubcategories.map((sc) => ({ value: sc.id, label: sc.name }))}
+            options={[
+              { value: "__none__", label: "— No Subcategory —" },
+              ...filteredSubcategories.map((sc) => ({ value: sc.id, label: sc.name })),
+            ]}
             placeholder="All Sub-categories"
           />
           <button onClick={() => setAddModal("subcategory")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Sub-category">
@@ -953,6 +982,7 @@ export default function InventoryPage() {
           <option value="">All Stock</option>
           <option value="low">Low Stock</option>
           <option value="out">Out of Stock</option>
+          <option value="special_order">Special Order</option>
         </select>
 
         <div className="flex items-center">
@@ -962,6 +992,7 @@ export default function InventoryPage() {
             className="h-8 rounded-lg rounded-r-none border border-border bg-background px-2.5 pr-7 text-[12px] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
           >
             <option value="">All Brands</option>
+            <option value="__none__" className="italic text-muted-foreground">— No Brand —</option>
             {brandsList.map((b) => (
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
@@ -971,6 +1002,29 @@ export default function InventoryPage() {
           </button>
         </div>
 
+        {/* SO / DC toggle buttons */}
+        <button
+          onClick={() => { const v = !hideSO; setHideSO(v); localStorage.setItem("item-list-hide-so", String(v)); setPage(1); }}
+          className={cn(
+            "h-8 rounded-lg px-2.5 text-[11px] font-medium transition-colors border",
+            hideSO
+              ? "border-blue-300 bg-blue-50 text-blue-700"
+              : "border-border bg-background text-muted-foreground hover:bg-muted",
+          )}
+        >
+          {hideSO ? "SO Hidden" : "Hide SO"}
+        </button>
+        <button
+          onClick={() => { const v = !hideDC; setHideDC(v); localStorage.setItem("item-list-hide-dc", String(v)); setPage(1); }}
+          className={cn(
+            "h-8 rounded-lg px-2.5 text-[11px] font-medium transition-colors border",
+            hideDC
+              ? "border-gray-400 bg-gray-100 text-gray-700"
+              : "border-border bg-background text-muted-foreground hover:bg-muted",
+          )}
+        >
+          {hideDC ? "DC Hidden" : "Hide DC"}
+        </button>
       </div>
 
       {/* -- Active Filter Indicator -- */}
@@ -989,64 +1043,181 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* -- Bulk Action Bar -- */}
-      {selectedIds.size > 0 && (
-        <div className="mb-1.5 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-1.5 animate-in fade-in slide-in-from-top-1 duration-150">
-          <span className="text-[12px] font-medium text-foreground">
-            {selectedIds.size} selected
-          </span>
-          <div className="h-3.5 w-px bg-border" />
-          <button
-            onClick={handleBulkDelete}
-            disabled={deleteMut.isPending}
-            className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
-          >
-            <Trash2 size={12} />
-            {deleteMut.isPending ? "Deleting\u2026" : "Delete"}
-          </button>
-          <button onClick={handleExportSelected} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors">
-            <Download size={12} />
-            Export
-          </button>
-          <button className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted transition-colors">
-            <ArrowUpDown size={12} />
-            Adjust
-          </button>
-          <div className="h-3.5 w-px bg-border" />
-          <BulkDropdown
-            label="Category"
-            options={filteredCategories.map(c => ({ id: c.id, name: c.name }))}
-            onSelect={(id) => handleBulkUpdate({ categoryId: id })}
-          />
-          <BulkDropdown
-            label="Brand"
-            options={brandsList.map(b => ({ id: b.id, name: b.name }))}
-            onSelect={(id) => handleBulkUpdate({ brandId: id })}
-          />
-          <BulkDropdown
-            label="Family"
-            options={families.map(f => ({ id: f.id, name: f.name }))}
-            onSelect={(id) => handleBulkUpdate({ familyId: id })}
-          />
-          <BulkDropdown
-            label="Subcategory"
-            options={filteredSubcategories.map(s => ({ id: s.id, name: s.name }))}
-            onSelect={(id) => handleBulkUpdate({ subcategoryId: id })}
-          />
-          <button
-            onClick={() => setShowAvailModal(true)}
-            className="rounded bg-muted px-2 py-1 text-[11px] font-medium text-foreground hover:bg-muted/80 transition-colors whitespace-nowrap"
-          >
-            Available for Sale
-          </button>
-          <div className="flex-1" />
-          <button
-            onClick={clearSelection}
-            className="text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Clear
-          </button>
-        </div>
+      {/* -- Bulk Action Bar (portal to body so it escapes all layout constraints) -- */}
+      {typeof document !== "undefined" && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            zIndex: 99999,
+            transform: selectedIds.size > 0 ? "translateY(0)" : "translateY(100%)",
+            transition: "transform 200ms ease-out",
+            background: "#ffffff",
+            borderTop: "2px solid hsl(var(--primary))",
+            boxShadow: "0 -6px 24px rgba(0,0,0,0.18)",
+          }}
+        >
+          <div className="flex items-center gap-2.5 px-5 py-3 overflow-x-auto" style={{ marginLeft: isCollapsed ? 64 : 252 }}>
+            <span className="shrink-0 rounded-md bg-primary px-2.5 py-0.5 text-[12px] font-bold text-primary-foreground tabular-nums">
+              {selectedIds.size}
+            </span>
+            <span className="shrink-0 text-[12px] font-medium text-foreground">selected</span>
+            <div className="h-4 w-px bg-border shrink-0" />
+            <button
+              onClick={handleBulkDelete}
+              disabled={deleteMut.isPending}
+              className="shrink-0 flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+            >
+              <Trash2 size={12} />
+              {deleteMut.isPending ? "Deleting\u2026" : "Delete"}
+            </button>
+            <button onClick={handleExportSelected} className="shrink-0 flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted transition-colors">
+              <Download size={12} />
+              Export
+            </button>
+            <button className="shrink-0 flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted transition-colors">
+              <ArrowUpDown size={12} />
+              Adjust
+            </button>
+            <div className="h-4 w-px bg-border shrink-0" />
+            <BulkDropdown
+              label="Category"
+              options={filteredCategories.map(c => ({ id: c.id, name: c.name }))}
+              onSelect={(id) => handleBulkUpdate({ categoryId: id })}
+            />
+            <BulkDropdown
+              label="Brand"
+              options={brandsList.map(b => ({ id: b.id, name: b.name }))}
+              onSelect={(id) => handleBulkUpdate({ brandId: id })}
+            />
+            <BulkDropdown
+              label="Family"
+              options={families.map(f => ({ id: f.id, name: f.name }))}
+              onSelect={(id) => handleBulkUpdate({ familyId: id })}
+            />
+            <BulkDropdown
+              label="Subcategory"
+              options={filteredSubcategories.map(s => ({ id: s.id, name: s.name }))}
+              onSelect={(id) => handleBulkUpdate({ subcategoryId: id })}
+            />
+            <button
+              onClick={() => setShowAvailModal(true)}
+              className="shrink-0 rounded bg-muted px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted/80 transition-colors whitespace-nowrap"
+            >
+              Available for Sale
+            </button>
+            <select
+              onChange={(e) => {
+                if (!e.target.value) return;
+                const val = e.target.value === "mark";
+                apiFetch("/products/bulk-update", {
+                  token: token!,
+                  locationId: apiLocationId,
+                  method: "PATCH",
+                  body: {
+                    productIds: Array.from(selectedIds),
+                    updates: { specialOrder: val },
+                  },
+                }).then(() => {
+                  queryClient.invalidateQueries({ queryKey: ["products"] });
+                  clearSelection();
+                });
+                e.target.value = "";
+              }}
+              className="shrink-0 rounded bg-muted px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted/80 transition-colors"
+              value=""
+            >
+              <option value="">Special Order</option>
+              <option value="mark">Mark as Special Order</option>
+              <option value="unmark">Remove Special Order</option>
+            </select>
+            <select
+              onChange={(e) => {
+                if (!e.target.value) return;
+                const val = e.target.value === "mark";
+                apiFetch("/products/bulk-update", {
+                  token: token!,
+                  locationId: apiLocationId,
+                  method: "PATCH",
+                  body: {
+                    productIds: Array.from(selectedIds),
+                    updates: { discontinued: val },
+                  },
+                }).then(() => {
+                  queryClient.invalidateQueries({ queryKey: ["products"] });
+                  clearSelection();
+                });
+                e.target.value = "";
+              }}
+              className="shrink-0 rounded bg-muted px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted/80 transition-colors"
+              value=""
+            >
+              <option value="">Discontinued</option>
+              <option value="mark">Mark as Discontinued</option>
+              <option value="unmark">Remove Discontinued</option>
+            </select>
+            <button
+              onClick={() => setShowSerialModal(true)}
+              className="shrink-0 rounded bg-muted px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted/80 transition-colors whitespace-nowrap"
+            >
+              Item Tracking
+            </button>
+            <button
+              onClick={() => setShowFindReplace(true)}
+              className="shrink-0 rounded bg-muted px-2.5 py-1 text-[11px] font-medium text-foreground hover:bg-muted/80 transition-colors"
+            >
+              Find & Replace
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={clearSelection}
+              className="shrink-0 rounded-md border border-border px-3 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Find & Replace Modal */}
+      {showFindReplace && (
+        <FindReplaceModal
+          productIds={Array.from(selectedIds)}
+          products={products.filter(p => selectedIds.has(p.id))}
+          token={token!}
+          locationId={apiLocationId}
+          onClose={() => setShowFindReplace(false)}
+          onApplied={() => {
+            queryClient.invalidateQueries({ queryKey: ["products"] });
+            clearSelection();
+            setShowFindReplace(false);
+          }}
+        />
+      )}
+
+      {/* Serial Tracking Modal */}
+      {showSerialModal && (
+        <SerialTrackingModal
+          count={selectedIds.size}
+          onClose={() => setShowSerialModal(false)}
+          onApply={async (updates) => {
+            await apiFetch("/products/bulk-update", {
+              token: token!,
+              locationId: apiLocationId,
+              method: "PATCH",
+              body: JSON.stringify({
+                productIds: Array.from(selectedIds),
+                updates,
+              }),
+            });
+            queryClient.invalidateQueries({ queryKey: ["products"] });
+            clearSelection();
+            setShowSerialModal(false);
+          }}
+        />
       )}
 
       {/* -- Data Table -- */}
@@ -1060,7 +1231,7 @@ export default function InventoryPage() {
       ) : products.length === 0 ? (
         <EmptyState query={searchQuery} hasFilters={hasActiveFilters} onClearFilters={clearAllFilters} />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border">
+        <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border", selectedIds.size > 0 && "mb-14")}>
           <div className="flex-1 overflow-x-auto overflow-y-auto">
             <table className="w-full min-w-[700px] text-[12px]">
               <thead className="sticky top-0 z-10 border-b border-border bg-muted/90 backdrop-blur-sm">
@@ -1597,5 +1768,100 @@ function QuickAddEntityModal({
         </div>
       </div>
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * SERIAL TRACKING MODAL — bulk enable/disable serial tracking
+ * ═══════════════════════════════════════════════════════ */
+
+function SerialTrackingModal({
+  count,
+  onClose,
+  onApply,
+}: {
+  count: number;
+  onClose: () => void;
+  onApply: (updates: Record<string, unknown>) => Promise<void>;
+}) {
+  const [trackingType, setTrackingType] = useState<"none" | "serial" | "dot">("none");
+  const [warrantyMonths, setWarrantyMonths] = useState<number | null>(12);
+  const [maxTireAgeYears, setMaxTireAgeYears] = useState<number | null>(5);
+  const [applying, setApplying] = useState(false);
+
+  async function handleApply() {
+    setApplying(true);
+    try {
+      const updates: Record<string, unknown> = {
+        isSerialized: trackingType === "serial",
+        isTire: trackingType === "dot",
+      };
+      if (trackingType === "serial") {
+        updates.warrantyMonths = warrantyMonths;
+        updates.maxTireAgeYears = null;
+      } else if (trackingType === "dot") {
+        updates.warrantyMonths = null;
+        updates.maxTireAgeYears = maxTireAgeYears;
+      } else {
+        updates.warrantyMonths = null;
+        updates.maxTireAgeYears = null;
+      }
+      await onApply(updates);
+    } catch {
+      // parent handles
+    }
+    setApplying(false);
+  }
+
+  return (
+    <ModalShell title="Set Item Tracking" onClose={onClose}>
+      <div className="space-y-3">
+        <label className="flex items-center gap-2 cursor-pointer text-sm" onClick={() => setTrackingType("none")}>
+          <input type="radio" name="bulkTrackingType" checked={trackingType === "none"} readOnly className="accent-primary" />
+          <span>No tracking</span>
+        </label>
+
+        <label className="flex items-center gap-2 cursor-pointer text-sm" onClick={() => setTrackingType("serial")}>
+          <input type="radio" name="bulkTrackingType" checked={trackingType === "serial"} readOnly className="accent-primary" />
+          <span>Serial Numbers <span className="text-muted-foreground text-xs">(batteries, alternators)</span></span>
+        </label>
+        {trackingType === "serial" && (
+          <div className="ml-6">
+            <label className="text-xs font-medium text-muted-foreground">Warranty Period (months)</label>
+            <input
+              type="number" min="0" max="120" value={warrantyMonths ?? ""}
+              onChange={(e) => setWarrantyMonths(e.target.value ? parseInt(e.target.value) : null)}
+              className="mt-1 block w-24 rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-primary"
+              placeholder="e.g. 12"
+            />
+          </div>
+        )}
+
+        <label className="flex items-center gap-2 cursor-pointer text-sm" onClick={() => setTrackingType("dot")}>
+          <input type="radio" name="bulkTrackingType" checked={trackingType === "dot"} readOnly className="accent-primary" />
+          <span>DOT Batch Tracking <span className="text-muted-foreground text-xs">(tires)</span></span>
+        </label>
+        {trackingType === "dot" && (
+          <div className="ml-6">
+            <label className="text-xs font-medium text-muted-foreground">Max Tire Age (years)</label>
+            <input
+              type="number" min="1" max="10" value={maxTireAgeYears ?? ""}
+              onChange={(e) => setMaxTireAgeYears(e.target.value ? parseInt(e.target.value) : null)}
+              className="mt-1 block w-24 rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-primary"
+              placeholder="e.g. 5"
+            />
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors">
+            Cancel
+          </button>
+          <button onClick={handleApply} disabled={applying} className="rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+            {applying ? "Applying..." : `Apply to ${count} item${count !== 1 ? "s" : ""}`}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
   );
 }

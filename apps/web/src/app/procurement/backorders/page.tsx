@@ -18,6 +18,7 @@ import {
   XCircle,
   ShoppingCart,
   Check,
+  ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -34,16 +35,28 @@ interface BackorderItem {
   supplierId: string;
   supplierName: string;
   qtyNeeded: number;
+  quantityOrdered: number | null;
+  quantityReceived: number | null;
+  quantityOutstanding: number | null;
+  unitCost: string | null;
   sourcePo: string | null;
   sourcePONumber: string | null;
+  originalPoLineId: string | null;
   daysPending: number;
   reason: string;
   priority: "HIGH" | "NORMAL" | "LOW";
   neededBy: string | null;
-  status: "PENDING" | "INCLUDED_IN_PO" | "CANCELLED";
+  waitUntil: string | null;
+  isOverdue: boolean;
+  status: "PENDING" | "INCLUDED_IN_PO" | "FULFILLED" | "CANCELLED";
+  targetPoId: string | null;
+  targetPoNumber: string | null;
+  newSupplierId: string | null;
+  newSupplierName: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+  resolvedAt: string | null;
 }
 
 interface SupplierGroup {
@@ -59,6 +72,7 @@ interface BackorderSummary {
   suppliersWithPending: number;
   oldestPendingDays: number;
   neededThisWeek: number;
+  overdueCount: number;
 }
 
 interface ProductSearchResult {
@@ -81,6 +95,7 @@ const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
 const STATUS_TABS = [
   { key: "PENDING", label: "Pending" },
   { key: "INCLUDED_IN_PO", label: "Included in PO" },
+  { key: "FULFILLED", label: "Fulfilled" },
   { key: "CANCELLED", label: "Cancelled" },
   { key: "ALL", label: "All" },
 ] as const;
@@ -99,13 +114,15 @@ const PRIORITY_LABELS: Record<string, string> = {
 
 const STATUS_BADGES: Record<string, string> = {
   PENDING: "bg-amber-100 text-amber-700",
-  INCLUDED_IN_PO: "bg-green-100 text-green-700",
+  INCLUDED_IN_PO: "bg-blue-100 text-blue-700",
+  FULFILLED: "bg-green-100 text-green-700",
   CANCELLED: "bg-gray-100 text-gray-600",
 };
 
 const STATUS_LABELS: Record<string, string> = {
   PENDING: "Pending",
   INCLUDED_IN_PO: "Included in PO",
+  FULFILLED: "Fulfilled",
   CANCELLED: "Cancelled",
 };
 
@@ -164,6 +181,10 @@ export default function BackordersPage() {
   const [editNeededBy, setEditNeededBy] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [editLoading, setEditLoading] = useState(false);
+
+  const [resourceModal, setResourceModal] = useState<BackorderItem | null>(null);
+  const [resourceSupplierId, setResourceSupplierId] = useState("");
+  const [resourceLoading, setResourceLoading] = useState(false);
 
   const [newModal, setNewModal] = useState(false);
   const [newProductSearch, setNewProductSearch] = useState("");
@@ -263,9 +284,9 @@ export default function BackordersPage() {
 
   // ── Product search for new backorder ──
   useEffect(() => {
-    if (!newModal || !token || !locationId) return;
+    if ((!newModal && !resourceModal) || !token || !locationId) return;
     fetchSuppliers();
-  }, [newModal, token, locationId, fetchSuppliers]);
+  }, [newModal, resourceModal, token, locationId, fetchSuppliers]);
 
   useEffect(() => {
     if (!newProductSearch.trim() || !token || !locationId) {
@@ -410,6 +431,52 @@ export default function BackordersPage() {
       setCancelLoading(false);
     }
   }, [cancelModal, cancelReason, token, locationId, reload]);
+
+  // ── Create PO for single backorder ──
+  const handleCreatePOSingle = useCallback(
+    async (backorderId: string, productName: string) => {
+      if (!token || !locationId) return;
+      try {
+        const result = await apiFetch(
+          `/procurement/backorders/${backorderId}/create-po`,
+          token,
+          locationId,
+          { method: "POST" },
+        );
+        setSuccessMsg(`Draft PO ${result.newPoNo} created for ${productName}`);
+        setTimeout(() => setSuccessMsg(null), 5000);
+        reload();
+      } catch (err: any) {
+        setError(err.message || "Failed to create PO");
+      }
+    },
+    [token, locationId, reload],
+  );
+
+  const handleResource = useCallback(async () => {
+    if (!resourceModal || !resourceSupplierId || !token || !locationId) return;
+    setResourceLoading(true);
+    try {
+      const result = await apiFetch(
+        `/procurement/backorders/${resourceModal.id}/resource`,
+        token,
+        locationId,
+        {
+          method: "POST",
+          body: JSON.stringify({ newSupplierId: resourceSupplierId }),
+        },
+      );
+      setSuccessMsg(`Re-sourced to ${result.newSupplierName ?? "new supplier"}. Draft PO ${result.newPoNo} created.`);
+      setTimeout(() => setSuccessMsg(null), 5000);
+      setResourceModal(null);
+      setResourceSupplierId("");
+      reload();
+    } catch (err: any) {
+      setError(err.message || "Failed to re-source");
+    } finally {
+      setResourceLoading(false);
+    }
+  }, [resourceModal, resourceSupplierId, token, locationId, reload]);
 
   // ── Edit backorder ──
   const handleEdit = useCallback(async () => {
@@ -637,6 +704,11 @@ export default function BackordersPage() {
                     setCancelModal(item);
                     setCancelReason("");
                   }}
+                  onCreatePOSingle={handleCreatePOSingle}
+                  onResourceItem={(item) => {
+                    setResourceModal(item);
+                    setResourceSupplierId("");
+                  }}
                 />
               ))}
             </div>
@@ -702,6 +774,11 @@ export default function BackordersPage() {
                       setCancelModal(item);
                       setCancelReason("");
                     }}
+                    onCreatePO={() => handleCreatePOSingle(item.id, item.productName)}
+                    onResource={() => {
+                      setResourceModal(item);
+                      setResourceSupplierId("");
+                    }}
                   />
                 ))}
               </tbody>
@@ -760,6 +837,47 @@ export default function BackordersPage() {
               >
                 {cancelLoading && <Loader2 size={12} className="animate-spin" />}
                 Cancel Backorder
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {/* ── Re-source Modal ── */}
+      {resourceModal && (
+        <ModalOverlay onClose={() => setResourceModal(null)}>
+          <div className="bg-white rounded-xl border shadow-lg p-6 w-full max-w-md">
+            <h3 className="text-base font-semibold text-foreground mb-1">Re-source to Different Supplier</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Re-source <span className="font-medium text-foreground">{resourceModal.productName}</span> ({resourceModal.quantityOutstanding ?? resourceModal.qtyNeeded} pcs)
+            </p>
+            <label className="block text-xs font-medium text-gray-700 mb-1">New Supplier</label>
+            <select
+              value={resourceSupplierId}
+              onChange={(e) => setResourceSupplierId(e.target.value)}
+              className="w-full rounded-lg border border-input px-3 py-2 text-sm mb-4"
+            >
+              <option value="">Select supplier...</option>
+              {suppliers
+                .filter((s: SupplierOption) => s.id !== resourceModal.supplierId)
+                .map((s: SupplierOption) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+            </select>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setResourceModal(null)}
+                className="rounded-lg border px-3 py-2 text-sm text-muted-foreground hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResource}
+                disabled={!resourceSupplierId || resourceLoading}
+                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {resourceLoading && <Loader2 size={14} className="animate-spin" />}
+                Create PO & Re-source
               </button>
             </div>
           </div>
@@ -1067,6 +1185,8 @@ function SupplierGroupSection({
   isCreatingPO,
   onEdit,
   onCancel,
+  onCreatePOSingle,
+  onResourceItem,
 }: {
   group: SupplierGroup;
   isExpanded: boolean;
@@ -1075,6 +1195,8 @@ function SupplierGroupSection({
   isCreatingPO: boolean;
   onEdit: (item: BackorderItem) => void;
   onCancel: (item: BackorderItem) => void;
+  onCreatePOSingle: (id: string, name: string) => void;
+  onResourceItem: (item: BackorderItem) => void;
 }) {
   const pendingCount = group.items.filter((i) => i.status === "PENDING").length;
   const hasPending = pendingCount > 0;
@@ -1155,6 +1277,8 @@ function SupplierGroupSection({
                 hideSupplier
                 onEdit={() => onEdit(item)}
                 onCancel={() => onCancel(item)}
+                onCreatePO={() => onCreatePOSingle(item.id, item.productName)}
+                onResource={() => onResourceItem(item)}
               />
             ))}
           </tbody>
@@ -1173,30 +1297,35 @@ function BackorderRow({
   hideSupplier,
   onEdit,
   onCancel,
+  onCreatePO,
+  onResource,
 }: {
   item: BackorderItem;
   hideSupplier?: boolean;
   onEdit: () => void;
   onCancel: () => void;
+  onCreatePO: () => void;
+  onResource: () => void;
 }) {
   const priorityBadge = PRIORITY_BADGES[item.priority] ?? "bg-gray-100 text-gray-600";
   const statusBadge = STATUS_BADGES[item.status] ?? "bg-gray-100 text-gray-600";
 
-  const neededByStr = item.neededBy
-    ? new Date(item.neededBy).toLocaleDateString("en-PH", {
+  const waitUntilStr = item.waitUntil
+    ? new Date(item.waitUntil).toLocaleDateString("en-PH", {
         year: "numeric",
         month: "short",
         day: "numeric",
       })
     : "--";
 
-  const isOverdue =
-    item.neededBy && item.status === "PENDING" && new Date(item.neededBy) < new Date();
+  const overdueFlag =
+    item.isOverdue ||
+    (item.waitUntil && item.status === "PENDING" && new Date(item.waitUntil) < new Date());
 
   const isPending = item.status === "PENDING";
 
   return (
-    <tr className="group transition-colors hover:bg-muted/30">
+    <tr className={cn("group transition-colors hover:bg-muted/30", overdueFlag && isPending && "bg-red-50/50 dark:bg-red-900/10")}>
       {/* Product Name + SKU */}
       <td className="max-w-[240px] px-4 py-2.5">
         <div className="truncate text-sm font-medium text-foreground" title={item.productName}>
@@ -1214,9 +1343,14 @@ function BackorderRow({
         </td>
       )}
 
-      {/* Qty Needed */}
+      {/* Qty */}
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium text-foreground">
-        {item.qtyNeeded.toLocaleString()}
+        {(item.quantityOutstanding ?? item.qtyNeeded).toLocaleString()}
+      </td>
+
+      {/* Unit Cost */}
+      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+        {item.unitCost ? `₱${parseFloat(item.unitCost).toLocaleString()}` : "--"}
       </td>
 
       {/* Source PO */}
@@ -1228,7 +1362,27 @@ function BackorderRow({
         )}
       </td>
 
-      {/* Days Pending */}
+      {/* Wait Until / Target PO */}
+      <td className="whitespace-nowrap px-4 py-2.5 text-sm">
+        {item.status === "INCLUDED_IN_PO" && item.targetPoNumber ? (
+          <span className="font-mono text-xs text-blue-600">{item.targetPoNumber}</span>
+        ) : (
+          <span
+            className={cn(
+              overdueFlag ? "text-red-600 font-medium" : "text-muted-foreground",
+            )}
+          >
+            {waitUntilStr}
+            {overdueFlag && isPending && (
+              <span className="ml-1 inline-flex rounded bg-red-100 px-1 py-0.5 text-[9px] font-bold text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                OVERDUE
+              </span>
+            )}
+          </span>
+        )}
+      </td>
+
+      {/* Days */}
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">
         <span
           className={cn(
@@ -1240,13 +1394,6 @@ function BackorderRow({
           )}
         >
           {item.daysPending}d
-        </span>
-      </td>
-
-      {/* Reason */}
-      <td className="max-w-[160px] whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
-        <span className="truncate block" title={item.reason}>
-          {item.reason || "--"}
         </span>
       </td>
 
@@ -1276,49 +1423,50 @@ function BackorderRow({
         </td>
       )}
 
-      {/* Needed By */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm">
-        <span
-          className={cn(
-            isOverdue ? "text-red-600 font-medium" : "text-muted-foreground",
-          )}
-        >
-          {neededByStr}
-          {isOverdue && " (overdue)"}
-        </span>
-      </td>
-
       {/* Actions */}
       <td className="whitespace-nowrap px-4 py-2.5 text-center">
         <div className="flex items-center justify-center gap-1">
           {isPending && (
             <>
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onEdit();
-                }}
+                onClick={(e) => { e.stopPropagation(); onCreatePO(); }}
+                className="flex h-6 items-center gap-1 rounded bg-blue-600 px-2 text-[10px] font-medium text-white transition-colors hover:bg-blue-700"
+                title="Create new PO for this item"
+              >
+                <ShoppingCart size={10} />
+                PO
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onResource(); }}
+                className="flex h-6 items-center gap-1 rounded border border-border px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Re-source to different supplier"
+              >
+                <ArrowRightLeft size={10} />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onEdit(); }}
                 className="flex h-6 items-center gap-1 rounded border border-border px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 title="Edit backorder"
               >
                 <Pencil size={10} />
-                Edit
               </button>
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCancel();
-                }}
+                onClick={(e) => { e.stopPropagation(); onCancel(); }}
                 className="flex h-6 items-center gap-1 rounded border border-border px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 hover:border-red-200"
                 title="Cancel backorder"
               >
                 <XCircle size={10} />
-                Cancel
               </button>
             </>
           )}
-          {!isPending && (
-            <span className="text-[10px] text-muted-foreground/50">--</span>
+          {item.status === "FULFILLED" && (
+            <span className="flex items-center gap-1 text-[10px] text-green-600"><Check size={10} /> Fulfilled</span>
+          )}
+          {item.status === "INCLUDED_IN_PO" && item.targetPoNumber && (
+            <span className="text-[10px] text-blue-600">→ {item.targetPoNumber}</span>
+          )}
+          {item.status === "CANCELLED" && (
+            <span className="text-[10px] text-muted-foreground/50">Cancelled</span>
           )}
         </div>
       </td>

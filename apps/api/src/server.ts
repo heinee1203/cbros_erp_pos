@@ -16,7 +16,7 @@ async function start() {
   const app = await buildApp();
   try {
     await app.listen({ port: PORT, host: HOST });
-    app.log.info(`Apex API running on http://${HOST}:${PORT}`);
+    app.log.info(`CBROS API running on http://${HOST}:${PORT}`);
   } catch (err) {
     app.log.error(err);
     process.exit(1);

@@ -69,6 +69,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         id: products.id,
         sku: products.sku,
         name: products.name,
+        parentName: sql<string | null>`(SELECT pp.name FROM products pp WHERE pp.id = ${products.parentProductId})`.as("parent_name"),
         brandName: brands.name,
         familyName: productFamilies.name,
         categoryName: categories.name,
@@ -125,10 +126,11 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     // Build results with stock info
     let results = data.map(p => {
       const stock = stockMap.get(p.id) ?? { total: 0, byLocation: {} };
+      const displayName = p.parentName ? `${p.parentName} (${p.name})` : p.name;
       return {
         id: p.id,
         sku: p.sku,
-        name: p.name,
+        name: displayName,
         brand: p.brandName,
         family: p.familyName,
         category: p.categoryName,
@@ -172,6 +174,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         id: products.id,
         sku: products.sku,
         name: products.name,
+        parentName: sql<string | null>`(SELECT pp.name FROM products pp WHERE pp.id = ${products.parentProductId})`.as("parent_name"),
         brandName: brands.name,
         familyName: productFamilies.name,
         categoryName: categories.name,
@@ -192,6 +195,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ error: "Product not found" });
     }
 
+    const displayName = product.parentName ? `${product.parentName} (${product.name})` : product.name;
+
     // Fetch stock
     const stockRows = await db
       .select({
@@ -211,7 +216,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({
       id: product.id,
       sku: product.sku,
-      name: product.name,
+      name: displayName,
       brand: product.brandName,
       family: product.familyName,
       category: product.categoryName,

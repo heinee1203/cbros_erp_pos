@@ -1,6 +1,6 @@
 import { db } from "@apex/database";
-import { stockJournal, products, locations, users, purchaseOrders, stockTransfers, sales, poReceiptEvents } from "@apex/database/schema";
-import { eq, and, gt, lt, gte, lte, ilike, or, sql, type SQL } from "drizzle-orm";
+import { stockJournal, products, locations, users, purchaseOrders, stockTransfers, sales, poReceiptEvents, historicalSales } from "@apex/database/schema";
+import { eq, and, gt, lt, gte, lte, ilike, or, sql, inArray, type SQL } from "drizzle-orm";
 
 // ── Types ──
 
@@ -54,6 +54,8 @@ export interface JournalEntry {
   actorType: string;
   actorName: string | null;
   reversalOfJournalId: string | null;
+  lineAmount: string | null; // ₱ amount for sales/refunds (net_sales or qty × unit_price)
+  unitPrice: string | null;  // Per-unit price for sales/refunds
   createdAt: Date;
 }
 
@@ -166,7 +168,7 @@ export async function queryJournal(params: JournalQueryParams): Promise<JournalP
       id: stockJournal.id,
       effectiveAt: stockJournal.effectiveAt,
       productId: stockJournal.productId,
-      productName: products.name,
+      productName: sql<string>`CASE WHEN ${products.parentProductId} IS NOT NULL THEN (SELECT pp.name FROM products pp WHERE pp.id = ${products.parentProductId}) || ' (' || ${products.name} || ')' ELSE ${products.name} END`.as("product_name"),
       productSku: products.sku,
       mnemonicSku: products.mnemonicSku,
       locationId: stockJournal.locationId,
@@ -184,6 +186,7 @@ export async function queryJournal(params: JournalQueryParams): Promise<JournalP
       actorType: stockJournal.actorType,
       actorName: users.fullName,
       reversalOfJournalId: stockJournal.reversalOfJournalId,
+      lineAmount: stockJournal.unitCostSnapshot, // unit cost for POS journal entries
       createdAt: stockJournal.createdAt,
     })
     .from(stockJournal)
@@ -203,4 +206,142 @@ export async function queryJournal(params: JournalQueryParams): Promise<JournalP
   const nextCursor = hasMore && data.length > 0 ? data[data.length - 1]!.id : null;
 
   return { data, nextCursor, hasMore };
+}
+
+/**
+ * Query historical_sales (imported Loyverse receipts) for a specific product.
+ * Returns entries shaped like JournalEntry for unified display.
+ */
+export async function queryHistoricalForProduct(
+  orgId: string,
+  productId: string,
+  opts: { locationId?: string; dateFrom?: string; dateTo?: string; limit?: number; cursor?: string; variantProductId?: string } = {},
+): Promise<JournalPage> {
+  const limit = opts.limit ?? 50;
+
+  // Get the product's SKU and check if it's a parent with variants
+  const [product] = await db
+    .select({ sku: products.sku, name: products.name, isParent: products.isParent })
+    .from(products)
+    .where(eq(products.id, productId))
+    .limit(1);
+  if (!product) return { data: [], nextCursor: null, hasMore: false };
+
+  // Collect all SKUs to match: own SKU + variant SKUs (if parent product)
+  const matchSkus: string[] = [];
+  const matchProductIds: string[] = [productId];
+  if (product.sku) matchSkus.push(product.sku);
+
+  // Track variant info for display
+  const variantSkuToName = new Map<string, string>();
+
+  if (product.isParent) {
+    const variants = await db
+      .select({ id: products.id, sku: products.sku, name: products.name })
+      .from(products)
+      .where(eq(products.parentProductId, productId));
+
+    // If filtering by a specific variant, only match that variant
+    if (opts.variantProductId) {
+      const targetVariant = variants.find(v => v.id === opts.variantProductId);
+      if (targetVariant) {
+        matchProductIds.length = 0; // Clear parent
+        matchProductIds.push(targetVariant.id);
+        matchSkus.length = 0; // Clear parent SKU
+        if (targetVariant.sku) matchSkus.push(targetVariant.sku);
+        variantSkuToName.set(targetVariant.sku || "", targetVariant.name);
+      }
+    } else {
+      // Include all variants
+      for (const v of variants) {
+        matchProductIds.push(v.id);
+        if (v.sku) {
+          matchSkus.push(v.sku);
+          variantSkuToName.set(v.sku, v.name);
+        }
+      }
+    }
+  }
+
+  const conditions: SQL[] = [
+    eq(historicalSales.orgId, orgId),
+    sql`${historicalSales.reasonType} IN ('SALE', 'REFUND')`,
+  ];
+
+  // Match by productId(s) OR by SKU(s) — includes variants
+  const orClauses: SQL[] = [];
+  if (matchProductIds.length === 1) {
+    orClauses.push(eq(historicalSales.productId, matchProductIds[0]));
+  } else if (matchProductIds.length > 1) {
+    orClauses.push(inArray(historicalSales.productId, matchProductIds));
+  }
+  if (matchSkus.length === 1) {
+    orClauses.push(eq(historicalSales.sku, matchSkus[0]));
+  } else if (matchSkus.length > 1) {
+    orClauses.push(inArray(historicalSales.sku, matchSkus));
+  }
+  conditions.push(or(...orClauses)!);
+
+  if (opts.locationId) conditions.push(eq(historicalSales.locationId, opts.locationId));
+  if (opts.dateFrom) conditions.push(gte(historicalSales.movementDate, new Date(opts.dateFrom)));
+  if (opts.dateTo) {
+    const to = new Date(opts.dateTo);
+    to.setHours(23, 59, 59, 999);
+    conditions.push(lte(historicalSales.movementDate, to));
+  }
+  if (opts.cursor) {
+    conditions.push(sql`${historicalSales.id} < ${opts.cursor}`);
+  }
+
+  const rows = await db
+    .select()
+    .from(historicalSales)
+    .where(and(...conditions))
+    .orderBy(sql`${historicalSales.movementDate} DESC, ${historicalSales.id} DESC`)
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore && data.length > 0 ? data[data.length - 1].id : null;
+
+  // Map to JournalEntry-compatible shape
+  const entries: JournalEntry[] = data.map((r) => {
+    // Extract variant name: try SKU→name map first, then parse from product name "Parent (Variant)"
+    let variantName: string | null = null;
+    if (r.sku && variantSkuToName.has(r.sku)) {
+      variantName = variantSkuToName.get(r.sku) || null;
+    } else {
+      const match = r.productName?.match(/\(([^)]+)\)$/);
+      if (match) variantName = match[1];
+    }
+
+    return {
+      id: `hist-${r.id}`,
+      effectiveAt: r.movementDate,
+      productId: r.productId || productId,
+      productName: r.productName,
+      productSku: r.sku,
+      mnemonicSku: variantName || "",
+      locationId: r.locationId || "",
+      locationName: r.locationName,
+      locationType: variantName ? "VARIANT" : "",
+      changeQuantity: r.direction === "OUT" ? -r.quantity : r.quantity,
+      balanceAfter: 0,
+      referenceType: r.reasonType === "REFUND" ? "RETURN" : "SALE",
+      referenceId: r.id,
+      referenceNumber: r.reasonReference,
+      referenceDocId: null,
+      referenceLineId: null,
+      reasonCode: null,
+      notes: `Imported${r.employeeName ? ` · Cashier: ${r.employeeName}` : ""}`,
+      actorType: "INTEGRATION",
+      actorName: r.employeeName,
+      reversalOfJournalId: null,
+      lineAmount: r.netSales || null,
+      unitPrice: r.unitPrice || null,
+      createdAt: r.importedAt,
+    };
+  });
+
+  return { data: entries, nextCursor, hasMore };
 }

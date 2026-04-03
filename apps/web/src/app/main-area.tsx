@@ -223,7 +223,7 @@ export function MainArea({ children }: { children: ReactNode }) {
           </button>
           <div className="hidden h-1.5 w-1.5 rounded-full bg-success md:block" />
           <span className="text-[13px] font-medium text-foreground">
-            Apex Auto Parts
+            CBROS Autoparts
           </span>
           <span className="text-muted-foreground">/</span>
           <span className="text-[13px] text-muted-foreground">Admin</span>

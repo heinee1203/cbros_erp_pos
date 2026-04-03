@@ -153,11 +153,15 @@ export function useCreateCount(token: string, locationId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: {
-      locationId: string;
-      label: string;
-      scope: string;
-      scopeFilter?: string;
+      countType: string;
+      title?: string;
       notes?: string;
+      filterCriteria?: {
+        familyId?: string;
+        categoryId?: string;
+        subcategoryId?: string;
+        brandId?: string;
+      };
     }) =>
       apiFetch<{ id: string; totalLines: number; label: string; status: string }>(
         "/inventory/counts",

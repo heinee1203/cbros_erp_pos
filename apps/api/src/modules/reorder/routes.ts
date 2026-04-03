@@ -202,59 +202,97 @@ export const reorderRoutes: FastifyPluginAsync = async (app) => {
       bySupplier.get(key)!.push(s);
     }
 
-    const createdPOs: string[] = [];
+    const results: { poNo: string; action: "created" | "updated"; itemsAdded: number }[] = [];
     const skippedNoSupplier = bySupplier.has("no-supplier")
       ? bySupplier.get("no-supplier")!.length
       : 0;
 
     await db.transaction(async (tx) => {
       for (const [supplierId, items] of bySupplier) {
-        if (supplierId === "no-supplier") continue; // skip items without supplier
+        if (supplierId === "no-supplier") continue;
 
-        // Generate PO number
-        const seqRows = await tx.execute(
-          sql`SELECT COALESCE(MAX(CAST(SUBSTRING(po_no FROM 4) AS INTEGER)), 0) + 1 AS next_num FROM purchase_orders WHERE org_id = ${orgId}`,
-        );
-        const nextNum = (seqRows as any[])[0].next_num;
-        const poNo = `PO-${String(nextNum).padStart(6, "0")}`;
-
-        // Get a destination location (first active location)
-        const locRows = await tx.execute(
-          sql`SELECT id FROM locations WHERE org_id = ${orgId} AND is_active = true LIMIT 1`,
-        );
-        const locationId = (locRows as any[])[0]?.id;
-        if (!locationId) continue;
-
-        // Create PO
-        const poRows = await tx.execute(sql`
-          INSERT INTO purchase_orders (
-            id, org_id, po_no, supplier_id, destination_location_id,
-            status, created_by_user_id, idempotency_key, created_at, updated_at
-          )
-          VALUES (
-            gen_random_uuid(), ${orgId}, ${poNo}, ${supplierId}, ${locationId},
-            'DRAFT', ${userId}, gen_random_uuid(), NOW(), NOW()
-          )
-          RETURNING id, po_no
+        // Check for existing DRAFT PO for this supplier
+        const existingDraftRows = await tx.execute(sql`
+          SELECT id, po_no FROM purchase_orders
+          WHERE supplier_id = ${supplierId} AND status = 'DRAFT' AND org_id = ${orgId}
+          ORDER BY created_at DESC LIMIT 1
         `);
-        const po = (poRows as any[])[0];
+        const existingDraft = (existingDraftRows as any[])[0];
 
-        // Create PO lines with cost prices from products
-        for (const item of items) {
-          await tx.execute(sql`
-            INSERT INTO po_lines (
-              id, purchase_order_id, org_id, product_id, ordered_qty, unit_cost,
-              created_at, updated_at
+        let poId: string;
+        let poNo: string;
+        let action: "created" | "updated";
+
+        if (existingDraft) {
+          // Merge into existing draft PO
+          poId = existingDraft.id;
+          poNo = existingDraft.po_no;
+          action = "updated";
+        } else {
+          // Create new draft PO
+          const seqRows = await tx.execute(
+            sql`SELECT COALESCE(MAX(CAST(SUBSTRING(po_no FROM 4) AS INTEGER)), 0) + 1 AS next_num FROM purchase_orders WHERE org_id = ${orgId}`,
+          );
+          const nextNum = (seqRows as any[])[0].next_num;
+          poNo = `PO-${String(nextNum).padStart(6, "0")}`;
+
+          const locRows = await tx.execute(
+            sql`SELECT id FROM locations WHERE org_id = ${orgId} AND is_active = true LIMIT 1`,
+          );
+          const locationId = (locRows as any[])[0]?.id;
+          if (!locationId) continue;
+
+          const poRows = await tx.execute(sql`
+            INSERT INTO purchase_orders (
+              id, org_id, po_no, supplier_id, destination_location_id,
+              status, created_by_user_id, idempotency_key, created_at, updated_at
             )
             VALUES (
-              gen_random_uuid(), ${po.id}, ${orgId}, ${item.productId}, ${item.suggestedQty},
-              COALESCE((SELECT cost_price FROM products WHERE id = ${item.productId}), '0.00'),
-              NOW(), NOW()
+              gen_random_uuid(), ${orgId}, ${poNo}, ${supplierId}, ${locationId},
+              'DRAFT', ${userId}, gen_random_uuid(), NOW(), NOW()
             )
+            RETURNING id, po_no
           `);
+          poId = (poRows as any[])[0].id;
+          action = "created";
         }
 
-        createdPOs.push(po.po_no);
+        // Add items — merge if product already exists in the PO
+        let itemsAdded = 0;
+        for (const item of items) {
+          const existingLine = await tx.execute(sql`
+            SELECT id, ordered_qty FROM po_lines
+            WHERE purchase_order_id = ${poId} AND product_id = ${item.productId}
+            LIMIT 1
+          `);
+
+          if ((existingLine as any[]).length > 0) {
+            // Product already in PO — add quantity
+            await tx.execute(sql`
+              UPDATE po_lines
+              SET ordered_qty = ordered_qty + ${item.suggestedQty},
+                  unit_cost = COALESCE((SELECT cost_price FROM products WHERE id = ${item.productId}), unit_cost),
+                  updated_at = NOW()
+              WHERE id = ${(existingLine as any[])[0].id}
+            `);
+          } else {
+            // New line item
+            await tx.execute(sql`
+              INSERT INTO po_lines (
+                id, purchase_order_id, org_id, product_id, ordered_qty, unit_cost,
+                created_at, updated_at
+              )
+              VALUES (
+                gen_random_uuid(), ${poId}, ${orgId}, ${item.productId}, ${item.suggestedQty},
+                COALESCE((SELECT cost_price FROM products WHERE id = ${item.productId}), '0.00'),
+                NOW(), NOW()
+              )
+            `);
+          }
+          itemsAdded++;
+        }
+
+        results.push({ poNo, action, itemsAdded });
 
         // Mark suggestions as ORDERED
         const itemIds = items.map((i) => i.id);
@@ -268,7 +306,7 @@ export const reorderRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.send({
       success: true,
-      createdPOs,
+      results,
       skippedNoSupplier,
     });
   });

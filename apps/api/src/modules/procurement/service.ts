@@ -10,6 +10,7 @@ import {
   products,
   suppliers,
   users,
+  serialNumbers,
 } from "@apex/database/schema";
 import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
 import type { CreatePOInput, ReceivePOInput } from "@apex/types";
@@ -19,6 +20,7 @@ import {
   PROCUREMENT_ROLES,
   generateCostCode,
 } from "@apex/types";
+import { autoFulfillBackordersForPO } from "../backorders/service";
 
 // ── Helpers ──
 
@@ -486,6 +488,121 @@ export async function receivePO(
         .where(inArray(poReceiptEvents.id, receiptEventIds));
     }
 
+    // ── Step 4c: Identify serialized and tire products ──
+    const trackingProductIds = [...new Set(receiptResults.map((r) => r.productId))];
+    const serialFlagRows = trackingProductIds.length > 0
+      ? await tx.execute(sql`SELECT id, is_serialized, is_tire FROM products WHERE id IN (${sql.join(trackingProductIds.map(id => sql`${id}`), sql`, `)})`)
+      : [];
+    const serializedIds = new Set(
+      (serialFlagRows as any[]).filter((p: any) => p.is_serialized && !p.is_tire).map((p: any) => p.id),
+    );
+    const tireIds = new Set(
+      (serialFlagRows as any[]).filter((p: any) => p.is_tire).map((p: any) => p.id),
+    );
+
+    // ── Step 4c-serial: Create serial number records for serialized products ──
+    {
+
+      if (serializedIds.size > 0) {
+        // Validate serial counts and collect all serials
+        const allSerialValues: any[] = [];
+        const allSerialStrings = new Set<string>();
+
+        for (const result of receiptResults) {
+          if (!serializedIds.has(result.productId) || result.acceptedQty === 0) continue;
+          const lineInput = input.lines.find((l) => l.poLineId === result.poLineId);
+          const serials = lineInput?.serialNumbers ?? [];
+
+          if (serials.length !== result.acceptedQty) {
+            throw new Error(
+              `Serial count mismatch for PO line: expected ${result.acceptedQty} serials, got ${serials.length}`,
+            );
+          }
+
+          for (const sn of serials) {
+            const key = `${result.productId}:${sn.serialNumber}`;
+            if (allSerialStrings.has(key)) {
+              throw new Error(`Duplicate serial number in batch: ${sn.serialNumber}`);
+            }
+            allSerialStrings.add(key);
+
+            const values: any = {
+              orgId,
+              productId: result.productId,
+              serialNumber: sn.serialNumber,
+              status: "IN_STOCK",
+              locationId: destinationLocationId,
+              receivedVia: "PO_RECEIPT",
+              receivedReferenceId: result.receiptEventId,
+              receivedAt: new Date(),
+            };
+
+            if (sn.dotCode) {
+              // Inline DOT code parsing (week/year from 4-digit WWYY format)
+              const ww = parseInt(sn.dotCode.slice(0, 2), 10);
+              const yy = parseInt(sn.dotCode.slice(2, 4), 10);
+              if (ww >= 1 && ww <= 53 && yy >= 0 && yy <= 99) {
+                const fullYear = yy >= 90 ? 1900 + yy : 2000 + yy;
+                values.dotCode = sn.dotCode;
+                values.manufactureWeek = ww;
+                values.manufactureYear = fullYear;
+                values.manufactureDate = new Date(fullYear, 0, 1 + (ww - 1) * 7);
+              }
+            }
+
+            allSerialValues.push(values);
+          }
+        }
+
+        // Bulk dedup check against DB
+        if (allSerialValues.length > 0) {
+          const existingCheck = await tx.execute(
+            sql`SELECT serial_number, product_id FROM serial_numbers
+                WHERE org_id = ${orgId}
+                AND serial_number IN (${sql.join(allSerialValues.map(v => sql`${v.serialNumber}`), sql`, `)})`,
+          );
+          if ((existingCheck as any[]).length > 0) {
+            const dupes = (existingCheck as any[]).map((r: any) => r.serial_number).join(", ");
+            throw new Error(`Serial numbers already exist: ${dupes}`);
+          }
+
+          // Bulk insert
+          await tx.insert(serialNumbers).values(allSerialValues);
+        }
+      }
+    }
+
+    // ── Step 4d: Create DOT batch records for tire products ──
+    if (tireIds.size > 0) {
+      const { receiveDotBatches } = await import("../dot-batches/service");
+
+      for (const result of receiptResults) {
+        if (!tireIds.has(result.productId) || result.acceptedQty === 0) continue;
+        const lineInput = input.lines.find((l) => l.poLineId === result.poLineId);
+        const batches = lineInput?.dotBatches ?? [];
+
+        const batchTotal = batches.reduce((s, b) => s + b.quantity, 0);
+        if (batchTotal !== result.acceptedQty) {
+          throw new Error(
+            `DOT batch quantity mismatch: expected ${result.acceptedQty} units, got ${batchTotal}`,
+          );
+        }
+
+        await receiveDotBatches(tx, {
+          orgId,
+          productId: result.productId,
+          locationId: destinationLocationId,
+          purchaseOrderId: poId,
+          poNumber: po.po_no,
+          supplierId: po.supplier_id,
+          supplierName: "", // supplier name not available on raw PO row
+          costPrice: result.unitCost,
+          userId,
+          batches,
+        });
+      }
+    }
+
     // ── Step 5: Lock inventory rows in deterministic order ──
     // Only for lines with acceptedQty > 0
     const acceptedResults = receiptResults.filter((r) => r.acceptedQty > 0);
@@ -652,6 +769,11 @@ export async function receivePO(
       .set(updateSet)
       .where(eq(purchaseOrders.id, poId))
       .returning();
+
+    // Auto-fulfill any backorders linked to this PO
+    if (isFullyReceived) {
+      await autoFulfillBackordersForPO(orgId, poId);
+    }
 
     return {
       po: updatedPO,
@@ -961,6 +1083,10 @@ async function buildPODetail(po: typeof purchaseOrders.$inferSelect) {
       barcode: products.barcode,
       unitPrice: products.unitPrice,
       mnemonicCostCode: products.mnemonicCostCode,
+      parentProductId: products.parentProductId,
+      parentName: sql<string | null>`(SELECT pp.name FROM products pp WHERE pp.id = ${products.parentProductId})`.as("parent_name"),
+      isSerialized: products.isSerialized,
+      isTire: products.isTire,
     })
     .from(poLines)
     .innerJoin(products, eq(products.id, poLines.productId))
@@ -978,7 +1104,11 @@ async function buildPODetail(po: typeof purchaseOrders.$inferSelect) {
     ...po,
     supplier,
     destination: location,
-    lines: rawLines,
+    lines: rawLines.sort((a, b) => {
+      const nameA = a.parentName ? `${a.parentName} (${a.productName})` : a.productName;
+      const nameB = b.parentName ? `${b.parentName} (${b.productName})` : b.productName;
+      return nameA.localeCompare(nameB);
+    }),
     receiptEvents,
   };
 }
@@ -988,9 +1118,38 @@ async function buildPODetail(po: typeof purchaseOrders.$inferSelect) {
  */
 export async function listPOs(
   orgId: string,
-  cursor?: string,
-  limit: number = 50,
+  opts: {
+    cursor?: string;
+    limit?: number;
+    status?: string;
+    supplierId?: string;
+    destinationLocationId?: string;
+    createdAfter?: string;
+    createdBefore?: string;
+  } = {},
 ) {
+  const limit = opts.limit ?? 50;
+  const conditions: SQL[] = [eq(purchaseOrders.orgId, orgId)];
+
+  if (opts.status) {
+    conditions.push(eq(purchaseOrders.status, opts.status as any));
+  }
+  if (opts.supplierId) {
+    conditions.push(eq(purchaseOrders.supplierId, opts.supplierId));
+  }
+  if (opts.destinationLocationId) {
+    conditions.push(eq(purchaseOrders.destinationLocationId, opts.destinationLocationId));
+  }
+  if (opts.createdAfter) {
+    conditions.push(sql`${purchaseOrders.createdAt} >= ${opts.createdAfter}`);
+  }
+  if (opts.createdBefore) {
+    conditions.push(sql`${purchaseOrders.createdAt} <= ${opts.createdBefore}::date + INTERVAL '1 day'`);
+  }
+  if (opts.cursor) {
+    conditions.push(sql`${purchaseOrders.createdAt} < (SELECT created_at FROM purchase_orders WHERE id = ${opts.cursor})`);
+  }
+
   let query = db
     .select({
       id: purchaseOrders.id,
@@ -1016,15 +1175,8 @@ export async function listPOs(
     .from(purchaseOrders)
     .innerJoin(suppliers, eq(suppliers.id, purchaseOrders.supplierId))
     .innerJoin(locations, eq(locations.id, purchaseOrders.destinationLocationId))
-    .where(
-      cursor
-        ? and(
-            eq(purchaseOrders.orgId, orgId),
-            sql`${purchaseOrders.id} > ${cursor}`,
-          )
-        : eq(purchaseOrders.orgId, orgId),
-    )
-    .orderBy(asc(purchaseOrders.id))
+    .where(and(...conditions))
+    .orderBy(desc(purchaseOrders.createdAt), desc(purchaseOrders.id))
     .limit(limit + 1);
 
   const results = await query;

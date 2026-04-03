@@ -56,7 +56,7 @@ export function TransactionDetailPane({ saleId, onRefunded, onRefundPress }: Tra
     if (!sale) return;
     const receiptData: ReceiptData = {
       header: {
-        storeName: sale.location?.name || 'APEX AUTO PARTS',
+        storeName: sale.location?.name || 'CBROS GENUINE AUTOPARTS',
         address: sale.location?.address || undefined,
       },
       transaction: {

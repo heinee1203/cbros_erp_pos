@@ -5,6 +5,7 @@ import {
   queryStockMonitor,
   exportStockMonitorCSV,
   querySupplierMetrics,
+  getReorderSuggestions,
 } from "./service";
 
 export const stockMonitorRoutes: FastifyPluginAsync = async (app) => {
@@ -20,10 +21,23 @@ export const stockMonitorRoutes: FastifyPluginAsync = async (app) => {
     const result = await queryStockMonitor({
       orgId,
       search: q.search,
+      productId: q.productId,
       status: q.status,
       brandId: q.brandId,
       categoryId: q.categoryId,
+      subcategoryId: q.subcategoryId,
       familyId: q.familyId,
+      hideNegativeStock: q.hideNegativeStock === "true",
+      urgency: q.urgency,
+      urgencyWindow: q.urgencyWindow,
+      velocityClass: q.velocityClass,
+      urgencyAll: q.urgencyAll,
+      urgency12m: q.urgency12M || q.urgency12m,
+      urgency6m: q.urgency6M || q.urgency6m,
+      urgency3m: q.urgency3M || q.urgency3m,
+      urgency1m: q.urgency1M || q.urgency1m,
+      lastSoldAfter: q.lastSoldAfter,
+      lastSoldBefore: q.lastSoldBefore,
       sortBy: q.sortBy,
       sortDir: q.sortDir,
       cursor: q.cursor,
@@ -45,10 +59,23 @@ export const stockMonitorRoutes: FastifyPluginAsync = async (app) => {
     const rows = await exportStockMonitorCSV({
       orgId,
       search: q.search,
+      productId: q.productId,
       status: q.status,
       brandId: q.brandId,
       categoryId: q.categoryId,
+      subcategoryId: q.subcategoryId,
       familyId: q.familyId,
+      hideNegativeStock: q.hideNegativeStock === "true",
+      urgency: q.urgency,
+      urgencyWindow: q.urgencyWindow,
+      velocityClass: q.velocityClass,
+      urgencyAll: q.urgencyAll,
+      urgency12m: q.urgency12M || q.urgency12m,
+      urgency6m: q.urgency6M || q.urgency6m,
+      urgency3m: q.urgency3M || q.urgency3m,
+      urgency1m: q.urgency1M || q.urgency1m,
+      lastSoldAfter: q.lastSoldAfter,
+      lastSoldBefore: q.lastSoldBefore,
       sortBy: q.sortBy,
       sortDir: q.sortDir,
     });
@@ -126,5 +153,29 @@ export const stockMonitorRoutes: FastifyPluginAsync = async (app) => {
       productCount,
       supplierCount,
     });
+  });
+
+  // ── GET /reorder-suggestions ──
+  app.get("/reorder-suggestions", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as Record<string, string | undefined>;
+    const suggestions = await getReorderSuggestions(orgId, {
+      reorderThreshold: q.threshold ? parseFloat(q.threshold) : undefined,
+      targetMonths: q.targetMonths ? parseFloat(q.targetMonths) : undefined,
+      categoryId: q.categoryId,
+      brandId: q.brandId,
+      urgency: q.urgency,
+      urgencyWindow: q.urgencyWindow,
+      velocityClass: q.velocityClass,
+      urgencyAll: q.urgencyAll,
+      urgency12m: q.urgency12M || q.urgency12m,
+      urgency6m: q.urgency6M || q.urgency6m,
+      urgency3m: q.urgency3M || q.urgency3m,
+      urgency1m: q.urgency1M || q.urgency1m,
+      lastSoldAfter: q.lastSoldAfter,
+      lastSoldBefore: q.lastSoldBefore,
+      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+    });
+    return reply.send({ data: suggestions });
   });
 };

@@ -712,7 +712,7 @@ export default function CheckVoucherDetailPage() {
             <div
               style={{ fontSize: "18px", fontWeight: "bold", marginBottom: "2px" }}
             >
-              Apex Auto Parts
+              CBROS Genuine Autoparts & Accessories, Inc.
             </div>
             <div style={{ fontSize: "10px", color: "#666" }}>
               Automotive Parts &amp; Supplies

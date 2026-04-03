@@ -11,7 +11,7 @@
       "name": "web",
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "pnpm", "web:dev"],
-      "port": 3001,
+      "port": 3002,
       "autoPort": true
     }
   ]

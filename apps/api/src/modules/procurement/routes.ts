@@ -11,6 +11,7 @@ import {
 import { db } from "@apex/database";
 import { purchaseOrders, poLines } from "@apex/database/schema";
 import { eq, and, sql } from "drizzle-orm";
+import { logAction } from "../audit/service";
 import {
   createPO,
   submitPO,
@@ -149,6 +150,7 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const result = await createPO(parsed.data, orgId, userId, role);
+      logAction({ orgId, userId, action: "PO_CREATE", entityType: "PO", entityId: result.po?.id, details: { poNo: result.po?.poNo }, ipAddress: request.ip });
       return reply.status(201).send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
@@ -156,20 +158,24 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ─── GET /procurement/purchase-orders ──────────────
-  // List POs with cursor-based pagination
+  // List POs with cursor-based pagination + filters
   app.get("/purchase-orders", async (request, reply) => {
     const { orgId } = request.storeContext!;
     const { role } = request.user;
     assertProcurementRole(role);
 
-    const parsed = paginationSchema.safeParse(request.query);
-    if (!parsed.success) {
-      return reply
-        .status(400)
-        .send({ error: "Validation failed", details: parsed.error.flatten() });
-    }
+    const q = request.query as Record<string, string | undefined>;
+    const limit = q.limit ? parseInt(q.limit, 10) : 50;
 
-    const result = await listPOs(orgId, parsed.data.cursor, parsed.data.limit);
+    const result = await listPOs(orgId, {
+      cursor: q.cursor,
+      limit,
+      status: q.status,
+      supplierId: q.supplierId,
+      destinationLocationId: q.destinationLocationId,
+      createdAfter: q.createdAfter,
+      createdBefore: q.createdBefore,
+    });
     return reply.send(result);
   });
 
@@ -233,6 +239,7 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
         parsed.data.idempotencyKey,
         parsed.data.notes,
       );
+      logAction({ orgId, userId, action: "PO_SUBMIT", entityType: "PO", entityId: id, ipAddress: request.ip });
       return reply.send(result);
     } catch (err: any) {
       if (isIdempotencyError(err)) {
@@ -261,6 +268,7 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const result = await receivePO(id, orgId, userId, role, parsed.data);
+      logAction({ orgId, userId, action: "PO_RECEIVE", entityType: "PO", entityId: id, ipAddress: request.ip });
       return reply.send(result);
     } catch (err: any) {
       if (isIdempotencyError(err)) {

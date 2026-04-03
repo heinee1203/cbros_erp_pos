@@ -817,7 +817,7 @@ async function buildTransferDetail(
       varianceQty: stockTransferItems.varianceQty,
       createdAt: stockTransferItems.createdAt,
       mnemonicSku: products.mnemonicSku,
-      productName: products.name,
+      productName: sql<string>`CASE WHEN ${products.parentProductId} IS NOT NULL THEN (SELECT pp.name FROM products pp WHERE pp.id = ${products.parentProductId}) || ' (' || ${products.name} || ')' ELSE ${products.name} END`.as("product_name"),
       sku: products.sku,
     })
     .from(stockTransferItems)

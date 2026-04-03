@@ -18,6 +18,9 @@ export interface CatalogItem {
   isVariablePrice: boolean;
   isParent: boolean;
   parentProductId: string | null;
+  isSerialized: boolean;
+  isTire: boolean;
+  warrantyMonths: number | null;
   stockLevel: number;
   reservedLevel: number;
   reorderPoint: number;
@@ -112,6 +115,9 @@ export function useCatalogSearch() {
           isVariablePrice: p.isVariablePrice,
           isParent: p.isParent,
           parentProductId: p.parentProductId,
+          isSerialized: p.isSerialized ?? false,
+          isTire: p.isTire ?? false,
+          warrantyMonths: p.warrantyMonths ?? null,
           stockLevel: inv?.stockLevel ?? 0,
           reservedLevel: inv?.reservedLevel ?? 0,
           reorderPoint: inv?.reorderPoint ?? 10,
@@ -189,6 +195,9 @@ export function useCatalogSearch() {
       isVariablePrice: p.isVariablePrice,
       isParent: p.isParent,
       parentProductId: p.parentProductId,
+      isSerialized: p.isSerialized ?? false,
+      isTire: p.isTire ?? false,
+      warrantyMonths: p.warrantyMonths ?? null,
       stockLevel,
       reservedLevel,
       reorderPoint,

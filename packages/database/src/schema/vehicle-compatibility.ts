@@ -7,6 +7,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { products } from "./products";
+import { vehicles } from "./vehicles";
 
 export const vehicleCompatibility = pgTable(
   "vehicle_compatibility",
@@ -15,6 +16,8 @@ export const vehicleCompatibility = pgTable(
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
+    /** Link to master vehicle record (nullable for legacy entries) */
+    vehicleId: uuid("vehicle_id").references(() => vehicles.id, { onDelete: "set null" }),
     make: varchar("make", { length: 100 }).notNull(),
     model: varchar("model", { length: 100 }).notNull(),
     yearStart: integer("year_start"),

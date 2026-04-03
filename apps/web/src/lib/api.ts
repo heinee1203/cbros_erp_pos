@@ -28,8 +28,11 @@ export async function apiFetch<T>(
     ...((customHeaders as Record<string, string>) || {}),
   };
 
-  // Only set Content-Type when there is a body to send
-  if (rest.body) {
+  // Auto-stringify object bodies and set Content-Type
+  if (rest.body != null) {
+    if (typeof rest.body === "object" && !(rest.body instanceof Blob) && !(rest.body instanceof FormData) && !(rest.body instanceof ArrayBuffer)) {
+      rest.body = JSON.stringify(rest.body);
+    }
     headers["Content-Type"] = "application/json";
   }
 
@@ -53,6 +56,15 @@ export async function apiFetch<T>(
       "Network error — please check your connection",
       0,
     );
+  }
+
+  if (res.status === 401) {
+    // Token expired or invalid — redirect to login
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("apex-auth");
+      window.location.href = "/login";
+    }
+    throw new ApiError("Session expired — please log in again", 401);
   }
 
   if (!res.ok) {

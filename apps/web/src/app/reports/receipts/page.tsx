@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { FileStack, Search, DollarSign, Hash } from "lucide-react";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import { useSalesListQuery, type SalesFilters } from "@/hooks/use-sales-query";
@@ -124,8 +125,11 @@ export default function ReceiptsLogPage() {
           );
         })}
         <div className="h-4 w-px bg-border" />
-        <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setActivePreset(null); }} className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] text-foreground outline-none" />
-        <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setActivePreset(null); }} className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] text-foreground outline-none" />
+        <DateRangePicker
+          startDate={dateFrom}
+          endDate={dateTo}
+          onChange={(start, end) => { setDateFrom(start); setDateTo(end); setActivePreset(null); }}
+        />
         {(dateFrom || dateTo) && <button onClick={clearDates} className="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground">Clear</button>}
       </div>
 

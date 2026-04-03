@@ -1,4 +1,5 @@
 import React, { useCallback, useRef } from 'react';
+import { colors } from '@/theme';
 import {
   Animated,
   Pressable,
@@ -62,29 +63,29 @@ export function Chip({ label, active, onPress, count, style }: ChipProps) {
 
 const styles = StyleSheet.create({
   active: {
-    backgroundColor: '#F5A623',
+    backgroundColor: colors.accent.primary,
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 24,
     marginRight: 8,
   },
   inactive: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: colors.bg.surface,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
+    borderColor: colors.border.light,
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 24,
     marginRight: 8,
   },
   activeText: {
-    color: '#1A1A1A',
+    color: colors.text.inverse,
     fontSize: 13,
     fontFamily: 'Outfit-SemiBold',
     letterSpacing: 0.3,
   },
   inactiveText: {
-    color: '#5A5750',
+    color: colors.text.muted,
     fontSize: 13,
     fontFamily: 'Outfit-Medium',
     letterSpacing: 0.3,

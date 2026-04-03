@@ -201,3 +201,52 @@ export function useEmployeesQuery(token: string, locationId: string) {
     staleTime: 120_000,
   });
 }
+
+// ── Sales by Payment Method ──
+
+export interface PaymentMethodRow {
+  method: string;
+  transactionCount: number;
+  totalAmount: number;
+  percentage: number;
+}
+
+export interface SalesByPaymentData {
+  data: PaymentMethodRow[];
+  grandTotal: number;
+}
+
+export function useSalesByPaymentQuery(token: string, locationId: string, filters: ReportFilters = {}) {
+  const qs = buildParams(filters);
+  return useQuery<SalesByPaymentData>({
+    queryKey: ["reports", "sales-by-payment", filters, locationId],
+    queryFn: () => apiFetch<SalesByPaymentData>(`/reports/sales-by-payment${qs ? `?${qs}` : ""}`, { token, locationId }),
+    enabled: !!token && !!locationId,
+    staleTime: 30_000,
+  });
+}
+
+// ── Discount Analysis ──
+
+export interface DiscountAnalysis {
+  summary: {
+    totalSales: number;
+    salesWithDiscount: number;
+    totalDiscount: number;
+    totalRevenue: number;
+    avgDiscountPct: number;
+  };
+  byEmployee: { userId: string; employeeName: string; transactionCount: number; totalDiscount: number }[];
+  byProduct: { productId: string; productName: string; sku: string; transactionCount: number; totalQty: number; totalDiscount: number }[];
+  byCategory: { categoryName: string; transactionCount: number; totalQty: number; totalDiscount: number }[];
+}
+
+export function useDiscountAnalysisQuery(token: string, locationId: string, filters: ReportFilters = {}) {
+  const qs = buildParams(filters);
+  return useQuery<DiscountAnalysis>({
+    queryKey: ["reports", "discount-analysis", filters, locationId],
+    queryFn: () => apiFetch<DiscountAnalysis>(`/reports/discount-analysis${qs ? `?${qs}` : ""}`, { token, locationId }),
+    enabled: !!token && !!locationId,
+    staleTime: 30_000,
+  });
+}

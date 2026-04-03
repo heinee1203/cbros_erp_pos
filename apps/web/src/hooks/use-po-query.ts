@@ -37,6 +37,8 @@ export interface POLine {
   barcode: string | null;
   unitPrice: string;
   mnemonicCostCode: string | null;
+  isSerialized: boolean;
+  isTire: boolean;
 }
 
 export interface POReceiptEvent {

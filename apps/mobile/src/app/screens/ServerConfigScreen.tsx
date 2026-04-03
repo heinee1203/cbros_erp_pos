@@ -80,7 +80,7 @@ export default function ServerConfigScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.content}>
-        <Text style={styles.logo}>APEX</Text>
+        <Text style={styles.logo}>CBROS</Text>
         <Text style={styles.title}>Device Setup</Text>
         <Text style={styles.subtitle}>
           Enter the API server URL for this device.

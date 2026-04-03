@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import {
   Tag,
   Hash,
@@ -27,12 +28,14 @@ interface DemandRow {
   tagId: string;
   tagName: string;
   tagType: string;
-  unitsSold: number;
-  revenue: number;
+  unitsSold?: number;
+  totalQtySold?: number;
+  revenue?: number;
+  totalRevenue?: number;
   productCount: number;
   topBrand: string | null;
-  stockLeft: number;
-  daysOfStock: number | null;
+  stockLeft?: number;
+  daysOfStock?: number | null;
 }
 
 interface DetailProduct {
@@ -95,6 +98,7 @@ export default function DemandByTagPage() {
   const { token, locationId } = useAuth();
 
   const [tagTypeFilter, setTagTypeFilter] = useState<TagTypeFilter>("ALL");
+  const [rimSizeFilter, setRimSizeFilter] = useState("All");
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 90);
@@ -128,8 +132,9 @@ export default function DemandByTagPage() {
       if (tagTypeFilter !== "ALL") params.set("tagType", tagTypeFilter);
       if (dateFrom) params.set("from", `${dateFrom}T00:00:00Z`);
       if (dateTo) params.set("to", `${dateTo}T23:59:59Z`);
+      params.set("limit", "200"); // Fetch all tags, not just top 50
       const qs = params.toString();
-      return apiFetch<{ data: DemandRow[] }>(`/reports/demand-by-tag${qs ? `?${qs}` : ""}`, {
+      return apiFetch<{ data: DemandRow[] }>(`/tags/demand${qs ? `?${qs}` : ""}`, {
         token: token!,
         locationId,
       });
@@ -137,7 +142,17 @@ export default function DemandByTagPage() {
     enabled: !!token,
   });
 
-  const rawRows = reportQuery.data?.data ?? [];
+  const rawRows: DemandRow[] = (reportQuery.data?.data ?? []).map((r: any) => ({
+    ...r,
+    // Ensure numeric fields are actual numbers (API may return strings)
+    unitsSold: Number(r.unitsSold ?? r.totalQtySold ?? 0),
+    totalQtySold: Number(r.totalQtySold ?? r.unitsSold ?? 0),
+    revenue: Number(r.revenue ?? r.totalRevenue ?? 0),
+    totalRevenue: Number(r.totalRevenue ?? r.revenue ?? 0),
+    productCount: Number(r.productCount ?? 0),
+    stockLeft: Number(r.stockLeft ?? r.totalStock ?? 0),
+    daysOfStock: r.daysOfStock != null ? Number(r.daysOfStock) : null,
+  }));
 
   // Filter + sort
   const rows = useMemo(() => {
@@ -146,17 +161,38 @@ export default function DemandByTagPage() {
       const q = search.toLowerCase();
       result = result.filter((r) => r.tagName.toLowerCase().includes(q));
     }
+    // Rim size filter (only for tire sizes)
+    if (rimSizeFilter !== "All" && tagTypeFilter === "TIRE_SIZE") {
+      result = result.filter((r) => r.tagName.includes(rimSizeFilter));
+    }
+    const NUMERIC_KEYS = new Set(["unitsSold", "totalQtySold", "revenue", "totalRevenue", "productCount", "stockLeft", "daysOfStock"]);
     result = [...result].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
-      if (typeof av === "string" && typeof bv === "string")
-        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-      const an = (av as number) ?? 0;
-      const bn = (bv as number) ?? 0;
-      return sortDir === "asc" ? an - bn : bn - an;
+      if (NUMERIC_KEYS.has(sortKey)) {
+        const an = Number(av ?? 0);
+        const bn = Number(bv ?? 0);
+        return sortDir === "asc" ? an - bn : bn - an;
+      }
+      // String sort for tagName, tagType, topBrand
+      const as = String(av ?? "");
+      const bs = String(bv ?? "");
+      return sortDir === "asc" ? as.localeCompare(bs) : bs.localeCompare(as);
     });
     return result;
-  }, [rawRows, search, sortKey, sortDir]);
+  }, [rawRows, search, sortKey, sortDir, rimSizeFilter, tagTypeFilter]);
+
+  // Derive rim sizes from tire size tags
+  const rimSizes = useMemo(() => {
+    const sizes = new Set<string>();
+    rawRows
+      .filter((r) => r.tagType === "TIRE_SIZE")
+      .forEach((r) => {
+        const match = r.tagName.match(/R(\d+)/);
+        if (match) sizes.add(`R${match[1]}`);
+      });
+    return ["All", ...Array.from(sizes).sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)))];
+  }, [rawRows]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -165,8 +201,8 @@ export default function DemandByTagPage() {
 
   // Summary
   const totalApplications = rows.length;
-  const totalUnits = rows.reduce((s, r) => s + r.unitsSold, 0);
-  const mostInDemand = rows.length > 0 ? [...rows].sort((a, b) => b.unitsSold - a.unitsSold)[0]?.tagName : "-";
+  const totalUnits = rows.reduce((s, r) => s + (r.unitsSold ?? r.totalQtySold ?? 0), 0);
+  const mostInDemand = rows.length > 0 ? [...rows].sort((a, b) => (b.unitsSold ?? b.totalQtySold ?? 0) - (a.unitsSold ?? a.totalQtySold ?? 0))[0]?.tagName : "-";
 
   const isLoading = reportQuery.isLoading;
 
@@ -177,11 +213,11 @@ export default function DemandByTagPage() {
       rows.map((r) => [
         r.tagName,
         r.tagType.replace(/_/g, " "),
-        String(r.unitsSold),
-        String(r.revenue),
+        String(r.unitsSold ?? r.totalQtySold ?? 0),
+        String(r.revenue ?? r.totalRevenue ?? 0),
         String(r.productCount),
         r.topBrand ?? "-",
-        String(r.stockLeft),
+        String(r.stockLeft ?? 0),
         r.daysOfStock != null ? String(r.daysOfStock) : "-",
       ]),
     );
@@ -236,7 +272,7 @@ export default function DemandByTagPage() {
           return (
             <button
               key={t.key}
-              onClick={() => setTagTypeFilter(t.key)}
+              onClick={() => { setTagTypeFilter(t.key); if (t.key !== "TIRE_SIZE") setRimSizeFilter("All"); }}
               className={cn(
                 "flex items-center gap-1.5 h-8 rounded-lg border px-3 text-[11px] font-medium transition-colors",
                 tagTypeFilter === t.key
@@ -250,31 +286,14 @@ export default function DemandByTagPage() {
           );
         })}
         <div className="h-4 w-px bg-border" />
-        {["30d", "90d", "180d", "365d"].map((p) => (
-          <button
-            key={p}
-            onClick={() => applyPreset(p)}
-            className={cn(
-              "h-8 rounded-lg border px-3 text-[11px] font-medium transition-colors",
-              activePreset === p
-                ? "border-primary/20 bg-primary/[0.04] text-foreground"
-                : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            {p === "30d" ? "30 Days" : p === "90d" ? "90 Days" : p === "180d" ? "6 Months" : "1 Year"}
-          </button>
-        ))}
-        <input
-          type="date"
-          value={dateFrom}
-          onChange={(e) => { setDateFrom(e.target.value); setActivePreset(null); }}
-          className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] text-foreground outline-none"
-        />
-        <input
-          type="date"
-          value={dateTo}
-          onChange={(e) => { setDateTo(e.target.value); setActivePreset(null); }}
-          className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] text-foreground outline-none"
+        <DateRangePicker
+          startDate={dateFrom}
+          endDate={dateTo}
+          onChange={(start, end) => {
+            setDateFrom(start);
+            setDateTo(end);
+            setActivePreset(null);
+          }}
         />
         {(dateFrom || dateTo) && (
           <button onClick={clearDates} className="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -291,6 +310,27 @@ export default function DemandByTagPage() {
           </button>
         )}
       </div>
+
+      {/* Rim Size Filter — only for Tire Sizes tab */}
+      {tagTypeFilter === "TIRE_SIZE" && rimSizes.length > 1 && (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mr-1">Rim:</span>
+          {rimSizes.map((size) => (
+            <button
+              key={size}
+              onClick={() => setRimSizeFilter(size)}
+              className={cn(
+                "h-6 rounded-full px-2.5 text-[11px] font-medium transition-colors",
+                rimSizeFilter === size
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground",
+              )}
+            >
+              {size}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative mb-3">
@@ -364,11 +404,11 @@ export default function DemandByTagPage() {
                       {row.tagType.replace(/_/g, " ")}
                     </span>
                   </div>
-                  <div className="w-24 text-right text-[12px] tabular-nums font-medium text-foreground">{row.unitsSold.toLocaleString()}</div>
-                  <div className="w-32 text-right text-[12px] tabular-nums font-medium text-foreground">PHP {fmt(row.revenue)}</div>
+                  <div className="w-24 text-right text-[12px] tabular-nums font-medium text-foreground">{(row.unitsSold ?? row.totalQtySold ?? 0).toLocaleString()}</div>
+                  <div className="w-32 text-right text-[12px] tabular-nums font-medium text-foreground">PHP {fmt(row.revenue ?? row.totalRevenue ?? 0)}</div>
                   <div className="w-20 text-right text-[12px] tabular-nums text-foreground">{row.productCount}</div>
                   <div className="w-24 text-right text-[12px] text-muted-foreground truncate">{row.topBrand ?? "-"}</div>
-                  <div className="w-20 text-right text-[12px] tabular-nums text-foreground">{row.stockLeft.toLocaleString()}</div>
+                  <div className="w-20 text-right text-[12px] tabular-nums text-foreground">{(row.stockLeft ?? 0).toLocaleString()}</div>
                   <div className={cn(
                     "w-16 text-right text-[12px] tabular-nums font-medium",
                     row.daysOfStock != null && row.daysOfStock <= 14 ? "text-red-600" :
@@ -404,7 +444,7 @@ export default function DemandByTagPage() {
         <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-2">
           <span className="text-[11px] text-muted-foreground">{rows.length} applications</span>
           <span className="text-[11px] text-muted-foreground">
-            Total revenue: PHP {fmt(rows.reduce((s, r) => s + r.revenue, 0))}
+            Total revenue: PHP {fmt(rows.reduce((s, r) => s + (r.revenue ?? r.totalRevenue ?? 0), 0))}
           </span>
         </div>
       </div>
@@ -466,14 +506,37 @@ function TagDemandDetail({
   const { data, isLoading } = useQuery({
     queryKey: ["demand-by-tag-detail", tagId, dateFrom, dateTo],
     queryFn: () =>
-      apiFetch<{ data: { brands: DetailBrand[]; products: DetailProduct[] } }>(
-        `/reports/demand-by-tag/${tagId}${qs ? `?${qs}` : ""}`,
+      apiFetch<{ data: any[] }>(
+        `/tags/demand/${tagId}${qs ? `?${qs}` : ""}`,
         { token, locationId },
       ),
   });
 
-  const brands = data?.data?.brands ?? [];
-  const products = data?.data?.products ?? [];
+  // API returns flat array — derive brands and products from it
+  const rawProducts = (data?.data ?? []) as any[];
+  const products: DetailProduct[] = rawProducts.map((p: any) => ({
+    productId: p.productId,
+    name: p.name,
+    brand: p.brandName ?? p.brand ?? null,
+    sku: p.sku,
+    unitPrice: String(p.sellPrice ?? p.unitPrice ?? "0"),
+    qtySold: Number(p.qtySold ?? 0),
+    revenue: Number(p.revenue ?? 0),
+    stock: Number(p.currentStock ?? p.stock ?? 0),
+    daysLeft: null,
+  }));
+  // Aggregate brands from products
+  const brandMap = new Map<string, { name: string; qty: number; revenue: number }>();
+  for (const p of products) {
+    const bName = p.brand || "Unknown";
+    const existing = brandMap.get(bName) || { name: bName, qty: 0, revenue: 0 };
+    existing.qty += p.qtySold;
+    existing.revenue += p.revenue;
+    brandMap.set(bName, existing);
+  }
+  const brands: DetailBrand[] = [...brandMap.values()]
+    .sort((a, b) => b.qty - a.qty)
+    .map(b => ({ brand: b.name, qty: b.qty, revenue: b.revenue }));
   const maxBrandQty = Math.max(...brands.map((b) => b.qty), 1);
 
   if (isLoading) {
@@ -491,8 +554,8 @@ function TagDemandDetail({
         <div>
           <h4 className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Brand Breakdown</h4>
           <div className="space-y-1.5">
-            {brands.map((b) => (
-              <div key={b.brand} className="flex items-center gap-3">
+            {brands.map((b, i) => (
+              <div key={`${b.brand}-${i}`} className="flex items-center gap-3">
                 <span className="w-28 text-[12px] text-foreground truncate">{b.brand || "Unknown"}</span>
                 <div className="flex-1 h-5 bg-muted/40 rounded-full overflow-hidden">
                   <div

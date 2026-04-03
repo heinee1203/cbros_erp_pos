@@ -91,9 +91,8 @@ export default function CategoriesPage() {
 
   // Data
   const { data: familiesData, isLoading: familiesLoading } = useProductFamilies(token, locationId);
-  const { data: categoriesData, isLoading: categoriesLoading, isError } = useCategories(token, locationId, {
-    search: debouncedSearch || undefined,
-  });
+  // Fetch ALL categories (no server-side search) — search is done client-side across the full hierarchy
+  const { data: categoriesData, isLoading: categoriesLoading, isError } = useCategories(token, locationId, {});
   const { data: subcategoriesData, isLoading: subcategoriesLoading } = useSubcategories(token, locationId);
 
   const createCatMut = useCreateCategory(token, locationId);
@@ -150,26 +149,37 @@ export default function CategoriesPage() {
     };
   }, [allCategories, allSubcategories]);
 
-  // When searching, auto-expand families/categories that have matching items
+  // When searching, auto-expand families/categories that have matching items or subcategories
   const searchExpandedFamilyIds = useMemo(() => {
     if (!debouncedSearch) return null;
+    const q = debouncedSearch.toLowerCase();
     const ids = new Set<string>();
     for (const family of families) {
       const cats = categoriesByFamily.get(family.id) ?? [];
-      if (cats.length > 0 || family.name.toLowerCase().includes(debouncedSearch.toLowerCase())) {
+      const familyMatches = family.name.toLowerCase().includes(q);
+      const anyCatMatches = cats.some(c => c.name.toLowerCase().includes(q));
+      // Check if any sub-category matches
+      const anySubMatches = cats.some(c => {
+        const subs = subcategoriesByCategory.get(c.id) ?? [];
+        return subs.some(s => s.name.toLowerCase().includes(q));
+      });
+      if (cats.length > 0 || familyMatches || anyCatMatches || anySubMatches) {
         ids.add(family.id);
       }
     }
     if (ungroupedCategories.length > 0) ids.add("__ungrouped__");
     return ids;
-  }, [debouncedSearch, families, categoriesByFamily, ungroupedCategories]);
+  }, [debouncedSearch, families, categoriesByFamily, ungroupedCategories, subcategoriesByCategory]);
 
   const searchExpandedCategoryIds = useMemo(() => {
     if (!debouncedSearch) return null;
+    const q = debouncedSearch.toLowerCase();
     const ids = new Set<string>();
     for (const cat of allCategories) {
       const subs = subcategoriesByCategory.get(cat.id) ?? [];
-      if (subs.length > 0) {
+      const catMatches = cat.name.toLowerCase().includes(q);
+      const anySubMatches = subs.some(s => s.name.toLowerCase().includes(q));
+      if (subs.length > 0 || catMatches || anySubMatches) {
         ids.add(cat.id);
       }
     }
@@ -244,11 +254,14 @@ export default function CategoriesPage() {
     });
   }
 
-  // Summary stats
+  // Summary stats — use unfiltered data for header totals
   const totalFamilies = families.length;
   const totalCategories = allCategories.length;
   const totalSubcategories = allSubcategories.length;
-  const totalItems = allCategories.reduce((sum, c) => sum + c.productCount, 0);
+  // Items count: sum from categories + subcategories (whichever is more complete)
+  const itemsFromCategories = allCategories.reduce((sum, c) => sum + c.productCount, 0);
+  const itemsFromSubcategories = allSubcategories.reduce((sum, s: any) => sum + (s.productCount ?? 0), 0);
+  const totalItems = Math.max(itemsFromCategories, itemsFromSubcategories);
 
   if (authLoading) {
     return (
@@ -318,6 +331,27 @@ export default function CategoriesPage() {
             <span className="text-muted-foreground">Items</span>
             <span className="font-semibold tabular-nums text-foreground">{totalItems.toLocaleString()}</span>
           </div>
+          <div className="ml-auto">
+            <button
+              onClick={async () => {
+                if (!confirm("Remove all empty categories and subcategories (0 items)? This cannot be undone.")) return;
+                try {
+                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}/categories/remove-empty`, {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}`, "X-Location-ID": locationId },
+                  });
+                  const data = await res.json();
+                  alert(`Removed ${data.categoriesRemoved} empty categories and ${data.subcategoriesRemoved} empty subcategories`);
+                  window.location.reload();
+                } catch (err: any) {
+                  alert("Failed: " + (err.message || "Unknown error"));
+                }
+              }}
+              className="rounded-md border border-destructive/30 px-3 py-1.5 text-[11px] font-medium text-destructive hover:bg-destructive/5 transition-colors"
+            >
+              Remove Empty
+            </button>
+          </div>
         </div>
       </div>
 
@@ -359,8 +393,34 @@ export default function CategoriesPage() {
         ) : (
           <div className="divide-y divide-border">
             {/* Family groups */}
-            {families.map((family) => {
-              const familyCats = categoriesByFamily.get(family.id) ?? [];
+            {families.filter((family) => {
+              // When searching, hide families with no matches
+              if (searchExpandedFamilyIds && !searchExpandedFamilyIds.has(family.id)) return false;
+              return true;
+            }).map((family) => {
+              const allFamilyCats = categoriesByFamily.get(family.id) ?? [];
+              const q = debouncedSearch?.toLowerCase();
+              const familyNameMatches = q && family.name.toLowerCase().includes(q);
+
+              // When searching, filter categories and subcategories to only matching ones
+              let familyCats = allFamilyCats;
+              let filteredSubsMap = subcategoriesByCategory;
+              if (q && !familyNameMatches) {
+                // Filter categories to those matching OR having matching subcategories
+                familyCats = allFamilyCats.filter(cat => {
+                  if (cat.name.toLowerCase().includes(q)) return true;
+                  const subs = subcategoriesByCategory.get(cat.id) ?? [];
+                  return subs.some(s => s.name.toLowerCase().includes(q));
+                });
+                // Also filter subcategories within each category
+                filteredSubsMap = new Map(
+                  familyCats.map(cat => {
+                    const subs = subcategoriesByCategory.get(cat.id) ?? [];
+                    const catMatches = cat.name.toLowerCase().includes(q);
+                    return [cat.id, catMatches ? subs : subs.filter(s => s.name.toLowerCase().includes(q))];
+                  })
+                );
+              }
               const familyItemCount = familyCats.reduce((s, c) => s + c.productCount, 0);
 
               return (
@@ -369,7 +429,7 @@ export default function CategoriesPage() {
                   family={family}
                   categories={familyCats}
                   familyItemCount={familyItemCount}
-                  subcategoriesByCategory={subcategoriesByCategory}
+                  subcategoriesByCategory={filteredSubsMap}
                   isExpanded={effectiveExpandedFamilies.has(family.id)}
                   showAllCats={showAllCategories.has(family.id)}
                   expandedCategories={effectiveExpandedCategories}
@@ -391,18 +451,38 @@ export default function CategoriesPage() {
             })}
 
             {/* Ungrouped categories (familyId === null) */}
-            {ungroupedCategories.length > 0 && (
+            {(() => {
+              const q = debouncedSearch?.toLowerCase();
+              // Filter ungrouped categories by search term
+              let filteredUngrouped = ungroupedCategories;
+              let filteredUngroupedSubsMap = subcategoriesByCategory;
+              if (q) {
+                filteredUngrouped = ungroupedCategories.filter(cat => {
+                  if (cat.name.toLowerCase().includes(q)) return true;
+                  const subs = subcategoriesByCategory.get(cat.id) ?? [];
+                  return subs.some(s => s.name.toLowerCase().includes(q));
+                });
+                filteredUngroupedSubsMap = new Map(
+                  filteredUngrouped.map(cat => {
+                    const subs = subcategoriesByCategory.get(cat.id) ?? [];
+                    const catMatches = cat.name.toLowerCase().includes(q);
+                    return [cat.id, catMatches ? subs : subs.filter(s => s.name.toLowerCase().includes(q))];
+                  })
+                );
+              }
+              if (filteredUngrouped.length === 0) return null;
+              return (
               <FamilyGroup
                 key="__ungrouped__"
                 family={{
                   id: "__ungrouped__",
                   name: debouncedSearch ? "Search Results" : "Ungrouped",
                   slug: "ungrouped",
-                  productCount: ungroupedCategories.reduce((s, c) => s + c.productCount, 0),
+                  productCount: filteredUngrouped.reduce((s, c) => s + c.productCount, 0),
                 }}
-                categories={ungroupedCategories}
-                familyItemCount={ungroupedCategories.reduce((s, c) => s + c.productCount, 0)}
-                subcategoriesByCategory={subcategoriesByCategory}
+                categories={filteredUngrouped}
+                familyItemCount={filteredUngrouped.reduce((s, c) => s + c.productCount, 0)}
+                subcategoriesByCategory={filteredUngroupedSubsMap}
                 isExpanded={effectiveExpandedFamilies.has("__ungrouped__") || (!!debouncedSearch && families.length === 0)}
                 showAllCats={showAllCategories.has("__ungrouped__")}
                 expandedCategories={effectiveExpandedCategories}
@@ -420,10 +500,11 @@ export default function CategoriesPage() {
                 onEditFamily={() => {}}
                 onDeleteFamily={() => {}}
               />
-            )}
+              );
+            })()}
 
             {/* Empty state */}
-            {families.length === 0 && ungroupedCategories.length === 0 && (
+            {(families.length === 0 || (searchExpandedFamilyIds && searchExpandedFamilyIds.size === 0)) && ungroupedCategories.length === 0 && (
               <div className="py-16 text-center text-[13px] text-muted-foreground">
                 {debouncedSearch ? "No categories match your search" : "No categories found"}
               </div>

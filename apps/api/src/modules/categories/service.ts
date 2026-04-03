@@ -276,3 +276,37 @@ export async function deleteCategory(
     .delete(categories)
     .where(and(eq(categories.id, categoryId), eq(categories.orgId, orgId)));
 }
+
+/**
+ * Remove all empty categories and subcategories (0 products assigned).
+ * Only deletes categories that have no products AND no non-empty subcategories.
+ */
+export async function removeEmptyCategories(orgId: string): Promise<{ categoriesRemoved: number; subcategoriesRemoved: number }> {
+  // Step 1: Delete empty subcategories first
+  const emptySubsResult = await db.execute(sql`
+    DELETE FROM product_subcategories
+    WHERE org_id = ${orgId}
+      AND id NOT IN (
+        SELECT DISTINCT subcategory_id FROM products
+        WHERE subcategory_id IS NOT NULL AND org_id = ${orgId}
+      )
+  `);
+  const subcategoriesRemoved = (emptySubsResult as any).rowCount ?? 0;
+
+  // Step 2: Delete empty categories (no products AND no remaining subcategories)
+  const emptyCatsResult = await db.execute(sql`
+    DELETE FROM categories
+    WHERE org_id = ${orgId}
+      AND id NOT IN (
+        SELECT DISTINCT category_id FROM products
+        WHERE category_id IS NOT NULL AND org_id = ${orgId}
+      )
+      AND id NOT IN (
+        SELECT DISTINCT category_id FROM product_subcategories
+        WHERE category_id IS NOT NULL AND org_id = ${orgId}
+      )
+  `);
+  const categoriesRemoved = (emptyCatsResult as any).rowCount ?? 0;
+
+  return { categoriesRemoved, subcategoriesRemoved };
+}

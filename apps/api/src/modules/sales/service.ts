@@ -10,6 +10,7 @@ import {
   customers,
   customerVehicles,
   users,
+  historicalSales,
 } from "@apex/database/schema";
 import { eq, and, or, sql, desc, ilike, inArray, type SQL, asc } from "drizzle-orm";
 import type { CreateSaleInput, CompleteSaleInput, RefundSaleInput } from "@apex/types";
@@ -893,6 +894,7 @@ export async function listSales(
     from?: string;
     to?: string;
     q?: string;
+    employeeId?: string;
     cursor?: string;
     limit: number;
   },
@@ -901,6 +903,9 @@ export async function listSales(
 
   if (opts.locationId) {
     conditions.push(eq(sales.locationId, opts.locationId));
+  }
+  if (opts.employeeId) {
+    conditions.push(sql`(${sales.completedByUserId} = ${opts.employeeId} OR ${sales.createdByUserId} = ${opts.employeeId})`);
   }
   if (opts.status && opts.status.length > 0) {
     conditions.push(inArray(sales.status, opts.status as any));
@@ -984,4 +989,233 @@ export async function getSaleJournal(saleId: string, orgId: string) {
     .orderBy(stockJournal.effectiveAt, stockJournal.createdAt);
 
   return entries;
+}
+
+// ══════════════════════════════════════════════════════
+// HISTORICAL SALES (Imported from Loyverse Receipts CSV)
+// ══════════════════════════════════════════════════════
+
+export async function listHistoricalSales(
+  orgId: string,
+  opts: {
+    locationId?: string;
+    from?: string;
+    to?: string;
+    q?: string;
+    cursor?: string;
+    limit: number;
+  },
+) {
+  const conditions: SQL[] = [
+    eq(historicalSales.orgId, orgId),
+    sql`${historicalSales.reasonType} IN ('SALE', 'REFUND')`,
+  ];
+
+  if (opts.locationId) {
+    conditions.push(eq(historicalSales.locationId, opts.locationId));
+  }
+  if (opts.from) {
+    conditions.push(sql`${historicalSales.movementDate} >= ${opts.from}`);
+  }
+  if (opts.to) {
+    conditions.push(sql`${historicalSales.movementDate} <= ${opts.to}`);
+  }
+  if (opts.q && opts.q.length >= 1) {
+    conditions.push(
+      or(
+        ilike(historicalSales.reasonReference, `%${opts.q}%`),
+        ilike(historicalSales.productName, `%${opts.q}%`),
+        ilike(historicalSales.sku, `%${opts.q}%`),
+      )!,
+    );
+  }
+  if (opts.cursor) {
+    conditions.push(sql`${historicalSales.id} < ${opts.cursor}`);
+  }
+
+  const rows = await db
+    .select({
+      id: historicalSales.id,
+      sku: historicalSales.sku,
+      productName: historicalSales.productName,
+      productId: historicalSales.productId,
+      locationName: historicalSales.locationName,
+      employeeName: historicalSales.employeeName,
+      reasonType: historicalSales.reasonType,
+      reasonReference: historicalSales.reasonReference,
+      quantity: historicalSales.quantity,
+      direction: historicalSales.direction,
+      movementDate: historicalSales.movementDate,
+    })
+    .from(historicalSales)
+    .where(and(...conditions))
+    .orderBy(desc(historicalSales.movementDate), desc(historicalSales.id))
+    .limit(opts.limit + 1);
+
+  const hasMore = rows.length > opts.limit;
+  const data = hasMore ? rows.slice(0, opts.limit) : rows;
+  const nextCursor = hasMore ? data[data.length - 1].id : null;
+
+  return {
+    data: data.map((r) => ({
+      ...r,
+      movementDate: r.movementDate.toISOString(),
+      source: "imported" as const,
+    })),
+    nextCursor,
+    hasMore,
+  };
+}
+
+/**
+ * Get all line items for a specific imported receipt number.
+ */
+export async function getHistoricalReceipt(orgId: string, receiptNumber: string) {
+  const rows = await db
+    .select({
+      id: historicalSales.id,
+      sku: historicalSales.sku,
+      productName: historicalSales.productName,
+      productId: historicalSales.productId,
+      locationName: historicalSales.locationName,
+      employeeName: historicalSales.employeeName,
+      reasonType: historicalSales.reasonType,
+      quantity: historicalSales.quantity,
+      unitPrice: historicalSales.unitPrice,
+      netSales: historicalSales.netSales,
+      costAmount: historicalSales.costAmount,
+      discountAmount: historicalSales.discountAmount,
+      customerName: historicalSales.customerName,
+      direction: historicalSales.direction,
+      movementDate: historicalSales.movementDate,
+    })
+    .from(historicalSales)
+    .where(
+      and(
+        eq(historicalSales.orgId, orgId),
+        eq(historicalSales.reasonReference, receiptNumber),
+      ),
+    )
+    .orderBy(historicalSales.id);
+
+  if (rows.length === 0) return null;
+
+  const first = rows[0];
+  const receiptTotal = rows.reduce((sum, r) => sum + parseFloat(r.netSales || "0"), 0);
+  return {
+    receiptNumber,
+    date: first.movementDate.toISOString(),
+    store: first.locationName,
+    cashier: first.employeeName,
+    customer: first.customerName,
+    type: first.reasonType,
+    source: "imported" as const,
+    lines: rows.map((r) => ({
+      id: r.id,
+      productName: r.productName,
+      sku: r.sku,
+      productId: r.productId,
+      quantity: r.quantity,
+      unitPrice: r.unitPrice ? parseFloat(r.unitPrice) : null,
+      netSales: r.netSales ? parseFloat(r.netSales) : null,
+      costAmount: r.costAmount ? parseFloat(r.costAmount) : null,
+      direction: r.direction,
+    })),
+    totalItems: rows.reduce((sum, r) => sum + r.quantity, 0),
+    lineCount: rows.length,
+    receiptTotal,
+  };
+}
+
+/**
+ * List imported receipts aggregated by receipt number (one row per receipt).
+ */
+export async function listHistoricalReceipts(
+  orgId: string,
+  opts: {
+    locationId?: string;
+    from?: string;
+    to?: string;
+    q?: string;
+    employeeName?: string;
+    cursor?: string;
+    limit: number;
+  },
+) {
+  const limit = opts.limit;
+
+  // Build a raw SQL query for receipt-level grouping
+  const conditions: string[] = [
+    `hs.org_id = '${orgId}'`,
+    `hs.reason_type IN ('SALE', 'REFUND')`,
+  ];
+
+  if (opts.locationId) conditions.push(`hs.location_id = '${opts.locationId}'`);
+  if (opts.employeeName) {
+    const ename = opts.employeeName.replace(/'/g, "''");
+    conditions.push(`hs.employee_name = '${ename}'`);
+  }
+  if (opts.from) conditions.push(`hs.movement_date >= '${opts.from}'`);
+  if (opts.to) conditions.push(`hs.movement_date <= '${opts.to}'`);
+
+  // Search on receipt number, employee, location
+  let searchCondition = "";
+  if (opts.q && opts.q.length >= 1) {
+    const q = opts.q.replace(/'/g, "''");
+    searchCondition = `AND (hs.reason_reference ILIKE '%${q}%' OR hs.employee_name ILIKE '%${q}%' OR hs.location_name ILIKE '%${q}%' OR hs.product_name ILIKE '%${q}%')`;
+  }
+
+  // Cursor pagination on receipt date
+  let cursorCondition = "";
+  if (opts.cursor) {
+    // cursor format: "date|reference" — decode
+    const [cursorDate, cursorRef] = opts.cursor.split("|");
+    if (cursorDate && cursorRef) {
+      cursorCondition = `HAVING MAX(hs.movement_date) < '${cursorDate}' OR (MAX(hs.movement_date) = '${cursorDate}' AND hs.reason_reference < '${cursorRef}')`;
+    }
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const rows = await db.execute(sql.raw(`
+    SELECT
+      hs.reason_reference AS receipt_number,
+      MAX(hs.movement_date) AS receipt_date,
+      hs.location_name AS store,
+      hs.employee_name AS cashier,
+      hs.reason_type AS type,
+      COUNT(*)::int AS line_count,
+      SUM(hs.quantity)::int AS total_qty,
+      COALESCE(SUM(hs.net_sales::numeric), 0)::numeric(14,2) AS receipt_total,
+      MAX(hs.customer_name) AS customer_name
+    FROM historical_sales hs
+    WHERE ${whereClause} ${searchCondition}
+    GROUP BY hs.reason_reference, hs.location_name, hs.employee_name, hs.reason_type
+    ${cursorCondition}
+    ORDER BY MAX(hs.movement_date) DESC, hs.reason_reference DESC
+    LIMIT ${limit + 1}
+  `));
+
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore && data.length > 0
+    ? `${(data[data.length - 1] as any).receipt_date}|${(data[data.length - 1] as any).receipt_number}`
+    : null;
+
+  return {
+    data: data.map((r: any) => ({
+      receiptNumber: r.receipt_number,
+      date: new Date(r.receipt_date).toISOString(),
+      store: r.store,
+      cashier: r.cashier,
+      type: r.type,
+      lineCount: r.line_count,
+      totalQty: r.total_qty,
+      receiptTotal: parseFloat(r.receipt_total) || 0,
+      customerName: r.customer_name || null,
+      source: "imported" as const,
+    })),
+    nextCursor,
+    hasMore,
+  };
 }

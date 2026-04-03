@@ -10,6 +10,7 @@ import {
   check,
   boolean,
   integer,
+  date,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { organizations } from "./organizations";
@@ -80,8 +81,20 @@ export const products = pgTable(
     /** Default supplier for this product — used to pre-fill PO creation */
     primarySupplierId: uuid("primary_supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
     isSerialized: boolean("is_serialized").notNull().default(false),
+    /** Default warranty period in months (e.g. 12 for batteries, 6 for alternators) */
+    warrantyMonths: integer("warranty_months"),
+    /** Tire product — enables DOT batch tracking instead of serial tracking */
+    isTire: boolean("is_tire").notNull().default(false),
+    /** Maximum tire age in years before it's considered expired (default 5) */
+    maxTireAgeYears: integer("max_tire_age_years"),
+    /** Special order item — ordered on demand, zero stock is intentional */
+    specialOrder: boolean("special_order").notNull().default(false),
+    /** Discontinued — no longer sold or restocked */
+    discontinued: boolean("discontinued").notNull().default(false),
     reorderEnabled: boolean("reorder_enabled").notNull().default(true),
     customReorderPoint: integer("custom_reorder_point"),
+    /** Hide this product from Low Stock lists until this date */
+    reorderSnoozedUntil: date("reorder_snoozed_until"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -101,7 +114,7 @@ export const products = pgTable(
     check("chk_mnemonic_sku_length", sql`char_length(mnemonic_sku) = 10`),
     check("chk_conversion_factor_positive", sql`conversion_factor > 0`),
     index("idx_products_family_id").on(table.familyId),
-    uniqueIndex("idx_products_org_barcode").on(table.orgId, table.barcode).where(sql`barcode IS NOT NULL`),
+    index("idx_products_barcode").on(table.barcode),
     index("idx_products_category_id").on(table.categoryId),
     index("idx_products_subcategory_id").on(table.subcategoryId),
     index("idx_products_parent_id").on(table.parentProductId),

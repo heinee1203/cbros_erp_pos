@@ -41,10 +41,10 @@ export interface StatusHistoryEntry {
   id: string;
   fromStatus: string | null;
   toStatus: string;
-  changedByUserId: string;
-  changedByName: string;
+  changedByUserId: string | null;
+  changedByName: string | null;
   notes: string | null;
-  createdAt: string;
+  createdAt: string | null;
 }
 
 export interface SupplierReturnDetail extends SupplierReturnRow {
@@ -117,10 +117,11 @@ export interface CreateSupplierReturnPayload {
   reason: string;
   sourcePOId?: string;
   notes?: string;
+  idempotencyKey: string;
   lines: {
     productId: string;
     quantity: number;
-    costPerUnit: string;
+    costPrice: string;
     condition: string;
     notes?: string;
   }[];
@@ -163,6 +164,21 @@ export function useSupplierReturnAction(token: string, locationId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["supplier-returns"] });
       qc.invalidateQueries({ queryKey: ["supplier-return"] });
+    },
+  });
+}
+
+export function useDeleteSupplierReturn(token: string, locationId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rtvId: string) =>
+      apiFetch(`/procurement/supplier-returns/${rtvId}`, {
+        method: "DELETE",
+        token,
+        locationId,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["supplier-returns"] });
     },
   });
 }

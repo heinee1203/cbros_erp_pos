@@ -484,7 +484,7 @@ export async function generateDailyDigest(orgId: string) {
     // Log email (v1 — future: swap in real email provider)
     sendEmail(
       admin.email,
-      `Apex Auto Parts — ${digestTitle}`,
+      `CBROS Autoparts — ${digestTitle}`,
       digestBody,
     );
   }

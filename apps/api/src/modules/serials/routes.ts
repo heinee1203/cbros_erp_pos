@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { UserRole } from "@apex/types";
 import { db } from "@apex/database";
-import { products, locations } from "@apex/database/schema";
-import { eq, and } from "drizzle-orm";
+import { products, locations, serialNumbers } from "@apex/database/schema";
+import { eq, and, sql } from "drizzle-orm";
 import { listSerials, lookupSerial, getSerialsBySale, bulkRegisterSerials, getTireAgeReport } from "./service";
 
 const SERIAL_ADMIN_ROLES = [UserRole.ADMIN, UserRole.MANAGER];
@@ -40,6 +40,35 @@ export const serialRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return reply.send(serial);
+  });
+
+  // ─── GET /validate — Check if a serial number already exists ───────────────────
+  app.get("/validate", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as { serialNumber?: string; productId?: string };
+
+    if (!q.serialNumber) {
+      return reply.status(400).send({ error: "serialNumber is required" });
+    }
+
+    const conditions = [
+      eq(serialNumbers.orgId, orgId),
+      eq(serialNumbers.serialNumber, q.serialNumber),
+    ];
+    if (q.productId) {
+      conditions.push(eq(serialNumbers.productId, q.productId));
+    }
+
+    const [existing] = await db
+      .select({ id: serialNumbers.id, status: serialNumbers.status })
+      .from(serialNumbers)
+      .where(and(...conditions))
+      .limit(1);
+
+    return reply.send({
+      exists: !!existing,
+      status: existing?.status ?? null,
+    });
   });
 
   // ─── GET /by-sale/:saleId — Get serials for a sale ───────────────────

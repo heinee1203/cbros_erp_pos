@@ -20,6 +20,7 @@ import {
   TrendingUp,
   Archive,
   Sparkles,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -32,6 +33,7 @@ import {
 } from "@/hooks/use-stock-monitor";
 import { useBrands } from "@/hooks/use-brands";
 import { useCategories } from "@/hooks/use-categories";
+import { useSubcategories } from "@/hooks/use-subcategories";
 import { AiAdvisorPanel } from "@/components/ai-advisor-panel";
 
 /* ═══════════════════════════════════════════════════════
@@ -48,12 +50,28 @@ const STATUS_CONFIG: Record<string, { label: string; badge: string; text: string
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
+function formatRelativeDate(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  if (diffDays < 180) return `${Math.floor(diffDays / 30)}mo ago`;
+  // Older than 6 months — show month + year
+  return d.toLocaleDateString("en-PH", { month: "short", year: "numeric" });
+}
+
 type SortField =
   | "productName"
   | "totalStock"
   | "avgDailySales30d"
   | "daysOfStock"
   | "stockoutDays90d"
+  | "lastSaleDate"
   | "lastPoDate"
   | "status"
   | "brandName"
@@ -73,8 +91,68 @@ export default function StockMonitorPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [brandFilter, setBrandFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [subcategoryFilter, setSubcategoryFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  // ── Column visibility ──
+  const DEFAULT_VISIBLE_COLS = ["status", "product", "brand", "category", "totalStock", "avgSales", "daysOfStock", "lastSold"];
+  const ALL_COLUMNS = [
+    { key: "status", label: "Status" },
+    { key: "product", label: "Product" },
+    { key: "brand", label: "Brand" },
+    { key: "category", label: "Category" },
+    { key: "subcategory", label: "Sub-category" },
+    { key: "totalStock", label: "Total Stock" },
+    { key: "avgSales", label: "Avg Sales/Day" },
+    { key: "daysOfStock", label: "Days of Stock" },
+    { key: "lastSold", label: "Last Sold" },
+    { key: "stockoutDays", label: "Stockout Days" },
+    { key: "lastPo", label: "Last PO" },
+    { key: "leadTime", label: "Lead Time" },
+    { key: "ai", label: "AI" },
+  ];
+  const [visibleCols, setVisibleCols] = useState<Set<string>>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("stock-monitor-columns");
+        if (saved) return new Set(JSON.parse(saved));
+      } catch {}
+    }
+    return new Set(DEFAULT_VISIBLE_COLS);
+  });
+  const [showColPicker, setShowColPicker] = useState(false);
+  const toggleCol = (key: string) => {
+    setVisibleCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      localStorage.setItem("stock-monitor-columns", JSON.stringify([...next]));
+      return next;
+    });
+  };
+  const isCol = (key: string) => visibleCols.has(key);
+
+  // ── Velocity window ──
+  type VelocityWindow = "30" | "90" | "180" | "365" | "all";
+  const [velocityWindow, setVelocityWindow] = useState<VelocityWindow>("365");
+  const VELOCITY_PILLS: { key: VelocityWindow; label: string }[] = [
+    { key: "30", label: "1mo" },
+    { key: "90", label: "3mo" },
+    { key: "180", label: "6mo" },
+    { key: "365", label: "1yr" },
+    { key: "all", label: "All" },
+  ];
+  const getVelocity = (row: StockMonitorRow): number => {
+    switch (velocityWindow) {
+      case "30": return parseFloat(row.avgDailySales30d) || 0;
+      case "90": return parseFloat(row.avgDailySales90d) || 0;
+      case "180": return parseFloat(row.avgDailySales180d) || 0;
+      case "365": return parseFloat(row.avgDailySales365d) || 0;
+      case "all": return parseFloat(row.avgDailySalesAll) || 0;
+      default: return parseFloat(row.avgDailySales365d) || 0;
+    }
+  };
 
   // ── Sort state ──
   const [sortBy, setSortBy] = useState<SortField>("daysOfStock");
@@ -111,6 +189,7 @@ export default function StockMonitorPage() {
     status: statusFilter !== "all" ? statusFilter : undefined,
     brandId: brandFilter !== "all" ? brandFilter : undefined,
     categoryId: categoryFilter !== "all" ? categoryFilter : undefined,
+    subcategoryId: subcategoryFilter !== "all" ? subcategoryFilter : undefined,
     sortBy: sortBy,
     sortDir: sortDir,
   };
@@ -129,15 +208,26 @@ export default function StockMonitorPage() {
   const refreshMutation = useStockMonitorRefresh(token, apiLocationId);
   const { data: brandsData } = useBrands(token, apiLocationId);
   const { data: categoriesData } = useCategories(token, apiLocationId);
+  const { data: subcategoriesData } = useSubcategories(token, apiLocationId);
 
   const brands = brandsData?.data ?? [];
   const categories = categoriesData?.data ?? [];
+  const allSubcategories = subcategoriesData?.data ?? [];
+  const filteredSubcategories = categoryFilter !== "all"
+    ? allSubcategories.filter((s: any) => s.categoryId === categoryFilter)
+    : allSubcategories;
 
   // Flatten pages
-  const rows = useMemo(
-    () => data?.pages.flatMap((page) => page.data) ?? [],
-    [data],
-  );
+  const rows = useMemo(() => {
+    const all = data?.pages.flatMap((page) => page.data) ?? [];
+    // Deduplicate by id — infinite scroll pages can overlap at boundaries
+    const seen = new Set<string>();
+    return all.filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+  }, [data]);
 
   const summary: StockMonitorSummary | null = data?.pages[0]?.summary ?? null;
   const lastComputed = rows[0]?.computedAt ?? null;
@@ -168,6 +258,7 @@ export default function StockMonitorPage() {
     setStatusFilter("all");
     setBrandFilter("all");
     setCategoryFilter("all");
+    setSubcategoryFilter("all");
     setSearchQuery("");
     setDebouncedSearch("");
   };
@@ -284,10 +375,20 @@ export default function StockMonitorPage() {
           {/* Category */}
           <FilterSelect
             value={categoryFilter}
-            onChange={setCategoryFilter}
+            onChange={(v) => { setCategoryFilter(v); setSubcategoryFilter("all"); }}
             options={[
               { value: "all", label: "All Categories" },
               ...categories.map((c) => ({ value: c.id, label: c.name })),
+            ]}
+          />
+
+          {/* Sub-category */}
+          <FilterSelect
+            value={subcategoryFilter}
+            onChange={setSubcategoryFilter}
+            options={[
+              { value: "all", label: "All Sub-categories" },
+              ...filteredSubcategories.map((s: any) => ({ value: s.id, label: s.name })),
             ]}
           />
 
@@ -313,7 +414,60 @@ export default function StockMonitorPage() {
               Clear
             </button>
           )}
+
+          {/* Column visibility toggle */}
+          <div className="relative">
+            <button
+              onClick={() => setShowColPicker(!showColPicker)}
+              className="flex h-8 items-center gap-1 rounded-md border border-border px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Settings size={12} />
+              Columns
+            </button>
+            {showColPicker && (
+              <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg border border-border bg-background p-2 shadow-lg">
+                {ALL_COLUMNS.map((col) => (
+                  <label key={col.key} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted">
+                    <input
+                      type="checkbox"
+                      checked={visibleCols.has(col.key)}
+                      onChange={() => toggleCol(col.key)}
+                      className="rounded border-border"
+                    />
+                    {col.label}
+                  </label>
+                ))}
+                <div className="mt-1 border-t border-border pt-1">
+                  <button
+                    onClick={() => { setVisibleCols(new Set(DEFAULT_VISIBLE_COLS)); localStorage.setItem("stock-monitor-columns", JSON.stringify(DEFAULT_VISIBLE_COLS)); }}
+                    className="w-full rounded px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-muted"
+                  >
+                    Reset to defaults
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+      </div>
+
+      {/* Velocity window pills */}
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className="text-[11px] text-muted-foreground mr-1">Velocity:</span>
+        {VELOCITY_PILLS.map((pill) => (
+          <button
+            key={pill.key}
+            onClick={() => setVelocityWindow(pill.key)}
+            className={cn(
+              "rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+              velocityWindow === pill.key
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80",
+            )}
+          >
+            {pill.label}
+          </button>
+        ))}
       </div>
 
       {/* ── Main Table ── */}
@@ -336,17 +490,19 @@ export default function StockMonitorPage() {
             <table className="w-full text-left text-sm">
               <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
                 <tr>
-                  <SortHeader label="Status" field="status" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                  <SortHeader label="Product" field="productName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                  <SortHeader label="Brand" field="brandName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                  <SortHeader label="Category" field="categoryName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                  <SortHeader label="Total Stock" field="totalStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <SortHeader label="Avg Sales/Day" field="avgDailySales30d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <SortHeader label="Days of Stock" field="daysOfStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <SortHeader label="Stockout Days" field="stockoutDays90d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <SortHeader label="Last PO" field="lastPoDate" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Lead Time</th>
-                  <th scope="col" className="w-10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-center">AI</th>
+                  {isCol("status") && <SortHeader label="Status" field="status" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
+                  {isCol("product") && <SortHeader label="Product" field="productName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
+                  {isCol("brand") && <SortHeader label="Brand" field="brandName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
+                  {isCol("category") && <SortHeader label="Category" field="categoryName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
+                  {isCol("subcategory") && <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Sub-category</th>}
+                  {isCol("totalStock") && <SortHeader label="Total Stock" field="totalStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
+                  {isCol("avgSales") && <SortHeader label="Avg Sales/Day" field="avgDailySales30d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
+                  {isCol("daysOfStock") && <SortHeader label="Days of Stock" field="daysOfStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
+                  {isCol("lastSold") && <SortHeader label="Last Sold" field="lastSaleDate" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
+                  {isCol("stockoutDays") && <SortHeader label="Stockout Days" field="stockoutDays90d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
+                  {isCol("lastPo") && <SortHeader label="Last PO" field="lastPoDate" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
+                  {isCol("leadTime") && <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Lead Time</th>}
+                  {isCol("ai") && <th scope="col" className="w-10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-center">AI</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -354,6 +510,8 @@ export default function StockMonitorPage() {
                   <StockMonitorRow
                     key={row.id}
                     row={row}
+                    visibleCols={visibleCols}
+                    velocity={getVelocity(row)}
                     onClick={() => router.push(`/inventory/${row.productId}/edit`)}
                     onAskAi={() => {
                       setAiProductIds([row.productId]);
@@ -461,10 +619,14 @@ function SummaryCards({
  * TABLE ROW
  * ═══════════════════════════════════════════════════════ */
 
-function StockMonitorRow({ row, onClick, onAskAi }: { row: StockMonitorRow; onClick: () => void; onAskAi: () => void }) {
+function StockMonitorRow({ row, visibleCols, velocity, onClick, onAskAi }: { row: StockMonitorRow; visibleCols: Set<string>; velocity: number; onClick: () => void; onAskAi: () => void }) {
+  const isCol = (k: string) => visibleCols.has(k);
   const cfg = STATUS_CONFIG[row.status] ?? { label: row.status, badge: "bg-muted text-muted-foreground", text: "text-muted-foreground" };
-  const avgSales = parseFloat(row.avgDailySales30d);
-  const daysOfStock = row.daysOfStock != null ? parseFloat(row.daysOfStock) : null;
+  const avgSales = velocity;
+  const daysOfStock = avgSales > 0.01 ? row.totalStock / avgSales : null;
+  const trendIcon = row.trend === "up" ? "↑" : row.trend === "down" ? "↓" : "→";
+  const trendColor = row.trend === "up" ? "text-green-600" : row.trend === "down" ? "text-red-500" : "text-muted-foreground/50";
+  const trendTooltip = `${row.trend === "up" ? "Trending up" : row.trend === "down" ? "Trending down" : "Stable"}: ${parseFloat(row.trendRecent).toFixed(1)}/day (last 3mo) vs ${parseFloat(row.trendPrior).toFixed(1)}/day (prior 3mo)`;
 
   return (
     <tr
@@ -472,55 +634,68 @@ function StockMonitorRow({ row, onClick, onAskAi }: { row: StockMonitorRow; onCl
       className="group cursor-pointer transition-colors hover:bg-muted/30"
     >
       {/* Status */}
-      <td className="whitespace-nowrap px-4 py-2.5">
+      {isCol("status") && <td className="whitespace-nowrap px-4 py-2.5">
         <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", cfg.badge)}>
           {cfg.label}
         </span>
-      </td>
+      </td>}
 
       {/* Product */}
-      <td className="max-w-[260px] px-4 py-2.5">
+      {isCol("product") && <td className="max-w-[260px] px-4 py-2.5">
         <div className="truncate text-sm font-medium text-foreground" title={row.productName}>
           {row.productName}
         </div>
         <div className="truncate font-mono text-[10px] text-muted-foreground">{row.productSku}</div>
-      </td>
+      </td>}
 
       {/* Brand */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      {isCol("brand") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
         {row.brandName ?? "—"}
-      </td>
+      </td>}
 
       {/* Category */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      {isCol("category") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
         {row.categoryName ?? "—"}
-      </td>
+      </td>}
+
+      {/* Sub-category */}
+      {isCol("subcategory") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
+        {row.subcategoryName ?? "—"}
+      </td>}
 
       {/* Total Stock */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
+      {isCol("totalStock") && <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
         {row.totalStock.toLocaleString()}{row.sellingUnit && row.sellingUnit !== "piece" ? ` ${row.sellingUnit}` : ""}
-      </td>
+      </td>}
 
-      {/* Avg Daily Sales (30d) */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      {/* Avg Daily Sales */}
+      {isCol("avgSales") && <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
         {avgSales.toFixed(1)}
-      </td>
+        <span className={cn("ml-1 text-[10px]", trendColor)} title={trendTooltip}>
+          {trendIcon}
+        </span>
+      </td>}
 
       {/* Days of Stock */}
-      <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium", cfg.text)}>
+      {isCol("daysOfStock") && <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium", cfg.text)}>
         {daysOfStock != null ? Math.round(daysOfStock).toLocaleString() : "—"}
-      </td>
+      </td>}
+
+      {/* Last Sold */}
+      {isCol("lastSold") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
+        {row.lastSaleDate ? formatRelativeDate(row.lastSaleDate) : "—"}
+      </td>}
 
       {/* Stockout Days (90d) */}
-      <td className={cn(
+      {isCol("stockoutDays") && <td className={cn(
         "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm",
         row.stockoutDays90d > 0 ? "font-medium text-red-600" : "text-muted-foreground",
       )}>
         {row.stockoutDays90d}
-      </td>
+      </td>}
 
       {/* Last PO */}
-      <td className="max-w-[140px] px-4 py-2.5">
+      {isCol("lastPo") && <td className="max-w-[140px] px-4 py-2.5">
         {row.lastPoDate ? (
           <div>
             <div className="text-xs text-foreground">
@@ -535,15 +710,15 @@ function StockMonitorRow({ row, onClick, onAskAi }: { row: StockMonitorRow; onCl
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
         )}
-      </td>
+      </td>}
 
       {/* Lead Time */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      {isCol("leadTime") && <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.lastLeadTimeDays != null ? `${row.lastLeadTimeDays}d` : "—"}
-      </td>
+      </td>}
 
       {/* AI */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+      {isCol("ai") && <td className="whitespace-nowrap px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={onAskAi}
           className="rounded p-1 text-amber-500 hover:bg-amber-50"
@@ -551,7 +726,7 @@ function StockMonitorRow({ row, onClick, onAskAi }: { row: StockMonitorRow; onCl
         >
           <Sparkles size={13} />
         </button>
-      </td>
+      </td>}
     </tr>
   );
 }

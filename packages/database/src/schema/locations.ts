@@ -3,6 +3,7 @@ import {
   uuid,
   varchar,
   boolean,
+  text,
   timestamp,
   pgEnum,
   index,
@@ -29,6 +30,8 @@ export const locations = pgTable(
     code: varchar("code", { length: 50 }).notNull().default(""),
     type: locationTypeEnum("type").notNull(),
     address: varchar("address", { length: 500 }),
+    phone: varchar("phone", { length: 50 }),
+    receiptHeader: text("receipt_header"),
     isSystem: boolean("is_system").notNull().default(false),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })

@@ -4,6 +4,8 @@ import {
   products,
   locations,
   categories,
+  stockMetrics,
+  productFamilies,
 } from "@apex/database/schema";
 import { eq, and, lte, sql, type SQL } from "drizzle-orm";
 
@@ -61,6 +63,7 @@ export interface LowStockItem {
   available: number;
   reorderPoint: number;
   locationName: string;
+  lastSoldAt: string | null;
 }
 
 export interface RecentActivityEntry {
@@ -307,13 +310,17 @@ async function getLowStockItems(
   locationConditions: SQL[],
   isAllLocations: boolean,
   limit = 10,
+  hideNegative = true,
 ): Promise<LowStockItem[]> {
   if (isAllLocations) {
     // Aggregate per-product across all locations — no duplicates
     const rows = await db.execute(sql`
       SELECT
         p.id AS "productId",
-        p.name AS "productName",
+        CASE
+          WHEN p.parent_product_id IS NOT NULL THEN parent_p.name || ' (' || p.name || ')'
+          ELSE p.name
+        END AS "productName",
         p.sku,
         p.category::text,
         cat.name AS "categoryName",
@@ -321,15 +328,30 @@ async function getLowStockItems(
         COALESCE(SUM(i.reserved_level), 0)::int AS "reservedLevel",
         (COALESCE(SUM(i.stock_level), 0) - COALESCE(SUM(i.reserved_level), 0))::int AS "available",
         COALESCE(MAX(i.reorder_point), 0)::int AS "reorderPoint",
-        'All Locations' AS "locationName"
+        'All Locations' AS "locationName",
+        sm.last_sale_date AS "lastSoldAt"
       FROM products p
       INNER JOIN inventory i ON i.product_id = p.id
       INNER JOIN locations loc ON i.location_id = loc.id AND loc.is_active = true
       LEFT JOIN categories cat ON p.category_id = cat.id
+      LEFT JOIN products parent_p ON p.parent_product_id = parent_p.id
+      LEFT JOIN stock_metrics sm ON sm.product_id = p.id AND sm.org_id = p.org_id
+      LEFT JOIN product_families fam ON p.family_id = fam.id
       WHERE p.org_id = ${orgId}
-      GROUP BY p.id, p.name, p.sku, p.category, cat.name
+        AND p.is_parent = false
+        AND (fam.slug IS NULL OR fam.slug != 'non-items')
+        AND NOT EXISTS (
+          SELECT 1 FROM categories exc_cat
+          WHERE exc_cat.name IN ('Count', 'Price Add', 'Labor')
+            AND (exc_cat.id = p.category_id
+              OR exc_cat.id = (SELECT pp.category_id FROM products pp WHERE pp.id = p.parent_product_id))
+        )
+        ${hideNegative ? sql`AND NOT (p.special_order = true OR p.discontinued = true)` : sql``}
+        AND (p.reorder_snoozed_until IS NULL OR p.reorder_snoozed_until < CURRENT_DATE)
+      GROUP BY p.id, p.name, p.sku, p.category, cat.name, parent_p.name, p.parent_product_id, sm.last_sale_date
       HAVING COALESCE(SUM(i.stock_level), 0) <= COALESCE(MAX(i.reorder_point), 0)
-      ORDER BY (COALESCE(SUM(i.stock_level), 0) - COALESCE(SUM(i.reserved_level), 0)) ASC, p.name
+        ${hideNegative ? sql`AND COALESCE(SUM(i.stock_level), 0) >= 0` : sql``}
+      ORDER BY sm.last_sale_date DESC NULLS LAST, p.name
       LIMIT ${limit}
     `);
 
@@ -341,12 +363,30 @@ async function getLowStockItems(
     eq(products.orgId, orgId),
     ...locationConditions,
     lte(inventory.stockLevel, inventory.reorderPoint),
+    eq(products.isParent, false),
+    sql`(${productFamilies.slug} IS NULL OR ${productFamilies.slug} != 'non-items')`,
+    sql`(${categories.name} IS NULL OR ${categories.name} NOT IN ('Count', 'Price Add', 'Labor'))
+    AND NOT EXISTS (
+      SELECT 1 FROM categories exc_cat
+      WHERE exc_cat.name IN ('Count', 'Price Add', 'Labor')
+        AND exc_cat.id = (SELECT pp.category_id FROM products pp WHERE pp.id = ${products.parentProductId})
+    )`,
   ];
+  if (hideNegative) {
+    conditions.push(sql`${inventory.stockLevel} >= 0`);
+    conditions.push(sql`(${products.specialOrder} = false OR ${products.specialOrder} IS NULL)`);
+    conditions.push(sql`(${products.discontinued} = false OR ${products.discontinued} IS NULL)`);
+  }
+  conditions.push(sql`(${products.reorderSnoozedUntil} IS NULL OR ${products.reorderSnoozedUntil} < CURRENT_DATE)`);
 
   const rows = await db
     .select({
       productId: products.id,
-      productName: products.name,
+      productName: sql<string>`CASE
+        WHEN ${products.parentProductId} IS NOT NULL THEN
+          (SELECT pp.name FROM products pp WHERE pp.id = ${products.parentProductId}) || ' (' || ${products.name} || ')'
+        ELSE ${products.name}
+      END`.as("product_name"),
       sku: products.sku,
       category: products.category,
       categoryName: categories.name,
@@ -355,14 +395,17 @@ async function getLowStockItems(
       available: sql<number>`(${inventory.stockLevel} - ${inventory.reservedLevel})`.as("available"),
       reorderPoint: inventory.reorderPoint,
       locationName: locations.name,
+      lastSoldAt: sql<string | null>`${stockMetrics.lastSaleDate}`.as("last_sold_at"),
     })
     .from(inventory)
     .innerJoin(products, eq(inventory.productId, products.id))
     .innerJoin(locations, eq(inventory.locationId, locations.id))
     .leftJoin(categories, eq(products.categoryId, categories.id))
+    .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+    .leftJoin(stockMetrics, and(eq(stockMetrics.productId, products.id), eq(stockMetrics.orgId, products.orgId)))
     .where(and(...conditions))
     .orderBy(
-      sql`(${inventory.stockLevel} - ${inventory.reservedLevel}) ASC`,
+      sql`${stockMetrics.lastSaleDate} DESC NULLS LAST`,
       products.name,
     )
     .limit(limit);

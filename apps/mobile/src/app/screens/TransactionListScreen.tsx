@@ -23,6 +23,8 @@ import { apiFetch } from '@/services/api-client';
 import { colors, textStyles, spacing, layout, fonts } from '@/theme';
 import { useTheme } from '@/theme/ThemeContext';
 import { Badge } from '@/components/ui';
+import { usePosPermission } from '@/hooks/use-pos-permission';
+import { useAuth } from '@/hooks/use-auth';
 import type { TransactionsStackParamList } from '@/app/MainTabs';
 
 type Nav = StackNavigationProp<TransactionsStackParamList, 'TransactionList'>;
@@ -51,11 +53,21 @@ export default function TransactionListScreen() {
   useTheme(); // Subscribe to theme changes for re-render
   const navigation = useNavigation<Nav>();
   const { isTablet, screenPadding } = useLayout();
+  const { can } = usePosPermission();
+  const { user } = useAuth();
   const [searchText, setSearchText] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
-  const { data: sales, isLoading, refetch } = useSalesListQuery(searchText || undefined);
+  const { data: allSales, isLoading, refetch } = useSalesListQuery(searchText || undefined);
   const { data: activeShift } = useActiveShiftQuery();
+
+  // Filter transactions: CASHIER sees own only, MANAGER+ sees all
+  const sales = React.useMemo(() => {
+    if (!allSales) return undefined;
+    if (can('viewAllTransactions')) return allSales;
+    // Filter to own transactions by matching cashier user ID
+    return allSales.filter((s: any) => s.createdByUserId === user?.id || s.cashierId === user?.id);
+  }, [allSales, can, user?.id]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const styles = createStyles();
@@ -90,16 +102,16 @@ export default function TransactionListScreen() {
   // Fetch the sale detail for refund flow (when refundSaleId is set)
   const { data: refundSale } = useSaleDetailQuery(refundSaleId ?? '');
 
-  const allSales = sales ?? getCachedTransactions();
+  const visibleSales = sales ?? getCachedTransactions();
   const displaySales = searchText
-    ? allSales.filter(s => {
+    ? visibleSales.filter(s => {
         const q = searchText.toLowerCase();
         return (
           s.saleNo.toLowerCase().includes(q) ||
           (s.receiptNumber && s.receiptNumber.toLowerCase().includes(q))
         );
       })
-    : allSales;
+    : visibleSales;
 
   // Auto-select first sale on tablet when data loads and nothing selected
   React.useEffect(() => {

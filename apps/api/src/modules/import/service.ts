@@ -5,6 +5,7 @@ import {
   locations,
   categories,
   brands,
+  historicalSales,
 } from "@apex/database/schema";
 import { eq, and, ilike, sql } from "drizzle-orm";
 import { generateEan13 } from "@apex/types";
@@ -25,6 +26,8 @@ export interface CategoryMapping {
   apexCategoryName: string | null;
   autoMatched: boolean;
   productCount: number;
+  createCount: number;
+  updateCount: number;
 }
 
 export interface ParsedRowLocation {
@@ -90,8 +93,9 @@ export interface PreviewResult {
 
 export interface ExecuteOptions {
   previewToken: string;
+  importMode?: "smart_sync" | "create_only" | "update_only" | "inventory_sync";
   locationMapping?: Record<string, string>; // csvName -> apexLocationId overrides
-  categoryMapping?: Record<string, { action: "create" | "map"; targetCategoryId?: string; targetSubcategoryId?: string; familyId?: string; createSubcategory?: boolean }>;
+  categoryMapping?: Record<string, { action: "create" | "map" | "skip"; targetCategoryId?: string; targetSubcategoryId?: string; familyId?: string; createSubcategory?: boolean }>;
   skipErrors?: boolean;
   createNewCategories?: boolean;
 }
@@ -383,7 +387,10 @@ export async function parseLoyverseCSV(
     const rowNum = i + 1; // 1-based for user display
 
     const name = getByIdx(row, colIdx.name);
-    const sku = getByIdx(row, colIdx.sku);
+    const rawSku = getByIdx(row, colIdx.sku);
+    // SKUs in scientific notation (e.g., "1.01113E+12") are Excel-damaged —
+    // precision is lost, so flag as an error rather than importing a corrupt SKU.
+    const sku = rawSku && /[eE]\+/.test(rawSku) ? "" : rawSku;
     const rawBarcode = getByIdx(row, colIdx.barcode);
     // Barcodes in scientific notation (e.g., "4.97579E+12") are unrecoverable —
     // Excel destroyed the precision. Skip the barcode entirely; keep existing DB value.
@@ -406,7 +413,11 @@ export async function parseLoyverseCSV(
 
     // Validate SKU
     if (!sku) {
-      rowErrors.push("SKU is required");
+      if (rawSku && /[eE]\+/.test(rawSku)) {
+        rowErrors.push(`SKU "${rawSku}" is in scientific notation (Excel damage). Re-export the CSV directly from Loyverse without opening in Excel.`);
+      } else {
+        rowErrors.push("SKU is required");
+      }
     }
 
     // Validate prices — handle Loyverse "variable" price items
@@ -440,9 +451,8 @@ export async function parseLoyverseCSV(
       const stockLevel = stockIdx !== undefined
         ? parseInt(row[stockIdx] ?? "0", 10) || 0
         : 0;
-      const available = availIdx !== undefined
-        ? (row[availIdx] ?? "").trim().toLowerCase() !== "no"
-        : true;
+      const availRaw = availIdx !== undefined ? (row[availIdx] ?? "").trim().toLowerCase() : "";
+      const available = availRaw === "" ? true : (availRaw === "y" || availRaw === "yes" || availRaw === "true" || availRaw === "1");
       // Blank reorder point defaults to 0 (no alert), not the schema default of 10
       const rawLowStock = lowStockIdx !== undefined ? (row[lowStockIdx] ?? "").trim() : "";
       const reorderPoint = rawLowStock !== ""
@@ -612,17 +622,32 @@ export async function parseLoyverseCSV(
     .from(categories)
     .where(eq(categories.orgId, orgId));
 
+  // Count creates vs updates per category
+  const csvCategoryActions = new Map<string, { create: number; update: number }>();
+  for (const row of parsedRows) {
+    const key = row.categoryName?.trim().toLowerCase();
+    if (key) {
+      const entry = csvCategoryActions.get(key) ?? { create: 0, update: 0 };
+      if (row.action === "CREATE") entry.create++;
+      else if (row.action === "UPDATE") entry.update++;
+      csvCategoryActions.set(key, entry);
+    }
+  }
+
   const categoryMapping: CategoryMapping[] = [];
   for (const [csvName, count] of csvCategoryCounts) {
     const match = orgCategories.find(
       (c) => c.name.trim().toLowerCase() === csvName.trim().toLowerCase(),
     );
+    const actions = csvCategoryActions.get(csvName.trim().toLowerCase()) ?? { create: 0, update: 0 };
     categoryMapping.push({
       csvName,
       apexCategoryId: match?.id ?? null,
       apexCategoryName: match?.name ?? null,
       autoMatched: !!match,
       productCount: count,
+      createCount: actions.create,
+      updateCount: actions.update,
     });
   }
 
@@ -655,6 +680,19 @@ export async function parseLoyverseCSV(
         : null,
       sku: r.sku,
       action: r.action,
+      changes: r.changes,
+      errors: r.errors,
+      isVariant: r.isVariant,
+    })),
+    // All CREATE rows for the preview (so frontend can show them even if none are in the first 100)
+    createPreview: parsedRows.filter((r) => r.action === "CREATE").map((r) => ({
+      rowIndex: r.rowIndex,
+      name: r.isVariant ? r.parentName : r.name,
+      variantName: r.isVariant
+        ? [r.option1Value, r.option2Value, r.option3Value].filter(Boolean).join(" / ") || null
+        : null,
+      sku: r.sku,
+      action: r.action as "CREATE",
       changes: r.changes,
       errors: r.errors,
       isVariant: r.isVariant,
@@ -772,8 +810,12 @@ export async function executeImport(
           const parentSku = `P-${Date.now().toString(36).toUpperCase().slice(-8)}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
 
           let parentCategoryId: string | null = null;
+          let parentBrandId: string | null = null;
           if (parentRow.categoryName) {
             parentCategoryId = categoryCache.get(parentRow.categoryName.toLowerCase()) ?? null;
+          }
+          if (parentRow.brandName) {
+            parentBrandId = brandCache.get(parentRow.brandName.toLowerCase()) ?? null;
           }
 
           const [newParent] = await tx
@@ -788,6 +830,7 @@ export async function executeImport(
               costPrice: "0.00",
               isParent: true,
               categoryId: parentCategoryId,
+              brandId: parentBrandId,
             })
             .returning({ id: products.id });
 
@@ -824,6 +867,61 @@ export async function executeImport(
           try {
             // SAVEPOINT for row-level error isolation — allows rollback without aborting batch transaction
             await tx.execute(sql`SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
+
+            // ── INVENTORY SYNC FAST PATH ──
+            // For existing items in inventory_sync mode, update stock + availability + prices
+            // Skip name/category — massive performance improvement
+            const mode = options.importMode || "smart_sync";
+            if (mode === "inventory_sync" && row.action === "UPDATE" && row.existingProductId) {
+              // Update prices on the product
+              const priceFields: Record<string, unknown> = {};
+              if (row.unitPrice && row.unitPrice !== "0.00") priceFields.unitPrice = row.unitPrice;
+              if (row.costPrice && row.costPrice !== "0.00") priceFields.costPrice = row.costPrice;
+              if (row.isVariablePrice) priceFields.isVariablePrice = true;
+              if (Object.keys(priceFields).length > 0) {
+                await tx.update(products).set(priceFields).where(eq(products.id, row.existingProductId));
+              }
+              // Upsert inventory per mapped location (stock + availability)
+              for (const loc of row.locations) {
+                if (!loc.apexLocationId) continue;
+                const [existingInv] = await tx
+                  .select({ id: inventory.id })
+                  .from(inventory)
+                  .where(
+                    and(
+                      eq(inventory.productId, row.existingProductId),
+                      eq(inventory.locationId, loc.apexLocationId),
+                    ),
+                  )
+                  .limit(1);
+
+                if (existingInv) {
+                  await tx
+                    .update(inventory)
+                    .set({
+                      stockLevel: loc.stockLevel,
+                      availableForSale: loc.available,
+                      reorderPoint: loc.reorderPoint ?? 0,
+                      optimalStock: loc.optimalStock ?? 0,
+                    })
+                    .where(eq(inventory.id, existingInv.id));
+                } else {
+                  await tx.insert(inventory).values({
+                    orgId,
+                    productId: row.existingProductId,
+                    locationId: loc.apexLocationId,
+                    stockLevel: loc.stockLevel,
+                    availableForSale: loc.available,
+                    reorderPoint: loc.reorderPoint ?? 0,
+                    optimalStock: loc.optimalStock ?? 0,
+                  });
+                }
+              }
+
+              updated++;
+              await tx.execute(sql`RELEASE SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
+              continue; // Skip ALL category/brand/family logic — next row
+            }
 
             // Resolve category — check user mapping first, then cache, then auto-create
             let categoryId: string | null = null;
@@ -874,7 +972,7 @@ export async function executeImport(
               } else {
                 // No explicit mapping — try auto-match by name
                 categoryId = categoryCache.get(row.categoryName.toLowerCase()) ?? null;
-                if (!categoryId && options.createNewCategories) {
+                if (!categoryId && options.createNewCategories && mode !== "inventory_sync") {
                   const autoSlug = row.categoryName
                     .toLowerCase()
                     .replace(/[^a-z0-9]+/g, "-")
@@ -953,6 +1051,19 @@ export async function executeImport(
               }
             }
 
+            // Import mode filter: skip rows that don't match the selected mode
+            // (mode already declared above in the fast path)
+            if (mode === "create_only" && row.action === "UPDATE") {
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
+              continue;
+            }
+            if (mode === "update_only" && row.action === "CREATE") {
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
+              continue;
+            }
+
             if (row.action === "CREATE") {
               // Generate mnemonic SKU
               const mnemonicSku = await generateUniqueMnemonicSku(
@@ -1005,17 +1116,25 @@ export async function executeImport(
 
               created++;
             } else if (row.action === "UPDATE" && row.existingProductId) {
-              // Update product fields
+              // Update product fields — inventory_sync mode: stock + availability only (no name/price)
               const updateFields: Record<string, unknown> = {};
-              if (row.name) updateFields.name = row.name;
-              if (row.unitPrice !== "0.00") updateFields.unitPrice = row.unitPrice;
-              if (row.costPrice !== "0.00") updateFields.costPrice = row.costPrice;
-              if (row.isVariablePrice) updateFields.isVariablePrice = true;
-              if (row.barcode) updateFields.barcode = row.barcode;
-              if (row.description) updateFields.description = row.description;
-              if (categoryId) updateFields.categoryId = categoryId;
-              if (subcategoryId) updateFields.subcategoryId = subcategoryId;
-              if (brandId) updateFields.brandId = brandId;
+              if (mode === "inventory_sync") {
+                // Inventory Sync: only prices — no name/category/description changes
+                if (row.unitPrice !== "0.00") updateFields.unitPrice = row.unitPrice;
+                if (row.costPrice !== "0.00") updateFields.costPrice = row.costPrice;
+                if (row.isVariablePrice) updateFields.isVariablePrice = true;
+              } else {
+                // Smart Sync / Update Only: update all fields
+                if (row.name) updateFields.name = row.name;
+                if (row.unitPrice !== "0.00") updateFields.unitPrice = row.unitPrice;
+                if (row.costPrice !== "0.00") updateFields.costPrice = row.costPrice;
+                if (row.isVariablePrice) updateFields.isVariablePrice = true;
+                if (row.barcode) updateFields.barcode = row.barcode;
+                if (row.description) updateFields.description = row.description;
+                if (categoryId) updateFields.categoryId = categoryId;
+                if (subcategoryId) updateFields.subcategoryId = subcategoryId;
+                if (brandId) updateFields.brandId = brandId;
+              }
 
               if (Object.keys(updateFields).length > 0) {
                 await tx
@@ -1128,4 +1247,513 @@ export async function executeImport(
 
 export function getProgress(token: string): ProgressUpdate | null {
   return progressCache.get(token) ?? null;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// RECEIPTS (SALES HISTORY) IMPORT
+// ══════════════════════════════════════════════════════════════════════
+
+interface ReceiptRow {
+  date: string;
+  receiptNumber: string;
+  receiptType: string;
+  category: string;
+  sku: string;
+  item: string;
+  variant: string;
+  quantity: number;
+  grossSales: number;
+  discounts: number;
+  netSales: number;
+  costOfGoods: number;
+  taxes: number;
+  pos: string;
+  store: string;
+  cashierName: string;
+  customerName: string;
+  status: string;
+}
+
+export interface ReceiptsPreviewResult {
+  previewToken: string;
+  totalRows: number;
+  dateRange: { from: string; to: string };
+  stores: string[];
+  receiptCount: number;
+  salesCount: number;
+  refundCount: number;
+  voidedCount: number;
+  skuMatchRate: string;
+  unmatchedSkus: { sku: string; item: string; count: number }[];
+  locationMapping: LocationMapping[];
+  preview: { date: string; receipt: string; item: string; sku: string; qty: number; net: number; store: string; type: string }[];
+}
+
+interface CachedReceiptsPreview {
+  orgId: string;
+  rows: ReceiptRow[];
+  locationMapping: LocationMapping[];
+  expiresAt: number;
+}
+
+const receiptsPreviewCache = new Map<string, CachedReceiptsPreview>();
+
+export async function parseReceiptsCSV(csvText: string, orgId: string): Promise<ReceiptsPreviewResult> {
+  cleanExpiredCache();
+
+  // Parse CSV — handle BOM
+  let text = csvText;
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) throw new Error("CSV file is empty or has no data rows");
+
+  // Parse header
+  const headerLine = lines[0];
+  const headers = parseCSVLine(headerLine);
+  const headerMap: Record<string, number> = {};
+  headers.forEach((h, i) => { headerMap[h.trim()] = i; });
+
+  // Validate required columns
+  const requiredCols = ["Date", "Receipt number", "Receipt type", "SKU", "Quantity", "Net sales", "Store", "Status"];
+  const missingCols = requiredCols.filter((c) => headerMap[c] === undefined);
+  if (missingCols.length > 0) {
+    // Try alternate names
+    const altNames: Record<string, string[]> = {
+      "Item": ["Item name", "Product"],
+      "Net sales": ["Net Sales", "Net amount"],
+    };
+    // If critical columns are missing, throw
+    if (headerMap["Date"] === undefined || headerMap["Receipt number"] === undefined) {
+      throw new Error(`Missing required columns: ${missingCols.join(", ")}. Is this a Loyverse Receipts by Item export?`);
+    }
+  }
+
+  const getCol = (row: string[], col: string): string => {
+    const idx = headerMap[col];
+    return idx !== undefined ? (row[idx] || "").trim() : "";
+  };
+
+  // Parse rows
+  const parsedRows: ReceiptRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    if (cols.length < 5) continue;
+
+    const status = getCol(cols, "Status");
+    const dateStr = getCol(cols, "Date");
+    if (!dateStr) continue;
+
+    parsedRows.push({
+      date: dateStr,
+      receiptNumber: getCol(cols, "Receipt number"),
+      receiptType: getCol(cols, "Receipt type"),
+      category: getCol(cols, "Category"),
+      sku: getCol(cols, "SKU"),
+      item: getCol(cols, "Item") || getCol(cols, "Item name"),
+      variant: getCol(cols, "Variant"),
+      quantity: parseFloat(getCol(cols, "Quantity")) || 0,
+      grossSales: parseFloat(getCol(cols, "Gross sales")) || 0,
+      discounts: parseFloat(getCol(cols, "Discounts")) || 0,
+      netSales: parseFloat(getCol(cols, "Net sales")) || 0,
+      costOfGoods: parseFloat(getCol(cols, "Cost of goods")) || 0,
+      taxes: parseFloat(getCol(cols, "Taxes")) || 0,
+      pos: getCol(cols, "POS"),
+      store: getCol(cols, "Store"),
+      cashierName: getCol(cols, "Cashier name"),
+      customerName: getCol(cols, "Customer name"),
+      status,
+    });
+  }
+
+  // Analyze
+  const salesRows = parsedRows.filter((r) => r.receiptType === "Sale" && r.status !== "Voided");
+  const refundRows = parsedRows.filter((r) => r.receiptType === "Refund" && r.status !== "Voided");
+  const voidedRows = parsedRows.filter((r) => r.status === "Voided");
+  const receiptNumbers = new Set(parsedRows.map((r) => r.receiptNumber));
+  const stores = [...new Set(parsedRows.map((r) => r.store).filter(Boolean))];
+
+  // Date range
+  const dates = parsedRows.map((r) => parseReceiptDate(r.date)).filter((d) => d !== null) as Date[];
+  dates.sort((a, b) => a.getTime() - b.getTime());
+  const dateRange = {
+    from: dates.length > 0 ? dates[0].toISOString().split("T")[0] : "",
+    to: dates.length > 0 ? dates[dates.length - 1].toISOString().split("T")[0] : "",
+  };
+
+  // SKU matching
+  const uniqueSkus = [...new Set(parsedRows.map((r) => r.sku).filter(Boolean))];
+  const matchedSkus = new Set<string>();
+  if (uniqueSkus.length > 0) {
+    const existing = await db
+      .select({ sku: products.sku })
+      .from(products)
+      .where(eq(products.orgId, orgId));
+    const existingSet = new Set(existing.map((e) => e.sku.toLowerCase()));
+    for (const sku of uniqueSkus) {
+      if (existingSet.has(sku.toLowerCase())) matchedSkus.add(sku);
+    }
+  }
+
+  const unmatchedSkus: { sku: string; item: string; count: number }[] = [];
+  const skuCounts = new Map<string, { item: string; count: number }>();
+  for (const row of parsedRows) {
+    if (row.sku && !matchedSkus.has(row.sku)) {
+      const entry = skuCounts.get(row.sku) || { item: row.item, count: 0 };
+      entry.count++;
+      skuCounts.set(row.sku, entry);
+    }
+  }
+  for (const [sku, info] of skuCounts) {
+    unmatchedSkus.push({ sku, item: info.item, count: info.count });
+  }
+  unmatchedSkus.sort((a, b) => b.count - a.count);
+
+  const matchRate = uniqueSkus.length > 0
+    ? `${Math.round((matchedSkus.size / uniqueSkus.length) * 100)}%`
+    : "N/A";
+
+  // Location mapping — reuse saved mappings
+  const savedMappingRows = await db.execute(
+    sql`SELECT csv_location_name, apex_location_id FROM import_location_mappings WHERE org_id = ${orgId}`,
+  );
+  const savedMappings = new Map<string, string>();
+  for (const row of savedMappingRows) {
+    savedMappings.set((row as any).csv_location_name?.toLowerCase(), (row as any).apex_location_id);
+  }
+
+  const allLocations = await db.select({ id: locations.id, name: locations.name })
+    .from(locations)
+    .where(and(eq(locations.orgId, orgId), eq(locations.isActive, true)));
+
+  const locationMapping: LocationMapping[] = stores.map((store) => {
+    // Check saved mapping
+    const savedId = savedMappings.get(store.toLowerCase());
+    if (savedId) {
+      const loc = allLocations.find((l) => l.id === savedId);
+      return {
+        csvName: store,
+        apexLocationId: savedId,
+        apexLocationName: loc?.name || store,
+        autoMatched: false,
+        saved: true,
+      };
+    }
+    // Try exact match
+    const exact = allLocations.find((l) => l.name.toLowerCase() === store.toLowerCase());
+    if (exact) {
+      return {
+        csvName: store,
+        apexLocationId: exact.id,
+        apexLocationName: exact.name,
+        autoMatched: true,
+        saved: false,
+      };
+    }
+    return { csvName: store, apexLocationId: null, apexLocationName: null, autoMatched: false, saved: false };
+  });
+
+  // Cache for execute
+  const token = crypto.randomUUID();
+  receiptsPreviewCache.set(token, {
+    orgId,
+    rows: parsedRows,
+    locationMapping,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+
+  return {
+    previewToken: token,
+    totalRows: parsedRows.length,
+    dateRange,
+    stores,
+    receiptCount: receiptNumbers.size,
+    salesCount: salesRows.length,
+    refundCount: refundRows.length,
+    voidedCount: voidedRows.length,
+    skuMatchRate: matchRate,
+    unmatchedSkus: unmatchedSkus.slice(0, 50),
+    locationMapping,
+    preview: parsedRows.slice(0, 50).map((r) => ({
+      date: r.date,
+      receipt: r.receiptNumber,
+      item: r.variant ? `${r.item} (${r.variant})` : r.item,
+      sku: r.sku,
+      qty: r.quantity,
+      net: r.netSales,
+      store: r.store,
+      type: r.receiptType,
+    })),
+  };
+}
+
+function parseReceiptDate(dateStr: string): Date | null {
+  // Format: DD/MM/YYYY HH:mm
+  const [datePart, timePart] = dateStr.split(" ");
+  if (!datePart) return null;
+  const [day, month, year] = datePart.split("/");
+  if (!day || !month || !year) return null;
+  const isoStr = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${timePart || "00:00"}:00+08:00`;
+  const d = new Date(isoStr);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (c === "," && !inQuotes) {
+      result.push(current);
+      current = "";
+    } else {
+      current += c;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+export interface ReceiptsExecuteOptions {
+  previewToken: string;
+  locationMapping?: Record<string, string>;
+  skipVoided?: boolean;
+  skipCustomerCount?: boolean;
+  skipZeroQty?: boolean;
+}
+
+export async function executeReceiptsImport(options: ReceiptsExecuteOptions) {
+  const cached = receiptsPreviewCache.get(options.previewToken);
+  if (!cached) throw new Error("Preview expired. Please re-upload the CSV.");
+
+  const { orgId, rows } = cached;
+  const batchId = crypto.randomUUID();
+  const BATCH_SIZE = 500;
+
+  // Build location mapping
+  const locMap = new Map<string, string>();
+  if (options.locationMapping) {
+    for (const [csvName, locId] of Object.entries(options.locationMapping)) {
+      locMap.set(csvName.toLowerCase(), locId);
+    }
+  }
+  for (const lm of cached.locationMapping) {
+    if (lm.apexLocationId && !locMap.has(lm.csvName.toLowerCase())) {
+      locMap.set(lm.csvName.toLowerCase(), lm.apexLocationId);
+    }
+  }
+
+  // Build product lookup by SKU
+  const allProducts = await db.select({ id: products.id, sku: products.sku, name: products.name })
+    .from(products)
+    .where(eq(products.orgId, orgId));
+  const skuToProduct = new Map<string, { id: string; name: string }>();
+  for (const p of allProducts) {
+    if (p.sku) skuToProduct.set(p.sku.toLowerCase(), { id: p.id, name: p.name });
+  }
+
+  // Location name lookup
+  const allLocations = await db.select({ id: locations.id, name: locations.name })
+    .from(locations)
+    .where(eq(locations.orgId, orgId));
+  const locIdToName = new Map(allLocations.map((l) => [l.id, l.name]));
+
+  // Track progress
+  const progressToken = options.previewToken;
+  progressCache.set(progressToken, {
+    status: "running",
+    processed: 0,
+    total: rows.length,
+    percent: 0,
+    created: 0,
+    updated: 0,
+    errors: 0,
+  });
+
+  let created = 0;
+  let skipped = 0;
+  let priceBackfilled = 0;
+  const errors: { row: number; message: string }[] = [];
+
+  for (let batchStart = 0; batchStart < rows.length; batchStart += BATCH_SIZE) {
+    const batch = rows.slice(batchStart, batchStart + BATCH_SIZE);
+
+    try {
+      await db.transaction(async (tx) => {
+        for (let i = 0; i < batch.length; i++) {
+          const row = batch[i];
+          const rowIndex = batchStart + i + 1;
+
+          try {
+            await tx.execute(sql`SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+
+            // Skip voided
+            if (row.status === "Voided" && (options.skipVoided ?? true)) {
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+              continue;
+            }
+
+            // Skip CUSTOMER COUNT
+            if ((row.sku === "CUSTOMER COUNT" || row.item?.includes("CUSTOMER COUNT")) && (options.skipCustomerCount ?? true)) {
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+              continue;
+            }
+
+            // Skip zero qty + zero net
+            if (row.quantity === 0 && row.netSales === 0 && (options.skipZeroQty ?? true)) {
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+              continue;
+            }
+
+            // Parse date
+            const movementDate = parseReceiptDate(row.date);
+            if (!movementDate) {
+              errors.push({ row: rowIndex, message: `Invalid date: ${row.date}` });
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+              continue;
+            }
+
+            // Match product
+            const product = row.sku ? skuToProduct.get(row.sku.toLowerCase()) : null;
+
+            // Map location
+            const locationId = row.store ? locMap.get(row.store.toLowerCase()) || null : null;
+            const locationName = locationId ? (locIdToName.get(locationId) || row.store) : (row.store || "Unknown");
+
+            // Determine type
+            const isRefund = row.receiptType === "Refund";
+            const reasonType = isRefund ? "REFUND" : "SALE";
+            const direction = isRefund ? "IN" : "OUT";
+            const qty = Math.abs(Math.round(row.quantity));
+            if (qty === 0) {
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+              continue;
+            }
+
+            const productName = row.variant
+              ? `${row.item} (${row.variant})`
+              : row.item || "Unknown";
+
+            // Dedup check
+            const [existing] = await tx
+              .select({ id: historicalSales.id })
+              .from(historicalSales)
+              .where(and(
+                eq(historicalSales.orgId, orgId),
+                eq(historicalSales.reasonReference, row.receiptNumber),
+                eq(historicalSales.sku, row.sku || ""),
+                eq(historicalSales.movementDate, movementDate),
+              ))
+              .limit(1);
+
+            if (existing) {
+              // Update existing record with price data (may have been imported before price columns existed)
+              if (row.netSales !== 0 || row.costOfGoods !== 0) {
+                const upUnitPrice = qty > 0 ? Math.abs(row.netSales / qty) : 0;
+                await tx
+                  .update(historicalSales)
+                  .set({
+                    unitPrice: upUnitPrice.toFixed(2),
+                    netSales: Math.abs(row.netSales).toFixed(2),
+                    costAmount: Math.abs(row.costOfGoods || 0).toFixed(2),
+                    discountAmount: Math.abs(row.discounts || 0).toFixed(2),
+                    customerName: row.customerName || null,
+                  })
+                  .where(eq(historicalSales.id, existing.id));
+                priceBackfilled++;
+              }
+              skipped++;
+              await tx.execute(sql`RELEASE SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+              continue;
+            }
+
+            // Insert
+            const unitPrice = qty > 0 ? Math.abs(row.netSales / qty) : 0;
+            await tx.insert(historicalSales).values({
+              orgId,
+              productId: product?.id || null,
+              sku: row.sku || "",
+              productName,
+              locationId,
+              locationName,
+              employeeName: row.cashierName || null,
+              reasonType: reasonType as any,
+              reasonReference: row.receiptNumber,
+              quantity: qty,
+              unitPrice: unitPrice.toFixed(2),
+              netSales: Math.abs(row.netSales).toFixed(2),
+              costAmount: Math.abs(row.costOfGoods || 0).toFixed(2),
+              discountAmount: Math.abs(row.discounts || 0).toFixed(2),
+              customerName: row.customerName || null,
+              direction: direction as any,
+              movementDate,
+              importBatchId: batchId,
+            });
+
+            created++;
+            await tx.execute(sql`RELEASE SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`);
+          } catch (rowErr: any) {
+            try { await tx.execute(sql`ROLLBACK TO SAVEPOINT receipt_row_${sql.raw(String(rowIndex))}`); } catch {}
+            errors.push({ row: rowIndex, message: rowErr.message || "Unknown error" });
+            skipped++;
+          }
+        }
+      });
+    } catch (batchErr: any) {
+      errors.push({ row: batchStart + 1, message: `Batch error: ${batchErr.message}` });
+    }
+
+    // Update progress
+    progressCache.set(progressToken, {
+      status: "running",
+      processed: Math.min(batchStart + BATCH_SIZE, rows.length),
+      total: rows.length,
+      percent: Math.round(((batchStart + BATCH_SIZE) / rows.length) * 100),
+      created,
+      updated: 0,
+      errors: errors.length,
+    });
+  }
+
+  // Final progress
+  progressCache.set(progressToken, {
+    status: "completed",
+    processed: rows.length,
+    total: rows.length,
+    percent: 100,
+    created,
+    updated: 0,
+    errors: errors.length,
+  });
+
+  // Clean up preview cache
+  receiptsPreviewCache.delete(options.previewToken);
+
+  return { created, skipped, priceBackfilled, errors: errors.length, errorLog: errors, batchId };
+}
+
+// ── Backfill orphaned historical sales ──
+
+export async function backfillOrphanedSales(orgId: string) {
+  const result = await db.execute(sql`
+    UPDATE historical_sales hs
+    SET product_id = p.id
+    FROM products p
+    WHERE hs.product_id IS NULL
+      AND hs.org_id = p.org_id
+      AND hs.org_id = ${orgId}
+      AND hs.sku IS NOT NULL
+      AND hs.sku != ''
+      AND LOWER(TRIM(hs.sku)) = LOWER(TRIM(p.sku))
+  `);
+  return { linked: result.length ?? 0 };
 }

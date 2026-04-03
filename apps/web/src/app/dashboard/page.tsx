@@ -1,7 +1,11 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import { useAuth } from "../auth-context";
 import { useDashboard, type LowStockItem, type RecentActivityEntry } from "@/hooks/use-dashboard";
+import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api";
 import Link from "next/link";
 import {
   Package,
@@ -18,11 +22,24 @@ import {
   Loader2,
   MapPin,
   CheckCircle2,
+  ChevronDown,
+  ShoppingCart,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fmtNum, fmtDateTime } from "@/lib/format";
+import { fmtNum, fmtDateTime, timeAgo } from "@/lib/format";
 import { REF_TYPE_LABELS, REF_TYPE_COLORS, isFinancialRole, isOperationalRole } from "@/lib/constants";
+import { ModalShell } from "@/app/inventory/components/modal-shell";
+
+/* ─── Reorder Types ─── */
+
+interface PendingOrdersData {
+  draftPOs: { poId: string; poNumber: string; supplierId: string; supplierName: string; quantity: number; status: string }[];
+  submittedPOs: { poId: string; poNumber: string; supplierId: string; supplierName: string; quantityOrdered: number; quantityReceived: number; quantityRemaining: number; status: string }[];
+  backorders: { backorderId: string; sourcePoNumber: string; supplierId: string; supplierName: string; quantityOutstanding: number; status: string; waitUntil: string | null }[];
+  lastSupplier: { supplierId: string; supplierName: string; lastCost: string; lastPoNumber: string; lastPoDate: string } | null;
+  suggestedQty: number;
+}
 
 /* ─── Format Helpers ─── */
 
@@ -31,17 +48,6 @@ function fmtPeso(v: string | number): string {
   const n = typeof v === "string" ? parseFloat(v) : v;
   if (isNaN(n) || n === 0) return "\u2014";
   return `\u20B1${n.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
 }
 
 /* ─── Activity Grouping ─── */
@@ -80,9 +86,88 @@ interface ActionQueueItem {
 /* ─── Page Component ─── */
 
 export default function DashboardPage() {
-  const { token, locationId, user } = useAuth();
+  const { token, locationId, apiLocationId, user } = useAuth();
   const role = user?.role ?? "";
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const { data, isLoading, isError } = useDashboard(token, locationId);
+
+  // ── Reorder state ──
+  const [reorderModal, setReorderModal] = useState<{ item: LowStockItem; data: PendingOrdersData } | null>(null);
+  const [reorderLoading, setReorderLoading] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const handleReorder = useCallback(async (item: LowStockItem) => {
+    if (!token || !locationId) return;
+    setReorderLoading(item.productId);
+    try {
+      const pendingData = await apiFetch<PendingOrdersData>(`/products/${item.productId}/pending-orders`, { token, locationId });
+      const hasExisting = pendingData.draftPOs.length > 0 || pendingData.submittedPOs.length > 0 || pendingData.backorders.length > 0;
+      if (hasExisting) {
+        setReorderModal({ item, data: pendingData });
+      } else {
+        await addToDraftPO(item, pendingData.lastSupplier, pendingData.suggestedQty);
+      }
+    } catch {
+      // API error — user can retry via the button
+    } finally {
+      setReorderLoading(null);
+    }
+  }, [token, locationId]);
+
+  const addToDraftPO = useCallback(async (
+    item: LowStockItem,
+    lastSupplier: PendingOrdersData["lastSupplier"],
+    suggestedQty: number,
+  ) => {
+    if (!token || !locationId) return;
+    if (!lastSupplier) {
+      router.push(`/procurement/purchase-orders/new?productId=${item.productId}&qty=${suggestedQty}`);
+      return;
+    }
+
+    // Check for existing draft PO to same supplier
+    const drafts = await apiFetch<{ data: { id: string; poNo: string }[] }>(
+      `/procurement/purchase-orders?status=DRAFT&supplierId=${lastSupplier.supplierId}&limit=1`,
+      { token, locationId },
+    );
+
+    if (drafts.data && drafts.data.length > 0) {
+      const draft = drafts.data[0];
+      await apiFetch(`/procurement/purchase-orders/${draft.id}/lines`, {
+        token, locationId,
+        method: "POST",
+        body: JSON.stringify({ productId: item.productId, orderedQty: suggestedQty, unitCost: lastSupplier.lastCost }),
+      });
+      setReorderModal(null);
+      setSuccessMsg(`Added ${suggestedQty} units to ${draft.poNo}`);
+      setTimeout(() => setSuccessMsg(null), 4000);
+      router.push(`/procurement/purchase-orders/${draft.poNo}`);
+    } else {
+      // Navigate to new PO page with supplier + cost pre-filled for user review
+      setReorderModal(null);
+      const params = new URLSearchParams({
+        productId: item.productId,
+        qty: String(suggestedQty),
+        supplierId: lastSupplier.supplierId,
+        unitCost: lastSupplier.lastCost,
+      });
+      router.push(`/procurement/purchase-orders/new?${params.toString()}`);
+    }
+  }, [token, locationId, apiLocationId, router]);
+
+  const handleSnooze = useCallback(async (productId: string, days: number) => {
+    if (!token || !locationId) return;
+    await apiFetch(`/products/${productId}/snooze-reorder`, {
+      token, locationId,
+      method: "POST",
+      body: JSON.stringify({ days }),
+    });
+    setReorderModal(null);
+    setSuccessMsg(`Snoozed for ${days} days`);
+    setTimeout(() => setSuccessMsg(null), 4000);
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  }, [token, locationId, queryClient]);
 
   if (isLoading || !data) {
     return (
@@ -312,18 +397,45 @@ export default function DashboardPage() {
                   <th scope="col" className="pb-2 px-2 text-right">Available</th>
                   <th scope="col" className="pb-2 px-2 text-right">Reorder Pt</th>
                   <th scope="col" className="pb-2 px-2 text-right">On Hand</th>
+                  <th scope="col" className="pb-2 px-2 text-right">Last Sold</th>
                   <th scope="col" className="pb-2 pl-2 text-right"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
                 {lowStockItems.slice(0, 5).map((item) => (
-                  <LowStockRow key={item.productId + item.locationName} item={item} />
+                  <LowStockRow
+                    key={item.productId + item.locationName}
+                    item={item}
+                    onReorder={handleReorder}
+                    onSnooze={handleSnooze}
+                    loading={reorderLoading === item.productId}
+                  />
                 ))}
               </tbody>
             </table>
           )}
         </div>
       </div>
+
+      {/* Success toast */}
+      {successMsg && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[13px] font-medium text-emerald-800 shadow-lg animate-in slide-in-from-bottom-2">
+          <CheckCircle2 size={15} />
+          {successMsg}
+        </div>
+      )}
+
+      {/* Reorder modal */}
+      {reorderModal && (
+        <ReorderModal
+          item={reorderModal.item}
+          data={reorderModal.data}
+          onDismiss={() => setReorderModal(null)}
+          onAddToExisting={(po) => { setReorderModal(null); router.push(`/procurement/purchase-orders/${po.poNumber}`); }}
+          onCreateNew={() => addToDraftPO(reorderModal.item, reorderModal.data.lastSupplier, reorderModal.data.suggestedQty)}
+          onSnooze={(days) => handleSnooze(reorderModal.item.productId, days)}
+        />
+      )}
 
       {/* ── Section 4: Activity Feed ── */}
       <div className="mb-5 rounded-xl border border-border bg-background">
@@ -442,7 +554,8 @@ function HeadlineCard({
 
 /* ─── Low Stock Row ─── */
 
-function LowStockRow({ item }: { item: LowStockItem }) {
+function LowStockRow({ item, onReorder, onSnooze, loading }: { item: LowStockItem; onReorder: (item: LowStockItem) => void; onSnooze: (productId: string, days: number) => void; loading: boolean }) {
+  const [showSnooze, setShowSnooze] = useState(false);
   const isOut = item.stockLevel === 0;
   const isLow = item.stockLevel > 0 && item.stockLevel <= item.reorderPoint;
 
@@ -468,7 +581,7 @@ function LowStockRow({ item }: { item: LowStockItem }) {
         <div className="mt-px font-mono text-[10px] text-muted-foreground">{item.sku}</div>
       </td>
       <td className="py-[5px] px-2 text-muted-foreground">
-        {item.categoryName ?? item.category ?? "\u2014"}
+        {item.categoryName || "\u2014"}
       </td>
       <td
         className={cn(
@@ -489,15 +602,163 @@ function LowStockRow({ item }: { item: LowStockItem }) {
       >
         {fmtNum(item.stockLevel)}
       </td>
+      <td className="py-[5px] px-2 text-right text-muted-foreground whitespace-nowrap">
+        {item.lastSoldAt ? timeAgo(item.lastSoldAt) : "\u2014"}
+      </td>
       <td className="py-[5px] pl-2 text-right">
-        <Link
-          href="/procurement/purchase-orders"
-          className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Reorder
-        </Link>
+        <div className="inline-flex items-center gap-0.5">
+          <button
+            onClick={() => onReorder(item)}
+            disabled={loading}
+            className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={11} className="animate-spin" /> : <ShoppingCart size={11} />}
+            Reorder
+          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowSnooze(!showSnooze)}
+              className="rounded p-0.5 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-muted-foreground"
+              title="Snooze"
+            >
+              <ChevronDown size={10} />
+            </button>
+            {showSnooze && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowSnooze(false)} />
+                <div className="absolute right-0 top-full z-50 mt-1 min-w-[110px] rounded-md border border-border bg-background shadow-lg">
+                  {[7, 14, 30, 90].map((days) => (
+                    <button
+                      key={days}
+                      onClick={() => { setShowSnooze(false); onSnooze(item.productId, days); }}
+                      className="block w-full px-3 py-1.5 text-[11px] text-left text-muted-foreground hover:bg-muted hover:text-foreground transition-colors first:rounded-t-md last:rounded-b-md"
+                    >
+                      Snooze {days}d
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </td>
     </tr>
+  );
+}
+
+/* ─── Reorder Modal ─── */
+
+function ReorderModal({
+  item,
+  data,
+  onDismiss,
+  onAddToExisting,
+  onCreateNew,
+  onSnooze,
+}: {
+  item: LowStockItem;
+  data: PendingOrdersData;
+  onDismiss: () => void;
+  onAddToExisting: (po: PendingOrdersData["draftPOs"][0]) => void;
+  onCreateNew: () => void;
+  onSnooze: (days: number) => void;
+}) {
+  const [showSnooze, setShowSnooze] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const handleAction = async (fn: () => Promise<void> | void) => {
+    setActionLoading(true);
+    try { await fn(); } catch { /* parent handles */ }
+    setActionLoading(false);
+  };
+
+  return (
+    <ModalShell title={`Reorder: ${item.productName}`} onClose={onDismiss} wide>
+      {/* Existing orders warning */}
+      <div className="space-y-2 mb-4">
+        <p className="text-[12px] font-medium text-amber-600 flex items-center gap-1.5">
+          <AlertTriangle size={13} />
+          This item has pending orders:
+        </p>
+
+        {data.draftPOs.map((po) => (
+          <div key={po.poId} className="flex justify-between text-[12px] bg-muted/50 p-2 rounded">
+            <span>{po.poNumber} <span className="text-muted-foreground">(Draft)</span> — {po.quantity} units</span>
+            <span className="text-muted-foreground">{po.supplierName}</span>
+          </div>
+        ))}
+
+        {data.submittedPOs.map((po) => (
+          <div key={po.poId} className="flex justify-between text-[12px] bg-blue-50 dark:bg-blue-950/20 p-2 rounded">
+            <span>{po.poNumber} <span className="text-muted-foreground">({po.status})</span> — {po.quantityRemaining} remaining</span>
+            <span className="text-muted-foreground">{po.supplierName}</span>
+          </div>
+        ))}
+
+        {data.backorders.map((bo) => (
+          <div key={bo.backorderId} className="flex justify-between text-[12px] bg-orange-50 dark:bg-orange-950/20 p-2 rounded">
+            <span>Backorder{bo.sourcePoNumber ? ` from ${bo.sourcePoNumber}` : ""} — {bo.quantityOutstanding} pending</span>
+            <span className="text-muted-foreground">{bo.supplierName}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Suggested qty */}
+      <div className="text-[12px] text-muted-foreground mb-5">
+        Suggested reorder qty: <strong className="text-foreground">{data.suggestedQty}</strong>
+        <span className="ml-1">(reorder point - current stock)</span>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 justify-end flex-wrap">
+        <button
+          onClick={onDismiss}
+          className="px-3 py-1.5 border border-border rounded-md text-[12px] font-medium hover:bg-muted transition-colors"
+        >
+          Dismiss
+        </button>
+
+        {/* Snooze dropdown */}
+        <div className="relative">
+          <button
+            onClick={() => setShowSnooze(!showSnooze)}
+            className="flex items-center gap-1 px-3 py-1.5 border border-border rounded-md text-[12px] font-medium hover:bg-muted transition-colors"
+          >
+            Snooze <ChevronDown size={12} />
+          </button>
+          {showSnooze && (
+            <div className="absolute bottom-full mb-1 right-0 bg-background border border-border rounded-md shadow-lg z-10 min-w-[100px]">
+              {[7, 14, 30, 90].map((days) => (
+                <button
+                  key={days}
+                  onClick={() => { setShowSnooze(false); onSnooze(days); }}
+                  className="block w-full px-3 py-1.5 text-[12px] text-left hover:bg-muted transition-colors first:rounded-t-md last:rounded-b-md"
+                >
+                  {days} days
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {data.draftPOs.length > 0 && (
+          <button
+            onClick={() => onAddToExisting(data.draftPOs[0])}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-[12px] font-medium hover:bg-blue-700 transition-colors"
+          >
+            View {data.draftPOs[0].poNumber}
+          </button>
+        )}
+
+        <button
+          onClick={() => handleAction(onCreateNew)}
+          disabled={actionLoading}
+          className="px-3 py-1.5 bg-emerald-600 text-white rounded-md text-[12px] font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50"
+        >
+          Create New PO
+        </button>
+      </div>
+    </ModalShell>
   );
 }
 

@@ -9,6 +9,7 @@ import {
   Platform,
 } from 'react-native';
 import { useAuth } from '@/hooks/use-auth';
+import { getDeviceBinding } from '@/config/device-binding';
 import { colors, textStyles, spacing } from '@/theme';
 import { Button, Input } from '@/components/ui';
 
@@ -47,7 +48,15 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.content}>
-        <Text style={styles.logo}>APEX</Text>
+        <Text style={styles.logo}>CBROS</Text>
+        {(() => {
+          const binding = getDeviceBinding();
+          return binding ? (
+            <Text style={[styles.subtitle, { marginBottom: 4 }]}>
+              {'\uD83D\uDCCD'} {binding.locationName} ({binding.locationCode})
+            </Text>
+          ) : null;
+        })()}
         <Text style={styles.title}>Sign In</Text>
         <Text style={styles.subtitle}>Enter your credentials to continue</Text>
 

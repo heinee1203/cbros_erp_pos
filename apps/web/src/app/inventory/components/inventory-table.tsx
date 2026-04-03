@@ -407,7 +407,7 @@ export function ParentAwareCheckbox({
   onToggleSelect: () => void;
   onToggleParentSelect: (parentId: string, variantIds: string[]) => void;
 }) {
-  const { token, apiLocationId: locationId } = useAuth();
+  const { token, locationId } = useAuth();
   const { data } = useVariants(token, locationId, isParent ? parentId : undefined);
   const variantIds = useMemo(() => (data?.data ?? []).map((v) => v.id), [data]);
 
@@ -472,7 +472,7 @@ export function FlatProductRow({
   const sell = parseFloat(p.unitPrice) || 0;
   const cost = parseFloat(p.costPrice) || 0;
   const margin = getMarginPercent(sell, cost);
-  const { token, apiLocationId: locationId } = useAuth();
+  const { token, locationId } = useAuth();
 
   return (
     <>
@@ -482,7 +482,10 @@ export function FlatProductRow({
           "cursor-pointer transition-colors duration-75",
           p.isParent && "bg-muted/30 hover:bg-muted/50",
           !p.isParent && isSelected && "bg-primary/[0.05]",
-          !p.isParent && !isSelected && "hover:bg-accent/70",
+          !p.isParent && !isSelected && p.stockLevel <= 0 && p.discontinued && "bg-gray-100 hover:bg-gray-200/70",
+          !p.isParent && !isSelected && p.stockLevel <= 0 && !p.discontinued && p.specialOrder && "bg-blue-50 hover:bg-blue-100/70",
+          !p.isParent && !isSelected && p.stockLevel <= 0 && !p.discontinued && !p.specialOrder && "bg-red-50 hover:bg-red-100/70",
+          !p.isParent && !isSelected && p.stockLevel > 0 && "hover:bg-accent/70",
         )}
       >
         {/* Arrow (expand/collapse) — only for parent items */}
@@ -519,6 +522,18 @@ export function FlatProductRow({
             <span className={cn("block truncate text-[12px] leading-snug text-foreground", p.isParent ? "font-semibold" : "font-medium")}>
               {p.name}
             </span>
+            {p.specialOrder && (
+              <span className="shrink-0 rounded bg-blue-100 px-1.5 py-px text-[10px] font-medium text-blue-700">SO</span>
+            )}
+            {p.discontinued && (
+              <span className="shrink-0 rounded bg-gray-200 px-1.5 py-px text-[10px] font-medium text-gray-600">DC</span>
+            )}
+            {p.isSerialized && !(p as any).isTire && (
+              <span className="shrink-0 rounded bg-violet-100 px-1.5 py-px text-[10px] font-medium text-violet-700">SN</span>
+            )}
+            {(p as any).isTire && (
+              <span className="shrink-0 rounded bg-amber-100 px-1.5 py-px text-[10px] font-medium text-amber-700">DOT</span>
+            )}
             {p.isParent && (
               <span className="inline-flex items-center gap-1 shrink-0 rounded-full bg-violet-50 px-1.5 py-px text-[10px] font-medium text-violet-600">
                 <Layers size={9} />
@@ -671,7 +686,7 @@ export function VariantSubRows({
             onClick={onSelectProduct}
             className={cn(
               "cursor-pointer border-l-2 border-l-primary/20 transition-colors duration-75",
-              isVariantSelected ? "bg-primary/[0.05]" : "bg-background hover:bg-accent/50",
+              isVariantSelected ? "bg-primary/[0.05]" : v.stockLevel <= 0 ? (v.discontinued ? "bg-gray-100 hover:bg-gray-200/70" : v.specialOrder ? "bg-blue-50 hover:bg-blue-100/70" : "bg-red-50 hover:bg-red-100/70") : "bg-background hover:bg-accent/50",
             )}
           >
             {/* Arrow (empty for variant rows) */}

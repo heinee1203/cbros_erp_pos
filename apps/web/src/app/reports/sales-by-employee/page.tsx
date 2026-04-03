@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { UserCog, DollarSign, Hash, Download } from "lucide-react";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { downloadCSV } from "@/lib/csv-export";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -89,8 +90,11 @@ export default function SalesByEmployeePage() {
             {p === "today" ? "Today" : p === "week" ? "This Week" : p === "month" ? "This Month" : "Last 30 Days"}
           </button>
         ))}
-        <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setActivePreset(null); }} className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] text-foreground outline-none" />
-        <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setActivePreset(null); }} className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] text-foreground outline-none" />
+        <DateRangePicker
+          startDate={dateFrom}
+          endDate={dateTo}
+          onChange={(start, end) => { setDateFrom(start); setDateTo(end); setActivePreset(null); }}
+        />
         {(dateFrom || dateTo) && <button onClick={clearDates} className="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground">Clear</button>}
         {employees.length > 0 && (
           <button
@@ -140,7 +144,7 @@ export default function SalesByEmployeePage() {
         ) : (
           <div className="divide-y divide-border">
             {employees.map((emp) => (
-              <div key={emp.employeeId} className="flex items-center px-4 py-3 transition-colors hover:bg-accent/40">
+              <div key={emp.employeeId ?? emp.employeeName} className="flex items-center px-4 py-3 transition-colors hover:bg-accent/40">
                 <div className="flex-1 min-w-0">
                   <span className="text-[13px] font-medium text-foreground">{emp.employeeName}</span>
                 </div>

@@ -27,6 +27,8 @@ export interface JournalEntry {
   actorType: string;
   actorName: string | null;
   reversalOfJournalId: string | null;
+  lineAmount: string | null;
+  unitPrice: string | null;
   createdAt: string;
 }
 
@@ -46,6 +48,7 @@ export interface JournalFilters {
   dateTo?: string;
   reasonCode?: string;
   productId?: string;
+  variantProductId?: string;
 }
 
 // ── Hook ──
@@ -76,6 +79,7 @@ export function useStockJournal(
       filters.dateTo,
       filters.reasonCode,
       filters.productId,
+      filters.variantProductId,
       locationId,
       limit,
     ],
@@ -93,6 +97,7 @@ export function useStockJournal(
       if (filters.dateTo) params.set("dateTo", filters.dateTo);
       if (filters.reasonCode) params.set("reasonCode", filters.reasonCode);
       if (filters.productId) params.set("productId", filters.productId);
+      if (filters.variantProductId) params.set("variantProductId", filters.variantProductId);
 
       return apiFetch<JournalPage>(
         `/inventory/journal?${params.toString()}`,

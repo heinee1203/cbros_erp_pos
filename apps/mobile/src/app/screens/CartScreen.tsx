@@ -10,17 +10,23 @@ import {
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
+import { useShallow } from 'zustand/react/shallow';
 import {
   useCartStore,
   selectSubtotal,
   selectCartDiscount,
   selectGrandTotal,
   selectLineCount,
+  selectIncompleteSerials,
   type CartLine,
 } from '@/stores/cart-store';
 import { CustomerLookup } from '@/components/CustomerLookup';
+import { SerialInput } from '@/components/SerialInput';
+import { WarrantyPhotoCapture } from '@/components/WarrantyPhotoCapture';
 import type { Customer, Vehicle } from '@/hooks/use-customer-search';
 import { useLayout } from '@/hooks/use-layout';
+import { usePosPermission } from '@/hooks/use-pos-permission';
+import { formatDotAllocation } from '@/utils/dot-fifo-allocate';
 import { colors, textStyles, spacing, radius, layout, fonts, fontSize, touchTarget } from '@/theme';
 
 function fmtPHP(amount: number): string {
@@ -34,6 +40,7 @@ interface CartScreenProps {
 export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const navigation = useNavigation();
   const { isTablet, screenPadding } = useLayout();
+  const { can } = usePosPermission();
 
   const lines = useCartStore(s => s.lines);
   const customerId = useCartStore(s => s.customerId);
@@ -43,12 +50,18 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const removeLine = useCartStore(s => s.removeLine);
   const setAllowNegativeStock = useCartStore(s => s.setAllowNegativeStock);
   const clear = useCartStore(s => s.clear);
+  const setLineSerials = useCartStore(s => s.setLineSerials);
+  const setLineWarrantyPhoto = useCartStore(s => s.setLineWarrantyPhoto);
+  const incompleteSerials = useCartStore(useShallow(selectIncompleteSerials));
 
   const subtotal = useCartStore(selectSubtotal);
   const discount = useCartStore(selectCartDiscount);
   const grandTotal = useCartStore(selectGrandTotal);
   const unitCount = useCartStore(selectLineCount);
   const productCount = lines.length;
+
+  // Serial input modal state
+  const [serialModalLine, setSerialModalLine] = useState<CartLine | null>(null);
 
   const attachCustomer = useCartStore(s => s.attachCustomer);
   const detachCustomer = useCartStore(s => s.detachCustomer);
@@ -68,6 +81,19 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   }, [onProceedToPayment, navigation]);
 
   const handleProceedToPayment = useCallback(() => {
+    // Block checkout if any serialized items have incomplete serials
+    if (incompleteSerials.length > 0) {
+      const itemList = incompleteSerials
+        .map(l => `\u2022 ${l.name} \u2014 ${l.serials.length}/${l.quantity} serials`)
+        .join('\n');
+      Alert.alert(
+        'Serial Numbers Required',
+        `Enter serial numbers for:\n\n${itemList}`,
+        [{ text: 'OK' }],
+      );
+      return;
+    }
+
     const lowStockLines = lines.filter(
       l => l.availableStock !== null && l.availableStock < l.quantity,
     );
@@ -163,6 +189,61 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
                 <Text style={styles.stockBadgeLowText}>Only {item.availableStock} avail.</Text>
               </View>
             )}
+            {/* Serial number badge */}
+            {item.isSerialized && (
+              <Pressable
+                onPress={() => setSerialModalLine(item)}
+                style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}
+              >
+                <View style={{
+                  paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+                  backgroundColor: item.serials.length >= item.quantity
+                    ? 'rgba(52,199,89,0.15)' : 'rgba(255,59,48,0.15)',
+                }}>
+                  <Text style={{
+                    fontSize: 10, fontFamily: 'Outfit-SemiBold',
+                    color: item.serials.length >= item.quantity
+                      ? colors.status.success : colors.status.danger,
+                  }}>
+                    Serial {item.serials.length}/{item.quantity}
+                  </Text>
+                </View>
+                {/* Warranty photo button */}
+                {item.serials.length >= item.quantity && (item.warrantyMonths ?? 0) > 0 && (
+                  <WarrantyPhotoCapture
+                    photoUri={item.warrantyPhotoUri}
+                    onCapture={(uri) => setLineWarrantyPhoto(item.id, uri)}
+                    onClear={() => setLineWarrantyPhoto(item.id, null)}
+                  />
+                )}
+              </Pressable>
+            )}
+            {/* DOT batch allocation */}
+            {item.isTire && item.dotAllocation && item.dotAllocation.length > 0 && (
+              <View style={{ marginTop: 4 }}>
+                {item.dotAllocation.map((alloc, i) => (
+                  <Text key={i} style={{ fontSize: 10, color: colors.text.muted, fontFamily: 'JetBrainsMono-Regular' }}>
+                    {formatDotAllocation(alloc)} ×{alloc.quantity}
+                  </Text>
+                ))}
+                {can('overrideDotFIFO') && (
+                  <Text style={{ fontSize: 10, color: colors.accent.primary, marginTop: 2 }}>Change DOT</Text>
+                )}
+              </View>
+            )}
+            {/* Price override display */}
+            {item.overridePrice != null && (
+              <View style={{ marginTop: 4, flexDirection: 'row', gap: 4, alignItems: 'center' }}>
+                <Text style={{ fontSize: 10, color: colors.status.warning, fontFamily: 'Outfit-Medium' }}>
+                  Override: {fmtPHP(item.overridePrice)}
+                </Text>
+                {item.overrideApprovedBy && (
+                  <Text style={{ fontSize: 9, color: colors.text.muted }}>
+                    by {item.overrideApprovedBy}
+                  </Text>
+                )}
+              </View>
+            )}
           </View>
           <View style={styles.qtyControls}>
             <Pressable
@@ -207,20 +288,22 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             <Text style={styles.cartHeaderCount}>{productCount} products · {unitCount} units</Text>
           </View>
         )}
-        <Pressable
-          onPress={() => {
-            if (lines.length > 0) {
-              Alert.alert('Clear Cart', 'Remove all items?', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Clear', style: 'destructive', onPress: clear },
-              ]);
-            }
-          }}
-          hitSlop={8}
-          style={styles.clearButton}
-        >
-          <Text style={styles.clearText}>Clear</Text>
-        </Pressable>
+        {can('voidSale') && (
+          <Pressable
+            onPress={() => {
+              if (lines.length > 0) {
+                Alert.alert('Clear Cart', 'Remove all items?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Clear', style: 'destructive', onPress: clear },
+                ]);
+              }
+            }}
+            hitSlop={8}
+            style={styles.clearButton}
+          >
+            <Text style={styles.clearText}>Clear</Text>
+          </Pressable>
+        )}
       </View>
 
       {/* Customer bar — only when cart has items */}
@@ -318,6 +401,21 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         onClose={() => setCustomerLookupVisible(false)}
         onSelect={handleSelectCustomer}
       />
+
+      {/* Serial number input modal */}
+      {serialModalLine && (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 100 }}>
+          <SerialInput
+            lineId={serialModalLine.id}
+            productId={serialModalLine.productId}
+            productName={serialModalLine.name}
+            requiredCount={serialModalLine.quantity}
+            serials={serialModalLine.serials}
+            onUpdate={(serials) => setLineSerials(serialModalLine.id, serials)}
+            onClose={() => setSerialModalLine(null)}
+          />
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -339,18 +437,18 @@ const createStyles = () => StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
+    borderBottomColor: colors.border.subtle,
   },
   cartHeaderTitle: {
     fontSize: 18,
     fontFamily: 'Outfit-Bold',
-    color: '#F2F0ED',
+    color: colors.text.primary,
     letterSpacing: -0.3,
   },
   cartHeaderCount: {
     fontSize: 13,
     fontFamily: 'Outfit-Medium',
-    color: '#5A5750',
+    color: colors.text.muted,
     marginLeft: 8,
   },
   headerTouchTarget: {
@@ -362,12 +460,12 @@ const createStyles = () => StyleSheet.create({
   backText: {
     fontSize: 14,
     fontFamily: 'Outfit-Medium',
-    color: '#F2F0ED',
+    color: colors.text.primary,
   },
   headerTitle: {
     fontSize: 18,
     fontFamily: 'Outfit-Bold',
-    color: '#F2F0ED',
+    color: colors.text.primary,
     letterSpacing: -0.3,
   },
   clearButton: {
@@ -384,7 +482,7 @@ const createStyles = () => StyleSheet.create({
 
   // Customer bar
   customerSelected: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: colors.bg.surface,
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 16,
@@ -397,13 +495,13 @@ const createStyles = () => StyleSheet.create({
   detachText: {
     fontSize: 14,
     fontFamily: 'Outfit-Medium',
-    color: '#5A5750',
+    color: colors.text.muted,
     paddingHorizontal: spacing.sm,
   },
   addCustomerButton: {
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: 'rgba(255,255,255,0.12)',
+    borderColor: colors.border.light,
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 16,
@@ -414,17 +512,17 @@ const createStyles = () => StyleSheet.create({
   addCustomerText: {
     fontSize: 13,
     fontFamily: 'Outfit-Medium',
-    color: '#5A5750',
+    color: colors.text.muted,
   },
   customerName: {
     fontSize: 14,
     fontFamily: 'Outfit-Medium',
-    color: '#F2F0ED',
+    color: colors.text.primary,
   },
   customerVehicle: {
     fontSize: 12,
     fontFamily: 'DMSans-Regular',
-    color: '#5A5750',
+    color: colors.text.muted,
     marginTop: 2,
   },
 
@@ -436,7 +534,7 @@ const createStyles = () => StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
+    borderBottomColor: colors.border.subtle,
   },
   cartLineSKU: {
     fontSize: 13,
@@ -447,7 +545,7 @@ const createStyles = () => StyleSheet.create({
   lineName: {
     fontSize: 14,
     fontFamily: 'Outfit-Medium',
-    color: '#F2F0ED',
+    color: colors.text.primary,
     marginTop: 2,
     lineHeight: 19,
   },
@@ -459,7 +557,7 @@ const createStyles = () => StyleSheet.create({
   },
   lineSku: {
     ...textStyles.monoSm,
-    color: '#5A5750',
+    color: colors.text.muted,
   },
   stockBadgeOut: {
     backgroundColor: colors.status.dangerBg,
@@ -489,7 +587,7 @@ const createStyles = () => StyleSheet.create({
   lineUnitPrice: {
     fontSize: 12,
     fontFamily: 'DMSans-Regular',
-    color: '#5A5750',
+    color: colors.text.muted,
   },
   qtyControls: {
     flexDirection: 'row',
@@ -511,7 +609,7 @@ const createStyles = () => StyleSheet.create({
   },
   qtyText: {
     ...textStyles.monoMd,
-    color: '#F2F0ED',
+    color: colors.text.primary,
     marginHorizontal: spacing.md,
     minWidth: 24,
     textAlign: 'center',
@@ -519,7 +617,7 @@ const createStyles = () => StyleSheet.create({
   lineTotal: {
     fontSize: 16,
     fontFamily: 'Outfit-Bold',
-    color: '#F5A623',
+    color: colors.accent.primary,
     marginLeft: 8,
   },
 
@@ -538,13 +636,13 @@ const createStyles = () => StyleSheet.create({
   emptyTitle: {
     fontSize: 16,
     fontFamily: 'Outfit-SemiBold',
-    color: '#5A5750',
+    color: colors.text.muted,
     marginBottom: 6,
   },
   emptySubtitle: {
     fontSize: 13,
     fontFamily: 'DMSans-Regular',
-    color: 'rgba(255,255,255,0.3)',
+    color: colors.text.muted,
     textAlign: 'center',
     lineHeight: 18,
   },
@@ -552,7 +650,7 @@ const createStyles = () => StyleSheet.create({
   // Cart Footer — PINNED
   cartFooter: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
+    borderTopColor: colors.border.default,
     paddingHorizontal: 20,
     paddingVertical: 16,
     backgroundColor: colors.bg.elevated,
@@ -565,12 +663,12 @@ const createStyles = () => StyleSheet.create({
   vatLabel: {
     fontSize: 12,
     fontFamily: 'DMSans-Regular',
-    color: '#5A5750',
+    color: colors.text.muted,
   },
   vatAmount: {
     fontSize: 12,
     fontFamily: 'Outfit-Medium',
-    color: '#5A5750',
+    color: colors.text.muted,
   },
   totalRow: {
     flexDirection: 'row',
@@ -580,12 +678,12 @@ const createStyles = () => StyleSheet.create({
   totalLabel: {
     fontSize: 13,
     fontFamily: 'DMSans-Regular',
-    color: '#5A5750',
+    color: colors.text.muted,
   },
   totalValue: {
     fontSize: 13,
     fontFamily: 'Outfit-Medium',
-    color: '#F2F0ED',
+    color: colors.text.primary,
   },
   grandTotalRow: {
     flexDirection: 'row',
@@ -596,24 +694,24 @@ const createStyles = () => StyleSheet.create({
   grandTotalLabel: {
     fontSize: 14,
     fontFamily: 'Outfit-Medium',
-    color: '#5A5750',
+    color: colors.text.muted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
   grandTotalValue: {
     fontSize: 28,
     fontFamily: 'Outfit-Bold',
-    color: '#F2F0ED',
+    color: colors.text.primary,
     letterSpacing: -0.5,
   },
 
   // Checkout button
   checkoutButton: {
-    backgroundColor: '#F5A623',
+    backgroundColor: colors.accent.primary,
     paddingVertical: 18,
     borderRadius: 14,
     alignItems: 'center',
-    shadowColor: '#F5A623',
+    shadowColor: colors.accent.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -622,7 +720,7 @@ const createStyles = () => StyleSheet.create({
   checkoutButtonText: {
     fontSize: 16,
     fontFamily: 'Outfit-Bold',
-    color: '#1A1A1A',
+    color: colors.text.inverse,
     letterSpacing: 1,
     textTransform: 'uppercase',
   },

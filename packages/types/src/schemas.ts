@@ -126,6 +126,8 @@ export const createProductSchema = z.object({
   primarySupplierId: z.string().uuid().nullable().optional(),
   isSerialized: z.boolean().default(false),
   trackInventory: z.boolean().default(true),
+  specialOrder: z.boolean().default(false),
+  discontinued: z.boolean().default(false),
   reorderPoint: z.number().int().min(0).default(5),
   optimalStock: z.number().int().min(0).default(0),
   leadTimeDays: z.number().int().min(0).default(7),
@@ -176,6 +178,8 @@ export const updateProductSchema = z.object({
   primarySupplierId: z.string().uuid().nullable().optional(),
   isSerialized: z.boolean().optional(),
   reorderPoint: z.number().int().min(0).optional(),
+  specialOrder: z.boolean().optional(),
+  discontinued: z.boolean().optional(),
   reorderEnabled: z.boolean().optional(),
   customReorderPoint: z.number().int().min(0).nullable().optional(),
   // Add new variants to an existing parent product
@@ -418,6 +422,12 @@ export const createSaleSchema = z.object({
         overridePrice: z.string().optional(), // numeric as string
         discountAmount: z.string().optional(),
         notes: z.string().max(500).optional(),
+        serials: z.array(z.string().min(1).max(100)).optional(),
+        dotAllocation: z.array(z.object({
+          dotBatchId: z.string().uuid(),
+          dotCode: z.string(),
+          quantity: z.number().int().positive(),
+        })).optional(),
       }),
     )
     .min(1, "At least one line item is required"),
@@ -512,6 +522,14 @@ export const receivePOSchema = z.object({
         rejectedQty: z.number().int().min(0),
         unitCost: z.string().min(1), // actual cost at delivery
         notes: z.string().max(500).optional(),
+        serialNumbers: z.array(z.object({
+          serialNumber: z.string().min(1).max(100),
+          dotCode: z.string().length(4).optional(),
+        })).optional(),
+        dotBatches: z.array(z.object({
+          dotCode: z.string().min(4).max(100),
+          quantity: z.number().int().positive(),
+        })).optional(),
       }),
     )
     .min(1),
@@ -698,7 +716,9 @@ export const createCountSchema = z.object({
   title: z.string().min(1).max(255).optional(),
   notes: z.string().max(2000).optional(),
   filterCriteria: z.object({
+    familyId: z.string().uuid().optional(),
     categoryId: z.string().uuid().optional(),
+    subcategoryId: z.string().uuid().optional(),
     brandId: z.string().uuid().optional(),
   }).optional(),
 });

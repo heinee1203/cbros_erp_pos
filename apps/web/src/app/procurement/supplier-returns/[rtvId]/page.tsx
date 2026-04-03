@@ -7,6 +7,7 @@ import { useAuth } from "@/app/auth-context";
 import {
   useSupplierReturnDetail,
   useSupplierReturnAction,
+  useDeleteSupplierReturn,
   type StatusHistoryEntry,
 } from "@/hooks/use-supplier-returns";
 import { fmtPeso, fmtDate, fmtDateTime } from "@/lib/format";
@@ -79,7 +80,7 @@ function printReturnForm(rtv: any) {
         <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">
           <span style="display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;background:${l.condition === "DEFECTIVE" ? "#fee2e2" : l.condition === "DAMAGED" ? "#ffedd5" : "#f3f4f6"};color:${l.condition === "DEFECTIVE" ? "#b91c1c" : l.condition === "DAMAGED" ? "#c2410c" : "#374151"};">${l.condition}</span>
         </td>
-        <td style="padding:4px 8px;text-align:right;border-bottom:1px solid #e5e5e5;">₱${parseFloat(l.costPerUnit).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
+        <td style="padding:4px 8px;text-align:right;border-bottom:1px solid #e5e5e5;">₱${parseFloat(l.costPrice || l.costPerUnit || "0").toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
         <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #e5e5e5;">${l.notes || ""}</td>
       </tr>`)
     .join("\n");
@@ -109,8 +110,8 @@ function printReturnForm(rtv: any) {
   <div class="meta">
     <div><div class="meta-label">RTV No</div><div class="meta-value">${rtv.rtvNo}</div></div>
     <div><div class="meta-label">Date</div><div class="meta-value">${date}</div></div>
-    <div><div class="meta-label">From</div><div class="meta-value">Apex Auto Parts — ${rtv.locationName}</div></div>
-    <div><div class="meta-label">To (Supplier)</div><div class="meta-value">${rtv.supplierName}</div></div>
+    <div><div class="meta-label">From</div><div class="meta-value">C-BROS Genuine Autoparts &amp; Accessories, Inc. — ${rtv.location?.name ?? ""}</div></div>
+    <div><div class="meta-label">To (Supplier)</div><div class="meta-value">${rtv.supplier?.name ?? ""}</div></div>
     <div><div class="meta-label">Reason</div><div class="meta-value">${REASON_LABELS[rtv.reason] ?? rtv.reason}</div></div>
     ${rtv.notes ? `<div><div class="meta-label">Notes</div><div class="meta-value">${rtv.notes}</div></div>` : ""}
   </div>
@@ -147,7 +148,7 @@ function printReturnForm(rtv: any) {
     <div>
       <div style="height:40px;"></div>
       <div class="sig-block">
-        <div class="sig-label">Returned by (Apex Auto Parts)</div>
+        <div class="sig-label">Returned by (CBROS Genuine Autoparts & Accessories, Inc.)</div>
         <div style="margin-top:4px;font-size:11px;color:#aaa;">Name / Signature / Date</div>
       </div>
     </div>
@@ -182,6 +183,7 @@ export default function SupplierReturnDetailPage() {
 
   const { data: rtv, isLoading, error, refetch } = useSupplierReturnDetail(token, locationId, rtvId);
   const actionMutation = useSupplierReturnAction(token, locationId);
+  const deleteMutation = useDeleteSupplierReturn(token, locationId);
 
   // ── Modal states ──
   const [showCreditModal, setShowCreditModal] = useState(false);
@@ -317,16 +319,16 @@ export default function SupplierReturnDetailPage() {
                   Edit
                 </Link>
                 <button
-                  onClick={() =>
-                    setShowConfirmDialog({
-                      title: "Delete RTV",
-                      message: "Are you sure you want to delete this draft RTV?",
-                      action: "cancel",
-                    })
-                  }
-                  className="rounded-md border border-destructive/30 px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/5"
+                  onClick={() => {
+                    if (!confirm("Are you sure you want to delete this draft RTV?")) return;
+                    deleteMutation.mutate(rtvId, {
+                      onSuccess: () => router.push("/procurement/supplier-returns"),
+                    });
+                  }}
+                  disabled={deleteMutation.isPending}
+                  className="rounded-md border border-destructive/30 px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/5 disabled:opacity-50"
                 >
-                  Delete
+                  {deleteMutation.isPending ? "Deleting..." : "Delete"}
                 </button>
               </>
             )}
@@ -394,9 +396,9 @@ export default function SupplierReturnDetailPage() {
       </div>
 
       {/* Mutation error */}
-      {actionMutation.isError && (
+      {(actionMutation.isError || deleteMutation.isError) && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
-          {(actionMutation.error as Error)?.message || "Action failed"}
+          {(actionMutation.error as Error)?.message || (deleteMutation.error as Error)?.message || "Action failed"}
         </div>
       )}
 
@@ -730,14 +732,18 @@ function TimelineEntry({ entry }: { entry: StatusHistoryEntry }) {
           <span className="text-sm font-medium">
             {STATUS_LABELS[entry.toStatus] ?? entry.toStatus.replace(/_/g, " ")}
           </span>
-          <span className="text-xs text-muted-foreground">
-            {fmtDateTime(entry.createdAt)}
-          </span>
+          {entry.createdAt && (
+            <span className="text-xs text-muted-foreground">
+              {fmtDateTime(entry.createdAt)}
+            </span>
+          )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          by {entry.changedByName}
-          {entry.notes && <span> &mdash; {entry.notes}</span>}
-        </p>
+        {(entry.changedByName || entry.notes) && (
+          <p className="text-xs text-muted-foreground">
+            {entry.changedByName && <>by {entry.changedByName}</>}
+            {entry.notes && <span>{entry.changedByName ? " \u2014 " : ""}{entry.notes}</span>}
+          </p>
+        )}
       </div>
     </div>
   );

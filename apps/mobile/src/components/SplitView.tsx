@@ -75,7 +75,7 @@ const createStyles = () => StyleSheet.create({
     minWidth: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: '#F5A623',
+    backgroundColor: colors.accent.primary,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4,
@@ -83,6 +83,6 @@ const createStyles = () => StyleSheet.create({
   collapsedBadgeText: {
     fontSize: 11,
     fontFamily: 'Outfit-Bold',
-    color: '#1A1A1A',
+    color: colors.text.inverse,
   },
 });

@@ -13,6 +13,7 @@ import {
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { fmtPeso, fmtDate, fmtTime } from "@/lib/format";
 
 interface ShiftListItem {
@@ -147,19 +148,10 @@ export default function ShiftsPage() {
           <option value="FORCE_CLOSED">Force Closed</option>
         </select>
 
-        <input
-          type="date"
-          value={dateFrom}
-          onChange={(e) => setDateFrom(e.target.value)}
-          className="h-8 rounded-md border border-border bg-background px-2.5 text-[13px] text-foreground"
-          placeholder="From"
-        />
-        <input
-          type="date"
-          value={dateTo}
-          onChange={(e) => setDateTo(e.target.value)}
-          className="h-8 rounded-md border border-border bg-background px-2.5 text-[13px] text-foreground"
-          placeholder="To"
+        <DateRangePicker
+          startDate={dateFrom}
+          endDate={dateTo}
+          onChange={(start, end) => { setDateFrom(start); setDateTo(end); }}
         />
 
         {(statusFilter || dateFrom || dateTo) && (

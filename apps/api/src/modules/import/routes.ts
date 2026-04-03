@@ -3,7 +3,11 @@ import {
   parseLoyverseCSV,
   executeImport,
   getProgress,
+  parseReceiptsCSV,
+  executeReceiptsImport,
+  backfillOrphanedSales,
   type ExecuteOptions,
+  type ReceiptsExecuteOptions,
 } from "./service";
 import { db } from "@apex/database";
 import { sql, eq, and } from "drizzle-orm";
@@ -67,7 +71,7 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
               additionalProperties: {
                 type: "object",
                 properties: {
-                  action: { type: "string", enum: ["create", "map"] },
+                  action: { type: "string", enum: ["create", "map", "skip"] },
                   targetCategoryId: { type: "string" },
                   targetSubcategoryId: { type: "string" },
                   familyId: { type: "string" },
@@ -75,6 +79,7 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
                 },
               },
             },
+            importMode: { type: "string", enum: ["smart_sync", "create_only", "update_only", "inventory_sync"] },
             skipErrors: { type: "boolean" },
             createNewCategories: { type: "boolean" },
           },
@@ -162,5 +167,75 @@ export const importRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return reply.send({ success: true, saved: Object.keys(mappings).length });
+  });
+
+  // ── POST /receipts-preview — parse receipts CSV ─────────────────────
+  app.post(
+    "/receipts-preview",
+    {
+      config: { bodyLimit: 50 * 1024 * 1024 },
+      schema: {
+        body: {
+          type: "object",
+          required: ["csvText"],
+          properties: { csvText: { type: "string" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!MANAGE_ROLES.includes(request.user.role)) {
+        return reply.status(403).send({ error: "Insufficient permissions" });
+      }
+      const { csvText } = request.body as { csvText: string };
+      const { orgId } = request.storeContext!;
+      try {
+        const result = await parseReceiptsCSV(csvText, orgId);
+        return reply.send(result);
+      } catch (err: any) {
+        return reply.status(400).send({ error: err.message || "Failed to parse receipts CSV" });
+      }
+    },
+  );
+
+  // ── POST /receipts-execute — import receipts ────────────────────────
+  app.post(
+    "/receipts-execute",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["previewToken"],
+          properties: {
+            previewToken: { type: "string" },
+            locationMapping: { type: "object", additionalProperties: { type: "string" } },
+            skipVoided: { type: "boolean" },
+            skipCustomerCount: { type: "boolean" },
+            skipZeroQty: { type: "boolean" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!MANAGE_ROLES.includes(request.user.role)) {
+        return reply.status(403).send({ error: "Insufficient permissions" });
+      }
+      const body = request.body as ReceiptsExecuteOptions;
+      try {
+        const result = await executeReceiptsImport(body);
+        return reply.status(200).send(result);
+      } catch (err: any) {
+        return reply.status(500).send({ error: err.message || "Import failed" });
+      }
+    },
+  );
+
+  // ── POST /backfill-orphaned-sales — link orphaned historical sales ─
+  app.post("/backfill-orphaned-sales", async (request, reply) => {
+    if (!MANAGE_ROLES.includes(request.user.role)) {
+      return reply.status(403).send({ error: "Insufficient permissions" });
+    }
+    const { orgId } = request.storeContext!;
+    const result = await backfillOrphanedSales(orgId);
+    return reply.send(result);
   });
 };

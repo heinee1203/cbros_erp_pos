@@ -5,7 +5,7 @@ import { AuthProvider } from "./auth-context";
 import { AppShell } from "./app-shell";
 
 export const metadata: Metadata = {
-  title: "Apex Auto Parts \u2014 Admin",
+  title: "CBROS Genuine Autoparts \u2014 Admin",
   description: "Automotive ERP & POS Administration",
 };
 

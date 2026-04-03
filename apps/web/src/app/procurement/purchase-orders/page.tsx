@@ -80,9 +80,15 @@ function formatDateTime(iso: string): string {
 export default function PurchaseOrdersPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState("");
+  const [locationFilter, setLocationFilter] = useState("");
+  const [datePreset, setDatePreset] = useState("");
   const [pos, setPos] = useState<POListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [supplierOptions, setSupplierOptions] = useState<{ id: string; name: string }[]>([]);
+  const [locationOptions, setLocationOptions] = useState<{ id: string; name: string }[]>([]);
 
   // Expandable receipt rows
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -90,22 +96,61 @@ export default function PurchaseOrdersPage() {
   const [loadingReceipts, setLoadingReceipts] = useState<Set<string>>(new Set());
 
   // ── Fetch POs ──
+  // Compute date range from preset
+  const getDateRange = useCallback((preset: string) => {
+    if (!preset) return {};
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+    switch (preset) {
+      case "today": return { createdAfter: today, createdBefore: today };
+      case "week": {
+        const d = new Date(now); d.setDate(d.getDate() - d.getDay() + 1);
+        return { createdAfter: d.toISOString().split("T")[0], createdBefore: today };
+      }
+      case "month": return { createdAfter: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-01`, createdBefore: today };
+      case "30d": { const d = new Date(now); d.setDate(d.getDate()-30); return { createdAfter: d.toISOString().split("T")[0], createdBefore: today }; }
+      case "90d": { const d = new Date(now); d.setDate(d.getDate()-90); return { createdAfter: d.toISOString().split("T")[0], createdBefore: today }; }
+      default: return {};
+    }
+  }, []);
+
   const fetchPOs = useCallback(async () => {
     if (!token || !locationId) return;
     setLoading(true);
     setError(null);
     try {
+      const params = new URLSearchParams();
+      params.set("limit", "100");
+      if (statusFilter) params.set("status", statusFilter);
+      if (supplierFilter) params.set("supplierId", supplierFilter);
+      if (locationFilter) params.set("destinationLocationId", locationFilter);
+      const dateRange = getDateRange(datePreset);
+      if (dateRange.createdAfter) params.set("createdAfter", dateRange.createdAfter);
+      if (dateRange.createdBefore) params.set("createdBefore", dateRange.createdBefore);
       const res = await apiFetch<{ data: POListItem[] }>(
-        "/procurement/purchase-orders",
+        `/procurement/purchase-orders?${params.toString()}`,
         { token, locationId },
       );
       setPos(res.data);
+
+      // Extract unique suppliers and locations from results for filter dropdowns
+      // Only populate on unfiltered fetch (no supplier/location filter active)
+      if (!supplierFilter && !locationFilter) {
+        const suppMap = new Map<string, string>();
+        const locMap = new Map<string, string>();
+        res.data.forEach(po => {
+          if (po.supplierId && po.supplierName) suppMap.set(po.supplierId, po.supplierName);
+          if (po.destinationLocationId && po.destinationLocationName) locMap.set(po.destinationLocationId, po.destinationLocationName);
+        });
+        setSupplierOptions([...suppMap.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)));
+        setLocationOptions([...locMap.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)));
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load purchase orders");
     } finally {
       setLoading(false);
     }
-  }, [token, locationId]);
+  }, [token, locationId, statusFilter, supplierFilter, locationFilter, datePreset, getDateRange]);
 
   useEffect(() => {
     if (!authLoading && token && locationId) {
@@ -204,7 +249,7 @@ export default function PurchaseOrdersPage() {
       )}
 
       {/* Search */}
-      <div className="mb-3">
+      <div className="mb-2">
         <input
           type="text"
           value={search}
@@ -212,6 +257,67 @@ export default function PurchaseOrdersPage() {
           placeholder="Search by PO number or supplier…"
           className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/20"
         />
+      </div>
+
+      {/* Filters */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <select
+          value={supplierFilter}
+          onChange={(e) => setSupplierFilter(e.target.value)}
+          className="h-8 rounded-lg border border-border bg-background px-2.5 text-[12px]"
+        >
+          <option value="">All Suppliers</option>
+          {supplierOptions.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+
+        <select
+          value={locationFilter}
+          onChange={(e) => setLocationFilter(e.target.value)}
+          className="h-8 rounded-lg border border-border bg-background px-2.5 text-[12px]"
+        >
+          <option value="">All Destinations</option>
+          {locationOptions.map((l) => (
+            <option key={l.id} value={l.id}>{l.name}</option>
+          ))}
+        </select>
+
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="h-8 rounded-lg border border-border bg-background px-2.5 text-[12px]"
+        >
+          <option value="">All Statuses</option>
+          <option value="DRAFT">Draft</option>
+          <option value="SUBMITTED">Submitted</option>
+          <option value="PARTIALLY_RECEIVED">Partially Received</option>
+          <option value="FULLY_RECEIVED">Fully Received</option>
+          <option value="CLOSED_WITH_VARIANCE">Closed (Variance)</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
+
+        <select
+          value={datePreset}
+          onChange={(e) => setDatePreset(e.target.value)}
+          className="h-8 rounded-lg border border-border bg-background px-2.5 text-[12px]"
+        >
+          <option value="">All Time</option>
+          <option value="today">Today</option>
+          <option value="week">This Week</option>
+          <option value="month">This Month</option>
+          <option value="30d">Last 30 Days</option>
+          <option value="90d">Last 90 Days</option>
+        </select>
+
+        {(supplierFilter || locationFilter || statusFilter || datePreset) && (
+          <button
+            onClick={() => { setSupplierFilter(""); setLocationFilter(""); setStatusFilter(""); setDatePreset(""); }}
+            className="text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Table */}

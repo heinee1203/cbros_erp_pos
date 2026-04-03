@@ -19,5 +19,8 @@ export default class Product extends Model {
   @text('brand_id') brandId!: string | null;
   @text('parent_product_id') parentProductId!: string | null;
   @field('is_parent') isParent!: boolean;
+  @field('is_serialized') isSerialized!: boolean;
+  @field('is_tire') isTire!: boolean;
+  @field('warranty_months') warrantyMonths!: number | null;
   @field('server_updated_at') serverUpdatedAt!: number;
 }

@@ -53,10 +53,10 @@ export default function LoginPage() {
         {/* Brand */}
         <div className="mb-8 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground text-lg font-bold shadow-lg">
-            A
+            C
           </div>
           <h1 className="mt-4 text-xl font-semibold text-foreground">
-            Apex Auto Parts
+            CBROS Genuine Autoparts
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Sign in to the admin dashboard

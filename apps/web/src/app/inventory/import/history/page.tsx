@@ -82,6 +82,28 @@ interface ImportBatch {
 const ALL_REASONS: ReasonType[] = ["Sale", "Refund", "PO Receipt", "Transfer", "Count", "Damage", "Loss"];
 const DEFAULT_CHECKED: ReasonType[] = ["Sale", "Refund", "PO Receipt"];
 
+// Map API internal reason types ↔ display names
+const REASON_TO_DISPLAY: Record<string, ReasonType> = {
+  SALE: "Sale",
+  REFUND: "Refund",
+  PO_RECEIPT: "PO Receipt",
+  TRANSFER_IN: "Transfer",
+  TRANSFER_OUT: "Transfer",
+  COUNT_ADJUSTMENT: "Count",
+  DAMAGE: "Damage",
+  LOSS: "Loss",
+};
+
+const DISPLAY_TO_REASONS: Record<ReasonType, string[]> = {
+  "Sale": ["SALE"],
+  "Refund": ["REFUND"],
+  "PO Receipt": ["PO_RECEIPT"],
+  "Transfer": ["TRANSFER_IN", "TRANSFER_OUT"],
+  "Count": ["COUNT_ADJUSTMENT"],
+  "Damage": ["DAMAGE"],
+  "Loss": ["LOSS"],
+};
+
 /* ─────────────────────────────────────────────
  * Page
  * ───────────────────────────────────────────── */
@@ -338,7 +360,7 @@ export default function ImportHistoryPage() {
       ? Math.round(((progress.total - progress.processed) / progress.processed) * elapsed)
       : null;
 
-  const unmatchedLocations = preview?.locations.filter((l) => !l.matched) ?? [];
+  const unmatchedLocations = preview?.locations?.filter((l) => !l.matched) ?? [];
   const hasUnmappedLocations = unmatchedLocations.some((l) => !locationMapping[l.csvName]);
 
   const formatDate = (d: string) => {
@@ -363,9 +385,9 @@ export default function ImportHistoryPage() {
           <ArrowLeft size={16} />
         </Link>
         <div>
-          <h1 className="text-xl font-semibold text-foreground">Import History</h1>
+          <h1 className="text-xl font-semibold text-foreground">Import Center</h1>
           <p className="text-sm text-muted-foreground">
-            Import inventory history from a Loyverse CSV export
+            Import data from Loyverse CSV exports
           </p>
         </div>
       </div>
@@ -376,16 +398,19 @@ export default function ImportHistoryPage() {
           href="/inventory/import"
           className="px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground border-b-2 border-transparent"
         >
-          Import Items
+          Item Catalog
+        </Link>
+        <Link
+          href="/inventory/import-sales"
+          className="px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground border-b-2 border-transparent"
+        >
+          Sales Receipts
         </Link>
         <Link
           href="/inventory/import/history"
-          className={cn(
-            "px-3 py-2 text-sm font-medium border-b-2",
-            "border-primary text-primary",
-          )}
+          className="px-3 py-2 text-sm font-medium border-b-2 border-primary text-primary"
         >
-          Import History
+          Inventory Movements
         </Link>
       </div>
 
@@ -527,29 +552,29 @@ export default function ImportHistoryPage() {
             <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
               <div className="text-xs text-muted-foreground">Date Range</div>
               <div className="mt-1 text-lg font-semibold text-foreground">
-                {formatDate(preview.summary.dateRange.from)} &mdash;{" "}
-                {formatDate(preview.summary.dateRange.to)}
+                {formatDate(preview?.summary?.dateRange?.from ?? "")} &mdash;{" "}
+                {formatDate(preview?.summary?.dateRange?.to ?? "")}
               </div>
             </div>
             <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
               <div className="text-xs text-muted-foreground">Total Rows</div>
               <div className="mt-1 text-2xl font-semibold text-foreground">
-                {preview.summary.totalRows.toLocaleString()}
+                {(preview?.summary?.totalRows ?? 0).toLocaleString()}
               </div>
             </div>
             <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
               <div className="text-xs text-muted-foreground">SKU Match Rate</div>
               <div className="mt-1 text-2xl font-semibold text-emerald-600">
-                {(preview.summary.skuMatchRate * 100).toFixed(1)}%
+                {((preview?.summary?.skuMatchRate ?? 0) * 100).toFixed(1)}%
               </div>
               <div className="text-xs text-muted-foreground">
-                {preview.summary.matchedSkus.toLocaleString()} / {preview.summary.totalSkus.toLocaleString()}
+                {(preview?.summary?.matchedSkus ?? 0).toLocaleString()} / {(preview?.summary?.totalSkus ?? 0).toLocaleString()}
               </div>
             </div>
             <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
               <div className="text-xs text-muted-foreground">Unmatched SKUs</div>
               <div className="mt-1 text-2xl font-semibold text-amber-600">
-                {preview.summary.unmatchedSkus.length.toLocaleString()}
+                {(preview?.summary?.unmatchedSkus?.length ?? 0).toLocaleString()}
               </div>
             </div>
           </div>
@@ -567,14 +592,15 @@ export default function ImportHistoryPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.summary.reasonBreakdown.map((rb) => {
-                    const importing = selectedReasons.has(rb.reason as ReasonType);
+                  {(preview?.summary?.reasonBreakdown ?? []).map((rb) => {
+                    const displayName = REASON_TO_DISPLAY[rb.reason] ?? rb.reason;
+                    const importing = selectedReasons.has(displayName as ReasonType);
                     return (
                       <tr
                         key={rb.reason}
                         className="border-b border-border hover:bg-accent"
                       >
-                        <td className="px-4 py-2 text-foreground">{rb.reason}</td>
+                        <td className="px-4 py-2 text-foreground">{REASON_TO_DISPLAY[rb.reason] ?? rb.reason}</td>
                         <td className="px-4 py-2 text-right font-mono text-foreground">
                           {rb.count.toLocaleString()}
                         </td>
@@ -596,7 +622,7 @@ export default function ImportHistoryPage() {
           </div>
 
           {/* Unmatched SKUs (collapsible) */}
-          {preview.summary.unmatchedSkus.length > 0 && (
+          {(preview?.summary?.unmatchedSkus?.length ?? 0) > 0 && (
             <div className="rounded-lg border border-amber-300 bg-amber-50">
               <button
                 onClick={() => setUnmatchedExpanded(!unmatchedExpanded)}
@@ -604,8 +630,8 @@ export default function ImportHistoryPage() {
               >
                 <span className="flex items-center gap-2">
                   <AlertTriangle size={14} />
-                  {preview.summary.unmatchedSkus.length} unmatched{" "}
-                  {preview.summary.unmatchedSkus.length === 1 ? "SKU" : "SKUs"}
+                  {(preview?.summary?.unmatchedSkus?.length ?? 0)} unmatched{" "}
+                  {(preview?.summary?.unmatchedSkus?.length ?? 0) === 1 ? "SKU" : "SKUs"}
                 </span>
                 <ChevronDown
                   size={14}
@@ -615,14 +641,14 @@ export default function ImportHistoryPage() {
               {unmatchedExpanded && (
                 <div className="border-t border-amber-200 px-4 py-3">
                   <div className="max-h-60 space-y-1 overflow-y-auto">
-                    {preview.summary.unmatchedSkus.slice(0, 20).map((sku) => (
+                    {(preview?.summary?.unmatchedSkus ?? []).slice(0, 20).map((sku) => (
                       <div key={sku} className="font-mono text-xs text-amber-600">
                         {sku}
                       </div>
                     ))}
-                    {preview.summary.unmatchedSkus.length > 20 && (
+                    {(preview?.summary?.unmatchedSkus?.length ?? 0) > 20 && (
                       <div className="text-xs text-amber-500">
-                        ... and {preview.summary.unmatchedSkus.length - 20} more
+                        ... and {(preview?.summary?.unmatchedSkus?.length ?? 0) - 20} more
                       </div>
                     )}
                   </div>
@@ -632,11 +658,11 @@ export default function ImportHistoryPage() {
           )}
 
           {/* Location mapping */}
-          {preview.locations.length > 0 && (
+          {preview?.locations?.length > 0 && (
             <div className="rounded-lg border border-border bg-muted/50 p-5">
               <h3 className="mb-3 text-sm font-medium text-foreground">Location Mapping</h3>
               <div className="space-y-2">
-                {preview.locations.map((loc) => (
+                {preview?.locations?.map((loc) => (
                   <div
                     key={loc.csvName}
                     className="flex items-center gap-3 rounded-md bg-muted/50 px-3 py-2"
@@ -881,9 +907,9 @@ export default function ImportHistoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {batches.map((batch) => (
+                {batches.map((batch, index) => (
                   <tr
-                    key={batch.id}
+                    key={batch.id || `batch-${index}`}
                     className="border-b border-border hover:bg-accent"
                   >
                     <td className="px-4 py-2 text-foreground">

@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, Suspense, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { useSuppliers, type SupplierRow } from "@/hooks/use-suppliers";
 import { useLocations } from "@/hooks/use-locations";
-import { fmtPeso } from "@/lib/format";
+import { fmtPeso, getProductDisplayName } from "@/lib/format";
 
 // ── Types ──
 
@@ -22,6 +22,8 @@ interface ProductSearchResult {
   categoryName?: string;
   unitsPerCase?: number;
   packagingUnit?: string | null;
+  parentName?: string | null;
+  parentProductId?: string | null;
 }
 
 interface POLineInput {
@@ -78,9 +80,18 @@ function formatNumber(n: number): string {
 // ══════════════════════════════════════════════════════════
 
 export default function NewPurchaseOrderPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center py-32 text-muted-foreground text-sm">Loading...</div>}>
+      <NewPurchaseOrderInner />
+    </Suspense>
+  );
+}
+
+function NewPurchaseOrderInner() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { token, locationId, loading: authLoading } = useAuth();
+  const searchParams = useSearchParams();
+  const { token, locationId, apiLocationId, loading: authLoading } = useAuth();
 
   // ── Data hooks ──
   const suppliersQuery = useSuppliers(token, locationId);
@@ -99,13 +110,62 @@ export default function NewPurchaseOrderPage() {
   const [expectedDelivery, setExpectedDelivery] = useState("");
   const [notes, setNotes] = useState("");
 
-  // Auto-set destination to current location
+  // Auto-set destination to current location (use apiLocationId as fallback when "All Locations" is selected)
   useEffect(() => {
-    if (locationId && !destinationId) {
-      const match = validLocations.find((l) => l.id === locationId);
-      if (match) setDestinationId(locationId);
+    if (!destinationId && validLocations.length > 0) {
+      const realId = locationId === "ALL" ? apiLocationId : locationId;
+      if (realId && validLocations.find((l) => l.id === realId)) {
+        setDestinationId(realId);
+      }
     }
-  }, [locationId, destinationId, validLocations]);
+  }, [locationId, apiLocationId, destinationId, validLocations]);
+
+  // ── Pre-populate from query params (e.g. from dashboard reorder) ──
+  const prefillDone = useRef(false);
+  useEffect(() => {
+    if (prefillDone.current || !token || !locationId || authLoading) return;
+    const qProductId = searchParams.get("productId");
+    const qQty = searchParams.get("qty");
+    const qSupplierId = searchParams.get("supplierId");
+    const qUnitCost = searchParams.get("unitCost");
+    if (!qProductId) return;
+    prefillDone.current = true;
+
+    // Pre-select supplier immediately (don't wait for product fetch)
+    if (qSupplierId) setSupplierId(qSupplierId);
+
+    (async () => {
+      try {
+        const product = await apiFetch<any>(
+          `/products/${qProductId}`,
+          { token, locationId },
+        );
+        if (!product?.id) return;
+        const qty = Math.max(parseInt(qQty || "1", 10) || 1, 1);
+        // Use unitCost from query param (last PO cost), fall back to product cost price
+        const cost = qUnitCost && parseFloat(qUnitCost) > 0 ? qUnitCost : (product.costPrice || "0.00");
+        setLines([{
+          localId: crypto.randomUUID(),
+          productId: product.id,
+          productName: getProductDisplayName(product),
+          sku: product.sku,
+          orderedQty: qty,
+          listPrice: cost,
+          discountChain: "",
+          netCost: cost,
+          isManualCost: false,
+          unitsPerCase: product.unitsPerCase ?? 1,
+          packagingUnit: product.packagingUnit ?? null,
+          entryUnit: (product.unitsPerCase ?? 1) > 1 ? "case" : "piece",
+          sellingUnit: product.sellingUnit ?? "piece",
+          purchaseUnit: product.purchaseUnit ?? null,
+          conversionFactor: parseFloat(product.conversionFactor ?? "1") || 1,
+        }]);
+      } catch {
+        // Ignore — user can add manually
+      }
+    })();
+  }, [token, locationId, authLoading, searchParams]);
 
   // ── Inline supplier creation ──
   const [showNewSupplier, setShowNewSupplier] = useState(false);
@@ -206,7 +266,7 @@ export default function NewPurchaseOrderPage() {
         {
           localId: crypto.randomUUID(),
           productId: product.id,
-          productName: product.name,
+          productName: getProductDisplayName(product),
           sku: product.sku,
           orderedQty: 1,
           listPrice: costPrice,
@@ -526,7 +586,7 @@ export default function NewPurchaseOrderPage() {
           {
             localId: crypto.randomUUID(),
             productId: product.id,
-            productName: product.name,
+            productName: getProductDisplayName(product),
             sku: product.sku,
             orderedQty: row.qty,
             listPrice: lp,
@@ -601,7 +661,7 @@ export default function NewPurchaseOrderPage() {
           Order Details
         </h3>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-2 gap-4">
           {/* Supplier */}
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">
@@ -611,7 +671,7 @@ export default function NewPurchaseOrderPage() {
               <select
                 value={supplierId}
                 onChange={(e) => setSupplierId(e.target.value)}
-                className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                className="h-10 flex-1 rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
               >
                 <option value="">Select a supplier...</option>
                 {suppliers.map((s) => (
@@ -624,7 +684,7 @@ export default function NewPurchaseOrderPage() {
               <button
                 type="button"
                 onClick={() => setShowNewSupplier(!showNewSupplier)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
                 title="Add new supplier"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -642,7 +702,7 @@ export default function NewPurchaseOrderPage() {
             <select
               value={destinationId}
               onChange={(e) => setDestinationId(e.target.value)}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
             >
               <option value="">Select destination...</option>
               {validLocations.map((l) => (
@@ -662,7 +722,7 @@ export default function NewPurchaseOrderPage() {
               type="date"
               value={expectedDelivery}
               onChange={(e) => setExpectedDelivery(e.target.value)}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
             />
           </div>
 
@@ -671,13 +731,13 @@ export default function NewPurchaseOrderPage() {
             <label className="mb-1 block text-xs font-medium text-muted-foreground">
               Notes
             </label>
-            <textarea
+            <input
+              type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Optional notes..."
-              rows={2}
               maxLength={1000}
-              className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
             />
           </div>
         </div>
@@ -806,7 +866,7 @@ export default function NewPurchaseOrderPage() {
                     className="flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
                   >
                     <div>
-                      <span className="font-medium">{p.name}</span>
+                      <span className="font-medium">{getProductDisplayName(p)}</span>
                       <span className="ml-2 text-xs text-muted-foreground">
                         {p.sku}
                       </span>
@@ -866,16 +926,16 @@ export default function NewPurchaseOrderPage() {
                     <th scope="col" className="w-8 px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       #
                     </th>
-                    <th scope="col" className="min-w-[180px] px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <th scope="col" className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       Item
                     </th>
-                    <th scope="col" className="w-20 px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <th scope="col" className="w-[120px] px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       Qty
                     </th>
                     <th scope="col" className="w-28 px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       List Price
                     </th>
-                    <th scope="col" className="w-28 px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <th scope="col" className="w-24 px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       Discount
                     </th>
                     <th scope="col" className="w-28 px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -912,19 +972,17 @@ export default function NewPurchaseOrderPage() {
                         </td>
                         <td className="px-2 py-1.5 text-right">
                           <div className="flex items-center justify-end gap-1">
-                            {line.unitsPerCase > 1 ? (
+                            {line.unitsPerCase > 1 && (
                               <select
                                 value={line.entryUnit}
                                 onChange={(e) =>
                                   updateLine(line.localId, "entryUnit", e.target.value as "piece" | "case")
                                 }
-                                className="w-auto rounded border border-border px-1 py-0.5 text-xs"
+                                className="w-auto rounded border border-border px-1 py-1 text-xs"
                               >
                                 <option value="piece">pc</option>
                                 <option value="case">{line.packagingUnit || "case"} ({line.unitsPerCase}/cs)</option>
                               </select>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">{line.purchaseUnit || "pc"}</span>
                             )}
                             <input
                               type="number"
@@ -938,12 +996,7 @@ export default function NewPurchaseOrderPage() {
                           </div>
                           {line.entryUnit === "case" && line.unitsPerCase > 1 && (
                             <div className="text-[10px] text-muted-foreground mt-0.5 text-right">
-                              = {line.orderedQty * line.unitsPerCase} pieces @ {fmtPeso((parseFloat(line.netCost) / line.unitsPerCase).toFixed(2))}/pc
-                            </div>
-                          )}
-                          {line.purchaseUnit && line.conversionFactor > 1 && (
-                            <div className="text-[10px] text-primary mt-0.5 text-right">
-                              {line.orderedQty} {line.purchaseUnit}{line.orderedQty !== 1 ? "s" : ""} = {line.orderedQty * line.conversionFactor} {line.sellingUnit}s
+                              = {line.orderedQty * line.unitsPerCase} pcs
                             </div>
                           )}
                         </td>
@@ -954,7 +1007,7 @@ export default function NewPurchaseOrderPage() {
                             onChange={(e) =>
                               updateLine(line.localId, "listPrice", e.target.value)
                             }
-                            className="w-24 rounded border border-border bg-background px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none focus:border-primary"
+                            className="w-full rounded border border-border bg-background px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none focus:border-primary"
                           />
                         </td>
                         <td className="px-2 py-1.5 text-right">
@@ -968,33 +1021,24 @@ export default function NewPurchaseOrderPage() {
                                 e.target.value,
                               )
                             }
-                            placeholder="e.g. 20, 5, 3"
-                            className="w-24 rounded border border-border bg-background px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none placeholder:text-muted-foreground/40 focus:border-primary"
+                            placeholder="e.g. 20,5,3"
+                            className="w-full rounded border border-border bg-background px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none placeholder:text-muted-foreground/40 focus:border-primary"
                           />
                         </td>
                         <td className="px-2 py-1.5 text-right">
-                          <div>
-                            <input
-                              type="text"
-                              value={line.netCost}
-                              onChange={(e) =>
-                                updateLine(line.localId, "netCost", e.target.value)
-                              }
-                              readOnly={isAutoCalc}
-                              className={`w-24 rounded border border-border px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none focus:border-primary ${
-                                isAutoCalc
-                                  ? "cursor-default bg-muted/50 text-muted-foreground"
-                                  : "bg-background"
-                              }`}
-                            />
-                            <div className="mt-0.5 text-[10px] text-muted-foreground/60">
-                              {line.isManualCost
-                                ? "manual"
-                                : isAutoCalc
-                                  ? "auto"
-                                  : ""}
-                            </div>
-                          </div>
+                          <input
+                            type="text"
+                            value={line.netCost}
+                            onChange={(e) =>
+                              updateLine(line.localId, "netCost", e.target.value)
+                            }
+                            readOnly={isAutoCalc}
+                            className={`w-full rounded border border-border px-1.5 py-1 text-right text-sm font-mono tabular-nums outline-none focus:border-primary ${
+                              isAutoCalc
+                                ? "cursor-default bg-muted/50 text-muted-foreground"
+                                : "bg-background"
+                            }`}
+                          />
                         </td>
                         <td className="px-2 py-1.5 text-right font-mono text-sm tabular-nums">
                           {fmtPeso(lineTotal)}

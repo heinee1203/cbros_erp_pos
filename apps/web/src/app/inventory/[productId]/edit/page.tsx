@@ -20,10 +20,10 @@ import {
   Info,
   Settings,
   Copy,
+  Clock,
   Search,
   X,
   Layers,
-  Clock,
   Truck,
   Tag,
 } from "lucide-react";
@@ -146,6 +146,8 @@ export default function EditItemPage() {
   const [barcode, setBarcode] = useState("");
   const [oemNumber, setOemNumber] = useState("");
   const [isParent, setIsParent] = useState(false);
+  const [specialOrder, setSpecialOrder] = useState(false);
+  const [discontinued, setDiscontinued] = useState(false);
 
   // ── Loyverse-style Variant System ──
   const optionsQuery = useProductOptions(token!, locationId!, isParent ? productId : undefined);
@@ -203,6 +205,9 @@ export default function EditItemPage() {
   }, [modifiedVariants, originalVariants]);
 
   const [isSerialized, setIsSerialized] = useState(false);
+  const [warrantyMonths, setWarrantyMonths] = useState<number | null>(null);
+  const [isTire, setIsTire] = useState(false);
+  const [maxTireAgeYears, setMaxTireAgeYears] = useState<number | null>(null);
   const [reorderPoint, setReorderPoint] = useState("5");
   const [unitsPerCase, setUnitsPerCase] = useState(1);
   const [packagingUnit, setPackagingUnit] = useState<string | null>(null);
@@ -384,11 +389,16 @@ export default function EditItemPage() {
     setBarcode(product.barcode ?? "");
     setOemNumber(product.oemNumber ?? "");
     setIsParent(product.isParent ?? false);
+    setSpecialOrder((product as any).specialOrder ?? false);
+    setDiscontinued((product as any).discontinued ?? false);
     setReorderPoint(String(product.reorderPoint));
     setUnitsPerCase(product.unitsPerCase ?? 1);
     setPackagingUnit(product.packagingUnit ?? null);
     setPrimarySupplierId(product.primarySupplierId ?? null);
     setIsSerialized(product.isSerialized ?? false);
+    setWarrantyMonths((product as any).warrantyMonths ?? null);
+    setIsTire((product as any).isTire ?? false);
+    setMaxTireAgeYears((product as any).maxTireAgeYears ?? null);
     setReorderEnabled((product as any).reorderEnabled ?? true);
     setCustomReorderPoint((product as any).customReorderPoint ?? null);
     if (product.vehicleCompatibility?.length > 0) {
@@ -476,10 +486,15 @@ export default function EditItemPage() {
       primarySupplierId !== (product.primarySupplierId ?? null) ||
       reorderEnabled !== ((product as any).reorderEnabled ?? true) ||
       (customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null) ||
-      isSerialized !== (product.isSerialized ?? false);
+      isSerialized !== (product.isSerialized ?? false) ||
+      (warrantyMonths ?? null) !== ((product as any).warrantyMonths ?? null) ||
+      isTire !== ((product as any).isTire ?? false) ||
+      (maxTireAgeYears ?? null) !== ((product as any).maxTireAgeYears ?? null) ||
+      specialOrder !== ((product as any).specialOrder ?? false) ||
+      discontinued !== ((product as any).discontinued ?? false);
     const vehicleDirty = JSON.stringify(vehicles) !== JSON.stringify(initialVehiclesRef.current);
     return basicDirty || vehicleDirty || isAvailabilityDirty || isVariantFieldsDirty;
-  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, primarySupplierId, reorderEnabled, customReorderPoint, isSerialized, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
+  }, [product, initialized, name, familyId, categoryId, subcategoryId, brandId, unitPrice, costPrice, barcode, oemNumber, isParent, unitsPerCase, packagingUnit, primarySupplierId, reorderEnabled, customReorderPoint, isSerialized, specialOrder, discontinued, vehicles, isAvailabilityDirty, isVariantFieldsDirty]);
 
   // Unsaved changes warning
   useEffect(() => {
@@ -512,7 +527,12 @@ export default function EditItemPage() {
     if (packagingUnit !== (product.packagingUnit ?? null)) payload.packagingUnit = packagingUnit;
     if (primarySupplierId !== (product.primarySupplierId ?? null)) payload.primarySupplierId = primarySupplierId;
     if (isSerialized !== (product.isSerialized ?? false)) payload.isSerialized = isSerialized;
+    if ((warrantyMonths ?? null) !== ((product as any).warrantyMonths ?? null)) payload.warrantyMonths = warrantyMonths;
+    if (isTire !== ((product as any).isTire ?? false)) payload.isTire = isTire;
+    if ((maxTireAgeYears ?? null) !== ((product as any).maxTireAgeYears ?? null)) payload.maxTireAgeYears = maxTireAgeYears;
     if (reorderEnabled !== ((product as any).reorderEnabled ?? true)) payload.reorderEnabled = reorderEnabled;
+    if (specialOrder !== ((product as any).specialOrder ?? false)) payload.specialOrder = specialOrder;
+    if (discontinued !== ((product as any).discontinued ?? false)) payload.discontinued = discontinued;
     if ((customReorderPoint ?? null) !== ((product as any).customReorderPoint ?? null)) payload.customReorderPoint = customReorderPoint;
     if ((unitPrice !== product.unitPrice || costPrice !== product.costPrice) && priceChangeReason.trim()) {
       payload.priceChangeReason = priceChangeReason.trim();
@@ -688,7 +708,13 @@ export default function EditItemPage() {
             </p>
           </div>
         </div>
-        {/* View History moved to Inventory section */}
+        <Link
+          href={`/inventory/${productId}/history`}
+          className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Clock size={13} />
+          View History
+        </Link>
       </div>
 
       {/* Status Messages */}
@@ -885,6 +911,44 @@ export default function EditItemPage() {
                       : isParent
                         ? `Parent item — ${existingVariants.length} variant${existingVariants.length !== 1 ? "s" : ""} defined`
                         : "Enable to create variants like Left/Right, different sizes, colors, etc."}
+                  </span>
+                </div>
+              </label>
+            </div>
+
+            {/* Special Order + Discontinued toggles */}
+            <div className="col-span-2 grid grid-cols-2 gap-3">
+              <label className={cn(
+                "flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer select-none transition-colors",
+                specialOrder ? "border-blue-300 bg-blue-50" : "border-border hover:bg-muted/30",
+              )}>
+                <input
+                  type="checkbox"
+                  checked={specialOrder}
+                  onChange={(e) => { setSpecialOrder(e.target.checked); if (e.target.checked) setDiscontinued(false); }}
+                  className="h-4 w-4 rounded border-border accent-blue-600"
+                />
+                <div className="flex-1">
+                  <span className="text-[12px] font-medium text-foreground">Special Order</span>
+                  <span className="text-[10px] text-muted-foreground block mt-0.5">
+                    Ordered on demand — zero stock is intentional
+                  </span>
+                </div>
+              </label>
+              <label className={cn(
+                "flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer select-none transition-colors",
+                discontinued ? "border-gray-400 bg-gray-100" : "border-border hover:bg-muted/30",
+              )}>
+                <input
+                  type="checkbox"
+                  checked={discontinued}
+                  onChange={(e) => { setDiscontinued(e.target.checked); if (e.target.checked) setSpecialOrder(false); }}
+                  className="h-4 w-4 rounded border-border accent-gray-600"
+                />
+                <div className="flex-1">
+                  <span className="text-[12px] font-medium text-foreground">Discontinued</span>
+                  <span className="text-[10px] text-muted-foreground block mt-0.5">
+                    No longer sold or restocked
                   </span>
                 </div>
               </label>
@@ -1310,25 +1374,45 @@ export default function EditItemPage() {
             )}
           </div>
 
-          {/* Serialization */}
+          {/* Tracking Type */}
           <div className="mt-4 pt-4 border-t border-border/50">
-            <label className="flex items-center gap-3 cursor-pointer" onClick={() => setIsSerialized((v) => !v)}>
-              <div className={cn(
-                "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
-                isSerialized ? "bg-primary" : "bg-muted-foreground/30",
-              )}>
-                <span className={cn(
-                  "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
-                  isSerialized ? "translate-x-4" : "translate-x-0.5",
-                )} />
-              </div>
-              <div>
-                <span className="text-sm font-medium">Track Serial Numbers</span>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  Require serial number entry when receiving and selling this item. Recommended for tires, batteries, and high-value items.
-                </p>
-              </div>
-            </label>
+            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Item Tracking</h4>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer text-sm" onClick={() => { setIsSerialized(false); setIsTire(false); }}>
+                <input type="radio" name="trackingType" checked={!isSerialized && !isTire} readOnly className="accent-primary" />
+                <span>No tracking</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-sm" onClick={() => { setIsSerialized(true); setIsTire(false); }}>
+                <input type="radio" name="trackingType" checked={isSerialized && !isTire} readOnly className="accent-primary" />
+                <span>Serial Numbers <span className="text-muted-foreground text-xs">(batteries, alternators)</span></span>
+              </label>
+              {isSerialized && !isTire && (
+                <div className="ml-6">
+                  <label className="text-xs font-medium text-muted-foreground">Warranty Period (months)</label>
+                  <input
+                    type="number" min="0" max="120" value={warrantyMonths ?? ""}
+                    onChange={(e) => setWarrantyMonths(e.target.value ? parseInt(e.target.value) : null)}
+                    className="mt-1 block w-24 rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-primary"
+                    placeholder="e.g. 12"
+                  />
+                </div>
+              )}
+              <label className="flex items-center gap-2 cursor-pointer text-sm" onClick={() => { setIsSerialized(false); setIsTire(true); }}>
+                <input type="radio" name="trackingType" checked={isTire} readOnly className="accent-primary" />
+                <span>DOT Batch Tracking <span className="text-muted-foreground text-xs">(tires)</span></span>
+              </label>
+              {isTire && (
+                <div className="ml-6">
+                  <label className="text-xs font-medium text-muted-foreground">Max Tire Age (years)</label>
+                  <input
+                    type="number" min="1" max="10" value={maxTireAgeYears ?? ""}
+                    onChange={(e) => setMaxTireAgeYears(e.target.value ? parseInt(e.target.value) : null)}
+                    className="mt-1 block w-24 rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-primary"
+                    placeholder="e.g. 5"
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Primary Supplier */}

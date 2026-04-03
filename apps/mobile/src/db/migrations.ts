@@ -59,5 +59,18 @@ export const migrations = schemaMigrations({
         }),
       ],
     },
+    {
+      toVersion: 8,
+      steps: [
+        addColumns({
+          table: 'products',
+          columns: [
+            { name: 'is_serialized', type: 'boolean' },
+            { name: 'is_tire', type: 'boolean' },
+            { name: 'warranty_months', type: 'number', isOptional: true },
+          ],
+        }),
+      ],
+    },
   ],
 });

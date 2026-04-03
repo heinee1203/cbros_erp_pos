@@ -3,6 +3,7 @@ import { View, Text, Pressable, StyleSheet, Alert } from 'react-native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { colors } from '@/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { usePosPermission } from '@/hooks/use-pos-permission';
 
 const TAB_ICONS: Record<string, string> = {
   POS: '\u229E',           // ⊞
@@ -16,6 +17,7 @@ export const NAV_RAIL_WIDTH = 52;
 export function NavRail({ state, navigation }: BottomTabBarProps) {
   const styles = createStyles();
   const { user, logout, locations, locationId } = useAuth();
+  const { can } = usePosPermission();
 
   const currentLocation = locations?.find((l: any) => l.id === locationId);
   const initials = user?.fullName
@@ -46,6 +48,9 @@ export function NavRail({ state, navigation }: BottomTabBarProps) {
       {/* Tab items */}
       <View style={styles.tabsContainer}>
         {state.routes.map((route, index) => {
+          // Gate Settings tab behind posSettings permission
+          if (route.name === 'Settings' && !can('posSettings')) return null;
+
           const isActive = state.index === index;
           return (
             <Pressable
@@ -85,7 +90,7 @@ const createStyles = () => StyleSheet.create({
     width: NAV_RAIL_WIDTH,
     backgroundColor: colors.bg.base,
     borderRightWidth: 1,
-    borderRightColor: 'rgba(255,255,255,0.06)',
+    borderRightColor: colors.border.subtle,
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -95,14 +100,14 @@ const createStyles = () => StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 8,
-    backgroundColor: '#F5A623',
+    backgroundColor: colors.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   brandText: {
     fontSize: 18,
     fontFamily: 'Outfit-Bold',
-    color: '#1A1A1A',
+    color: colors.text.inverse,
   },
   tabsContainer: {
     flex: 1,
@@ -126,23 +131,23 @@ const createStyles = () => StyleSheet.create({
     left: -4,
     width: 4,
     height: 28,
-    backgroundColor: '#F5A623',
+    backgroundColor: colors.accent.primary,
     borderTopRightRadius: 3,
     borderBottomRightRadius: 3,
   },
   navIcon: {
     fontSize: 20,
-    color: '#5A5750',
+    color: colors.text.muted,
   },
   navIconActive: {
-    color: '#F5A623',
+    color: colors.accent.primary,
   },
   userIndicator: {
     alignItems: 'center',
     gap: 4,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.06)',
+    borderTopColor: colors.border.subtle,
     width: '100%',
   },
   userAvatar: {
@@ -161,7 +166,7 @@ const createStyles = () => StyleSheet.create({
   branchAbbrev: {
     fontSize: 8,
     fontFamily: 'Outfit-Medium',
-    color: '#5A5750',
+    color: colors.text.muted,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },

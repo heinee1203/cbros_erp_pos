@@ -3,7 +3,7 @@ import { paginationSchema } from "@apex/types";
 import { db } from "@apex/database";
 import { products, inventory } from "@apex/database/schema";
 import { eq, and } from "drizzle-orm";
-import { queryStockLevels, getProductLocations, updateAvailability, type SortField, type SortDir } from "./service";
+import { queryStockLevels, queryProductStockLevels, getProductLocations, updateAvailability, type SortField, type SortDir } from "./service";
 
 const VALID_CATEGORIES = [
   "TIRES",
@@ -17,7 +17,7 @@ const VALID_STOCK_STATUSES = ["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK"];
 
 const VALID_SORT_FIELDS: SortField[] = [
   "name", "sku", "category", "location", "stockLevel",
-  "reservedLevel", "available", "reorderPoint", "status",
+  "reservedLevel", "available", "reorderPoint", "lastSoldAt", "status",
 ];
 
 const VALID_SORT_DIRS: SortDir[] = ["asc", "desc"];
@@ -51,16 +51,14 @@ export const stockLevelsRoutes: FastifyPluginAsync = async (app) => {
     const allLocations = q.allLocations === "true" || !locationId;
     const search = q.search;
     const category = q.category;
+    const familyId = q.familyId;
+    const categoryId = q.categoryId;
+    const subcategoryId = q.subcategoryId;
     const stockStatus = q.stockStatus;
     const belowReorder = q.belowReorder === "true";
     const overrideLocationId = q.locationId;
     const sortBy = q.sortBy as SortField | undefined;
     const sortDir = q.sortDir as SortDir | undefined;
-
-    // Validate category
-    if (category && !VALID_CATEGORIES.includes(category)) {
-      return reply.status(400).send({ error: `Invalid category: ${category}` });
-    }
 
     // Validate stockStatus
     if (stockStatus && !VALID_STOCK_STATUSES.includes(stockStatus)) {
@@ -87,6 +85,30 @@ export const stockLevelsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    const view = q.view; // "product" or "location" (default)
+
+    if (view === "product") {
+      // Aggregated product view — one row per product, stock summed across locations
+      const result = await queryProductStockLevels({
+        orgId,
+        defaultLocationId: locationId ?? "",
+        allLocations: true,
+        search,
+        category,
+        familyId,
+        categoryId,
+        subcategoryId,
+        stockStatus: stockStatus as any,
+        belowReorder,
+        sortBy,
+        sortDir,
+        cursor,
+        limit,
+      });
+      return reply.send(result);
+    }
+
+    // Default: per-location view
     const result = await queryStockLevels({
       orgId,
       defaultLocationId: locationId ?? "",

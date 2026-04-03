@@ -22,7 +22,18 @@ function getToken(): string | null {
 }
 
 function getLocationId(): string | null {
-  return storage.getString(KEYS.AUTH_LOCATION_ID) ?? null;
+  // Priority: auth context location > device binding location
+  const authLoc = storage.getString(KEYS.AUTH_LOCATION_ID);
+  if (authLoc) return authLoc;
+  // Fallback to device binding
+  try {
+    const bindingRaw = storage.getString('device_binding');
+    if (bindingRaw) {
+      const binding = JSON.parse(bindingRaw);
+      return binding.locationId ?? null;
+    }
+  } catch {}
+  return null;
 }
 
 export async function apiFetch<T>(

@@ -57,6 +57,7 @@ export interface LowStockItem {
   available: number;
   reorderPoint: number;
   locationName: string;
+  lastSoldAt: string | null;
 }
 
 export interface RecentActivityEntry {

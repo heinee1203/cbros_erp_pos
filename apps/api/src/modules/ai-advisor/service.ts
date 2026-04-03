@@ -322,7 +322,7 @@ export async function gatherItemContext(
 // ── Prompt Building ──
 
 export function buildSystemPrompt(): string {
-  return `You are an inventory advisor for a Philippine auto parts retail business (Apex Auto Parts). You help the owner make ordering decisions based on real sales data, stock levels, and supplier performance.
+  return `You are an inventory advisor for a Philippine auto parts retail business (CBROS Genuine Autoparts & Accessories). You help the owner make ordering decisions based on real sales data, stock levels, and supplier performance.
 
 Rules:
 - Always be specific and quantitative. Reference the actual numbers provided.

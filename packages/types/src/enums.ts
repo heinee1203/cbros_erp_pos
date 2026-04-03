@@ -253,6 +253,7 @@ export const SUPPLIER_RETURN_ROLES = [UserRole.ADMIN, UserRole.MANAGER] as const
 export const BackorderStatus = {
   PENDING: "PENDING",
   INCLUDED_IN_PO: "INCLUDED_IN_PO",
+  FULFILLED: "FULFILLED",
   CANCELLED: "CANCELLED",
 } as const;
 export type BackorderStatus = (typeof BackorderStatus)[keyof typeof BackorderStatus];

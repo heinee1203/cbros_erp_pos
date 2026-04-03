@@ -62,6 +62,9 @@ export async function getCatalogDelta(opts: SyncOpts): Promise<SyncResult<any>> 
       brandId: products.brandId,
       parentProductId: products.parentProductId,
       isParent: products.isParent,
+      isSerialized: products.isSerialized,
+      isTire: products.isTire,
+      warrantyMonths: products.warrantyMonths,
       updatedAt: products.updatedAt,
     })
     .from(products)

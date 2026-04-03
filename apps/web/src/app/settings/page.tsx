@@ -18,7 +18,7 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-lg font-semibold text-foreground">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Configure your Apex POS system
+          Configure your CBROS POS system
         </p>
       </div>
 

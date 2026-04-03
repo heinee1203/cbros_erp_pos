@@ -14,6 +14,8 @@ import {
   getSalesSummary,
   getDailySalesSummary,
   getSalesKPIs,
+  getSalesByPaymentMethod,
+  getDiscountAnalysis,
 } from "./sales-reports";
 import { db } from "@apex/database";
 import { sql } from "drizzle-orm";
@@ -180,6 +182,42 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return reply.send({ data });
+  });
+
+  // GET /reports/sales-by-payment
+  app.get("/sales-by-payment", async (request, reply) => {
+    const { orgId, locationId } = request.storeContext!;
+    const query = request.query as {
+      from?: string;
+      to?: string;
+      allLocations?: string;
+    };
+
+    const data = await getSalesByPaymentMethod(orgId, {
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
+      from: query.from,
+      to: query.to,
+    });
+
+    return reply.send(data);
+  });
+
+  // GET /reports/discount-analysis
+  app.get("/discount-analysis", async (request, reply) => {
+    const { orgId, locationId } = request.storeContext!;
+    const query = request.query as {
+      from?: string;
+      to?: string;
+      allLocations?: string;
+    };
+
+    const data = await getDiscountAnalysis(orgId, {
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
+      from: query.from,
+      to: query.to,
+    });
+
+    return reply.send(data);
   });
 
   // GET /reports/sales-summary

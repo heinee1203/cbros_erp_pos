@@ -18,6 +18,7 @@ import {
   Eye,
   Pencil,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/auth-context";
 import {
   useCountSessions,
@@ -68,8 +69,8 @@ const ALL_STATUSES = Object.keys(STATUS_LABELS);
 
 export default function InventoryCountsPage() {
   const { token, locationId, user, loading: authLoading } = useAuth();
+  const router = useRouter();
   const [activeCountId, setActiveCountId] = useState<string | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
 
   if (authLoading) {
     return (
@@ -96,19 +97,8 @@ export default function InventoryCountsPage() {
         token={token}
         locationId={locationId}
         onSelectCount={setActiveCountId}
-        onCreateNew={() => setShowCreateModal(true)}
+        onCreateNew={() => router.push("/inventory/counts/new")}
       />
-      {showCreateModal && (
-        <CreateCountModal
-          token={token}
-          locationId={locationId}
-          onClose={() => setShowCreateModal(false)}
-          onCreated={(id) => {
-            setShowCreateModal(false);
-            setActiveCountId(id);
-          }}
-        />
-      )}
     </>
   );
 }
@@ -891,11 +881,8 @@ function CountLineTableRow({
   );
 }
 
-/* ═══════════════════════════════════════════════════════
- * CREATE COUNT MODAL
- * ═══════════════════════════════════════════════════════ */
-
-function CreateCountModal({
+/* CreateCountModal removed — uses /inventory/counts/new page instead */
+function _UNUSED_CreateCountModal({
   token,
   locationId,
   onClose,

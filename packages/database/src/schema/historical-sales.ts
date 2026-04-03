@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, timestamp, index, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, integer, numeric, timestamp, index, pgEnum } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
 import { products } from "./products";
 import { locations } from "./locations";
@@ -24,6 +24,16 @@ export const historicalSales = pgTable(
     reasonType: historyReasonTypeEnum("reason_type").notNull(),
     reasonReference: varchar("reason_reference", { length: 50 }),
     quantity: integer("quantity").notNull(),
+    /** Unit price per item (from Loyverse Net sales / Quantity) */
+    unitPrice: numeric("unit_price", { precision: 12, scale: 2 }),
+    /** Net sales amount for this line (after discounts) */
+    netSales: numeric("net_sales", { precision: 12, scale: 2 }),
+    /** Cost of goods for this line */
+    costAmount: numeric("cost_amount", { precision: 12, scale: 2 }),
+    /** Discount amount applied */
+    discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }),
+    /** Customer name from CSV */
+    customerName: varchar("customer_name", { length: 255 }),
     direction: historyDirectionEnum("direction").notNull(),
     movementDate: timestamp("movement_date", { withTimezone: true }).notNull(),
     importedAt: timestamp("imported_at", { withTimezone: true }).notNull().defaultNow(),

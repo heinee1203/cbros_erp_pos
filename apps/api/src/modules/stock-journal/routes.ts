@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { paginationSchema } from "@apex/types";
 import { UserRole } from "@apex/types";
-import { queryJournal } from "./service";
+import { queryJournal, queryHistoricalForProduct } from "./service";
 
 /** Roles allowed to query across all locations */
 const CROSS_LOCATION_ROLES = [UserRole.ADMIN, UserRole.MANAGER];
@@ -102,6 +102,32 @@ export const stockJournalRoutes: FastifyPluginAsync = async (app) => {
       cursor,
       limit,
     });
+
+    // If filtering by productId and not filtering by a specific referenceType,
+    // also include historical sales (imported Loyverse receipts)
+    if (productId && (!referenceType || referenceType === "SALE" || referenceType === "RETURN")) {
+      {
+        const variantProductId = q.variantProductId;
+        const historical = await queryHistoricalForProduct(orgId, productId, {
+          locationId: allLocations ? undefined : (locationId || defaultLocationId || undefined),
+          dateFrom,
+          dateTo,
+          limit: limit || 50,
+          variantProductId,
+        });
+
+        if (historical.data.length > 0) {
+          // Merge and sort by date descending
+          const combined = [...result.data, ...historical.data]
+            .sort((a, b) => new Date(b.effectiveAt).getTime() - new Date(a.effectiveAt).getTime())
+            .slice(0, (limit || 50));
+
+          result.data = combined;
+          // If either has more, there's more
+          result.hasMore = result.hasMore || historical.hasMore;
+        }
+      }
+    }
 
     return reply.send(result);
   });

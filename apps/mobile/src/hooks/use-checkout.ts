@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { v4 as uuid } from 'uuid';
+import { useShallow } from 'zustand/react/shallow';
 import { apiFetch, ApiError } from '@/services/api-client';
 import { useCartStore, selectGrandTotal, selectSubtotal, selectCartDiscount } from '@/stores/cart-store';
 import { addPendingSale, removePendingSale, updatePendingSale, getPendingSales } from '@/storage/pending-sales';
@@ -27,7 +28,17 @@ export function useCheckout() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CheckoutResult | null>(null);
 
-  const cart = useCartStore();
+  const cart = useCartStore(useShallow(s => ({
+    lines: s.lines,
+    customerId: s.customerId,
+    vehicleId: s.vehicleId,
+    receiptNumber: s.receiptNumber,
+    note: s.note,
+    discountType: s.discountType,
+    discountValue: s.discountValue,
+    payments: s.payments,
+    allowNegativeStock: s.allowNegativeStock,
+  })));
   const grandTotal = useCartStore(selectGrandTotal);
 
   const checkout = useCallback(async (opts?: { allowNegativeStock?: boolean }) => {
@@ -57,9 +68,12 @@ export function useCheckout() {
       lines: cart.lines.map(l => ({
         productId: l.productId,
         quantity: l.quantity,
+        overridePrice: l.overridePrice != null ? String(l.overridePrice.toFixed(2)) : undefined,
         discountAmount: l.discountType !== 'none'
           ? String(l.unitPrice * l.quantity - l.lineTotal)
           : undefined,
+        serials: l.isSerialized && l.serials.length > 0 ? l.serials : undefined,
+        dotAllocation: l.isTire && l.dotAllocation ? l.dotAllocation : undefined,
       })),
     };
 

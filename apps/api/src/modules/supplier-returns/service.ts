@@ -9,8 +9,9 @@ import {
   locations,
   products,
   purchaseOrders,
+  users,
 } from "@apex/database/schema";
-import { eq, and, sql, desc, type SQL } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, type SQL } from "drizzle-orm";
 import type {
   CreateSupplierReturnInput,
   UpdateSupplierReturnInput,
@@ -35,13 +36,13 @@ async function generateRtvNumber(
     2_000_000;
   await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
 
-  const result = await tx
-    .select({ count: sql<string>`count(*)` })
-    .from(supplierReturns)
-    .where(eq(supplierReturns.orgId, orgId));
-
-  const seq = parseInt(result[0]?.count ?? "0", 10) + 1;
-  return `RTV-${String(seq).padStart(6, "0")}`;
+  // Use MAX to handle gaps from deletions
+  const result = await tx.execute(
+    sql`SELECT MAX(CAST(SUBSTRING(rtv_number FROM 5) AS integer)) AS max_seq
+        FROM supplier_returns WHERE org_id = ${orgId}`,
+  );
+  const maxSeq = (result[0] as any)?.max_seq ?? 0;
+  return `RTV-${String(maxSeq + 1).padStart(6, "0")}`;
 }
 
 /**
@@ -200,7 +201,7 @@ export async function createSupplierReturn(
       .from(products)
       .where(
         and(
-          sql`${products.id} = ANY(${productIds})`,
+          inArray(products.id, productIds),
           eq(products.orgId, orgId),
         ),
       );
@@ -332,7 +333,7 @@ export async function updateSupplierReturn(
         .from(products)
         .where(
           and(
-            sql`${products.id} = ANY(${productIds})`,
+            inArray(products.id, productIds),
             eq(products.orgId, orgId),
           ),
         );
@@ -533,41 +534,7 @@ export async function submitSupplierReturn(
       .from(supplierReturnLines)
       .where(eq(supplierReturnLines.supplierReturnId, rtvId));
 
-    // For each line: check stock >= quantity, deduct inventory, create journal
-    const insufficientStock: Array<{
-      productId: string;
-      productName: string;
-      required: number;
-      available: number;
-    }> = [];
-
-    for (const line of lines) {
-      const inv = await lockInventoryRow(
-        tx,
-        orgId,
-        line.productId,
-        rtv.location_id,
-      );
-
-      if (inv.stockLevel < line.quantity) {
-        insufficientStock.push({
-          productId: line.productId,
-          productName: line.productName,
-          required: line.quantity,
-          available: inv.stockLevel,
-        });
-        continue;
-      }
-    }
-
-    if (insufficientStock.length > 0) {
-      const err = new Error("Insufficient stock for supplier return") as any;
-      err.statusCode = 409;
-      err.details = insufficientStock;
-      throw err;
-    }
-
-    // All stock checks passed — now deduct
+    // Deduct inventory for each line (allow negative — items may already be set aside)
     for (const line of lines) {
       const inv = await lockInventoryRow(
         tx,
@@ -901,16 +868,41 @@ export async function getSupplierReturn(rtvId: string, orgId: string) {
 
   if (!rtv) return null;
 
+  // Resolve createdBy user name
+  let createdByName: string | null = null;
+  if (rtv.createdBy) {
+    const [creator] = await db
+      .select({ fullName: users.fullName })
+      .from(users)
+      .where(eq(users.id, rtv.createdBy))
+      .limit(1);
+    createdByName = creator?.fullName ?? null;
+  }
+
   const lines = await db
     .select()
     .from(supplierReturnLines)
     .where(eq(supplierReturnLines.supplierReturnId, rtv.id));
 
-  const history = await db
-    .select()
+  const historyRows = await db
+    .select({
+      id: supplierReturnStatusHistory.id,
+      fromStatus: supplierReturnStatusHistory.fromStatus,
+      toStatus: supplierReturnStatusHistory.toStatus,
+      changedByUserId: supplierReturnStatusHistory.changedBy,
+      changedByName: users.fullName,
+      notes: supplierReturnStatusHistory.notes,
+      createdAt: supplierReturnStatusHistory.changedAt,
+    })
     .from(supplierReturnStatusHistory)
+    .leftJoin(users, eq(supplierReturnStatusHistory.changedBy, users.id))
     .where(eq(supplierReturnStatusHistory.supplierReturnId, rtv.id))
     .orderBy(desc(supplierReturnStatusHistory.changedAt));
+  const history = historyRows.map((h) => ({
+    ...h,
+    changedByName: h.changedByName ?? null,
+    createdAt: h.createdAt?.toISOString() ?? null,
+  }));
 
   // Fetch supplier info
   const [supplier] = await db
@@ -935,6 +927,9 @@ export async function getSupplierReturn(rtvId: string, orgId: string) {
 
   return {
     ...rtv,
+    rtvNo: rtv.rtvNumber,
+    createdByName,
+    lineCount: lines.length,
     lines,
     statusHistory: history,
     supplier: supplier ?? null,
@@ -966,7 +961,7 @@ export async function listSupplierReturns(
 
   if (opts.status && opts.status.length > 0) {
     conditions.push(
-      sql`${supplierReturns.status} = ANY(${opts.status})`,
+      inArray(supplierReturns.status, opts.status as any),
     );
   }
 
@@ -1011,18 +1006,24 @@ export async function listSupplierReturns(
       id: supplierReturns.id,
       orgId: supplierReturns.orgId,
       locationId: supplierReturns.locationId,
-      rtvNumber: supplierReturns.rtvNumber,
+      rtvNo: supplierReturns.rtvNumber,
       supplierId: supplierReturns.supplierId,
       status: supplierReturns.status,
       reason: supplierReturns.reason,
       totalCost: supplierReturns.totalCost,
       creditAmount: supplierReturns.creditAmount,
       creditType: supplierReturns.creditType,
+      sourcePOId: supplierReturns.sourcePoId,
       submittedAt: supplierReturns.submittedAt,
       createdAt: supplierReturns.createdAt,
+      updatedAt: supplierReturns.updatedAt,
       // Joined fields
       supplierName: suppliers.name,
       locationName: locations.name,
+      lineCount: sql<number>`(
+        SELECT count(*)::int FROM supplier_return_lines srl
+        WHERE srl.supplier_return_id = ${supplierReturns.id}
+      )`.as("line_count"),
     })
     .from(supplierReturns)
     .leftJoin(suppliers, eq(suppliers.id, supplierReturns.supplierId))

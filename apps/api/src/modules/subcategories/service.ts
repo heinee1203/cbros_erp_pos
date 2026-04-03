@@ -35,8 +35,9 @@ export async function listSubcategories(opts: {
       createdAt: productSubcategories.createdAt,
       updatedAt: productSubcategories.updatedAt,
       productCount: sql<number>`COALESCE(
-        (SELECT COUNT(*)::int FROM ${products}
-         WHERE ${products.subcategoryId} = ${productSubcategories.id}),
+        (SELECT COUNT(*)::int FROM products p
+         WHERE p.subcategory_id = "product_subcategories"."id"
+         AND p.is_parent = false),
         0
       )`,
     })

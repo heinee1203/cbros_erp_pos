@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Printer, Pencil, Trash2, Plus, Search, X, Save, Loader2, ArrowRightLeft } from "lucide-react";
@@ -65,7 +65,7 @@ function printReceivingSlip(receipt: any, po: any) {
   const itemRows = (receipt.lines || []).map((line: any, i: number) => `
     <tr>
       <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:center">${i + 1}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid #ccc">${line.productName || "\u2014"}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #ccc">${line.parentName ? line.parentName + " (" + line.productName + ")" : line.productName || "\u2014"}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #ccc;font-family:monospace;font-size:10px">${line.sku || line.mnemonicSku || "\u2014"}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right">${line.receivedAcceptedQty ?? 0}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;${(line.rejectedQty ?? 0) > 0 ? "color:#dc2626;font-weight:bold" : ""}">${line.rejectedQty ?? 0}</td>
@@ -139,7 +139,7 @@ th{text-align:left;border-bottom:2px solid #000;padding:3px 6px;font-size:10px;t
     <div class="slbl">(Warehouse Staff)</div>
   </div>
 </div>
-<div class="ftr">Printed: ${new Date().toLocaleString("en-PH")} \u2014 Apex Auto Parts</div>
+<div class="ftr">Printed: ${new Date().toLocaleString("en-PH")} \u2014 CBROS Genuine Autoparts & Accessories, Inc.</div>
 </body></html>`;
 
   w.document.write(html);
@@ -157,7 +157,7 @@ function printAllReceivingSlips(receipts: any[], po: any) {
     const itemRows = (receipt.lines || []).map((line: any, i: number) => `
       <tr>
         <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:center">${i + 1}</td>
-        <td style="padding:4px 6px;border-bottom:1px solid #ccc">${line.productName || "\u2014"}</td>
+        <td style="padding:4px 6px;border-bottom:1px solid #ccc">${line.parentName ? line.parentName + " (" + line.productName + ")" : line.productName || "\u2014"}</td>
         <td style="padding:4px 6px;border-bottom:1px solid #ccc;font-family:monospace;font-size:10px">${line.sku || line.mnemonicSku || "\u2014"}</td>
         <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right">${line.receivedAcceptedQty ?? 0}</td>
         <td style="padding:4px 6px;border-bottom:1px solid #ccc;text-align:right;${(line.rejectedQty ?? 0) > 0 ? "color:#dc2626;font-weight:bold" : ""}">${line.rejectedQty ?? 0}</td>
@@ -206,7 +206,7 @@ function printAllReceivingSlips(receipts: any[], po: any) {
     <div class="slbl">(Warehouse Staff)</div>
   </div>
 </div>
-<div class="ftr">Printed: ${new Date().toLocaleString("en-PH")} \u2014 Apex Auto Parts</div>
+<div class="ftr">Printed: ${new Date().toLocaleString("en-PH")} \u2014 CBROS Genuine Autoparts & Accessories, Inc.</div>
 </div>`;
   }).join("");
 
@@ -242,6 +242,116 @@ th{text-align:left;border-bottom:2px solid #000;padding:3px 6px;font-size:10px;t
 
   w.document.write(html);
   w.document.close();
+}
+
+/** Print a professional Purchase Order document */
+function printPurchaseOrder(po: any, opts: { showPricing?: boolean } = {}) {
+  const showPricing = opts.showPricing !== false;
+  const w = window.open("", "_blank");
+  if (!w) return;
+
+  const sortedLines = [...(po.lines || [])].sort((a: any, b: any) => {
+    const nameA = a.parentName ? `${a.parentName} (${a.productName})` : a.productName;
+    const nameB = b.parentName ? `${b.parentName} (${b.productName})` : b.productName;
+    return nameA.localeCompare(nameB);
+  });
+
+  // Add displayName BEFORE chunking into pages
+  const linesWithName = sortedLines.map((line: any) => ({
+    ...line,
+    displayName: line.parentName ? `${line.parentName} (${line.productName})` : line.productName,
+  }));
+
+  const LINES_PER_PAGE = 45;
+  const pages: any[][] = [];
+  for (let i = 0; i < linesWithName.length; i += LINES_PER_PAGE) {
+    pages.push(linesWithName.slice(i, i + LINES_PER_PAGE));
+  }
+  if (pages.length === 0) pages.push([]);
+
+  const totalQty = linesWithName.reduce((s: number, l: any) => s + l.orderedQty, 0);
+  const grandTotal = linesWithName.reduce((s: number, l: any) => s + l.orderedQty * parseFloat(l.unitCost || "0"), 0);
+  const createdDate = po.createdAt ? new Date(po.createdAt).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) : "\u2014";
+  const submittedDate = po.submittedAt ? new Date(po.submittedAt).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) : null;
+
+  const thStyle = "background:#f9fafb;font-size:8pt;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#374151;padding:5px 6px;border-top:1px solid #d1d5db;border-bottom:1px solid #d1d5db";
+  const thRow = showPricing
+    ? `<th style="width:5%;text-align:center;${thStyle}">#</th><th style="width:50%;text-align:left;${thStyle}">Item</th><th style="width:10%;text-align:center;${thStyle}">Qty</th><th style="width:17%;text-align:right;${thStyle}">Unit Cost</th><th style="width:18%;text-align:right;${thStyle}">Total</th>`
+    : `<th style="width:5%;text-align:center;${thStyle}">#</th><th style="width:75%;text-align:left;${thStyle}">Item</th><th style="width:20%;text-align:center;${thStyle}">Qty</th>`;
+
+  function buildRow(line: any, rowNum: number) {
+    const cost = parseFloat(line.unitCost || "0");
+    const lt = line.orderedQty * cost;
+    const bg = rowNum % 2 === 0 ? "#f0f0f0" : "#ffffff";
+    const base = `<td style="text-align:center;padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:9pt">${rowNum}</td><td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:9pt;font-weight:500">${line.displayName}</td><td style="text-align:center;padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:9pt">${line.orderedQty}</td>`;
+    if (!showPricing) return `<tr style="background:${bg}">${base}</tr>`;
+    return `<tr style="background:${bg}">${base}<td style="text-align:right;padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:9pt">\u20B1${cost.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td><td style="text-align:right;padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:9pt;font-weight:500">\u20B1${lt.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td></tr>`;
+  }
+
+  const fullHeader = `<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;padding-bottom:10px;border-bottom:2px solid #111">
+  <div><h1 style="font-size:14pt;font-weight:700;margin:0 0 2px">CBROS Genuine Autoparts &amp; Accessories</h1><p style="font-size:9pt;color:#374151;margin:0">Naga City, Camarines Sur</p></div>
+  <div style="text-align:right"><h2 style="font-size:16pt;font-weight:700;margin:0 0 4px">PURCHASE ORDER</h2><div style="font-size:13pt;font-weight:600;color:#374151">${po.poNo}</div><div style="font-size:9pt;color:#6b7280;margin-top:3px">Date: ${createdDate}</div>${submittedDate ? `<div style="font-size:9pt;color:#6b7280;margin-top:2px">Submitted: ${submittedDate}</div>` : ""}<div style="display:inline-block;font-size:8pt;font-weight:600;text-transform:uppercase;padding:2px 8px;border-radius:3px;margin-top:3px;background:#f3f4f6;color:#374151">${(po.status || "").replace(/_/g, " ")}</div></div>
+</div>
+<div style="display:flex;gap:40px;margin:12px 0">
+  <div style="flex:1"><div style="font-size:8pt;font-weight:700;text-transform:uppercase;color:#6b7280;letter-spacing:.5px;margin-bottom:3px">Supplier</div><div style="font-size:10pt;font-weight:600">${po.supplier?.name || "\u2014"}</div>${po.supplier?.contactPhone ? `<div style="font-size:9pt;color:#374151">${po.supplier.contactPhone}</div>` : ""}${po.supplier?.contactEmail ? `<div style="font-size:9pt;color:#374151">${po.supplier.contactEmail}</div>` : ""}</div>
+</div>`;
+
+  const pagesHtml = pages.map((pageLines, pi) => {
+    const startNum = pi * LINES_PER_PAGE;
+    const rows = pageLines.map((line: any, i: number) => buildRow(line, startNum + i + 1)).join("");
+    const header = pi === 0 ? fullHeader : `<div style="font-size:9pt;color:#6b7280;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">${po.poNo} \u2014 Page ${pi + 1} of ${pages.length} \u2014 ${po.supplier?.name || ""}</div>`;
+    return `<div${pi > 0 ? ' style="page-break-before:always"' : ""}>${header}<table style="width:100%;border-collapse:collapse;margin:10px 0"><thead><tr>${thRow}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join("");
+
+  const footer = `<div style="font-size:9pt;color:#6b7280;margin-top:5px">${linesWithName.length} item${linesWithName.length !== 1 ? "s" : ""} \u00B7 ${totalQty} total units</div>
+${showPricing ? `<div style="display:flex;justify-content:flex-end;margin:10px 0 20px"><table><tr style="font-weight:700;font-size:11pt"><td style="text-align:right;color:#6b7280;padding:4px 8px;border-top:2px solid #111;padding-top:6px">Total:</td><td style="text-align:right;padding:4px 8px;width:150px;border-top:2px solid #111;padding-top:6px">\u20B1${grandTotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td></tr></table></div>` : ""}
+
+<div style="display:flex;gap:30px;margin-top:25px;padding-top:15px">
+  <div style="flex:1;text-align:center"><div style="border-bottom:1px solid #111;margin-bottom:3px;height:30px"></div><div style="font-size:8pt;color:#6b7280;text-transform:uppercase">Prepared by</div></div>
+  <div style="flex:1;text-align:center"><div style="border-bottom:1px solid #111;margin-bottom:3px;height:30px"></div><div style="font-size:8pt;color:#6b7280;text-transform:uppercase">Approved by</div></div>
+  <div style="flex:1;text-align:center"><div style="border-bottom:1px solid #111;margin-bottom:3px;height:30px"></div><div style="font-size:8pt;color:#6b7280;text-transform:uppercase">Received by (Supplier)</div></div>
+</div>
+<div style="margin-top:20px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:8pt;color:#9ca3af;text-align:center">CBROS Genuine Autoparts &amp; Accessories \u00B7 System-generated purchase order from CBROS ERP</div>`;
+
+  const html = `<!DOCTYPE html><html><head><title>Purchase Order \u2014 ${po.poNo}</title>
+<style>@page{size:A4 portrait;margin:10mm 12mm}*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#111;line-height:1.4}</style>
+</head><body>${pagesHtml}${footer}</body></html>`;
+
+  w.document.write(html);
+  w.document.close();
+  w.onload = () => w.print();
+}
+
+/** Parse discount expressions like "5000 -15%" or "3259.04 -20% -5%". Returns split parts. */
+function parseDiscountExpression(input: string): { listPrice: number; discountExpr: string; netCost: number } | null {
+  if (!input || !input.trim()) return null;
+  const cleaned = input.replace(/,/g, "").trim();
+  const match = cleaned.match(/^(\d+\.?\d*)\s*((?:\s*-\s*\d+\.?\d*%?\s*)*)$/);
+  if (!match) return null;
+  const listPrice = parseFloat(match[1]);
+  if (isNaN(listPrice)) return null;
+  const discountPart = match[2].trim();
+  let netCost = listPrice;
+  if (discountPart) {
+    const discounts = discountPart.match(/-\s*(\d+\.?\d*)(%?)/g);
+    if (discounts) {
+      for (const disc of discounts) {
+        const dm = disc.match(/-\s*(\d+\.?\d*)(%?)/);
+        if (dm) {
+          const v = parseFloat(dm[1]);
+          netCost = dm[2] === "%" ? netCost * (1 - v / 100) : netCost - v;
+        }
+      }
+    }
+  }
+  return { listPrice, discountExpr: discountPart, netCost: Math.round(netCost * 100) / 100 };
+}
+
+/** Recalculate net cost from list price + discount expression string */
+function recalcNetCost(lp: number, discExpr: string): number {
+  if (!discExpr.trim()) return lp;
+  const r = parseDiscountExpression(`${lp} ${discExpr}`);
+  return r ? r.netCost : lp;
 }
 
 /** Calculate net cost from list price through a chain of trade discounts */
@@ -373,7 +483,7 @@ function PODetailView({
       po.lines.map((l) => ({
         id: l.id,
         productId: l.productId,
-        productName: l.productName,
+        productName: (l as any).parentName ? `${(l as any).parentName} (${l.productName})` : l.productName,
         sku: l.sku,
         orderedQty: l.orderedQty,
         listPrice: l.listPrice ?? l.unitCost,
@@ -408,26 +518,41 @@ function PODetailView({
     }
   }, []);
 
-  // Add a new line from product search
+  // Add a new line from product search (with duplicate check + parent name)
   const addLine = useCallback((product: ProductRow) => {
-    const tempId = `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    setEditLines((prev) => [
-      ...prev,
-      {
-        id: tempId,
-        productId: product.id,
-        productName: product.name,
-        sku: product.sku,
-        orderedQty: 1,
-        listPrice: product.costPrice || "0",
-        discountChain: "",
-        unitCost: product.costPrice || "0",
-        isManualCost: false,
-        receivedAcceptedQty: 0,
-        rejectedQty: 0,
-        isNew: true,
-      },
-    ]);
+    const displayName = (product as any).parentName
+      ? `${(product as any).parentName} (${product.name})`
+      : product.name;
+
+    // Duplicate check — if product already in PO, prompt to add qty
+    setEditLines((prev) => {
+      const existing = prev.find((l) => l.productId === product.id);
+      if (existing) {
+        const addQty = parseInt(prompt(`"${displayName}" is already in this PO with ${existing.orderedQty} pcs.\n\nAdditional quantity to add (0 to cancel):`) || "0", 10);
+        if (addQty > 0) {
+          return prev.map((l) => l.id === existing.id ? { ...l, orderedQty: l.orderedQty + addQty } : l);
+        }
+        return prev; // cancelled
+      }
+
+      return [
+        ...prev,
+        {
+          id: `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          productId: product.id,
+          productName: displayName,
+          sku: product.sku,
+          orderedQty: 1,
+          listPrice: product.costPrice || "0",
+          discountChain: "",
+          unitCost: product.costPrice || "0",
+          isManualCost: false,
+          receivedAcceptedQty: 0,
+          rejectedQty: 0,
+          isNew: true,
+        },
+      ].sort((a, b) => a.productName.localeCompare(b.productName));
+    });
   }, []);
 
   // Save all edits
@@ -645,13 +770,36 @@ function PODetailView({
           ) : (
             <>
               {po.status !== "CANCELLED" && (
-                <Link
-                  href={`/inventory/barcode-printing?poNo=${encodeURIComponent(po.poNo)}`}
-                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Printer size={14} />
-                  Print Barcodes
-                </Link>
+                <>
+                  <div className="relative group">
+                    <button className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+                      <Printer size={14} />
+                      Print PO
+                      <svg width="10" height="10" viewBox="0 0 10 10" className="ml-0.5 opacity-50"><path d="M3 4l2 2 2-2" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
+                    </button>
+                    <div className="invisible group-hover:visible absolute right-0 top-full mt-1 z-50 min-w-[180px] rounded-lg border border-border bg-background shadow-lg">
+                      <button
+                        onClick={() => printPurchaseOrder(po, { showPricing: true })}
+                        className="w-full px-3 py-2 text-left text-[12px] hover:bg-accent rounded-t-lg"
+                      >
+                        Print with Pricing
+                      </button>
+                      <button
+                        onClick={() => printPurchaseOrder(po, { showPricing: false })}
+                        className="w-full px-3 py-2 text-left text-[12px] hover:bg-accent rounded-b-lg"
+                      >
+                        Print without Pricing
+                      </button>
+                    </div>
+                  </div>
+                  <Link
+                    href={`/inventory/barcode-printing?poNo=${encodeURIComponent(po.poNo)}`}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Printer size={14} />
+                    Print Barcodes
+                  </Link>
+                </>
               )}
               {allReceipts.length > 0 && (
                 <button
@@ -996,10 +1144,15 @@ function ReceivingGrid({
     acceptedQty: number;
     rejectedQty: number;
     unitCost: string;
+    listPrice: string;
+    discountExpr: string;
     costChanged: boolean;
     error: string | null;
     highlighted: boolean;
     checked: boolean;
+    costFocused?: boolean;
+    serialNumbers: { serialNumber: string; dotCode?: string }[];
+    dotBatches: { dotCode: string; quantity: number }[];
   }
 
   const [lineStates, setLineStates] = useState<Record<string, LineState>>(
@@ -1010,10 +1163,14 @@ function ReceivingGrid({
           acceptedQty: 0,
           rejectedQty: 0,
           unitCost: line.unitCost,
+          listPrice: line.listPrice || line.unitCost,
+          discountExpr: line.discountChain || "",
           costChanged: false,
           error: null,
           highlighted: false,
           checked: false,
+          serialNumbers: [],
+          dotBatches: [],
         };
       }
       return init;
@@ -1024,6 +1181,36 @@ function ReceivingGrid({
   const [receiptNotes, setReceiptNotes] = useState("");
   const [supplierDrNo, setSupplierDrNo] = useState("");
   const [drError, setDrError] = useState<string | null>(null);
+
+  // ── Backorder decision modal state ──
+  interface BackorderDecision {
+    poLineId: string;
+    productId: string;
+    productName: string;
+    sku: string;
+    orderedQty: number;
+    acceptedThisReceipt: number;
+    alreadyReceived: number;
+    alreadyRejected: number;
+    outstanding: number;
+    unitCost: string;
+    decision: "backorder" | "resource" | "cancel";
+    waitUntil: string;
+    newSupplierId: string;
+    newSupplierName: string;
+  }
+  const [showBackorderModal, setShowBackorderModal] = useState(false);
+  const [backorderDecisions, setBackorderDecisions] = useState<BackorderDecision[]>([]);
+  const [backorderPosting, setBackorderPosting] = useState(false);
+  const [pendingReceiptPayload, setPendingReceiptPayload] = useState<{
+    supplierDrNo: string;
+    lines: ReceiptLineInput[];
+    notes?: string;
+  } | null>(null);
+
+  // Suppliers for re-source dropdown
+  const suppliersQuery = useSuppliers(token, locationId);
+  const allSuppliers = suppliersQuery.data?.data ?? [];
 
   // ── Mutation hook ──
   const receiveMut = useReceivePOMutation(
@@ -1204,6 +1391,32 @@ function ReceivingGrid({
     }
     setDrError(null);
 
+    // Check serial count for serialized items (not tires)
+    const serialMismatch = receivableLines.find((line) => {
+      const state = lineStates[line.id];
+      if (!state?.checked || !line.isSerialized || (line as any).isTire || state.acceptedQty === 0) return false;
+      return state.serialNumbers.length !== state.acceptedQty;
+    });
+    if (serialMismatch) {
+      const st = lineStates[serialMismatch.id]!;
+      alert(`Enter serial numbers for ${serialMismatch.productName} (${st.acceptedQty} required, ${st.serialNumbers.length} entered)`);
+      return;
+    }
+
+    // Check DOT batch totals for tire items
+    const dotMismatch = receivableLines.find((line) => {
+      const state = lineStates[line.id];
+      if (!state?.checked || !(line as any).isTire || state.acceptedQty === 0) return false;
+      const batchTotal = state.dotBatches.reduce((s, b) => s + b.quantity, 0);
+      return batchTotal !== state.acceptedQty;
+    });
+    if (dotMismatch) {
+      const st = lineStates[dotMismatch.id]!;
+      const batchTotal = st.dotBatches.reduce((s, b) => s + b.quantity, 0);
+      alert(`Enter DOT batches for ${dotMismatch.productName} (${st.acceptedQty} units required, ${batchTotal} allocated)`);
+      return;
+    }
+
     const lines: ReceiptLineInput[] = receivableLines
       .filter((line) => {
         const state = lineStates[line.id];
@@ -1216,15 +1429,133 @@ function ReceivingGrid({
           receivedAcceptedQty: state.acceptedQty,
           rejectedQty: state.rejectedQty,
           unitCost: state.unitCost,
+          ...(line.isSerialized && !(line as any).isTire && state.serialNumbers.length > 0
+            ? { serialNumbers: state.serialNumbers }
+            : {}),
+          ...((line as any).isTire && state.dotBatches.length > 0
+            ? { dotBatches: state.dotBatches }
+            : {}),
         };
       });
 
+    // Post receipt directly — no backorder modal here
+    // Backorders are handled separately via "Close PO" button
     receiveMut.submit(po.id, {
       supplierDrNo: supplierDrNo.trim(),
       lines,
       notes: receiptNotes.trim() || undefined,
     });
-  }, [hasValidLines, hasAnyErrors, receiveMut, receivableLines, lineStates, po.id, receiptNotes, supplierDrNo]);
+  }, [hasValidLines, hasAnyErrors, receiveMut, receivableLines, lineStates, po, receiptNotes, supplierDrNo]);
+
+  // Close PO + create backorders from the modal
+  const handleConfirmBackorders = useCallback(async () => {
+    if (!token || !locationId) return;
+    setBackorderPosting(true);
+
+    try {
+      // 1. Create backorder entries for remaining items
+      const items = backorderDecisions.map((d) => ({
+        productId: d.productId,
+        supplierId: po.supplierId,
+        quantity: d.outstanding,
+        quantityOrdered: d.orderedQty,
+        quantityReceived: d.alreadyReceived + d.acceptedThisReceipt,
+        quantityOutstanding: d.outstanding,
+        productName: d.productName,
+        sku: d.sku,
+        supplierName: po.supplier?.name ?? "",
+        unitCost: d.unitCost,
+        originalPoId: po.id,
+        originalPoNumber: po.poNo,
+        originalPoLineId: d.poLineId,
+        reason: "Partial receipt — remaining on backorder",
+        decision: d.decision,
+        waitUntil: d.decision === "backorder" ? d.waitUntil : undefined,
+        newSupplierId: d.decision === "resource" ? d.newSupplierId : undefined,
+      }));
+
+      await apiFetch("/procurement/backorders/bulk", {
+        method: "POST",
+        token,
+        locationId,
+        body: { items } as any,
+      });
+
+      // 2. Close the PO with variance
+      await apiFetch(`/procurement/purchase-orders/${po.id}/close-variance`, {
+        method: "POST",
+        token,
+        locationId,
+        body: {
+          notes: "Closed — remaining items sent to backorders",
+          idempotencyKey: `close-bo-${po.id}-${Date.now()}`,
+        } as any,
+      });
+
+      setShowBackorderModal(false);
+      setPendingReceiptPayload(null);
+      setBackorderDecisions([]);
+
+      // Refetch PO to show updated status
+      if (typeof window !== "undefined") window.location.reload();
+    } catch (e: any) {
+      console.error("Close PO failed:", e);
+    } finally {
+      setBackorderPosting(false);
+    }
+  }, [backorderDecisions, po, token, locationId]);
+
+  // "Close PO" handler — calculates remaining and shows backorder modal
+  const handleClosePO = useCallback(() => {
+    const defaultWait = new Date();
+    defaultWait.setDate(defaultWait.getDate() + 14);
+    const waitStr = defaultWait.toISOString().split("T")[0];
+
+    const remaining: BackorderDecision[] = [];
+    for (const line of po.lines) {
+      const totalReceived = line.receivedAcceptedQty;
+      const totalRejected = line.rejectedQty;
+      const outstanding = line.orderedQty - totalReceived - totalRejected;
+      if (outstanding > 0) {
+        remaining.push({
+          poLineId: line.id,
+          productId: line.productId,
+          productName: (line as any).parentName
+            ? `${(line as any).parentName} (${line.productName})`
+            : line.productName,
+          sku: line.sku,
+          orderedQty: line.orderedQty,
+          acceptedThisReceipt: 0,
+          alreadyReceived: totalReceived,
+          alreadyRejected: totalRejected,
+          outstanding,
+          unitCost: line.unitCost,
+          decision: "backorder",
+          waitUntil: waitStr,
+          newSupplierId: "",
+          newSupplierName: "",
+        });
+      }
+    }
+
+    if (remaining.length === 0) {
+      // All items fully received — just close
+      if (confirm("All items have been received. Close this PO?")) {
+        apiFetch(`/procurement/purchase-orders/${po.id}/close-variance`, {
+          method: "POST",
+          token: token!,
+          locationId: locationId!,
+          body: {
+            notes: "Closed — all items received",
+            idempotencyKey: `close-${po.id}-${Date.now()}`,
+          } as any,
+        }).then(() => window.location.reload());
+      }
+    } else {
+      setBackorderDecisions(remaining);
+      setShowBackorderModal(true);
+    }
+  }, [po, token, locationId]);
 
   // Auto-refetch on success
   useEffect(() => {
@@ -1289,7 +1620,7 @@ function ReceivingGrid({
             value={scanValue}
             onChange={(e) => setScanValue(e.target.value)}
             onKeyDown={handleScanKeyDown}
-            placeholder="Scan barcode or type SKU \u2026 press Enter"
+            placeholder="Scan barcode or type SKU … press Enter"
             disabled={receiveMut.isSubmitting}
             className="w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-sm font-mono outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
           />
@@ -1325,7 +1656,9 @@ function ReceivingGrid({
               <Th align="right" width="w-[80px]">Remaining</Th>
               <Th align="right" width="w-[90px]">Accept Now</Th>
               <Th align="right" width="w-[90px]">Reject Now</Th>
-              <Th align="right" width="w-[110px]">Unit Cost</Th>
+              <Th align="right" width="w-[80px]">List Price</Th>
+              <Th align="right" width="w-[70px]">Discount</Th>
+              <Th align="right" width="w-[80px]">Net Cost</Th>
               <Th align="left" width="w-[40px]" />
             </tr>
           </thead>
@@ -1340,8 +1673,8 @@ function ReceivingGrid({
               const isHighlighted = state?.highlighted;
 
               return (
+                <React.Fragment key={line.id}>
                 <tr
-                  key={line.id}
                   ref={(el) => {
                     lineRowRefs.current[line.id] = el;
                   }}
@@ -1369,10 +1702,10 @@ function ReceivingGrid({
                   {/* Product Name */}
                   <td className="px-2 py-1.5">
                     <div
-                      className="max-w-[180px] truncate text-xs font-medium"
-                      title={line.productName}
+                      className="max-w-[220px] truncate text-xs font-medium"
+                      title={(line as any).parentName ? `${(line as any).parentName} (${line.productName})` : line.productName}
                     >
-                      {line.productName}
+                      {(line as any).parentName ? `${(line as any).parentName} (${line.productName})` : line.productName}
                     </div>
                     <div className="text-[10px] text-muted-foreground font-mono">
                       {line.sku}
@@ -1425,7 +1758,7 @@ function ReceivingGrid({
                         }`}
                       />
                     ) : (
-                      <span className="text-muted-foreground">\u2014</span>
+                      <span className="text-muted-foreground">{"\u2014"}</span>
                     )}
                   </td>
 
@@ -1450,33 +1783,79 @@ function ReceivingGrid({
                         }`}
                       />
                     ) : (
-                      <span className="text-muted-foreground">\u2014</span>
+                      <span className="text-muted-foreground">{"\u2014"}</span>
                     )}
                   </td>
 
-                  {/* Unit Cost — editable, prefilled from PO line */}
-                  <td className="px-2 py-1.5 text-right">
+                  {/* List Price — editable, accepts discount expressions */}
+                  <td className="px-1 py-1.5 text-right">
                     {isReceivable ? (
-                      <div className="flex items-center justify-end gap-1">
-                        <input
-                          type="text"
-                          value={state?.unitCost ?? line.unitCost}
-                          onChange={(e) =>
-                            updateLine(line.id, "unitCost", e.target.value)
+                      <input
+                        type="text"
+                        value={state?.listPrice ?? line.listPrice ?? line.unitCost}
+                        onChange={(e) => {
+                          setLineStates((prev) => {
+                            const s = prev[line.id];
+                            return { ...prev, [line.id]: { ...s, listPrice: e.target.value, costChanged: true } };
+                          });
+                        }}
+                        onBlur={(e) => {
+                          const parsed = parseDiscountExpression(e.target.value);
+                          if (parsed) {
+                            setLineStates((prev) => {
+                              const s = prev[line.id];
+                              return { ...prev, [line.id]: {
+                                ...s,
+                                listPrice: parsed.listPrice.toFixed(2),
+                                discountExpr: parsed.discountExpr || s.discountExpr || "",
+                                unitCost: parsed.netCost.toFixed(2),
+                                costChanged: parsed.netCost.toFixed(2) !== line.unitCost,
+                              }};
+                            });
                           }
-                          disabled={receiveMut.isSubmitting}
-                          className={`w-[90px] rounded border bg-background px-1.5 py-1 text-right text-sm tabular-nums outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50 ${
-                            state?.costChanged
-                              ? "border-warning bg-warning/5 text-warning"
-                              : "border-border"
-                          }`}
-                        />
-                      </div>
+                        }}
+                        disabled={receiveMut.isSubmitting}
+                        className={`w-[80px] rounded border bg-background px-1 py-1 text-right text-[11px] tabular-nums outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50 ${state?.costChanged ? "border-warning" : "border-border"}`}
+                        placeholder="List price"
+                      />
                     ) : (
-                      <span className="text-xs tabular-nums text-muted-foreground">
-                        {line.unitCost}
-                      </span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{line.listPrice || line.unitCost}</span>
                     )}
+                  </td>
+
+                  {/* Discount */}
+                  <td className="px-1 py-1.5 text-right">
+                    {isReceivable ? (
+                      <input
+                        type="text"
+                        value={state?.discountExpr ?? line.discountChain ?? ""}
+                        onChange={(e) => {
+                          setLineStates((prev) => {
+                            const s = prev[line.id];
+                            const lp = parseFloat(s.listPrice) || 0;
+                            const net = recalcNetCost(lp, e.target.value);
+                            return { ...prev, [line.id]: {
+                              ...s,
+                              discountExpr: e.target.value,
+                              unitCost: net.toFixed(2),
+                              costChanged: true,
+                            }};
+                          });
+                        }}
+                        disabled={receiveMut.isSubmitting}
+                        className="w-[70px] rounded border border-border bg-background px-1 py-1 text-right text-[11px] tabular-nums outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
+                        placeholder="-15%"
+                      />
+                    ) : (
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{line.discountChain || "\u2014"}</span>
+                    )}
+                  </td>
+
+                  {/* Net Cost — calculated */}
+                  <td className="px-1 py-1.5 text-right">
+                    <span className={`text-[11px] tabular-nums font-medium ${state?.costChanged ? "text-warning" : ""}`}>
+                      {parseFloat(state?.unitCost ?? line.unitCost).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                    </span>
                   </td>
 
                   {/* Status indicator */}
@@ -1500,6 +1879,47 @@ function ReceivingGrid({
                     )}
                   </td>
                 </tr>
+                {/* Serial entry panel for serialized items */}
+                {line.isSerialized && isReceivable && state?.checked && state.acceptedQty > 0 && (
+                  <tr className="bg-muted/10">
+                    <td colSpan={12} className="px-4 py-2 border-b border-border">
+                      <SerialEntryPanel
+                        lineId={line.id}
+                        productId={line.productId}
+                        requiredCount={state.acceptedQty}
+                        serials={state.serialNumbers}
+                        disabled={receiveMut.isSubmitting}
+                        token={token}
+                        locationId={locationId}
+                        onUpdate={(serials) => {
+                          setLineStates((prev) => ({
+                            ...prev,
+                            [line.id]: { ...prev[line.id], serialNumbers: serials },
+                          }));
+                        }}
+                      />
+                    </td>
+                  </tr>
+                )}
+                {/* DOT batch entry panel for tire products */}
+                {(line as any).isTire && !line.isSerialized && isReceivable && state?.checked && state.acceptedQty > 0 && (
+                  <tr className="bg-muted/10">
+                    <td colSpan={12} className="px-4 py-2 border-b border-border">
+                      <DotBatchEntryPanel
+                        requiredCount={state.acceptedQty}
+                        batches={state.dotBatches}
+                        disabled={receiveMut.isSubmitting}
+                        onUpdate={(batches) => {
+                          setLineStates((prev) => ({
+                            ...prev,
+                            [line.id]: { ...prev[line.id], dotBatches: batches },
+                          }));
+                        }}
+                      />
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -1605,7 +2025,7 @@ function ReceivingGrid({
         />
       )}
 
-      {/* ── Post Receipt Button ── */}
+      {/* ── Post Receipt + Close PO Buttons ── */}
       <div className="mt-3 flex items-center gap-3">
         <button
           type="button"
@@ -1621,6 +2041,16 @@ function ReceivingGrid({
             "Post Receipt"
           )}
         </button>
+        {/* Close PO — only when at least one receipt has been posted */}
+        {(po.status === "PARTIALLY_RECEIVED" || po.status === "SUBMITTED") && (
+          <button
+            type="button"
+            onClick={handleClosePO}
+            className="rounded-md border border-warning px-5 py-2.5 text-sm font-medium text-warning hover:bg-warning/10 transition-colors"
+          >
+            Close PO
+          </button>
+        )}
         <span className="text-xs text-muted-foreground">
           {hasAnyErrors
             ? "Fix validation errors before posting"
@@ -1631,6 +2061,137 @@ function ReceivingGrid({
                 : `${selectedCount} lines, ${selectedAccepted} units accepted`}
         </span>
       </div>
+
+      {/* ── Backorder Decision Modal ── */}
+      {showBackorderModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowBackorderModal(false)}>
+          <div className="w-full max-w-xl rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold">Handle Remaining Items</h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {backorderDecisions.length} item(s) not fully delivered. Choose what to do with each:
+                </p>
+              </div>
+              <button onClick={() => setShowBackorderModal(false)} className="rounded p-1 text-muted-foreground hover:bg-muted">
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="max-h-[55vh] space-y-3 overflow-y-auto">
+              {backorderDecisions.map((d, i) => (
+                <div key={d.poLineId} className="rounded-lg border border-border p-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-medium">{d.productName}</span>
+                      {d.sku && <span className="ml-2 text-[10px] font-mono text-muted-foreground">{d.sku}</span>}
+                    </div>
+                    <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                      {d.outstanding} remaining
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    Ordered: {d.orderedQty} · Received: {d.alreadyReceived + d.acceptedThisReceipt} · Cost: ₱{parseFloat(d.unitCost).toLocaleString()}
+                  </div>
+
+                  <div className="mt-2.5 space-y-1.5">
+                    {/* Wait on supplier */}
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name={`bo-decision-${i}`}
+                        checked={d.decision === "backorder"}
+                        onChange={() => setBackorderDecisions((prev) => prev.map((x, j) => j === i ? { ...x, decision: "backorder" } : x))}
+                        className="mt-0.5 h-3.5 w-3.5"
+                      />
+                      <div className="flex-1">
+                        <span className="text-xs font-medium">Wait on supplier</span>
+                        {d.decision === "backorder" && (
+                          <div className="mt-1 flex items-center gap-2">
+                            <span className="text-[10px] text-muted-foreground">Wait until:</span>
+                            <input
+                              type="date"
+                              value={d.waitUntil}
+                              onChange={(e) => setBackorderDecisions((prev) => prev.map((x, j) => j === i ? { ...x, waitUntil: e.target.value } : x))}
+                              className="rounded border border-input px-2 py-0.5 text-xs"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </label>
+
+                    {/* Source from different supplier */}
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name={`bo-decision-${i}`}
+                        checked={d.decision === "resource"}
+                        onChange={() => setBackorderDecisions((prev) => prev.map((x, j) => j === i ? { ...x, decision: "resource" } : x))}
+                        className="mt-0.5 h-3.5 w-3.5"
+                      />
+                      <div className="flex-1">
+                        <span className="text-xs font-medium">Source from different supplier</span>
+                        {d.decision === "resource" && (
+                          <select
+                            value={d.newSupplierId}
+                            onChange={(e) => {
+                              const s = allSuppliers.find((s: any) => s.id === e.target.value);
+                              setBackorderDecisions((prev) => prev.map((x, j) => j === i ? { ...x, newSupplierId: e.target.value, newSupplierName: s?.name ?? "" } : x));
+                            }}
+                            className="mt-1 w-full rounded border border-input px-2 py-1 text-xs"
+                          >
+                            <option value="">Select supplier...</option>
+                            {allSuppliers
+                              .filter((s: any) => s.id !== po.supplierId)
+                              .map((s: any) => (
+                                <option key={s.id} value={s.id}>{s.name}</option>
+                              ))}
+                          </select>
+                        )}
+                      </div>
+                    </label>
+
+                    {/* Cancel remainder */}
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name={`bo-decision-${i}`}
+                        checked={d.decision === "cancel"}
+                        onChange={() => setBackorderDecisions((prev) => prev.map((x, j) => j === i ? { ...x, decision: "cancel" } : x))}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="text-xs font-medium text-red-600">Cancel remainder</span>
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 rounded-lg bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              {backorderDecisions.filter((d) => d.decision === "backorder").length} waiting ·{" "}
+              {backorderDecisions.filter((d) => d.decision === "resource").length} re-sourcing ·{" "}
+              {backorderDecisions.filter((d) => d.decision === "cancel").length} cancelling
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => { setShowBackorderModal(false); setPendingReceiptPayload(null); }}
+                className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleConfirmBackorders}
+                disabled={backorderPosting || backorderDecisions.some((d) => d.decision === "resource" && !d.newSupplierId)}
+                className="flex items-center gap-1.5 rounded-lg bg-success px-4 py-2 text-xs font-medium text-white shadow-sm hover:bg-success/90 disabled:opacity-50"
+              >
+                {backorderPosting && <Loader2 size={12} className="animate-spin" />}
+                Close PO & Create Backorders
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1740,7 +2301,9 @@ function EditableGrid({
                   } ${isLocked ? "opacity-60" : ""}`}
                 >
                   <td className="px-3 py-1.5">
-                    <div className="text-sm font-medium">{line.productName}</div>
+                    <div className="text-sm font-medium">
+                      {(line as any).parentName ? `${(line as any).parentName} (${line.productName})` : line.productName}
+                    </div>
                     <div className="text-[10px] text-muted-foreground font-mono">
                       {line.sku}
                     </div>
@@ -1826,7 +2389,14 @@ function EditableGrid({
                           onChange={(e) =>
                             updateField(line.id, "unitCost", e.target.value)
                           }
-                          className="h-7 w-24 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+                          onBlur={(e) => {
+                            const parsed = parseDiscountExpression(e.target.value);
+                            if (parsed && parsed.netCost.toFixed(2) !== e.target.value) {
+                              updateField(line.id, "unitCost", parsed.netCost.toFixed(2));
+                            }
+                          }}
+                          placeholder="e.g. 5000 -15%"
+                          className="h-7 w-28 rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
                         />
                         {line.isManualCost && (
                           <div className="text-[9px] text-muted-foreground">manual</div>
@@ -1933,7 +2503,9 @@ function ProductSearchInline({ onSelect }: { onSelect: (product: ProductRow) => 
               className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-accent transition-colors"
             >
               <div>
-                <div className="font-medium text-foreground">{p.name}</div>
+                <div className="font-medium text-foreground">
+                  {(p as any).parentName ? `${(p as any).parentName} (${p.name})` : p.name}
+                </div>
                 <div className="text-[10px] text-muted-foreground font-mono">
                   {p.sku}
                 </div>
@@ -2000,7 +2572,9 @@ function ReadOnlyGrid({
                   }`}
                 >
                   <td className="px-3 py-1.5">
-                    <div className="text-sm">{line.productName}</div>
+                    <div className="text-sm">
+                      {(line as any).parentName ? `${(line as any).parentName} (${line.productName})` : line.productName}
+                    </div>
                     <div className="text-[10px] text-muted-foreground font-mono">
                       {line.sku}
                     </div>
@@ -2126,10 +2700,12 @@ function ReceiptHistory({ po, receipts = [] }: { po: PODetail; receipts?: any[] 
                       </tr>
                     </thead>
                     <tbody>
-                      {receipt.lines.map((line, i) => (
+                      {receipt.lines.map((line: any, i: number) => (
                         <tr key={i} className={`border-b border-border last:border-0 ${i % 2 === 0 ? "bg-background" : "bg-muted/20"}`}>
                           <td className="px-4 py-1.5">
-                            <div className="text-xs font-medium">{line.productName}</div>
+                            <div className="text-xs font-medium">
+                              {(line as any).parentName ? `${(line as any).parentName} (${line.productName})` : line.productName}
+                            </div>
                             <div className="flex items-center gap-1.5 mt-px">
                               <span className="font-mono text-[10px] text-muted-foreground">{line.sku}</span>
                             </div>
@@ -2606,5 +3182,278 @@ function Spinner() {
         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
       />
     </svg>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * SERIAL ENTRY PANEL — inline in receiving grid for serialized items
+ * ═══════════════════════════════════════════════════════ */
+
+function SerialEntryPanel({
+  lineId,
+  productId,
+  requiredCount,
+  serials,
+  disabled,
+  token,
+  locationId,
+  onUpdate,
+}: {
+  lineId: string;
+  productId: string;
+  requiredCount: number;
+  serials: { serialNumber: string; dotCode?: string }[];
+  disabled: boolean;
+  token: string;
+  locationId: string;
+  onUpdate: (serials: { serialNumber: string; dotCode?: string }[]) => void;
+}) {
+  const [input, setInput] = useState("");
+  const [validating, setValidating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const isComplete = serials.length >= requiredCount;
+
+  async function addSerial() {
+    const sn = input.trim();
+    if (!sn) return;
+
+    // Check local duplicates
+    if (serials.some((s) => s.serialNumber === sn)) {
+      setError(`"${sn}" already entered`);
+      return;
+    }
+
+    // Validate against DB
+    setValidating(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ exists: boolean; status: string | null }>(
+        `/inventory/serials/validate?serialNumber=${encodeURIComponent(sn)}&productId=${productId}`,
+        { token, locationId },
+      );
+      if (res.exists) {
+        setError(`"${sn}" already exists in system (${res.status})`);
+        setValidating(false);
+        return;
+      }
+    } catch {
+      // If validation fails, allow it — the server will catch duplicates on submit
+    }
+    setValidating(false);
+
+    onUpdate([...serials, { serialNumber: sn }]);
+    setInput("");
+    setError(null);
+    inputRef.current?.focus();
+  }
+
+  function removeSerial(index: number) {
+    onUpdate(serials.filter((_, i) => i !== index));
+  }
+
+  return (
+    <div className="max-w-md">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Serial Numbers
+        </span>
+        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+          isComplete ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+        }`}>
+          {serials.length} / {requiredCount}
+        </span>
+      </div>
+
+      {!isComplete && (
+        <div className="flex gap-1.5">
+          <input
+            ref={inputRef}
+            type="text"
+            value={input}
+            onChange={(e) => { setInput(e.target.value); setError(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSerial(); } }}
+            disabled={disabled || isComplete}
+            placeholder="Scan or type serial number..."
+            className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={addSerial}
+            disabled={disabled || !input.trim() || validating}
+            className="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {validating ? "..." : "Add"}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <p className="mt-1 text-[10px] text-destructive">{error}</p>
+      )}
+
+      {serials.length > 0 && (
+        <div className="mt-1.5 space-y-0.5">
+          {serials.map((s, i) => (
+            <div key={i} className="flex items-center justify-between rounded bg-muted/50 px-2 py-0.5 text-xs">
+              <span className="font-mono text-foreground">{s.serialNumber}</span>
+              <button
+                type="button"
+                onClick={() => removeSerial(i)}
+                disabled={disabled}
+                className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
+ * DOT BATCH ENTRY PANEL — for tire products during receiving
+ * ═══════════════════════════════════════════════════════ */
+
+function DotBatchEntryPanel({
+  requiredCount,
+  batches,
+  disabled,
+  onUpdate,
+}: {
+  requiredCount: number;
+  batches: { dotCode: string; quantity: number }[];
+  disabled: boolean;
+  onUpdate: (batches: { dotCode: string; quantity: number }[]) => void;
+}) {
+  const [dotInput, setDotInput] = useState("");
+  const [qtyInput, setQtyInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const allocated = batches.reduce((s, b) => s + b.quantity, 0);
+  const remaining = requiredCount - allocated;
+  const isComplete = remaining <= 0;
+
+  function parseDotLocal(code: string) {
+    const digits = code.replace(/[^0-9]/g, "").slice(-4);
+    if (!/^\d{4}$/.test(digits)) return null;
+    const wk = parseInt(digits.slice(0, 2), 10);
+    const yr = 2000 + parseInt(digits.slice(2, 4), 10);
+    if (wk < 1 || wk > 53) return null;
+    const now = new Date();
+    const ageMonths = Math.max(0, (now.getFullYear() - yr) * 12 + now.getMonth() - (wk <= 26 ? 5 : 11));
+    const expired = ageMonths >= 72;
+    const warning = ageMonths >= 60;
+    const dateStr = `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Math.floor((wk - 1) / 4.33)]} ${yr}`;
+    return { digits, wk, yr, ageMonths, expired, warning, dateStr };
+  }
+
+  function addBatch() {
+    const code = dotInput.trim();
+    const qty = parseInt(qtyInput, 10);
+    if (!code) { setError("Enter a DOT code"); return; }
+    if (!qty || qty < 1) { setError("Quantity must be at least 1"); return; }
+    if (qty > remaining) { setError(`Only ${remaining} units remaining`); return; }
+
+    const parsed = parseDotLocal(code);
+    if (!parsed) { setError("Invalid DOT code — need 4 digits (WWYY)"); return; }
+    if (parsed.expired) { setError(`DOT ${parsed.digits} is expired (${(parsed.ageMonths / 12).toFixed(1)} years old). Cannot receive.`); return; }
+
+    onUpdate([...batches, { dotCode: code, quantity: qty }]);
+    setDotInput("");
+    setQtyInput("");
+    setError(null);
+  }
+
+  function removeBatch(index: number) {
+    onUpdate(batches.filter((_, i) => i !== index));
+  }
+
+  return (
+    <div className="max-w-lg">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          🛞 DOT Batches
+        </span>
+        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+          isComplete ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+        }`}>
+          {allocated} / {requiredCount} units
+        </span>
+      </div>
+
+      {!isComplete && (
+        <div className="flex gap-1.5 items-end">
+          <div className="flex-1">
+            <label className="text-[10px] text-muted-foreground">DOT Code</label>
+            <input
+              type="text"
+              value={dotInput}
+              onChange={(e) => { setDotInput(e.target.value); setError(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addBatch(); } }}
+              disabled={disabled}
+              placeholder="e.g. DOT 1K2 2FYC8B 2825"
+              className="mt-0.5 w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 disabled:opacity-50"
+              autoFocus
+            />
+          </div>
+          <div className="w-16">
+            <label className="text-[10px] text-muted-foreground">Qty</label>
+            <input
+              type="number"
+              min={1}
+              max={remaining}
+              value={qtyInput}
+              onChange={(e) => setQtyInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addBatch(); } }}
+              disabled={disabled}
+              className="mt-0.5 w-full rounded border border-border bg-background px-2 py-1 text-xs text-right outline-none focus:border-primary disabled:opacity-50"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={addBatch}
+            disabled={disabled || !dotInput.trim() || !qtyInput}
+            className="rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            Add
+          </button>
+        </div>
+      )}
+
+      {error && <p className="mt-1 text-[10px] text-destructive">{error}</p>}
+
+      {batches.length > 0 && (
+        <div className="mt-1.5 space-y-0.5">
+          {batches.map((b, i) => {
+            const parsed = parseDotLocal(b.dotCode);
+            return (
+              <div key={i} className="flex items-center justify-between rounded bg-muted/50 px-2 py-0.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-foreground">{b.dotCode}</span>
+                  <span className="text-muted-foreground">×{b.quantity}</span>
+                  {parsed && (
+                    <span className={`text-[10px] ${parsed.warning ? "text-amber-600 font-medium" : "text-muted-foreground"}`}>
+                      {parsed.dateStr} ({(parsed.ageMonths / 12).toFixed(1)}y)
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeBatch(i)}
+                  disabled={disabled}
+                  className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

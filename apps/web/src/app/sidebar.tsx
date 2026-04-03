@@ -78,6 +78,8 @@ const NAV_TOP: NavEntry[] = [
       { label: "Sales by Item", href: "/reports/sales-by-item", match: /^\/reports\/sales-by-item/ },
       { label: "Sales by Category", href: "/reports/sales-by-category", match: /^\/reports\/sales-by-category/ },
       { label: "Sales by Employee", href: "/reports/sales-by-employee", match: /^\/reports\/sales-by-employee/ },
+      { label: "Sales by Payment", href: "/reports/sales-by-payment", match: /^\/reports\/sales-by-payment/ },
+      { label: "Discount Analysis", href: "/reports/discount-analysis", match: /^\/reports\/discount-analysis/ },
       { label: "Receipts Log", href: "/reports/receipts", match: /^\/reports\/receipts/ },
       { label: "Inventory Valuation", href: "/reports/inventory-valuation", match: /^\/reports\/inventory-valuation/ },
       { label: "Stock Movement", href: "/reports/stock-movement", match: /^\/reports\/stock-movement/ },
@@ -113,10 +115,10 @@ const NAV_TOP: NavEntry[] = [
       { label: "Barcode Printing", href: "/inventory/barcode-printing", match: /^\/inventory\/barcode-printing/ },
       { label: "Serial Lookup", href: "/inventory/serials", match: /^\/inventory\/serials$/ },
       { label: "Tire Age Report", href: "/inventory/serials/tire-age", match: /^\/inventory\/serials\/tire-age/ },
-      { label: "Import Items", href: "/inventory/import", match: /^\/inventory\/import/ },
+      { label: "Import Center", href: "/inventory/import", match: /^\/inventory\/import|^\/inventory\/import-sales/ },
       { label: "Tags / Fitment", href: "/inventory/tags", match: /^\/inventory\/tags/ },
+      { label: "Fitment Manager", href: "/inventory/fitments", match: /^\/inventory\/fitments/ },
       { label: "Price Management", href: "/inventory/pricing", match: /^\/inventory\/pricing/ },
-      { label: "Inventory Counts", href: "/inventory/counts", match: /^\/inventory\/counts/ },
     ],
   },
   {
@@ -136,6 +138,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Supplier Returns", href: "/procurement/supplier-returns", match: /^\/procurement\/supplier-returns/ },
       { label: "Inventory History", href: "/procurement/inventory-history", match: /^\/procurement\/inventory-history/ },
       { label: "Stock Monitor", href: "/procurement/stock-monitor", match: /^\/procurement\/stock-monitor/ },
+      { label: "Stock Velocity", href: "/procurement/stock-velocity", match: /^\/procurement\/stock-velocity/ },
       { label: "Suggested Orders", href: "/procurement/suggested-orders", match: /^\/procurement\/suggested-orders/ },
     ],
   },
@@ -233,6 +236,7 @@ const NAV_BOTTOM: NavEntry[] = [
       { label: "Company Profile", href: "/settings/company", match: /^\/settings\/company/ },
       { label: "POS Devices", href: "/settings/devices", match: /^\/settings\/devices/, permission: "bo.manage_pos_devices" },
       { label: "Roles & Permissions", href: "/settings/roles", match: /^\/settings\/roles/, permission: "bo.manage_employees" },
+      { label: "Audit Log", href: "/settings/audit-log", match: /^\/settings\/audit-log/ },
     ],
   },
 ];
@@ -326,10 +330,10 @@ export function Sidebar() {
         {!isCollapsed && (
           <div className="flex flex-col overflow-hidden">
             <span className="truncate text-[13px] font-semibold leading-none tracking-tight text-sidebar-foreground-active">
-              Apex Auto Parts
+              CBROS Autoparts
             </span>
             <span className="mt-0.5 text-[10px] leading-none text-sidebar-muted">
-              Automotive ERP
+              Genuine Autoparts &amp; Accessories
             </span>
           </div>
         )}

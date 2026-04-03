@@ -3,6 +3,8 @@ import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-nati
 import { BottomSheet } from '@/components/ui';
 import { apiFetch } from '@/services/api-client';
 import { useNetworkStatus } from '@/hooks/use-network-status';
+import { usePrinter } from '@/hardware/printer/context';
+import { buildShelfLabel, zplToBytes } from '@/hardware/printer/zpl-label-builder';
 import { colors, textStyles, spacing } from '@/theme';
 import { useTheme } from '@/theme/ThemeContext';
 import { storage } from '@/storage/mmkv';
@@ -37,6 +39,7 @@ export function ProductDetailSheet({ product, visible, onClose, onAddToCart }: P
   useTheme(); // Subscribe to theme changes
   const styles = createStyles();
   const { isOnline } = useNetworkStatus();
+  const printer = usePrinter();
   const [stockData, setStockData] = useState<StockData | null>(null);
   const [loading, setLoading] = useState(false);
   const currentLocationId = storage.getString(KEYS.AUTH_LOCATION_ID) || '';
@@ -138,14 +141,42 @@ export function ProductDetailSheet({ product, visible, onClose, onAddToCart }: P
         </View>
       ) : null}
 
-      {/* Add to Cart */}
-      <Pressable
-        style={styles.addButton}
-        onPress={handleAdd}
-        android_ripple={{ color: 'rgba(255,255,255,0.2)' }}
-      >
-        <Text style={styles.addButtonText}>Add to Cart</Text>
-      </Pressable>
+      {/* Action buttons */}
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Pressable
+          style={[styles.addButton, { flex: 1 }]}
+          onPress={handleAdd}
+          android_ripple={{ color: 'rgba(255,255,255,0.2)' }}
+        >
+          <Text style={styles.addButtonText}>Add to Cart</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.addButton, { flex: 0, paddingHorizontal: 16, backgroundColor: colors.bg.elevated }]}
+          onPress={async () => {
+            if (!product) return;
+            try {
+              const zpl = buildShelfLabel({
+                itemName: product.name,
+                barcode: product.barcode,
+              });
+              const data = zplToBytes(zpl);
+              const result = await printer.printRaw(data);
+              if (!result.success) {
+                // Fallback: try server-side print
+                await apiFetch('/printing/zpl/send', {
+                  method: 'POST',
+                  body: JSON.stringify({ zpl }),
+                });
+              }
+            } catch {
+              // Silent fail — label printing is best-effort
+            }
+          }}
+          android_ripple={{ color: 'rgba(255,255,255,0.2)' }}
+        >
+          <Text style={[styles.addButtonText, { color: colors.text.primary }]}>🏷️</Text>
+        </Pressable>
+      </View>
     </BottomSheet>
   );
 }
