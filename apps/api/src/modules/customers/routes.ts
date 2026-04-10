@@ -28,10 +28,12 @@ import {
   getSOAInvoices,
   getAgingReport,
   getSOA,
+  getSOAById,
   getARSummary,
   generateSOA,
   listSOARecords,
   updateSOAStatus,
+  recomputeSOAStatus,
 } from "./service";
 
 function assertArRole(role: string) {
@@ -98,6 +100,38 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.send(result);
     } catch (err: any) {
       return reply.status(404).send({ error: err.message });
+    }
+  });
+
+  // Historical SOA reprint — returns the exact line items that were billed
+  // under this SOA number, not a date-range re-query of the customer ledger.
+  // Fixes the Lucky Se7en reprint bug where SOA-0161 and SOA-0162 both
+  // returned the customer's full ledger in the overlapping date range.
+  app.get("/reports/soa-by-id/:soaId", async (request, reply) => {
+    const { soaId } = request.params as { soaId: string };
+    const { orgId } = request.storeContext!;
+    try {
+      const result = await getSOAById(soaId, orgId);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(404).send({ error: err.message });
+    }
+  });
+
+  // Admin repair — recompute a single SOA's status from real allocations.
+  // Used by the data-repair script after deploying the code fix. Idempotent.
+  app.post("/soa/:soaId/recompute", async (request, reply) => {
+    const { role } = request.user;
+    assertArRole(role);
+    const { soaId } = request.params as { soaId: string };
+    const { orgId } = request.storeContext!;
+    try {
+      const result = await db.transaction(async (tx) => {
+        return await recomputeSOAStatus(tx, orgId, soaId);
+      });
+      return reply.send({ success: true, result });
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
     }
   });
 

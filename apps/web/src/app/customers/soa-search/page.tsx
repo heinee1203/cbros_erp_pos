@@ -68,7 +68,11 @@ export default function SOASearchPage() {
 
   const handleReprint = async (r: SOARecord) => {
     try {
-      const soaRes = await apiFetch<any>(`/customers/reports/soa/${r.customerId}?from=${r.dateFrom}&to=${r.dateTo}`, { token, locationId });
+      // Historical reprint reads the stored soa_line_items snapshot — see
+      // customers/routes.ts /reports/soa-by-id/:soaId. The old date-range path
+      // produced Lucky Se7en's wrong ₱17,361 total because two SOAs with
+      // overlapping periods both returned the customer's full ledger slice.
+      const soaRes = await apiFetch<any>(`/customers/reports/soa-by-id/${r.id}`, { token, locationId });
       const html = buildSOAHtml({ customer: soaRes.customer, transactions: soaRes.transactions, openingBalance: soaRes.openingBalance, closingBalance: soaRes.closingBalance, from: r.dateFrom, to: r.dateTo, soaNumber: r.soaNumber });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }

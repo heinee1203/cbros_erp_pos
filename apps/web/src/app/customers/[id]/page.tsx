@@ -392,18 +392,12 @@ export default function CustomerDetailPage() {
             : undefined,
         }),
       });
-      // Mark SOAs based on payment coverage
-      if (paySelectedSoas.size > 0) {
-        for (const soaId of paySelectedSoas) {
-          const soa = paySoaList.find((s: any) => s.id === soaId);
-          if (!soa) continue;
-          const soaPayable = soa.totalPayable || 0;
-          const prevPaid = soa.paidAmount || 0;
-          const newPaidTotal = prevPaid + payTotal;
-          const status = newPaidTotal >= soaPayable ? "PAID" : "PARTIAL";
-          try { await apiFetch(`/customers/${id}/soa/${soaId}`, { method: "PATCH", body: JSON.stringify({ status, paidAmount: Math.min(newPaidTotal, soaPayable).toFixed(2) }), token, locationId }); } catch {}
-        }
-      }
+      // SOA status is now recomputed server-side inside recordPayment — reading
+      // real ar_payment_allocations instead of trusting client math. The old loop
+      // here naively added the full payTotal to every selected SOA's paidAmount,
+      // which caused SOA-0161 to be marked PAID even though ₱300 was unpaid.
+      // DO NOT PATCH status from the client. If you need to force a state
+      // transition (SENT / VOID only), use handleStatusChange.
       const selectedSoaDetails = paySoaList.filter((s) => paySelectedSoas.has(s.id)).map((s) => {
         const soaTotal = s.totalPayable;
         const prevPaid = s.paidAmount ?? 0;
@@ -2171,7 +2165,11 @@ function SOAHistoryTab({ customerId, token, locationId }: { customerId: string; 
 
   const handleReprint = async (r: any) => {
     try {
-      const soaRes = await apiFetch<any>(`/customers/reports/soa/${customerId}?from=${r.dateFrom}&to=${r.dateTo}`, { token, locationId });
+      // Historical reprint — use the SOA's stored line items (soa_line_items),
+      // NOT a date-range re-query of the customer ledger. Fixes the Lucky
+      // Se7en bug where two overlapping-date SOAs both pulled in the same
+      // ledger slice on reprint.
+      const soaRes = await apiFetch<any>(`/customers/reports/soa-by-id/${r.id}`, { token, locationId });
       const html = buildSOAHtml({ customer: soaRes.customer, transactions: soaRes.transactions, openingBalance: soaRes.openingBalance, closingBalance: soaRes.closingBalance, from: r.dateFrom, to: r.dateTo, soaNumber: r.soaNumber });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
@@ -2329,19 +2327,19 @@ function SOAHistoryTab({ customerId, token, locationId }: { customerId: string; 
                         <button onClick={() => { handlePrintCollectionSummary(r); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-accent">Print Collection Summary</button>
                       )}
                       <hr className="my-1 border-border/50" />
-                      {/* GENERATED: Mark Sent, Mark Paid, Void */}
+                      {/* GENERATED: Mark Sent, Void. To mark an SOA paid, record a
+                          payment through the Pay button — status is derived from real
+                          ar_payment_allocations, never set manually. */}
                       {r.status === "GENERATED" && (
                         <>
                           <button onClick={() => { handleStatusChange(r.id, "SENT"); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-accent">Mark Sent</button>
-                          <button onClick={() => { handleStatusChange(r.id, "PAID", r.totalPayable?.toString()); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-left text-[11px] text-emerald-600 hover:bg-accent">Mark Paid</button>
                           <button onClick={() => { if (confirm("Void this SOA?")) handleStatusChange(r.id, "VOID"); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-left text-[11px] text-red-600 hover:bg-accent">Void</button>
                         </>
                       )}
-                      {/* SENT: Undo Sent, Mark Paid, Void */}
+                      {/* SENT: Undo Sent, Void */}
                       {r.status === "SENT" && (
                         <>
                           <button onClick={() => { handleStatusChange(r.id, "GENERATED"); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-accent">Undo Sent</button>
-                          <button onClick={() => { handleStatusChange(r.id, "PAID", r.totalPayable?.toString()); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-left text-[11px] text-emerald-600 hover:bg-accent">Mark Paid</button>
                           <button onClick={() => { if (confirm("Void this SOA?")) handleStatusChange(r.id, "VOID"); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-left text-[11px] text-red-600 hover:bg-accent">Void</button>
                         </>
                       )}

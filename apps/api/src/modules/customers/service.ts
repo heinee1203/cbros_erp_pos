@@ -333,13 +333,117 @@ export async function softDeleteCustomer(customerId: string, orgId: string) {
  * FIFO allocate a payment (or credit note) against unpaid charges.
  * Oldest unpaid charges get paid first.
  */
+/**
+ * Recompute an SOA's payment status from real allocations on its line items.
+ * Single source of truth — never trust client-supplied paidAmount.
+ *
+ * Status rules:
+ *   - total_allocated >= total_payable AND all CHARGE lines fully paid → PAID
+ *   - total_allocated > 0                                              → PARTIAL
+ *   - total_allocated == 0                                             → keep existing
+ *                                                                        GENERATED/SENT/VOID
+ *
+ * VOID status is never overwritten.
+ */
+export async function recomputeSOAStatus(
+  tx: any,
+  orgId: string,
+  soaId: string,
+): Promise<{ soaId: string; prevStatus: string; newStatus: string; realAllocated: number; totalPayable: number; unpaidCharges: number } | null> {
+  const [soa] = (await tx.execute(sql`
+    SELECT id, status, total_payable::numeric AS total_payable,
+           COALESCE(paid_amount, 0)::numeric AS stored_paid
+    FROM soa_records
+    WHERE id = ${soaId} AND org_id = ${orgId}
+    FOR UPDATE
+  `)) as any[];
+  if (!soa) return null;
+
+  // VOID is terminal — never overwrite
+  if (soa.status === "VOID") return null;
+
+  // Real allocation = sum of ar_payment_allocations on this SOA's line items
+  const [allocRow] = (await tx.execute(sql`
+    SELECT COALESCE(SUM(pa.allocated_amount)::numeric, 0) AS real_allocated
+    FROM soa_line_items sli
+    JOIN ar_payment_allocations pa ON pa.charge_transaction_id = sli.transaction_id
+    WHERE sli.soa_id = ${soaId}
+  `)) as any[];
+  const realAllocated = parseFloat(allocRow?.real_allocated ?? "0");
+  const totalPayable = parseFloat(soa.total_payable);
+
+  // Count unpaid CHARGE lines (a CHARGE is unpaid if allocations < its amount)
+  const [unpaidRow] = (await tx.execute(sql`
+    SELECT COUNT(*)::int AS n
+    FROM soa_line_items sli
+    JOIN customer_transactions ct ON ct.id = sli.transaction_id
+    LEFT JOIN (
+      SELECT charge_transaction_id, SUM(allocated_amount)::numeric AS allocated
+      FROM ar_payment_allocations
+      GROUP BY charge_transaction_id
+    ) pa ON pa.charge_transaction_id = ct.id
+    WHERE sli.soa_id = ${soaId}
+      AND ct.type = 'CHARGE'
+      AND ct.amount::numeric > COALESCE(pa.allocated, 0)
+  `)) as any[];
+  const unpaidCharges = parseInt(unpaidRow?.n ?? "0", 10);
+
+  let newStatus: string;
+  if (realAllocated >= totalPayable - 0.005 && unpaidCharges === 0) {
+    newStatus = "PAID";
+  } else if (realAllocated > 0.005) {
+    newStatus = "PARTIAL";
+  } else {
+    // No allocations — preserve existing non-payment state (GENERATED/SENT)
+    newStatus = soa.status === "PAID" || soa.status === "PARTIAL" ? "GENERATED" : soa.status;
+  }
+
+  const storedPaid = Math.min(realAllocated, totalPayable).toFixed(2);
+
+  await tx.execute(sql`
+    UPDATE soa_records
+    SET status = ${newStatus}, paid_amount = ${storedPaid}
+    WHERE id = ${soaId} AND org_id = ${orgId}
+  `);
+
+  return {
+    soaId,
+    prevStatus: soa.status,
+    newStatus,
+    realAllocated,
+    totalPayable,
+    unpaidCharges,
+  };
+}
+
+/**
+ * Recompute status for every SOA that owns any of the given charge transactions.
+ * Used after a payment is allocated so all affected SOAs stay consistent.
+ */
+export async function recomputeSOAStatusForCharges(
+  tx: any,
+  orgId: string,
+  chargeTransactionIds: string[],
+): Promise<void> {
+  if (chargeTransactionIds.length === 0) return;
+  const affected = (await tx.execute(sql`
+    SELECT DISTINCT sli.soa_id AS id
+    FROM soa_line_items sli
+    WHERE sli.transaction_id = ANY(${chargeTransactionIds}::uuid[])
+  `)) as any[];
+  for (const row of affected) {
+    await recomputeSOAStatus(tx, orgId, row.id);
+  }
+}
+
 async function allocatePaymentFIFO(
   tx: any,
   orgId: string,
   customerId: string,
   paymentTxnId: string,
   paymentAmount: number,
-) {
+): Promise<string[]> {
+  const touched: string[] = [];
   // Get all CHARGE transactions for this customer, oldest first
   const charges = await tx
     .select({ id: customerTransactions.id, amount: customerTransactions.amount })
@@ -371,8 +475,10 @@ async function allocatePaymentFIFO(
       chargeTransactionId: charge.id,
       allocatedAmount: alloc.toFixed(2),
     });
+    touched.push(charge.id);
     remaining -= alloc;
   }
+  return touched;
 }
 
 /**
@@ -472,23 +578,26 @@ export async function recordMultiCustomerPayment(
         paymentLines,
       }).returning();
 
-      // FIFO allocate
-      try { await allocatePaymentFIFO(tx, orgId, alloc.customerId, txn.id, allocAmount); } catch {}
+      // FIFO allocate, collecting the exact charges this payment touched
+      let touchedCharges: string[] = [];
+      try {
+        touchedCharges = await allocatePaymentFIFO(tx, orgId, alloc.customerId, txn.id, allocAmount);
+      } catch (err) {
+        console.error("[MULTI-PAY] allocation failed", err);
+      }
 
-      // Update SOA statuses
-      if (alloc.soaIds) {
-        for (const soaId of alloc.soaIds) {
-          try {
-            const [soa] = await tx.execute(sql`SELECT total_payable, paid_amount FROM soa_records WHERE id = ${soaId}`) as any[];
-            if (soa) {
-              const soaPayable = parseFloat(soa.total_payable);
-              const prevPaid = parseFloat(soa.paid_amount || "0");
-              const newPaid = prevPaid + allocAmount;
-              const status = newPaid >= soaPayable ? "PAID" : "PARTIAL";
-              await tx.execute(sql`UPDATE soa_records SET status = ${status}, paid_amount = ${Math.min(newPaid, soaPayable).toFixed(2)} WHERE id = ${soaId}`);
-            }
-          } catch {}
+      // Recompute status for every SOA whose line items were actually touched.
+      // Union with the client-supplied soaIds as a safety net — recompute is
+      // idempotent and reads real allocations, so there's no double-counting.
+      try {
+        await recomputeSOAStatusForCharges(tx, orgId, touchedCharges);
+        if (alloc.soaIds) {
+          for (const soaId of alloc.soaIds) {
+            await recomputeSOAStatus(tx, orgId, soaId);
+          }
         }
+      } catch (err) {
+        console.error("[MULTI-PAY] status recompute failed", err);
       }
 
       results.push({ customerId: alloc.customerId, customerName: custRow.name, paymentNumber, amount: allocAmount, newBalance });
@@ -573,6 +682,7 @@ export async function recordPayment(
       .returning();
 
     // Allocate payment to charges — explicit allocations if provided, otherwise FIFO
+    let touchedCharges: string[] = [];
     try {
       const explicitAllocs = input.allocations;
       if (explicitAllocs && explicitAllocs.length > 0) {
@@ -585,14 +695,24 @@ export async function recordPayment(
             chargeTransactionId: alloc.chargeTransactionId,
             allocatedAmount: alloc.amount.toFixed(2),
           });
+          touchedCharges.push(alloc.chargeTransactionId);
         }
       } else {
         // Auto-allocate using FIFO
-        await allocatePaymentFIFO(tx, orgId, customerId, transaction.id, paymentAmount);
+        touchedCharges = await allocatePaymentFIFO(tx, orgId, customerId, transaction.id, paymentAmount);
       }
     } catch (allocErr) {
       // Non-critical — payment is still recorded even if allocation fails
       console.error("[ALLOC] allocation failed:", allocErr);
+    }
+
+    // Recompute status for every SOA whose line items were touched by this payment.
+    // Single source of truth — reads real ar_payment_allocations, never trusts
+    // client-supplied paidAmount.
+    try {
+      await recomputeSOAStatusForCharges(tx, orgId, touchedCharges);
+    } catch (recomputeErr) {
+      console.error("[ALLOC] status recompute failed:", recomputeErr);
     }
 
     return transaction;
@@ -1218,6 +1338,95 @@ export async function getSOAInvoices(soaId: string, orgId: string) {
 }
 
 /**
+ * Fetch an SOA reprint payload by soa_id, using the SOA's own stored
+ * soa_line_items (NOT the customer's current transactions in a date range).
+ *
+ * This is the historical snapshot — it returns exactly the invoices that were
+ * billed under this SOA number when it was generated. Fixes the Lucky Se7en
+ * reprint bug where the date-range endpoint re-queried customer_transactions
+ * and pulled in unrelated invoices from other SOAs covering overlapping dates.
+ *
+ * Return shape mirrors getSOA() so existing reprint flows can swap in.
+ */
+export async function getSOAById(soaId: string, orgId: string) {
+  const [soa] = (await db.execute(sql`
+    SELECT id, customer_id, soa_number, date_from, date_to, generated_at,
+           total_charges, total_credits, total_payable, paid_amount,
+           transaction_count, status
+    FROM soa_records
+    WHERE id = ${soaId} AND org_id = ${orgId}
+  `)) as any[];
+  if (!soa) throw new Error("SOA not found");
+
+  const [customer] = await db
+    .select()
+    .from(customers)
+    .where(and(eq(customers.id, soa.customer_id), eq(customers.orgId, orgId)))
+    .limit(1);
+  if (!customer) throw new Error("Customer not found");
+
+  // Historical transactions = rows referenced by soa_line_items, nothing else.
+  const transactions = (await db.execute(sql`
+    SELECT ct.id, ct.type, ct.amount, ct.balance_after, ct.reference_number,
+           ct.notes, ct.recorded_at, ct.payment_number, ct.payment_method
+    FROM soa_line_items sli
+    JOIN customer_transactions ct ON ct.id = sli.transaction_id
+    WHERE sli.soa_id = ${soaId} AND ct.org_id = ${orgId}
+    ORDER BY ct.recorded_at ASC, ct.id ASC
+  `)) as any[];
+
+  // Opening balance = balance_after of the last transaction strictly before
+  // the earliest line item on this SOA. Keeps continuity with historical data.
+  let openingBalance = 0;
+  if (transactions.length > 0) {
+    const earliest = transactions[0].recorded_at;
+    const earliestId = transactions[0].id;
+    const [lastBefore] = (await db.execute(sql`
+      SELECT balance_after FROM customer_transactions
+      WHERE customer_id = ${soa.customer_id}
+        AND org_id = ${orgId}
+        AND (recorded_at < ${earliest}
+          OR (recorded_at = ${earliest} AND id < ${earliestId}))
+      ORDER BY recorded_at DESC, id DESC
+      LIMIT 1
+    `)) as any[];
+    openingBalance = lastBefore ? parseFloat(lastBefore.balance_after) : 0;
+  }
+
+  const closingBalance =
+    transactions.length > 0
+      ? parseFloat(transactions[transactions.length - 1].balance_after)
+      : openingBalance;
+
+  return {
+    customer,
+    openingBalance,
+    transactions: transactions.map((t: any) => ({
+      id: t.id,
+      type: t.type,
+      amount: t.amount,
+      balanceAfter: t.balance_after,
+      referenceNumber: t.reference_number,
+      notes: t.notes,
+      recordedAt: t.recorded_at,
+      paymentNumber: t.payment_number,
+      paymentMethod: t.payment_method,
+    })),
+    closingBalance,
+    from: soa.date_from,
+    to: soa.date_to,
+    soaNumber: soa.soa_number,
+    soaStatus: soa.status,
+    soaTotals: {
+      totalCharges: parseFloat(soa.total_charges),
+      totalCredits: parseFloat(soa.total_credits),
+      totalPayable: parseFloat(soa.total_payable),
+      paidAmount: parseFloat(soa.paid_amount ?? "0"),
+    },
+  };
+}
+
+/**
  * List SOA records for a customer.
  */
 export async function listSOARecords(customerId: string, orgId: string) {
@@ -1244,24 +1453,51 @@ export async function listSOARecords(customerId: string, orgId: string) {
 }
 
 /**
- * Update SOA status (SENT, PAID, VOID).
+ * Update SOA status (SENT, GENERATED, VOID only).
+ *
+ * PAID / PARTIAL can NOT be set by clients — they are derived from real
+ * ar_payment_allocations by recomputeSOAStatus(), which is auto-invoked
+ * whenever a payment is recorded or allocated. If a caller passes PAID or
+ * PARTIAL, we ignore the value and recompute from actual allocations so the
+ * DB can never drift from the source of truth.
+ *
+ * This guard closes the root cause of the Lucky Se7en SOA-0161 false-PAID
+ * bug: the old web client-side loop passed the full payment amount to every
+ * SOA in a multi-SOA payment, which marked both PAID even though only part
+ * of the payment actually covered each SOA's line items.
  */
-export async function updateSOAStatus(soaId: string, orgId: string, status: string, paidAmount?: string) {
+export async function updateSOAStatus(
+  soaId: string,
+  orgId: string,
+  status: string,
+  _paidAmount?: string,
+) {
+  const allowedManualStates = new Set(["SENT", "GENERATED", "VOID"]);
+
+  // Client-supplied PAID / PARTIAL is ignored — recompute from real allocations.
+  if (!allowedManualStates.has(status)) {
+    return await db.transaction(async (tx) => {
+      const result = await recomputeSOAStatus(tx, orgId, soaId);
+      return { success: true, recomputed: result };
+    });
+  }
+
   if (status === "VOID") {
     await db.execute(sql`
       UPDATE customer_transactions SET billed = false, billed_soa_id = NULL
       WHERE billed_soa_id = ${soaId}
     `);
-  }
-  if (paidAmount !== undefined) {
     await db.execute(sql`
-      UPDATE soa_records SET status = ${status}, paid_amount = ${paidAmount} WHERE id = ${soaId} AND org_id = ${orgId}
+      UPDATE soa_records SET status = 'VOID', paid_amount = 0
+      WHERE id = ${soaId} AND org_id = ${orgId}
     `);
-  } else {
-    await db.execute(sql`
-      UPDATE soa_records SET status = ${status} WHERE id = ${soaId} AND org_id = ${orgId}
-    `);
+    return { success: true };
   }
+
+  // SENT / GENERATED — pure state transition, do not touch paid_amount.
+  await db.execute(sql`
+    UPDATE soa_records SET status = ${status} WHERE id = ${soaId} AND org_id = ${orgId}
+  `);
   return { success: true };
 }
 

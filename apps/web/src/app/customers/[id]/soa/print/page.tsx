@@ -72,7 +72,9 @@ const BLANK = "\u00A0\u00A0\u00A0______________________________";
 export default function SOAPrintPage() {
   const { id } = useParams() as { id: string };
   const searchParams = useSearchParams();
-  // Default to full range (Jan 2025 – now) so transactions are always found
+  // Preferred: historical snapshot by soaId (reads stored soa_line_items).
+  // Fallback: date range re-query for ad-hoc statements that aren't persisted.
+  const soaId = searchParams.get("soaId");
   const from = searchParams.get("from") || "2025-01-01";
   const to = searchParams.get("to") || new Date().toISOString().slice(0, 10);
 
@@ -83,12 +85,15 @@ export default function SOAPrintPage() {
 
   useEffect(() => {
     if (!authLoading && token && locationId && id) {
-      apiFetch<SOAData>(`/customers/reports/soa/${id}?from=${from}&to=${to}`, { token, locationId })
+      const url = soaId
+        ? `/customers/reports/soa-by-id/${soaId}`
+        : `/customers/reports/soa/${id}?from=${from}&to=${to}`;
+      apiFetch<SOAData>(url, { token, locationId })
         .then((res) => setData(res))
         .catch((err) => setError(err?.message || "Failed to load"))
         .finally(() => setLoading(false));
     }
-  }, [authLoading, token, locationId, id, from, to]);
+  }, [authLoading, token, locationId, id, soaId, from, to]);
 
   useEffect(() => {
     if (data && !loading) {

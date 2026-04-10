@@ -309,38 +309,40 @@ function StockLevelsInner() {
 
       {/* ── Summary Strip ── */}
       {viewMode === "product" && productSummary && (
-        <div className="grid grid-cols-5 border-b border-border bg-muted/30">
-          {([
-            { label: "Products", value: productSummary.totalProducts.toLocaleString() },
-            { label: "In Stock", value: productSummary.inStock.toLocaleString(), color: "text-success" },
-            { label: "Low Stock", value: productSummary.lowStock.toLocaleString(), color: "text-warning" },
-            { label: "Out of Stock", value: productSummary.outOfStock.toLocaleString(), color: "text-destructive" },
-            { label: "Below Reorder", value: productSummary.belowReorder.toLocaleString(), color: "text-orange-500" },
-          ]).map((card) => (
-            <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-3">
-              <div className={`text-lg font-bold tabular-nums ${card.color || "text-foreground"}`}>
-                {card.value}
-              </div>
-              <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{card.label}</div>
-            </div>
-          ))}
-        </div>
-        {productSummary.totalCostValue > 0 && (
-          <div className="grid grid-cols-3 border-b border-border bg-muted/20">
+        <>
+          <div className="grid grid-cols-5 border-b border-border bg-muted/30">
             {([
-              { label: "Total Cost Value", value: `₱${productSummary.totalCostValue.toLocaleString("en-PH", { maximumFractionDigits: 0 })}` },
-              { label: "Total Sell Value", value: `₱${productSummary.totalSellValue.toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-primary" },
-              { label: "Potential Margin", value: `₱${(productSummary.totalSellValue - productSummary.totalCostValue).toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-success" },
+              { label: "Products", value: productSummary.totalProducts.toLocaleString() },
+              { label: "In Stock", value: productSummary.inStock.toLocaleString(), color: "text-success" },
+              { label: "Low Stock", value: productSummary.lowStock.toLocaleString(), color: "text-warning" },
+              { label: "Out of Stock", value: productSummary.outOfStock.toLocaleString(), color: "text-destructive" },
+              { label: "Below Reorder", value: productSummary.belowReorder.toLocaleString(), color: "text-orange-500" },
             ]).map((card) => (
-              <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-2.5">
-                <div className={`text-base font-bold tabular-nums ${card.color || "text-foreground"}`}>
+              <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-3">
+                <div className={`text-lg font-bold tabular-nums ${card.color || "text-foreground"}`}>
                   {card.value}
                 </div>
                 <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{card.label}</div>
               </div>
             ))}
           </div>
-        )}
+          {productSummary.totalCostValue > 0 && (
+            <div className="grid grid-cols-3 border-b border-border bg-muted/20">
+              {([
+                { label: "Total Cost Value", value: `₱${productSummary.totalCostValue.toLocaleString("en-PH", { maximumFractionDigits: 0 })}` },
+                { label: "Total Sell Value", value: `₱${productSummary.totalSellValue.toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-primary" },
+                { label: "Potential Margin", value: `₱${(productSummary.totalSellValue - productSummary.totalCostValue).toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-success" },
+              ]).map((card) => (
+                <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-2.5">
+                  <div className={`text-base font-bold tabular-nums ${card.color || "text-foreground"}`}>
+                    {card.value}
+                  </div>
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{card.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
       {viewMode === "location" && summary && <SummaryStrip summary={summary} />}
 
