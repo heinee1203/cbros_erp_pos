@@ -113,6 +113,8 @@ export interface StockMonitorFilters {
   subcategoryId?: string;
   familyId?: string;
   hideNegativeStock?: boolean;
+  hideDiscontinued?: boolean;
+  hideSpecialOrder?: boolean;
   urgency?: string;
   lastSoldAfter?: string;
   lastSoldBefore?: string;
@@ -148,6 +150,8 @@ export function useStockMonitor(
       if (filters.subcategoryId) params.set("subcategoryId", filters.subcategoryId);
       if (filters.familyId) params.set("familyId", filters.familyId);
       if (filters.hideNegativeStock) params.set("hideNegativeStock", "true");
+      if (filters.hideDiscontinued) params.set("hideDiscontinued", "true");
+      if (filters.hideSpecialOrder) params.set("hideSpecialOrder", "true");
       if (filters.urgency) params.set("urgency", filters.urgency);
       if (filters.urgencyWindow) params.set("urgencyWindow", filters.urgencyWindow);
       if (filters.velocityClass) params.set("velocityClass", filters.velocityClass);

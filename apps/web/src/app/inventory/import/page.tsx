@@ -118,7 +118,7 @@ export default function ImportItemsPage() {
   const { token, apiLocationId: locationId } = useAuth();
 
   const [step, setStep] = useState<Step>("upload");
-  const [importMode, setImportMode] = useState<ImportMode>("inventory_sync");
+  const [importMode, setImportMode] = useState<ImportMode>("create_only");
   const [includeCreates, setIncludeCreates] = useState(true);
   const [includeUpdates, setIncludeUpdates] = useState(true);
   const [file, setFile] = useState<File | null>(null);
@@ -164,13 +164,16 @@ export default function ImportItemsPage() {
       setLocationMapping(mapping);
     }
     // Initialize category mapping — auto-matched stay as-is, unmatched default to "create"
-    // In inventory_sync mode, only map categories that have new items (creates)
+    // In create_only / inventory_sync mode, only map categories that have new items (creates)
+    // In update_only mode, no category mapping needed
     if (preview?.categoryMapping) {
       const cm: Record<string, { action: "create" | "map" | "skip"; targetCategoryId?: string; familyId?: string }> = {};
       for (const cat of preview.categoryMapping) {
         if (!cat.autoMatched) {
-          // In inventory_sync mode, skip categories that only have updates (no new items)
-          if (importMode === "inventory_sync" && cat.createCount === 0) continue;
+          // Skip categories that only have updates (no new items) in modes that only create
+          if ((importMode === "inventory_sync" || importMode === "create_only") && cat.createCount === 0) continue;
+          // Skip all in update_only mode (not creating anything)
+          if (importMode === "update_only") continue;
           cm[cat.csvName] = { action: "create" };
         }
       }
@@ -261,10 +264,10 @@ export default function ImportItemsPage() {
         body: JSON.stringify({
           previewToken: preview.previewToken,
           locationMapping,
-          categoryMapping: Object.keys(catMapping).length > 0 ? catMapping : undefined,
+          categoryMapping: importMode === "inventory_sync" ? undefined : (Object.keys(catMapping).length > 0 ? catMapping : undefined),
           importMode: !includeCreates ? "update_only" : !includeUpdates ? "create_only" : importMode,
           skipErrors: true,
-          createNewCategories: true,
+          createNewCategories: importMode !== "inventory_sync",
         }),
       });
       setResults(resp);
@@ -457,10 +460,10 @@ export default function ImportItemsPage() {
             <h3 className="mb-3 text-sm font-medium text-foreground">Import Mode</h3>
             <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
               {([
-                { value: "inventory_sync", label: "Stock & Availability", desc: "Create new items + update stock, prices & store availability (no name/category changes)" },
-                { value: "smart_sync", label: "Smart Sync", desc: "Create new items, update all fields" },
-                { value: "update_only", label: "Update Only", desc: "Only update existing items (all fields)" },
-                { value: "create_only", label: "Create Only", desc: "Only create new items" },
+                { value: "create_only", label: "New Items Only", desc: "Skip items that already exist (matched by SKU) \u2014 only add new products" },
+                { value: "inventory_sync", label: "Stock & Availability", desc: "Update stock, prices & store availability for existing items + create new ones" },
+                { value: "smart_sync", label: "Full Sync", desc: "Update all fields for existing items + create new ones" },
+                { value: "update_only", label: "Update Only", desc: "Only update existing items \u2014 do not create new ones" },
               ] as const).map((mode) => (
                 <label
                   key={mode.value}
@@ -525,6 +528,9 @@ export default function ImportItemsPage() {
               className="hidden"
             />
           </div>
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            Or <Link href="/inventory?action=add" className="font-medium text-primary hover:underline">add a single item manually</Link>
+          </p>
 
           {file && step !== "parsing" && (
             <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-4 py-2.5 text-sm">
@@ -650,22 +656,26 @@ export default function ImportItemsPage() {
             </div>
           )}
 
-          {/* Category Mapping — for inventory_sync mode, only show categories with new items */}
+          {/* Category Mapping — only show categories relevant to the import mode */}
           {preview.categoryMapping && preview.categoryMapping.length > 0 && (() => {
-            // In inventory_sync mode, only show categories that have new items (creates)
-            // Existing items keep their current category — no mapping needed
-            const relevantCategories = importMode === "inventory_sync"
-              ? preview.categoryMapping.filter((c) => c.createCount > 0)
-              : preview.categoryMapping;
+            // Filter categories to only those relevant for the current import mode:
+            // - create_only / inventory_sync: only categories with new items (createCount > 0)
+            // - update_only: no category mapping needed (not creating anything)
+            // - smart_sync: show all categories (everything is processed)
+            const relevantCategories = importMode === "update_only"
+              ? []
+              : (importMode === "create_only" || importMode === "inventory_sync")
+                ? preview.categoryMapping.filter((c) => c.createCount > 0)
+                : preview.categoryMapping;
             if (relevantCategories.length === 0) return null; // Nothing to map
             const matched = relevantCategories.filter((c) => c.autoMatched);
             const unmatched = relevantCategories.filter((c) => !c.autoMatched);
             return (
               <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
                 <h3 className="mb-2 text-sm font-medium text-foreground">Category Mapping</h3>
-                {importMode === "inventory_sync" && (
+                {(importMode === "inventory_sync" || importMode === "create_only") && (
                   <div className="mb-2 text-[11px] text-muted-foreground">
-                    Inventory Sync: only new items need category mapping. Existing items keep their current categories.
+                    Only categories with new items are shown. Existing items keep their current categories.
                   </div>
                 )}
                 {matched.length > 0 && (
@@ -890,7 +900,14 @@ export default function ImportItemsPage() {
                         </span>
                       </td>
                       <td className="max-w-[200px] truncate px-4 py-2 text-xs text-muted-foreground">
-                        {row.changes?.join(", ") || "\u2014"}
+                        {(() => {
+                          const ch = row.changes ?? [];
+                          // In inventory_sync mode, only show price changes (stock/availability not tracked as "changes")
+                          const filtered = importMode === "inventory_sync"
+                            ? ch.filter((c) => c.startsWith("unitPrice") || c.startsWith("costPrice"))
+                            : ch;
+                          return filtered.length > 0 ? filtered.join(", ") : "\u2014";
+                        })()}
                       </td>
                     </tr>
                   ))}

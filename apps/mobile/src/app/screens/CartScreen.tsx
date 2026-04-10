@@ -7,6 +7,10 @@ import {
   StyleSheet,
   Alert,
   SafeAreaView,
+  TextInput,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
@@ -23,9 +27,15 @@ import {
 import { CustomerLookup } from '@/components/CustomerLookup';
 import { SerialInput } from '@/components/SerialInput';
 import { WarrantyPhotoCapture } from '@/components/WarrantyPhotoCapture';
+import { HeldCartsSheet } from '@/components/HeldCartsSheet';
+import { ManagerPinModal } from '@/components/ManagerPinModal';
+import { getHeldCartCount } from '@/storage/held-carts';
 import type { Customer, Vehicle } from '@/hooks/use-customer-search';
 import { useLayout } from '@/hooks/use-layout';
+import { useAuth } from '@/hooks/use-auth';
 import { usePosPermission } from '@/hooks/use-pos-permission';
+import { useRequireElevation } from '@/hooks/use-require-elevation';
+import { logElevation } from '@/services/audit-logger';
 import { formatDotAllocation } from '@/utils/dot-fifo-allocate';
 import { colors, textStyles, spacing, radius, layout, fonts, fontSize, touchTarget } from '@/theme';
 
@@ -41,6 +51,8 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const navigation = useNavigation();
   const { isTablet, screenPadding } = useLayout();
   const { can } = usePosPermission();
+  const { user } = useAuth();
+  const { guard, elevationProps } = useRequireElevation();
 
   const lines = useCartStore(s => s.lines);
   const customerId = useCartStore(s => s.customerId);
@@ -52,6 +64,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const clear = useCartStore(s => s.clear);
   const setLineSerials = useCartStore(s => s.setLineSerials);
   const setLineWarrantyPhoto = useCartStore(s => s.setLineWarrantyPhoto);
+  const setLinePriceOverride = useCartStore(s => s.setLinePriceOverride);
   const incompleteSerials = useCartStore(useShallow(selectIncompleteSerials));
 
   const subtotal = useCartStore(selectSubtotal);
@@ -63,10 +76,61 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   // Serial input modal state
   const [serialModalLine, setSerialModalLine] = useState<CartLine | null>(null);
 
+  // Price override modal state
+  const [priceOverrideTarget, setPriceOverrideTarget] = useState<CartLine | null>(null);
+  const [priceOverrideValue, setPriceOverrideValue] = useState('');
+
   const attachCustomer = useCartStore(s => s.attachCustomer);
   const detachCustomer = useCartStore(s => s.detachCustomer);
 
   const [customerLookupVisible, setCustomerLookupVisible] = useState(false);
+  const [heldCartsSheetVisible, setHeldCartsSheetVisible] = useState(false);
+
+  const holdCurrentCart = useCartStore(s => s.holdCurrentCart);
+  const heldCartCount = getHeldCartCount();
+
+  const handleHoldCart = useCallback(() => {
+    if (lines.length === 0) return;
+    const success = holdCurrentCart();
+    if (!success) {
+      Alert.alert(
+        'Maximum Held Carts',
+        'Maximum 5 held carts. Please resume or delete one first.',
+      );
+    }
+  }, [lines.length, holdCurrentCart]);
+
+  const handlePriceOverride = useCallback((item: CartLine) => {
+    setPriceOverrideTarget(item);
+    setPriceOverrideValue(String(item.overridePrice ?? item.unitPrice));
+  }, []);
+
+  const handlePriceOverrideSubmit = useCallback(() => {
+    if (!priceOverrideTarget) return;
+    const newPrice = parseFloat(priceOverrideValue);
+    if (isNaN(newPrice) || newPrice < 0) {
+      Alert.alert('Invalid Price', 'Please enter a valid price.');
+      return;
+    }
+    const item = priceOverrideTarget;
+    const oldPrice = item.overridePrice ?? item.unitPrice;
+    setPriceOverrideTarget(null);
+    setPriceOverrideValue('');
+    guard(
+      'priceOverride',
+      `Override price on ${item.name}\n${fmtPHP(oldPrice)} \u2192 ${fmtPHP(newPrice)}`,
+      (approverName) => {
+        setLinePriceOverride(item.id, newPrice, approverName);
+        logElevation({
+          action: 'price_override',
+          description: `Price override on ${item.name} ${fmtPHP(oldPrice)} \u2192 ${fmtPHP(newPrice)}`,
+          approvedBy: approverName,
+          performedBy: user?.fullName ?? 'Unknown',
+          metadata: { lineId: item.id, productId: item.productId, oldPrice, newPrice },
+        });
+      },
+    );
+  }, [priceOverrideTarget, priceOverrideValue, guard, setLinePriceOverride, user?.fullName]);
 
   const handleSelectCustomer = useCallback((customer: Customer, vehicle?: Vehicle) => {
     attachCustomer(customer.id, customer.name, vehicle?.id);
@@ -173,7 +237,9 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
               {item.sku ? (
                 <Text style={styles.cartLineSKU} numberOfLines={1}>{item.sku}</Text>
               ) : null}
-              <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
+              <Pressable onLongPress={() => handlePriceOverride(item)} hitSlop={4}>
+                <Text style={styles.lineTotal}>{fmtPHP(item.lineTotal)}</Text>
+              </Pressable>
             </View>
             <Text style={styles.lineName} numberOfLines={2}>{item.name}</Text>
             <View style={styles.lineMetaRow}>
@@ -288,22 +354,42 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             <Text style={styles.cartHeaderCount}>{productCount} products · {unitCount} units</Text>
           </View>
         )}
-        {can('voidSale') && (
-          <Pressable
-            onPress={() => {
-              if (lines.length > 0) {
-                Alert.alert('Clear Cart', 'Remove all items?', [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Clear', style: 'destructive', onPress: clear },
-                ]);
-              }
-            }}
-            hitSlop={8}
-            style={styles.clearButton}
-          >
-            <Text style={styles.clearText}>Clear</Text>
-          </Pressable>
-        )}
+        <View style={styles.headerActions}>
+          {lines.length > 0 && (
+            <Pressable
+              onPress={handleHoldCart}
+              hitSlop={8}
+              style={styles.holdButton}
+              android_ripple={{ color: colors.status.warningBg }}
+            >
+              <Text style={styles.holdIcon}>{'\u23F8'}</Text>
+              <Text style={styles.holdText}>Hold</Text>
+            </Pressable>
+          )}
+          {lines.length > 0 && (
+            <Pressable
+              onPress={() => {
+                guard(
+                  'voidSale',
+                  `Void cart (${unitCount} items, ${fmtPHP(grandTotal)})`,
+                  (approverName) => {
+                    logElevation({
+                      action: 'void_sale',
+                      description: `Voided cart with ${unitCount} items totaling ${fmtPHP(grandTotal)}`,
+                      approvedBy: approverName,
+                      performedBy: user?.fullName ?? 'Unknown',
+                    });
+                    clear();
+                  },
+                );
+              }}
+              hitSlop={8}
+              style={styles.clearButton}
+            >
+              <Text style={styles.clearText}>Clear</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       {/* Customer bar — only when cart has items */}
@@ -342,6 +428,18 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             <Text style={styles.emptyIcon}>{'\uD83D\uDED2'}</Text>
             <Text style={styles.emptyTitle}>No items in cart</Text>
             <Text style={styles.emptySubtitle}>Tap a product or scan a barcode to start</Text>
+            {heldCartCount > 0 && (
+              <Pressable
+                style={styles.heldCartBanner}
+                onPress={() => setHeldCartsSheetVisible(true)}
+                android_ripple={{ color: colors.status.warningBg }}
+              >
+                <Text style={styles.heldCartBannerText}>
+                  You have {heldCartCount} held cart{heldCartCount !== 1 ? 's' : ''}
+                </Text>
+                <Text style={styles.heldCartBannerAction}>View Held Carts</Text>
+              </Pressable>
+            )}
           </View>
         }
         contentContainerStyle={[
@@ -391,7 +489,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             onPress={handleProceedToPayment}
             android_ripple={{ color: 'rgba(0,0,0,0.2)' }}
           >
-            <Text style={styles.checkoutButtonText}>CHECKOUT</Text>
+            <Text style={styles.checkoutButtonText}>CHECKOUT {fmtPHP(grandTotal)}</Text>
           </Pressable>
         </View>
       )}
@@ -416,6 +514,67 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
           />
         </View>
       )}
+
+      <HeldCartsSheet
+        visible={heldCartsSheetVisible}
+        onClose={() => setHeldCartsSheetVisible(false)}
+      />
+
+      {/* Price override modal */}
+      <Modal
+        visible={priceOverrideTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); }}
+      >
+        <Pressable
+          style={styles.priceOverrideOverlay}
+          onPress={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); }}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <Pressable style={styles.priceOverrideContainer} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.priceOverrideTitle}>Price Override</Text>
+              {priceOverrideTarget && (
+                <Text style={styles.priceOverrideProduct} numberOfLines={2}>
+                  {priceOverrideTarget.name}
+                </Text>
+              )}
+              <Text style={styles.priceOverrideOriginal}>
+                Current: {fmtPHP(priceOverrideTarget?.overridePrice ?? priceOverrideTarget?.unitPrice ?? 0)}
+              </Text>
+              <TextInput
+                style={styles.priceOverrideInput}
+                value={priceOverrideValue}
+                onChangeText={setPriceOverrideValue}
+                keyboardType="decimal-pad"
+                placeholder="New price"
+                placeholderTextColor={colors.text.muted}
+                autoFocus
+                selectTextOnFocus
+              />
+              <View style={styles.priceOverrideActions}>
+                <Pressable
+                  style={styles.priceOverrideCancelBtn}
+                  onPress={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); }}
+                >
+                  <Text style={styles.priceOverrideCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.priceOverrideConfirmBtn}
+                  onPress={handlePriceOverrideSubmit}
+                >
+                  <Text style={styles.priceOverrideConfirmText}>Override</Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Modal>
+
+      {/* Manager PIN elevation modal */}
+      <ManagerPinModal {...elevationProps} />
     </SafeAreaView>
   );
 }
@@ -478,6 +637,51 @@ const createStyles = () => StyleSheet.create({
     fontSize: 13,
     fontFamily: 'Outfit-SemiBold',
     color: '#FF3B30',
+  },
+  headerActions: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  holdButton: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: colors.status.warningBg,
+    gap: 4,
+  },
+  holdIcon: {
+    fontSize: 14,
+    color: colors.status.warning,
+  },
+  holdText: {
+    fontSize: 13,
+    fontFamily: 'Outfit-SemiBold',
+    color: colors.status.warning,
+  },
+  heldCartBanner: {
+    marginTop: 20,
+    backgroundColor: colors.status.warningBg,
+    borderRadius: radius.md,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: 'center' as const,
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.2)',
+  },
+  heldCartBannerText: {
+    fontSize: 13,
+    fontFamily: 'Outfit-Medium',
+    color: colors.status.warning,
+    marginBottom: 4,
+  },
+  heldCartBannerAction: {
+    fontSize: 14,
+    fontFamily: 'Outfit-SemiBold',
+    color: colors.status.warning,
+    textDecorationLine: 'underline' as const,
   },
 
   // Customer bar
@@ -543,11 +747,9 @@ const createStyles = () => StyleSheet.create({
     flex: 1,
   },
   lineName: {
-    fontSize: 14,
-    fontFamily: 'Outfit-Medium',
+    ...textStyles.bodyMedium,
     color: colors.text.primary,
     marginTop: 2,
-    lineHeight: 19,
   },
   lineMetaRow: {
     flexDirection: 'row',
@@ -595,30 +797,29 @@ const createStyles = () => StyleSheet.create({
     marginLeft: spacing.md,
   },
   qtyBtn: {
-    minWidth: touchTarget.min,
-    minHeight: touchTarget.min,
-    borderRadius: radius.md,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: colors.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   qtyBtnText: {
     fontFamily: fonts.display.bold,
-    fontSize: fontSize.xl,
+    fontSize: fontSize['2xl'],
     color: colors.text.inverse,
   },
   qtyText: {
-    ...textStyles.monoMd,
+    ...textStyles.monoLg,
     color: colors.text.primary,
     marginHorizontal: spacing.md,
-    minWidth: 24,
+    minWidth: 28,
     textAlign: 'center',
   },
   lineTotal: {
-    fontSize: 16,
-    fontFamily: 'Outfit-Bold',
-    color: colors.accent.primary,
-    marginLeft: 8,
+    ...textStyles.price,
+    color: colors.text.primary,
+    marginLeft: spacing.sm,
   },
 
   // Empty state
@@ -689,28 +890,27 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: spacing.lg,
+    paddingTop: spacing.sm,
   },
   grandTotalLabel: {
-    fontSize: 14,
-    fontFamily: 'Outfit-Medium',
+    ...textStyles.label,
     color: colors.text.muted,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
   grandTotalValue: {
-    fontSize: 28,
-    fontFamily: 'Outfit-Bold',
-    color: colors.text.primary,
-    letterSpacing: -0.5,
+    ...textStyles.priceLarge,
+    color: colors.accent.primary,
   },
 
   // Checkout button
   checkoutButton: {
     backgroundColor: colors.accent.primary,
-    paddingVertical: 18,
-    borderRadius: 14,
+    height: 64,
+    borderRadius: radius.lg,
     alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: colors.accent.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -718,8 +918,8 @@ const createStyles = () => StyleSheet.create({
     elevation: 8,
   },
   checkoutButtonText: {
-    fontSize: 16,
-    fontFamily: 'Outfit-Bold',
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['2xl'],
     color: colors.text.inverse,
     letterSpacing: 1,
     textTransform: 'uppercase',
@@ -745,5 +945,83 @@ const createStyles = () => StyleSheet.create({
     color: colors.status.warning,
     marginBottom: 12,
     textAlign: 'center',
+  },
+
+  // Price override modal
+  priceOverrideOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  priceOverrideContainer: {
+    width: 320,
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.xl,
+    padding: spacing['2xl'],
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.3,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  priceOverrideTitle: {
+    fontSize: fontSize.xl,
+    fontFamily: 'Outfit-Bold',
+    color: colors.text.primary,
+    marginBottom: spacing.sm,
+  },
+  priceOverrideProduct: {
+    fontSize: fontSize.base,
+    fontFamily: 'Outfit-Medium',
+    color: colors.text.secondary,
+    marginBottom: spacing.xs,
+  },
+  priceOverrideOriginal: {
+    fontSize: fontSize.sm,
+    fontFamily: 'DMSans-Regular',
+    color: colors.text.muted,
+    marginBottom: spacing.lg,
+  },
+  priceOverrideInput: {
+    backgroundColor: colors.bg.elevated,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    fontSize: fontSize['2xl'],
+    fontFamily: 'Outfit-SemiBold',
+    color: colors.text.primary,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: colors.border.light,
+    marginBottom: spacing.lg,
+  },
+  priceOverrideActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  priceOverrideCancelBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.bg.elevated,
+    alignItems: 'center',
+  },
+  priceOverrideCancelText: {
+    fontSize: fontSize.base,
+    fontFamily: 'Outfit-SemiBold',
+    color: colors.text.muted,
+  },
+  priceOverrideConfirmBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.accent.primary,
+    alignItems: 'center',
+  },
+  priceOverrideConfirmText: {
+    fontSize: fontSize.base,
+    fontFamily: 'Outfit-SemiBold',
+    color: colors.text.inverse,
   },
 });

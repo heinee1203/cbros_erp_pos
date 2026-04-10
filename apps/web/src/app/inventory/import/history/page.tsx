@@ -363,12 +363,11 @@ export default function ImportHistoryPage() {
   const unmatchedLocations = preview?.locations?.filter((l) => !l.matched) ?? [];
   const hasUnmappedLocations = unmatchedLocations.some((l) => !locationMapping[l.csvName]);
 
-  const formatDate = (d: string) => {
-    try {
-      return new Date(d).toLocaleDateString("en-US", { month: "short", year: "numeric" });
-    } catch {
-      return d;
-    }
+  const formatDate = (d: string | null | undefined) => {
+    if (!d) return "\u2014";
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return "\u2014";
+    return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
   };
 
   /* ─────────────────────────────────────────────
@@ -760,7 +759,7 @@ export default function ImportHistoryPage() {
                   <div key={c.label} className="text-center">
                     <div className="text-xs text-muted-foreground">{c.label}</div>
                     <div className="mt-0.5 text-lg font-semibold text-foreground">
-                      {c.value.toLocaleString()}
+                      {c.value != null ? c.value.toLocaleString() : "\u2014"}
                       {"showTotal" in c && c.showTotal && (
                         <span className="text-sm text-muted-foreground">
                           /{(c as { total: number }).total.toLocaleString()}
@@ -824,7 +823,7 @@ export default function ImportHistoryPage() {
                   <div key={c.label} className="rounded-lg bg-muted/50 px-3 py-2 text-center">
                     <div className="text-xs text-muted-foreground">{c.label}</div>
                     <div className={cn("mt-0.5 text-xl font-semibold", c.color)}>
-                      {c.value.toLocaleString()}
+                      {c.value != null ? c.value.toLocaleString() : "\u2014"}
                     </div>
                   </div>
                 ))}

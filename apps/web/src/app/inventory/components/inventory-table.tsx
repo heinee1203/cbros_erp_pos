@@ -454,6 +454,7 @@ export function FlatProductRow({
   onToggleParent,
   colCount,
   onDeleteSingle,
+  canEdit = true,
 }: {
   product: ProductRow;
   showFinancials: boolean;
@@ -468,6 +469,7 @@ export function FlatProductRow({
   onToggleParent: () => void;
   colCount: number;
   onDeleteSingle: (id: string, name: string, isParent?: boolean) => void;
+  canEdit?: boolean;
 }) {
   const sell = parseFloat(p.unitPrice) || 0;
   const cost = parseFloat(p.costPrice) || 0;
@@ -598,13 +600,15 @@ export function FlatProductRow({
         )}
         {/* Actions */}
         <td className="px-1 py-[5px] text-center" onClick={(e) => e.stopPropagation()}>
-          <RowActions
-            productId={p.id}
-            productName={p.name}
-            isParent={p.isParent ?? false}
-            onView={onSelectProduct}
-            onDelete={onDeleteSingle}
-          />
+          {canEdit ? (
+            <RowActions
+              productId={p.id}
+              productName={p.name}
+              isParent={p.isParent ?? false}
+              onView={onSelectProduct}
+              onDelete={onDeleteSingle}
+            />
+          ) : null}
         </td>
       </tr>
       {p.isParent && isParentExpanded && (
@@ -646,7 +650,7 @@ export function VariantSubRows({
   onSelectProduct: () => void;
 }) {
   const { data, isLoading } = useVariants(token, locationId, parentId);
-  const variants = data?.data ?? [];
+  const variants = (data?.data ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
 
   if (isLoading) {
     return (

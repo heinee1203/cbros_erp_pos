@@ -7,19 +7,21 @@ import { Loader2 } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { isAuthenticated, loading: authLoading, login } = useAuth();
+  const { isAuthenticated, loading: authLoading, login, user } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const getRedirectPath = (role?: string) => role === "STAFF" ? "/inventory" : "/dashboard";
+
   // Redirect if already authenticated
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
-      router.replace("/dashboard");
+      router.replace(getRedirectPath(user?.role));
     }
-  }, [authLoading, isAuthenticated, router]);
+  }, [authLoading, isAuthenticated, router, user]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -27,7 +29,14 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
-      router.replace("/dashboard");
+      // After login, check session for role to determine redirect
+      try {
+        const stored = sessionStorage.getItem("apex-dev-auth");
+        const parsed = stored ? JSON.parse(stored) : null;
+        router.replace(getRedirectPath(parsed?.user?.role));
+      } catch {
+        router.replace("/dashboard");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {

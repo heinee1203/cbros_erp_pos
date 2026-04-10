@@ -38,6 +38,8 @@ export const historicalSales = pgTable(
     movementDate: timestamp("movement_date", { withTimezone: true }).notNull(),
     importedAt: timestamp("imported_at", { withTimezone: true }).notNull().defaultNow(),
     importBatchId: uuid("import_batch_id").notNull(),
+    /** Technician assigned (backfilled from Loyverse labor variant names) */
+    technicianId: uuid("technician_id"),
   },
   (table) => [
     index("idx_hist_org_product_reason_date").on(table.orgId, table.productId, table.reasonType, table.movementDate),

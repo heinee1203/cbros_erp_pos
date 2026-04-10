@@ -57,6 +57,7 @@ export default function APAgingReportPage() {
   }, [authLoading, token, locationId, fetchAging]);
 
   const totals = useMemo(() => {
+    if (!rows.length) return { current: 0, days1to30: 0, days31to60: 0, days61to90: 0, days91to120: 0, days121to180: 0, over180: 0, total: 0 };
     return rows.reduce(
       (acc, r) => ({
         current: acc.current + r.current,

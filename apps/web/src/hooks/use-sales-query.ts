@@ -133,14 +133,15 @@ export interface HistoricalReceiptItem {
 
 interface HistoricalReceiptsResponse {
   data: HistoricalReceiptItem[];
-  nextCursor: string | null;
+  total: number;
+  totalRevenue: number;
   hasMore: boolean;
 }
 
 export function useHistoricalReceiptsQuery(
   token: string,
   locationId: string,
-  filters: { from?: string; to?: string; q?: string; filterLocationId?: string; employeeName?: string; cursor?: string; limit?: number } = {},
+  filters: { from?: string; to?: string; q?: string; filterLocationId?: string; employeeName?: string; offset?: number; limit?: number } = {},
 ) {
   return useQuery<HistoricalReceiptsResponse>({
     queryKey: ["sales", "history-receipts", filters, locationId],
@@ -151,7 +152,7 @@ export function useHistoricalReceiptsQuery(
       if (filters.q) params.set("q", filters.q);
       if (filters.filterLocationId) params.set("locationId", filters.filterLocationId);
       if (filters.employeeName) params.set("employeeName", filters.employeeName);
-      if (filters.cursor) params.set("cursor", filters.cursor);
+      if (filters.offset != null) params.set("offset", String(filters.offset));
       if (filters.limit) params.set("limit", String(filters.limit));
       const qs = params.toString();
       return apiFetch<HistoricalReceiptsResponse>(

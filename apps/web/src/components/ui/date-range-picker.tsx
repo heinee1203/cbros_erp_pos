@@ -139,6 +139,7 @@ export function DateRangePicker({ startDate, endDate, onChange, className }: Dat
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [above, setAbove] = useState(false);
+  const [alignRight, setAlignRight] = useState(false);
 
   // Sync temp state from props when opening
   const handleOpen = useCallback(() => {
@@ -148,10 +149,11 @@ export function DateRangePicker({ startDate, endDate, onChange, className }: Dat
     setTempEnd(e);
     if (s) { setViewYear(s.getFullYear()); setViewMonth(s.getMonth()); }
     setActivePreset(null);
-    // Check if popup should open above
+    // Check if popup should open above or align right
     if (triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
       setAbove(rect.bottom + 420 > window.innerHeight && rect.top > 420);
+      setAlignRight(rect.right > window.innerWidth / 2);
     }
     setOpen(true);
   }, [startDate, endDate]);
@@ -246,6 +248,7 @@ export function DateRangePicker({ startDate, endDate, onChange, className }: Dat
           className={cn(
             "absolute z-50 mt-1 rounded-xl border border-border bg-background shadow-xl flex",
             above ? "bottom-full mb-1" : "top-full",
+            alignRight ? "right-0" : "left-0",
           )}
           style={{ minWidth: 480 }}
         >

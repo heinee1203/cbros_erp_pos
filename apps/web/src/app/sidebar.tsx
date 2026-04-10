@@ -23,6 +23,7 @@ import {
   CreditCard,
   ShieldCheck,
   Gift,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -66,6 +67,7 @@ const NAV_TOP: NavEntry[] = [
     icon: LayoutDashboard,
     href: "/dashboard",
     match: /^\/dashboard/,
+    permission: "bo.view_sales_reports",
   },
   {
     kind: "group",
@@ -80,10 +82,10 @@ const NAV_TOP: NavEntry[] = [
       { label: "Sales by Employee", href: "/reports/sales-by-employee", match: /^\/reports\/sales-by-employee/ },
       { label: "Sales by Payment", href: "/reports/sales-by-payment", match: /^\/reports\/sales-by-payment/ },
       { label: "Discount Analysis", href: "/reports/discount-analysis", match: /^\/reports\/discount-analysis/ },
-      { label: "Receipts Log", href: "/reports/receipts", match: /^\/reports\/receipts/ },
       { label: "Inventory Valuation", href: "/reports/inventory-valuation", match: /^\/reports\/inventory-valuation/ },
       { label: "Stock Movement", href: "/reports/stock-movement", match: /^\/reports\/stock-movement/ },
       { label: "Demand by Application", href: "/reports/demand-by-tag", match: /^\/reports\/demand-by-tag/ },
+      { label: "Mechanic Productivity", href: "/reports/mechanic-productivity", match: /^\/reports\/mechanic-productivity/ },
     ],
   },
   {
@@ -115,6 +117,7 @@ const NAV_TOP: NavEntry[] = [
       { label: "Barcode Printing", href: "/inventory/barcode-printing", match: /^\/inventory\/barcode-printing/ },
       { label: "Serial Lookup", href: "/inventory/serials", match: /^\/inventory\/serials$/ },
       { label: "Tire Age Report", href: "/inventory/serials/tire-age", match: /^\/inventory\/serials\/tire-age/ },
+      { label: "DOT Code Entry", href: "/inventory/dot-entry", match: /^\/inventory\/dot-entry/ },
       { label: "Import Center", href: "/inventory/import", match: /^\/inventory\/import|^\/inventory\/import-sales/ },
       { label: "Tags / Fitment", href: "/inventory/tags", match: /^\/inventory\/tags/ },
       { label: "Fitment Manager", href: "/inventory/fitments", match: /^\/inventory\/fitments/ },
@@ -139,7 +142,6 @@ const NAV_TOP: NavEntry[] = [
       { label: "Inventory History", href: "/procurement/inventory-history", match: /^\/procurement\/inventory-history/ },
       { label: "Stock Monitor", href: "/procurement/stock-monitor", match: /^\/procurement\/stock-monitor/ },
       { label: "Stock Velocity", href: "/procurement/stock-velocity", match: /^\/procurement\/stock-velocity/ },
-      { label: "Suggested Orders", href: "/procurement/suggested-orders", match: /^\/procurement\/suggested-orders/ },
     ],
   },
   {
@@ -147,6 +149,7 @@ const NAV_TOP: NavEntry[] = [
     label: "Service",
     icon: Wrench,
     match: /^\/service/,
+    permission: "bo.view_sales_reports",
     children: [
       { label: "Job Cards", href: "/service/job-cards", match: /^\/service\/job-cards/ },
       { label: "Service Ops", href: "/service/operations", match: /^\/service\/operations/ },
@@ -162,6 +165,8 @@ const NAV_TOP: NavEntry[] = [
     children: [
       { label: "Customer List", href: "/customers", match: /^\/customers$/ },
       { label: "AR Aging Report", href: "/customers/reports/aging", match: /^\/customers\/reports\/aging/ },
+      { label: "SOA Search", href: "/customers/soa-search", match: /^\/customers\/soa-search/ },
+      { label: "Multi-Customer Payment", href: "/customers/multi-payment", match: /^\/customers\/multi-payment/ },
     ],
   },
   {
@@ -169,6 +174,7 @@ const NAV_TOP: NavEntry[] = [
     label: "Warranty",
     icon: ShieldCheck,
     match: /^\/warranties/,
+    permission: "bo.manage_customers",
     children: [
       { label: "Warranty Lookup", href: "/warranties/lookup", match: /^\/warranties\/lookup/ },
       { label: "Policies", href: "/warranties/policies", match: /^\/warranties\/policies/ },
@@ -177,22 +183,26 @@ const NAV_TOP: NavEntry[] = [
     ],
   },
   {
-    kind: "direct" as const,
-    label: "Promo Rules",
-    icon: Gift,
-    href: "/promos",
-    match: /^\/promos/,
-  },
-  {
     kind: "group",
     label: "Accounts Payable",
     icon: CreditCard,
     match: /^\/ap/,
+    permission: "bo.manage_customers",
     children: [
       { label: "Supplier Invoices", href: "/ap/invoices", match: /^\/ap\/invoices/ },
+      { label: "Supplier SOA", href: "/ap/supplier-soa", match: /^\/ap\/supplier-soa/ },
       { label: "Check Vouchers", href: "/ap/check-vouchers", match: /^\/ap\/check-vouchers/ },
       { label: "AP Aging Report", href: "/ap/reports/aging", match: /^\/ap\/reports\/aging/ },
       { label: "PDC Report", href: "/ap/reports/pdcs", match: /^\/ap\/reports\/pdcs/ },
+    ],
+  },
+  {
+    kind: "group",
+    label: "Finance",
+    icon: TrendingUp,
+    match: /^\/cashflow/,
+    permission: "bo.manage_customers",
+    children: [
       { label: "Cash Flow Forecast", href: "/cashflow", match: /^\/cashflow$/ },
       { label: "Recurring Expenses", href: "/cashflow/expenses", match: /^\/cashflow\/expenses/ },
     ],
@@ -205,6 +215,7 @@ const NAV_BOTTOM: NavEntry[] = [
     label: "Employees",
     icon: UserCog,
     match: /^\/employees/,
+    permission: "bo.manage_employees",
     children: [
       { label: "Employee List", href: "/employees", match: /^\/employees$/ },
       { label: "Roles & Access", href: "/employees/roles", match: /^\/employees\/roles/ },
@@ -216,6 +227,7 @@ const NAV_BOTTOM: NavEntry[] = [
     label: "Integrations",
     icon: Plug,
     match: /^\/integrations/,
+    permission: "bo.manage_settings",
     children: [
       { label: "Devices & Scanners", href: "/integrations/devices", match: /^\/integrations\/devices/ },
       { label: "Printers", href: "/integrations/printers", match: /^\/integrations\/printers/ },
@@ -227,12 +239,11 @@ const NAV_BOTTOM: NavEntry[] = [
     label: "Settings",
     icon: Settings,
     match: /^\/settings/,
+    permission: "bo.manage_settings",
     children: [
       { label: "General", href: "/settings", match: /^\/settings$/ },
       { label: "Locations", href: "/settings/locations", match: /^\/settings\/locations/ },
       { label: "POS Settings", href: "/settings/pos", match: /^\/settings\/pos/ },
-      { label: "Receipt / Invoice", href: "/settings/receipts", match: /^\/settings\/receipts/ },
-      { label: "Stock Alerts", href: "/settings/stock-alerts", match: /^\/settings\/stock-alerts/ },
       { label: "Company Profile", href: "/settings/company", match: /^\/settings\/company/ },
       { label: "POS Devices", href: "/settings/devices", match: /^\/settings\/devices/, permission: "bo.manage_pos_devices" },
       { label: "Roles & Permissions", href: "/settings/roles", match: /^\/settings\/roles/, permission: "bo.manage_employees" },

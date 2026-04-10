@@ -785,7 +785,21 @@
       "Bash(grep -oE '\\\\b\\(SA|SAK|SB|SBK|SC|SE|SEK|SI|SL|SLK|SP|SR|SRK\\)-[0-9]{3,5}[A-Z]?\\\\b' \"C:/Users/Admin/Downloads/CLAUDE/APEX_POS/scripts/555-catalog-text.txt\")",
       "Bash(for file:*)",
       "Bash(do echo:*)",
-      "Bash(find /c/Users/Admin/Downloads/CLAUDE/APEX_POS -type f -path */inventory/[productId]*/page.tsx)"
+      "Bash(find /c/Users/Admin/Downloads/CLAUDE/APEX_POS -type f -path */inventory/[productId]*/page.tsx)",
+      "Bash(grep -E \"\\\\.tsx?$\")",
+      "Bash(powershell -Command \"\\(Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue\\).OwningProcess\")",
+      "Bash(powershell -Command \"\\(Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue\\).OwningProcess\")",
+      "Bash(grep -r promo /c/Users/Admin/Downloads/CLAUDE/APEX_POS/apps/api/src/modules/sales --include=*.ts)",
+      "Bash(grep -r \"technician\" /c/Users/Admin/Downloads/CLAUDE/APEX_POS/apps/api/src -type f --include=\"*.ts\")",
+      "Bash(grep -r \"technician\" /c/Users/Admin/Downloads/CLAUDE/APEX_POS/apps/api/src -type f)",
+      "Bash(ls -1 /c/Users/Admin/Downloads/CLAUDE/APEX_POS/packages/database/migrations/*.sql)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI3ZGUyNGQ5OC01NTZmLTRhOGUtYThlYy0wMDgwMmZmMDE1ODAiLCJvcmdJZCI6IjU1NmUzNTBhLTcxODAtNGVjOS05ZTFlLWVhMGNhMTkzN2Y0MCIsInJvbGUiOiJBRE1JTiIsInByaW1hcnlMb2NhdGlvbklkIjoiNmZlMWFhMzEtYzVlYS00NjNlLTk5MDctMTJjMTAzNWVmMzA4IiwicGVybWlzc2lvbnMiOlsicG9zLmFjY2VwdF9wYXltZW50cyIsInBvcy5hcHBseV9kaXNjb3VudHMiLCJwb3MuY2hhbmdlX3RheGVzIiwicG9zLm9wZW5fY2FzaF9kcmF3ZXIiLCJwb3Mudmlld19yZWNlaXB0cyIsInBvcy5wZXJmb3JtX3JlZnVuZHMiLCJwb3MucmVwcmludF9yZWNlaXB0cyIsInBvcw\")",
+      "Bash(curl -s -X POST http://localhost:3000/technicians/seed -H \"Authorization: Bearer $TOKEN\" -H \"X-Location-ID: 6fe1aa31-c5ea-463e-9907-12c1035ef308\")",
+      "Bash(grep -l \"permissions\\\\|rbac\\\\|roles\" /c/Users/Admin/Downloads/CLAUDE/APEX_POS/packages/database/migrations/*.sql)",
+      "Bash(grep -l \"role_id\\\\|permission\" /c/Users/Admin/Downloads/CLAUDE/APEX_POS/packages/database/migrations/*.sql)",
+      "Bash(python3 -c:*)",
+      "Bash(python3 /dev/stdin:*)",
+      "Bash(find /c/Users/Admin/Downloads/CLAUDE/APEX_POS/apps/api/src/modules -type d -name *payable* -o -type d -name *ap*)"
     ]
   }
 }

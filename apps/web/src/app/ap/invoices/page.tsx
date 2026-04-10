@@ -28,24 +28,23 @@ interface Supplier {
 
 interface Invoice {
   id: string;
-  invoiceNo: string;
+  invoiceNumber: string;
   invoiceDate: string;
   supplierId: string;
   supplierName: string;
   dueDate: string;
-  amount: string;
+  totalAmount: string;
   paidAmount: string;
   balance: string;
   status: string;
-  paymentTerms: string | null;
-  poReference: string | null;
+  paymentTermsDays: number | null;
   notes: string | null;
   createdAt: string;
 }
 
 interface InvoiceListResponse {
   data: Invoice[];
-  cursor: string | null;
+  nextCursor: string | null;
   summary?: {
     totalOpen: number;
     overdueAmount: number;
@@ -401,9 +400,18 @@ export default function SupplierInvoicesPage() {
           { token, locationId }
         );
         setInvoices(res.data);
-        setHasMore(!!res.cursor);
-        setCursor(res.cursor);
-        if (res.summary) setSummary(res.summary);
+        setHasMore(!!res.nextCursor);
+        setCursor(res.nextCursor);
+        // Fetch summary separately
+        try {
+          const sumRes = await apiFetch<any>("/ap/reports/summary", { token, locationId });
+          setSummary({
+            totalOpen: parseFloat(sumRes.total_payables ?? "0"),
+            overdueAmount: parseFloat(sumRes.total_overdue ?? "0"),
+            dueThisWeek: 0,
+            invoiceCount: parseInt(sumRes.invoice_count ?? "0", 10),
+          });
+        } catch {}
       } catch (err: any) {
         setError(err.message || "Failed to load invoices");
       } finally {
@@ -628,7 +636,7 @@ export default function SupplierInvoicesPage() {
                     }`}
                   >
                     <td className="px-3 py-2.5 font-mono text-[13px] font-semibold text-primary">
-                      {inv.invoiceNo}
+                      {inv.invoiceNumber}
                     </td>
                     <td className="px-3 py-2.5 text-xs text-muted-foreground">
                       {fmtDate(inv.invoiceDate)}
@@ -642,7 +650,7 @@ export default function SupplierInvoicesPage() {
                       {fmtDate(inv.dueDate)}
                     </td>
                     <td className="px-3 py-2.5 text-right text-[13px] tabular-nums">
-                      {fmtPeso(inv.amount)}
+                      {fmtPeso(inv.totalAmount)}
                     </td>
                     <td className="px-3 py-2.5 text-right text-[13px] tabular-nums text-muted-foreground">
                       {fmtPeso(inv.paidAmount)}
@@ -651,15 +659,15 @@ export default function SupplierInvoicesPage() {
                       {fmtPeso(inv.balance)}
                     </td>
                     <td className="px-3 py-2.5">
-                      <span
-                        className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                          STATUS_COLORS[inv.status] ??
-                          "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {STATUS_LABELS[inv.status] ??
-                          inv.status.replace(/_/g, " ")}
-                      </span>
+                      {(() => {
+                        const isOverdue = (inv.status === "OPEN" || inv.status === "PARTIALLY_PAID") && new Date(inv.dueDate) < new Date();
+                        const displayStatus = isOverdue ? "OVERDUE" : inv.status;
+                        return (
+                          <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_COLORS[displayStatus] ?? "bg-muted text-muted-foreground"}`}>
+                            {STATUS_LABELS[displayStatus] ?? displayStatus.replace(/_/g, " ")}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2.5 text-right">
                       {(inv.status === "OPEN" ||

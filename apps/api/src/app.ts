@@ -51,6 +51,8 @@ import { rbacRoutes } from "./modules/rbac/routes";
 import { vehicleRoutes } from "./modules/vehicles/routes";
 import { printingRoutes } from "./modules/printing/routes";
 import auditRoutes from "./modules/audit/routes";
+import discountRoutes from "./modules/discounts/routes";
+import { technicianRoutes } from "./modules/technicians/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const JWT_SECRET = process.env.JWT_SECRET;
@@ -131,6 +133,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(vehicleRoutes, { prefix: "/vehicles" });
   await app.register(printingRoutes, { prefix: "/printing" });
   await app.register(auditRoutes, { prefix: "/audit-log" });
+  await app.register(discountRoutes, { prefix: "/discounts" });
+  await app.register(technicianRoutes, { prefix: "/technicians" });
 
   return app;
 }

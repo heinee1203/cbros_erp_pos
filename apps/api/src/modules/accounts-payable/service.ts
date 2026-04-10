@@ -1007,6 +1007,69 @@ export async function getSupplierSOA(
   };
 }
 
+/**
+ * Supplier SOA overview — all suppliers with outstanding balances, grouped.
+ */
+export async function getSupplierSOAOverview(orgId: string) {
+  const rows = await db.execute(sql`
+    SELECT
+      s.id AS supplier_id,
+      s.name AS supplier_name,
+      s.contact_email,
+      s.contact_phone,
+      s.address,
+      COUNT(si.id)::int AS invoice_count,
+      COALESCE(SUM(si.balance::numeric), 0)::numeric(14,2) AS total_balance,
+      MIN(si.invoice_date) AS oldest_invoice_date,
+      MIN(si.due_date) AS earliest_due_date,
+      COUNT(CASE WHEN si.due_date < CURRENT_DATE THEN 1 END)::int AS overdue_count,
+      COALESCE(SUM(CASE WHEN si.due_date < CURRENT_DATE THEN si.balance::numeric ELSE 0 END), 0)::numeric(14,2) AS overdue_amount
+    FROM suppliers s
+    JOIN supplier_invoices si ON si.supplier_id = s.id AND si.org_id = s.org_id
+    WHERE s.org_id = ${orgId}
+      AND si.status IN ('OPEN', 'PARTIALLY_PAID')
+      AND si.balance::numeric > 0
+    GROUP BY s.id, s.name, s.contact_email, s.contact_phone, s.address
+    ORDER BY total_balance DESC
+  `);
+
+  // Summary totals
+  const totalPayable = (rows as any[]).reduce((s: number, r: any) => s + parseFloat(r.total_balance), 0);
+  const totalOverdue = (rows as any[]).reduce((s: number, r: any) => s + parseFloat(r.overdue_amount), 0);
+  const supplierCount = rows.length;
+
+  // Due this week
+  const dueThisWeek = await db.execute(sql`
+    SELECT COALESCE(SUM(balance::numeric), 0)::numeric(14,2) AS amount
+    FROM supplier_invoices
+    WHERE org_id = ${orgId}
+      AND status IN ('OPEN', 'PARTIALLY_PAID')
+      AND due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+  `);
+
+  return {
+    suppliers: (rows as any[]).map((r: any) => ({
+      supplierId: r.supplier_id,
+      supplierName: r.supplier_name,
+      contactEmail: r.contact_email,
+      contactPhone: r.contact_phone,
+      address: r.address,
+      invoiceCount: r.invoice_count,
+      totalBalance: parseFloat(r.total_balance),
+      oldestInvoiceDate: r.oldest_invoice_date,
+      earliestDueDate: r.earliest_due_date,
+      overdueCount: r.overdue_count,
+      overdueAmount: parseFloat(r.overdue_amount),
+    })),
+    summary: {
+      totalPayable: Math.round(totalPayable * 100) / 100,
+      totalOverdue: Math.round(totalOverdue * 100) / 100,
+      supplierCount,
+      dueThisWeek: parseFloat((dueThisWeek as any[])[0]?.amount ?? "0"),
+    },
+  };
+}
+
 export async function getSummary(orgId: string) {
   const [totals] = await db.execute(
     sql`
@@ -1051,15 +1114,30 @@ export async function getPDCReport(orgId: string) {
     `,
   );
 
-  // Group by month
-  const grouped: Record<string, any[]> = {};
-  for (const row of rows as any[]) {
-    const bucket = row.month_bucket;
-    if (!grouped[bucket]) grouped[bucket] = [];
-    grouped[bucket].push(row);
-  }
+  // Map rows to flat array + compute monthly summary
+  const data = (rows as any[]).map((r: any) => ({
+    id: r.id,
+    cvNo: r.cv_number ?? "",
+    supplierName: r.supplier_name ?? "",
+    checkNo: r.check_number ?? "",
+    bankName: r.bank_name ?? "",
+    checkDate: r.check_date,
+    amount: String(r.net_amount ?? "0"),
+    status: r.status ?? "",
+  }));
 
-  return { data: grouped };
+  const monthMap = new Map<string, number>();
+  for (const r of rows as any[]) {
+    const bucket = r.month_bucket;
+    if (bucket) {
+      monthMap.set(bucket, (monthMap.get(bucket) || 0) + parseFloat(r.net_amount ?? "0"));
+    }
+  }
+  const monthlySummary = Array.from(monthMap.entries())
+    .map(([month, total]) => ({ month, total }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+
+  return { data, monthlySummary };
 }
 
 // ════════════════════════════════════════════════════════════════════

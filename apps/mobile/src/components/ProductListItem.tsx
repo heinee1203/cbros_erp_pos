@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import StockBadge from './StockBadge';
 import type { CatalogItem } from '@/hooks/use-catalog-search';
-import { colors } from '@/theme';
+import { colors, textStyles, spacing, radius, fonts, fontSize } from '@/theme';
 
 interface Props {
   item: CatalogItem;
@@ -55,7 +55,7 @@ function ProductListItem({ item, index, onPress, onLongPress }: Props) {
       ]}
       onPress={() => onPress(item)}
       onLongPress={() => onLongPress?.(item)}
-      android_ripple={isOOS ? undefined : { color: 'rgba(245,166,35,0.06)' }}
+      android_ripple={isOOS ? undefined : { color: colors.accent.glow }}
     >
       <View style={styles.left}>
         <Text style={styles.productName} numberOfLines={2}>
@@ -79,46 +79,45 @@ const createStyles = () => StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 18,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
     minHeight: 64,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border.subtle,
+    borderRadius: radius.lg,
   },
   rowPressed: {
-    backgroundColor: 'rgba(245,166,35,0.06)',
+    backgroundColor: colors.accent.glow,
   },
   rowOOS: {
-    opacity: 0.65,
+    opacity: 0.5,
   },
   left: {
     flex: 1,
-    marginRight: 12,
+    marginRight: spacing.md,
   },
   right: {
     alignItems: 'flex-end',
-    gap: 4,
+    gap: spacing.xs,
   },
   productName: {
-    fontSize: 15,
-    fontFamily: 'Outfit-SemiBold',
+    fontFamily: fonts.display.semiBold,
+    fontSize: fontSize.lg,
     color: colors.text.primary,
     lineHeight: 20,
   },
   skuText: {
-    fontSize: 12,
-    fontFamily: 'JetBrainsMono-Regular',
+    ...textStyles.monoSm,
     color: colors.text.muted,
     marginTop: 2,
   },
   priceText: {
-    fontSize: 16,
-    fontFamily: 'Outfit-Bold',
+    ...textStyles.price,
     color: colors.accent.primary,
   },
   priceNotSet: {
-    fontSize: 14,
-    fontFamily: 'Outfit-Medium',
+    fontFamily: fonts.display.medium,
+    fontSize: fontSize.base,
     color: colors.text.muted,
     fontStyle: 'italic',
   },

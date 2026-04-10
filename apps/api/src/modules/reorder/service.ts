@@ -220,6 +220,16 @@ export async function refreshReorderSuggestions(
         WHERE p.org_id = ${orgId}
           AND p.is_active = true
           AND p.reorder_enabled = true
+          AND p.track_inventory = true
+          AND NOT EXISTS (
+            SELECT 1 FROM product_families pf
+            WHERE pf.id = p.family_id AND pf.slug = 'non-items'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM categories exc_cat
+            WHERE exc_cat.id = p.category_id
+              AND exc_cat.name IN ('Count', 'Price Add', 'Labor', 'Payment')
+          )
       ),
       with_rop AS (
         SELECT

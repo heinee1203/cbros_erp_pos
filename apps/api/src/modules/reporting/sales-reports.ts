@@ -651,3 +651,91 @@ export async function getDiscountAnalysis(orgId: string, opts: DateRangeOpts) {
     })),
   };
 }
+
+/**
+ * Mechanic/Technician Productivity — labor revenue per technician
+ * Combines live POS sale_lines + imported historical_sales via UNION ALL
+ */
+export async function getMechanicProductivity(orgId: string, opts: DateRangeOpts) {
+  const locationFilter = opts.locationId ? sql`AND s.location_id = ${opts.locationId}` : sql``;
+  const fromFilter = opts.from ? sql`AND s.completed_at >= ${opts.from}` : sql``;
+  const toFilter = opts.to ? sql`AND s.completed_at <= ${opts.to}` : sql``;
+  const hsLocationFilter = opts.locationId ? sql`AND hs.location_id = ${opts.locationId}` : sql``;
+  const hsFromFilter = opts.from ? sql`AND hs.movement_date >= ${opts.from}` : sql``;
+  const hsToFilter = opts.to ? sql`AND hs.movement_date <= ${opts.to}` : sql``;
+
+  const rows = await db.execute(sql`
+    SELECT
+      technician_id,
+      technician_name,
+      SUM(job_count)::int AS job_count,
+      SUM(revenue)::numeric(14,2) AS revenue,
+      CASE WHEN SUM(job_count) > 0
+        THEN (SUM(revenue) / SUM(job_count))::numeric(14,2)
+        ELSE 0 END AS avg_per_job
+    FROM (
+      -- Live POS sales
+      SELECT
+        sl.technician_id,
+        COALESCE(t.name, u.full_name) AS technician_name,
+        COUNT(DISTINCT sl.sale_id)::int AS job_count,
+        SUM(sl.line_total::numeric) AS revenue
+      FROM sale_lines sl
+      INNER JOIN sales s ON s.id = sl.sale_id
+      INNER JOIN products p ON p.id = sl.product_id
+      LEFT JOIN users u ON u.id = sl.technician_id
+      LEFT JOIN technicians t ON t.id = sl.technician_id
+      WHERE s.org_id = ${orgId}
+        AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED')
+        AND p.track_inventory = false
+        AND (p.name ILIKE '%labor%' OR EXISTS (
+          SELECT 1 FROM categories c WHERE c.id = p.category_id AND c.name ILIKE '%labor%'
+        ))
+        ${locationFilter} ${fromFilter} ${toFilter}
+      GROUP BY sl.technician_id, COALESCE(t.name, u.full_name)
+
+      UNION ALL
+
+      -- Imported historical sales (Loyverse)
+      -- For historical data, technician_id IS the labor indicator (backfilled from variants).
+      -- Don't filter by track_inventory or labor name — Loyverse receipts have the revenue
+      -- on parts/accessory lines, not on the ₱0 variant marker line.
+      SELECT
+        hs.technician_id,
+        t.name AS technician_name,
+        COUNT(DISTINCT hs.reason_reference)::int AS job_count,
+        SUM(hs.quantity * hs.unit_price::numeric) AS revenue
+      FROM historical_sales hs
+      LEFT JOIN technicians t ON t.id = hs.technician_id
+      WHERE hs.org_id = ${orgId}
+        AND hs.reason_type = 'SALE'
+        AND hs.technician_id IS NOT NULL
+        AND hs.unit_price::numeric > 0
+        ${hsLocationFilter} ${hsFromFilter} ${hsToFilter}
+      GROUP BY hs.technician_id, t.name
+    ) combined
+    GROUP BY technician_id, technician_name
+    ORDER BY SUM(revenue) DESC
+  `);
+
+  const data = (rows as any[]).map((r: any) => ({
+    technicianId: r.technician_id,
+    technicianName: r.technician_name ?? "(Unassigned)",
+    jobCount: r.job_count,
+    revenue: parseFloat(r.revenue) || 0,
+    avgPerJob: parseFloat(r.avg_per_job) || 0,
+  }));
+
+  const totalRevenue = data.reduce((s, d) => s + d.revenue, 0);
+  const totalJobs = data.reduce((s, d) => s + d.jobCount, 0);
+
+  return {
+    data: data.map(d => ({ ...d, pctOfTotal: totalRevenue > 0 ? Math.round(d.revenue / totalRevenue * 1000) / 10 : 0 })),
+    summary: {
+      totalRevenue,
+      totalJobs,
+      avgPerJob: totalJobs > 0 ? Math.round(totalRevenue / totalJobs * 100) / 100 : 0,
+      topTechnician: data.length > 0 ? data[0].technicianName : "—",
+    },
+  };
+}

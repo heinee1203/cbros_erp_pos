@@ -351,7 +351,7 @@ export default function CatalogScreen() {
     <View style={styles.container}>
       {/* Header — hide Cart button on tablet (cart panel is visible) */}
       <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
-        <Text style={styles.headerTitle}>POINT OF SALE</Text>
+        <Text style={styles.headerTitle}>Catalog</Text>
         {!isTablet && (
           <Pressable
             style={styles.cartButton}
@@ -632,11 +632,8 @@ const createStyles = () => StyleSheet.create({
     backgroundColor: colors.bg.primary,
   },
   headerTitle: {
-    fontSize: 11,
-    fontFamily: 'Outfit-SemiBold',
-    color: colors.text.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 2,
+    ...textStyles.subheading,
+    color: colors.text.primary,
   },
   cartButton: {
     flexDirection: 'row',
@@ -676,21 +673,21 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.bg.surface,
-    borderRadius: 14,
+    borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.border.default,
-    paddingHorizontal: 16,
-    marginHorizontal: 16,
-    marginVertical: 12,
-    height: 52,
+    paddingHorizontal: spacing.lg,
+    marginHorizontal: spacing.lg,
+    marginVertical: spacing.md,
+    height: 56,
   },
   searchInputContainerFocused: {
     borderColor: colors.accent.primary,
   },
   searchIcon: {
-    marginRight: 10,
+    marginRight: spacing.sm,
     color: colors.text.muted,
-    fontSize: 18,
+    fontSize: 20,
   },
   searchInput: {
     flex: 1,
@@ -719,9 +716,10 @@ const createStyles = () => StyleSheet.create({
     flexShrink: 0,
   },
   chipRow: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
     paddingRight: 40,
+    gap: spacing.sm,
   },
 
   // ── Empty state ──

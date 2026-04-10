@@ -16,7 +16,12 @@ import {
   getSalesKPIs,
   getSalesByPaymentMethod,
   getDiscountAnalysis,
+  getMechanicProductivity,
 } from "./sales-reports";
+import {
+  getInventoryValuation,
+  getInventoryValuationDetail,
+} from "./inventory-valuation";
 import { db } from "@apex/database";
 import { sql } from "drizzle-orm";
 
@@ -220,6 +225,18 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(data);
   });
 
+  // GET /reports/mechanic-productivity
+  app.get("/mechanic-productivity", async (request, reply) => {
+    const { orgId, locationId } = request.storeContext!;
+    const query = request.query as { from?: string; to?: string; allLocations?: string };
+    const data = await getMechanicProductivity(orgId, {
+      locationId: query.allLocations === "true" || !locationId ? undefined : locationId,
+      from: query.from,
+      to: query.to,
+    });
+    return reply.send(data);
+  });
+
   // GET /reports/sales-summary
   app.get("/sales-summary", async (request, reply) => {
     const { orgId, locationId } = request.storeContext!;
@@ -277,6 +294,80 @@ export const reportingRoutes: FastifyPluginAsync = async (app) => {
       from: query.from,
       to: query.to,
       employeeId: query.employeeId,
+    });
+
+    return reply.send(data);
+  });
+
+  // ═══════════════════════════════════════════════
+  // Inventory Valuation
+  // ═══════════════════════════════════════════════
+
+  // GET /reports/inventory-valuation — Grouped inventory value at cost & retail
+  app.get("/inventory-valuation", async (request, reply) => {
+    const { orgId, locationId } = request.storeContext!;
+    const query = request.query as {
+      locationId?: string;
+      groupBy?: string;
+      allLocations?: string;
+      categoryId?: string;
+      brandId?: string;
+      excludeZeroCost?: string;
+      excludeZeroSell?: string;
+    };
+
+    const effectiveLocationId =
+      query.allLocations === "true" || !locationId
+        ? query.locationId || undefined
+        : query.locationId || locationId;
+
+    const data = await getInventoryValuation(orgId, {
+      locationId: effectiveLocationId,
+      groupBy: (query.groupBy as any) || "category",
+      categoryId: query.categoryId || undefined,
+      brandId: query.brandId || undefined,
+      excludeZeroCost: query.excludeZeroCost === "true",
+      excludeZeroSell: query.excludeZeroSell === "true",
+    });
+
+    return reply.send(data);
+  });
+
+  // GET /reports/inventory-valuation/detail — Product-level drill-down
+  app.get("/inventory-valuation/detail", async (request, reply) => {
+    const { orgId, locationId } = request.storeContext!;
+    const query = request.query as {
+      groupBy?: string;
+      groupName?: string;
+      locationId?: string;
+      cursor?: string;
+      limit?: string;
+      allLocations?: string;
+      categoryId?: string;
+      brandId?: string;
+      excludeZeroCost?: string;
+      excludeZeroSell?: string;
+    };
+
+    if (!query.groupName) {
+      return reply.status(400).send({ error: "groupName is required" });
+    }
+
+    const effectiveLocationId =
+      query.allLocations === "true" || !locationId
+        ? query.locationId || undefined
+        : query.locationId || locationId;
+
+    const data = await getInventoryValuationDetail(orgId, {
+      groupBy: (query.groupBy as any) || "category",
+      groupName: query.groupName,
+      locationId: effectiveLocationId,
+      cursor: query.cursor,
+      limit: query.limit ? parseInt(query.limit, 10) : 50,
+      categoryId: query.categoryId || undefined,
+      brandId: query.brandId || undefined,
+      excludeZeroCost: query.excludeZeroCost === "true",
+      excludeZeroSell: query.excludeZeroSell === "true",
     });
 
     return reply.send(data);

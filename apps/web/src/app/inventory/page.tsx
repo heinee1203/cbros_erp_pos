@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, startTransition } from "react";
 import { createPortal } from "react-dom";
 import {
   Search,
@@ -157,6 +157,8 @@ function BulkDropdown({ label, options, onSelect }: {
 export default function InventoryPage() {
   const { token, locationId, apiLocationId, user } = useAuth();
   const { isCollapsed } = useSidebar();
+  const isStaff = user?.role === "STAFF";
+  const canEdit = !isStaff; // STAFF cannot add/edit/delete/import/export
 
   const locationsQuery = useLocations(token);
   const orgLocations = useMemo(() => {
@@ -181,6 +183,7 @@ export default function InventoryPage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [showFindReplace, setShowFindReplace] = useState(false);
@@ -219,11 +222,20 @@ export default function InventoryPage() {
   /* Expand/collapse state for parent products (variants) */
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
 
-  /* Debounce search input */
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
-    return () => clearTimeout(timer);
+  /* Submit search on Enter (no debounce — API call only on explicit action) */
+  const submitSearch = useCallback(() => {
+    const val = searchInputRef.current?.value?.trim() ?? searchQuery.trim();
+    setSearchQuery(val);
+    setDebouncedSearch(val);
+    setPage(1);
   }, [searchQuery]);
+
+  const clearSearch = useCallback(() => {
+    setSearchQuery("");
+    setDebouncedSearch("");
+    setPage(1);
+    if (searchInputRef.current) searchInputRef.current.value = "";
+  }, []);
 
   /* Fetch product families for Group filter */
   const familiesQuery = useProductFamilies(token, apiLocationId);
@@ -242,11 +254,16 @@ export default function InventoryPage() {
   }, [categoriesQuery.data, familyFilter]);
 
   /* Fetch sub-categories for Sub-cat filter — cascaded by selected category */
-  const subcategoriesQuery = useSubcategories(token, apiLocationId, categoryFilter || undefined);
+  const subcategoriesQuery = useSubcategories(token, apiLocationId, (categoryFilter && categoryFilter !== "__none__") ? categoryFilter : undefined);
+  const allSubcategoriesQuery = useSubcategories(token!, apiLocationId!);
   const filteredSubcategories = useMemo(() => {
     const subs = subcategoriesQuery.data?.data ?? [];
     return [...subs].sort((a, b) => a.name.localeCompare(b.name));
   }, [subcategoriesQuery.data]);
+  const allSubcategories = useMemo(() => {
+    const subs = allSubcategoriesQuery.data?.data ?? [];
+    return [...subs].sort((a, b) => a.name.localeCompare(b.name));
+  }, [allSubcategoriesQuery.data]);
 
   /* Fetch brands for Brand filter */
   const brandsQuery = useBrands(token, apiLocationId);
@@ -876,21 +893,25 @@ export default function InventoryPage() {
             <Layers size={13} />
             {viewMode === "nested" ? "List" : "Group"}
           </button>
-          <button onClick={() => { resetImport(); setShowImportModal(true); }} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
-            <Upload size={13} />
-            Import
-          </button>
-          <button onClick={handleExport} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
-            <Download size={13} />
-            Export
-          </button>
-          <button
-            onClick={() => setShowQuickAdd(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98]"
-          >
-            <Plus size={13} strokeWidth={2.5} />
-            Add Item
-          </button>
+          {canEdit && (
+            <>
+              <button onClick={() => { resetImport(); setShowImportModal(true); }} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
+                <Upload size={13} />
+                Import
+              </button>
+              <button onClick={handleExport} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
+                <Download size={13} />
+                Export
+              </button>
+              <button
+                onClick={() => setShowQuickAdd(true)}
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-[0.98]"
+              >
+                <Plus size={13} strokeWidth={2.5} />
+                Add Item
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -901,20 +922,21 @@ export default function InventoryPage() {
           className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
         />
         <input
+          ref={searchInputRef}
           type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search items, SKU, OEM... (use commas for multiple)"
-          className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-8 text-sm text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none placeholder:text-muted-foreground/50 transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+          defaultValue={searchQuery}
+          onChange={(e) => startTransition(() => setSearchQuery(e.target.value))}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitSearch(); } }}
+          placeholder="Search items, SKU, OEM... (press Enter)"
+          className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-16 text-sm text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] outline-none placeholder:text-muted-foreground/50 transition-colors focus:border-primary/40 focus:ring-2 focus:ring-primary/[0.08]"
+          title="Tip: begins:NIS (starts with) | sku:SB-4122 (exact SKU) | barcode:4289 (barcode starts with) | use commas for multiple"
         />
-        {searchQuery && (
-          <button
-            onClick={() => setSearchQuery("")}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-          >
-            <X size={13} />
-          </button>
-        )}
+        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+          {searchQuery && (
+            <button onClick={clearSearch} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X size={13} /></button>
+          )}
+          <button onClick={submitSearch} className="rounded p-1 text-muted-foreground hover:text-primary hover:bg-primary/[0.06] transition-colors" title="Search"><Search size={14} /></button>
+        </div>
       </div>
 
       {/* -- Filter Bar -- */}
@@ -1099,8 +1121,16 @@ export default function InventoryPage() {
             />
             <BulkDropdown
               label="Subcategory"
-              options={filteredSubcategories.map(s => ({ id: s.id, name: s.name }))}
-              onSelect={(id) => handleBulkUpdate({ subcategoryId: id })}
+              options={allSubcategories.map(s => ({ id: s.id, name: s.name }))}
+              onSelect={(id) => {
+                // Auto-assign the parent category when a subcategory is selected
+                const sub = allSubcategories.find(s => s.id === id);
+                if (sub?.categoryId) {
+                  handleBulkUpdate({ subcategoryId: id, categoryId: sub.categoryId });
+                } else {
+                  handleBulkUpdate({ subcategoryId: id });
+                }
+              }}
             />
             <button
               onClick={() => setShowAvailModal(true)}
@@ -1307,6 +1337,7 @@ export default function InventoryPage() {
                       onToggleParent={() => setExpandedParents((prev) => { const next = new Set(prev); if (next.has(p.id)) next.delete(p.id); else next.add(p.id); return next; })}
                       colCount={colCount}
                       onDeleteSingle={handleDeleteSingle}
+                      canEdit={canEdit}
                     />
                   ))
                 )}

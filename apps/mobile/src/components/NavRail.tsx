@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Alert } from 'react-native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { colors } from '@/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { usePosPermission } from '@/hooks/use-pos-permission';
+import { getHeldCartCount } from '@/storage/held-carts';
+import { HeldCartsSheet } from '@/components/HeldCartsSheet';
 
 const TAB_ICONS: Record<string, string> = {
   POS: '\u229E',           // ⊞
@@ -18,6 +20,10 @@ export function NavRail({ state, navigation }: BottomTabBarProps) {
   const styles = createStyles();
   const { user, logout, locations, locationId } = useAuth();
   const { can } = usePosPermission();
+  const [heldCartsVisible, setHeldCartsVisible] = useState(false);
+
+  // Re-read on each render (NavRail re-renders on tab changes)
+  const heldCount = getHeldCartCount();
 
   const currentLocation = locations?.find((l: any) => l.id === locationId);
   const initials = user?.fullName
@@ -68,6 +74,20 @@ export function NavRail({ state, navigation }: BottomTabBarProps) {
         })}
       </View>
 
+      {/* Held carts indicator */}
+      {heldCount > 0 && (
+        <Pressable
+          style={styles.heldCartsButton}
+          onPress={() => setHeldCartsVisible(true)}
+          android_ripple={{ color: colors.accent.glow, borderless: true }}
+        >
+          <Text style={styles.heldCartsIcon}>{'\u23F8'}</Text>
+          <View style={styles.heldCartsBadge}>
+            <Text style={styles.heldCartsBadgeText}>{heldCount}</Text>
+          </View>
+        </Pressable>
+      )}
+
       {/* User/branch at bottom */}
       <Pressable style={styles.userIndicator} onPress={handleUserPress}>
         <View style={styles.userAvatar}>
@@ -77,6 +97,11 @@ export function NavRail({ state, navigation }: BottomTabBarProps) {
           <Text style={styles.branchAbbrev}>{branchAbbrev}</Text>
         ) : null}
       </Pressable>
+
+      <HeldCartsSheet
+        visible={heldCartsVisible}
+        onClose={() => setHeldCartsVisible(false)}
+      />
     </View>
   );
 }
@@ -100,7 +125,7 @@ const createStyles = () => StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 8,
-    backgroundColor: colors.accent.primary,
+    backgroundColor: '#1E3A8A',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -124,7 +149,7 @@ const createStyles = () => StyleSheet.create({
     position: 'relative',
   },
   navTabActive: {
-    backgroundColor: 'rgba(245,166,35,0.15)',
+    backgroundColor: colors.accent.glow,
   },
   activeIndicator: {
     position: 'absolute',
@@ -161,7 +186,7 @@ const createStyles = () => StyleSheet.create({
   userInitials: {
     fontSize: 12,
     fontFamily: 'Outfit-Bold',
-    color: '#9B978F',
+    color: colors.text.muted,
   },
   branchAbbrev: {
     fontSize: 8,
@@ -169,5 +194,33 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.muted,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
+  },
+  heldCartsButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  heldCartsIcon: {
+    fontSize: 18,
+    color: colors.status.warning,
+  },
+  heldCartsBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.status.warning,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 3,
+  },
+  heldCartsBadgeText: {
+    fontSize: 9,
+    fontFamily: 'Outfit-Bold',
+    color: '#0D0D0F',
   },
 });

@@ -9,7 +9,7 @@ import {
 } from "@apex/types";
 import { db } from "@apex/database";
 import { customers, customerVehicles } from "@apex/database/schema";
-import { eq, and, ilike, or } from "drizzle-orm";
+import { eq, and, ilike, or, sql } from "drizzle-orm";
 import {
   listCustomers,
   getCustomer,
@@ -17,11 +17,21 @@ import {
   updateCustomer,
   softDeleteCustomer,
   recordPayment,
+  recordMultiCustomerPayment,
   recordAdjustment,
+  reassignTransaction,
+  editTransactionAmount,
+  deleteTransaction,
   listTransactions,
+  getPaymentSettledInvoices,
+  getSOAPaymentSummary,
+  getSOAInvoices,
   getAgingReport,
   getSOA,
   getARSummary,
+  generateSOA,
+  listSOARecords,
+  updateSOAStatus,
 } from "./service";
 
 function assertArRole(role: string) {
@@ -97,11 +107,48 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(data);
   });
 
+  // ─── GET /customers/soa/search ───────────────────
+  app.get("/soa/search", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as { search?: string; status?: string; dateFrom?: string; dateTo?: string; limit?: string; offset?: string };
+    const limit = Math.min(parseInt(q.limit || "50", 10) || 50, 200);
+    const offset = parseInt(q.offset || "0", 10) || 0;
+
+    const conditions: string[] = [`s.org_id = '${orgId}'`];
+    if (q.status) conditions.push(`s.status = '${q.status.replace(/'/g, "''")}'`);
+    if (q.dateFrom) conditions.push(`s.generated_at >= '${q.dateFrom}'`);
+    if (q.dateTo) conditions.push(`s.generated_at <= '${q.dateTo}'`);
+    if (q.search && q.search.length >= 1) {
+      const term = q.search.replace(/'/g, "''");
+      conditions.push(`(s.soa_number ILIKE '%${term}%' OR c.name ILIKE '%${term}%')`);
+    }
+
+    const where = conditions.join(" AND ");
+    const [countRow] = await db.execute(sql.raw(`SELECT COUNT(*)::int AS total FROM soa_records s JOIN customers c ON c.id = s.customer_id WHERE ${where}`)) as any[];
+    const rows = await db.execute(sql.raw(`
+      SELECT s.id, s.soa_number, s.customer_id, c.name AS customer_name,
+        s.date_from, s.date_to, s.generated_at, s.total_charges, s.total_credits,
+        s.total_payable, s.transaction_count, s.status
+      FROM soa_records s JOIN customers c ON c.id = s.customer_id
+      WHERE ${where} ORDER BY s.generated_at DESC LIMIT ${limit} OFFSET ${offset}
+    `));
+
+    return reply.send({
+      data: (rows as any[]).map((r: any) => ({
+        id: r.id, soaNumber: r.soa_number, customerId: r.customer_id, customerName: r.customer_name,
+        dateFrom: r.date_from, dateTo: r.date_to, generatedAt: r.generated_at,
+        totalCharges: parseFloat(r.total_charges), totalCredits: parseFloat(r.total_credits),
+        totalPayable: parseFloat(r.total_payable), transactionCount: r.transaction_count, status: r.status,
+      })),
+      total: countRow.total,
+    });
+  });
+
   // ─── GET /customers ──────────────────────────────
   // List customers with search, filters, sorting, keyset pagination
   app.get("/", async (request, reply) => {
     const { orgId } = request.storeContext!;
-    const { search, type, hasBalance, sortBy, cursor, limit } =
+    const { search, type, hasBalance, sortBy, cursor, limit, dateFrom, dateTo } =
       request.query as {
         search?: string;
         type?: string;
@@ -109,9 +156,11 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         sortBy?: string;
         cursor?: string;
         limit?: string;
+        dateFrom?: string;
+        dateTo?: string;
       };
 
-    const parsedLimit = Math.min(parseInt(limit || "50", 10) || 50, 100);
+    const parsedLimit = Math.min(parseInt(limit || "50", 10) || 50, 200);
 
     const result = await listCustomers(orgId, {
       search,
@@ -120,6 +169,8 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       sortBy,
       cursor,
       limit: parsedLimit,
+      dateFrom,
+      dateTo,
     });
 
     return reply.send(result);
@@ -264,6 +315,23 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // ─── POST /customers/multi-payment ─────────────────
+  // Record a single payment covering multiple customers
+  app.post("/multi-payment", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertArRole(role);
+    const body = request.body as any;
+    if (!body?.allocations?.length) return reply.status(400).send({ error: "At least one customer allocation is required" });
+    if (!body?.totalAmount || !body?.method) return reply.status(400).send({ error: "totalAmount and method are required" });
+    try {
+      const result = await recordMultiCustomerPayment(body, orgId, userId);
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
   // ─── POST /customers/:id/adjustments ──────────────
   // Manual balance adjustment (ADMIN only)
   app.post("/:id/adjustments", async (request, reply) => {
@@ -282,6 +350,56 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     try {
       const result = await recordAdjustment(id, parsed.data, orgId, userId);
       return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── PATCH /customers/:id/transactions/:txnId/reassign ──
+  // Reassign a transaction to a different customer
+  app.patch("/:id/transactions/:txnId/reassign", async (request, reply) => {
+    const { id, txnId } = request.params as { id: string; txnId: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertAdmin(role);
+    const { newCustomerId, reason } = request.body as { newCustomerId: string; reason: string };
+    if (!newCustomerId || !reason) return reply.status(400).send({ error: "newCustomerId and reason are required" });
+    try {
+      const result = await reassignTransaction(id, txnId, newCustomerId, reason, orgId, userId);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── PATCH /customers/:id/transactions/:txnId ──
+  // Edit a transaction amount
+  app.patch("/:id/transactions/:txnId", async (request, reply) => {
+    const { id, txnId } = request.params as { id: string; txnId: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertAdmin(role);
+    const { amount, reason } = request.body as { amount: number; reason: string };
+    if (!amount || !reason) return reply.status(400).send({ error: "amount and reason are required" });
+    try {
+      const result = await editTransactionAmount(id, txnId, amount, reason, orgId, userId);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── DELETE /customers/:id/transactions/:txnId ──
+  // Delete a CHARGE transaction (must not be billed)
+  app.delete("/:id/transactions/:txnId", async (request, reply) => {
+    const { id, txnId } = request.params as { id: string; txnId: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertAdmin(role);
+    const { reason } = (request.body as { reason?: string }) || {};
+    try {
+      const result = await deleteTransaction(id, txnId, reason || "Deleted by admin", orgId, userId);
+      return reply.send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
     }
@@ -346,6 +464,74 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
         .returning();
 
       return reply.status(201).send(vehicle);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── SOA Generation & History ──────────────────────
+
+  // POST /customers/:id/soa/generate — Create SOA record & mark billed
+  app.post("/:id/soa/generate", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role, userId } = request.user;
+    assertArRole(role);
+    const { id: customerId } = request.params as { id: string };
+    const body = request.body as { from: string; to: string; unbilledOnly?: boolean; transactionIds?: string[] };
+    if (!body?.from || !body?.to) {
+      return reply.status(400).send({ error: "from and to are required" });
+    }
+    try {
+      const result = await generateSOA(customerId, orgId, body.from, body.to, userId, body.unbilledOnly, body.transactionIds);
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // GET /customers/:id/soa/history — List SOA records
+  app.get("/:id/soa/history", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { id: customerId } = request.params as { id: string };
+    const data = await listSOARecords(customerId, orgId);
+    return reply.send({ data });
+  });
+
+  // GET /customers/:id/transactions/:txnId/settled-invoices — Get invoices settled by a payment
+  app.get("/:id/transactions/:txnId/settled-invoices", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { txnId } = request.params as { txnId: string };
+    const data = await getPaymentSettledInvoices(txnId, orgId);
+    return reply.send({ data });
+  });
+
+  // GET /customers/:id/soa/:soaId/payment-summary — Get all payments for an SOA
+  app.get("/:id/soa/:soaId/payment-summary", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { soaId } = request.params as { soaId: string };
+    const data = await getSOAPaymentSummary(soaId, orgId);
+    return reply.send({ data });
+  });
+
+  // GET /customers/:id/soa/:soaId/invoices — Get invoices within an SOA with allocation status
+  app.get("/:id/soa/:soaId/invoices", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { soaId } = request.params as { soaId: string };
+    const data = await getSOAInvoices(soaId, orgId);
+    return reply.send({ data });
+  });
+
+  // PATCH /customers/:id/soa/:soaId — Update SOA status
+  app.patch("/:id/soa/:soaId", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertArRole(role);
+    const { soaId } = request.params as { soaId: string };
+    const body = request.body as { status: string; paidAmount?: string };
+    if (!body?.status) return reply.status(400).send({ error: "status is required" });
+    try {
+      await updateSOAStatus(soaId, orgId, body.status, body.paidAmount);
+      return reply.send({ success: true });
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
     }

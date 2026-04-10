@@ -20,7 +20,7 @@ import { KEYS } from '@/storage/keys';
 import type { SettingsStackParamList } from '@/app/MainTabs';
 import { useLayout } from '@/hooks/use-layout';
 import { useTheme } from '@/theme/ThemeContext';
-import { colors, textStyles, spacing, layout } from '@/theme';
+import { colors, textStyles, spacing, layout, radius, fonts } from '@/theme';
 import { Button, Card } from '@/components/ui';
 
 type Nav = StackNavigationProp<SettingsStackParamList, 'SettingsHome'>;
@@ -264,16 +264,18 @@ const createStyles = () => StyleSheet.create({
     marginBottom: spacing.md,
   },
   sectionLabel: {
-    ...textStyles.caption,
+    ...textStyles.label,
     color: colors.accent.primary,
     textTransform: 'uppercase',
+    letterSpacing: 1,
     marginBottom: spacing.sm,
   },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.xs,
+    minHeight: 56,
+    paddingVertical: spacing.sm,
   },
   rowLabel: {
     ...textStyles.body,
@@ -289,7 +291,8 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.md,
+    minHeight: 56,
+    paddingVertical: spacing.sm,
   },
   navRowText: {
     ...textStyles.bodyMedium,
@@ -308,18 +311,18 @@ const createStyles = () => StyleSheet.create({
   },
   themeOptions: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   themeOption: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 10,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg,
     backgroundColor: colors.bg.overlay,
-    gap: 6,
+    gap: spacing.sm,
   },
   themeOptionActive: {
     backgroundColor: colors.accent.primary,
@@ -329,8 +332,7 @@ const createStyles = () => StyleSheet.create({
   },
   themeOptionIconActive: {},
   themeOptionText: {
-    fontSize: 13,
-    fontFamily: 'Outfit-SemiBold',
+    ...textStyles.label,
     color: colors.text.secondary,
   },
   themeOptionTextActive: {

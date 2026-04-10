@@ -24,6 +24,8 @@ export const pricingRoutes: FastifyPluginAsync = async (app) => {
       dateFrom: q.dateFrom,
       dateTo: q.dateTo,
       field: q.field as "SELL_PRICE" | "COST_PRICE" | undefined,
+      source: q.source,
+      search: q.search,
       batchId: q.batchId,
       cursor: q.cursor,
       limit: q.limit ? parseInt(q.limit, 10) : undefined,
@@ -63,9 +65,11 @@ export const pricingRoutes: FastifyPluginAsync = async (app) => {
     const q = request.query as Record<string, string>;
 
     const threshold = q.threshold ? parseFloat(q.threshold) : 15;
+    const inStockOnly = q.inStockOnly !== "false";
     const result = await getMarginAlerts(
       orgId,
       threshold,
+      inStockOnly,
       q.cursor,
       q.limit ? parseInt(q.limit, 10) : undefined,
     );

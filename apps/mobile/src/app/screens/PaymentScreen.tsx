@@ -577,54 +577,56 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
             </ScrollView>
             <View style={s.appliedSummaryRow}>
               <Text style={s.appliedPaidLabel}>Paid: {fmtPHP(paidTotal)}</Text>
-              {remaining > 0 && (
+              {remaining > 0 ? (
                 <Text style={s.appliedRemainingLabel}>Remaining: {fmtPHP(remaining)}</Text>
+              ) : (
+                <Text style={s.appliedFullyPaidLabel}>Fully Paid</Text>
               )}
             </View>
           </View>
         )}
 
-        {/* ── 3. Payment Method Selector ── */}
+        {/* ── 3. Payment Method Selector (grid) ── */}
         {!isFullyPaid && (
           <View style={s.methodsSection}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={s.methodsRow}>
-                {STANDARD_METHODS.map(m => {
-                  const active = formMethod === m.key;
-                  return (
-                    <Pressable
-                      key={m.key}
-                      style={[s.methodBtn, active && s.methodBtnActive]}
-                      onPress={() => {
-                        setFormMethod(m.key);
-                        if (m.key !== 'CASH') {
-                          setFormAmount(remaining > 0 ? remaining.toFixed(2) : '');
-                        } else {
-                          setFormAmount('');
-                        }
-                      }}
-                    >
-                      <Text style={[s.methodBtnText, active && s.methodBtnTextActive]}>
-                        {m.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-                {/* Charge — visually distinct */}
-                <Pressable
-                  style={[
-                    s.chargeMethodBtn,
-                    isCharge && s.chargeMethodBtnActive,
-                    !customerId && s.chargeMethodBtnDisabled,
-                  ]}
-                  onPress={handleChargeSelect}
-                >
-                  <Text style={[s.chargeMethodText, isCharge && s.chargeMethodTextActive]}>
-                    {'\u26A0'} Charge
-                  </Text>
-                </Pressable>
-              </View>
-            </ScrollView>
+            <View style={s.methodsGrid}>
+              {STANDARD_METHODS.map(m => {
+                const active = formMethod === m.key;
+                return (
+                  <Pressable
+                    key={m.key}
+                    style={[s.methodBtn, active && s.methodBtnActive]}
+                    onPress={() => {
+                      setFormMethod(m.key);
+                      if (m.key !== 'CASH') {
+                        setFormAmount(remaining > 0 ? remaining.toFixed(2) : '');
+                      } else {
+                        setFormAmount('');
+                      }
+                    }}
+                    android_ripple={{ color: colors.accent.glow }}
+                  >
+                    <Text style={[s.methodBtnText, active && s.methodBtnTextActive]}>
+                      {m.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+              {/* Charge — visually distinct */}
+              <Pressable
+                style={[
+                  s.chargeMethodBtn,
+                  isCharge && s.chargeMethodBtnActive,
+                  !customerId && s.chargeMethodBtnDisabled,
+                ]}
+                onPress={handleChargeSelect}
+                android_ripple={{ color: colors.accent.glow }}
+              >
+                <Text style={[s.chargeMethodText, isCharge && s.chargeMethodTextActive]}>
+                  {'\u26A0'} Charge
+                </Text>
+              </Pressable>
+            </View>
           </View>
         )}
 
@@ -775,7 +777,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
           {isFullyPaid ? (
             /* Fully paid via split payments → Complete Sale */
             <Pressable
-              style={[s.completeSaleBtn, isProcessing && { opacity: 0.6 }]}
+              style={[s.completeSaleBtn, (isProcessing || receiptMissing) && { opacity: 0.5 }]}
               onPress={handleCheckout}
               disabled={isProcessing || receiptMissing}
             >
@@ -790,7 +792,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
           ) : singlePaymentCoversAll ? (
             /* Single payment covers everything → Complete Sale shortcut */
             <Pressable
-              style={[s.completeSaleBtn, isProcessing && { opacity: 0.6 }]}
+              style={[s.completeSaleBtn, (isProcessing || receiptMissing) && { opacity: 0.5 }]}
               onPress={() => {
                 handleSinglePaymentComplete();
               }}
@@ -972,57 +974,66 @@ const styles = StyleSheet.create({
     color: colors.text.secondary,
   },
   appliedRemainingLabel: {
-    fontFamily: fonts.body.medium,
-    fontSize: fontSize.sm,
-    color: colors.status.danger,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.md,
+    color: colors.status.warning,
+  },
+  appliedFullyPaidLabel: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.md,
+    color: colors.status.success,
   },
 
-  /* ── 3. Payment Methods ── */
+  /* ── 3. Payment Methods (grid) ── */
   methodsSection: {
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.border.subtle,
   },
-  methodsRow: {
+  methodsGrid: {
     flexDirection: 'row',
-    gap: 6,
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
   methodBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
+    width: '48%' as any,
+    flexGrow: 1,
+    minHeight: 80,
+    borderRadius: radius.lg,
+    borderWidth: 2,
     borderColor: colors.border.default,
-    backgroundColor: 'transparent',
-    minHeight: 42,
+    backgroundColor: colors.bg.surface,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: spacing.md,
+    overflow: 'hidden' as any,
   },
   methodBtnActive: {
-    backgroundColor: colors.accent.primary,
+    backgroundColor: colors.accent.glow,
     borderColor: colors.accent.primary,
   },
   methodBtnText: {
     fontFamily: fonts.display.semiBold,
-    fontSize: fontSize.md,
+    fontSize: fontSize.lg,
     color: colors.text.secondary,
   },
   methodBtnTextActive: {
-    color: colors.text.inverse,
+    color: colors.accent.primary,
     fontFamily: fonts.display.bold,
   },
   chargeMethodBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
+    width: '48%' as any,
+    flexGrow: 1,
+    minHeight: 80,
+    borderRadius: radius.lg,
+    borderWidth: 2,
     borderColor: colors.status.warning,
     borderStyle: 'dashed' as any,
-    backgroundColor: 'transparent',
-    minHeight: 42,
+    backgroundColor: colors.bg.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 4,
+    paddingVertical: spacing.md,
+    overflow: 'hidden' as any,
   },
   chargeMethodBtnActive: {
     borderStyle: 'solid' as any,
@@ -1033,7 +1044,7 @@ const styles = StyleSheet.create({
   },
   chargeMethodText: {
     fontFamily: fonts.display.semiBold,
-    fontSize: fontSize.md,
+    fontSize: fontSize.lg,
     color: colors.status.warning,
   },
   chargeMethodTextActive: {
@@ -1050,45 +1061,45 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.bg.overlay,
     borderRadius: radius.lg,
-    borderWidth: 1.5,
-    paddingHorizontal: 14,
-    height: 52,
+    borderWidth: 2,
+    paddingHorizontal: spacing.lg,
+    height: 64,
   },
   tenderedInputRowStatic: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.bg.overlay,
     borderRadius: radius.lg,
-    borderWidth: 1.5,
+    borderWidth: 2,
     borderColor: colors.border.medium,
-    paddingHorizontal: 14,
-    height: 52,
+    paddingHorizontal: spacing.lg,
+    height: 64,
   },
   tenderedCurrency: {
     fontFamily: fonts.display.bold,
-    fontSize: fontSize['3xl'],
+    fontSize: fontSize['4xl'],
     color: colors.text.muted,
-    marginRight: 6,
+    marginRight: spacing.sm,
   },
   tenderedInput: {
     flex: 1,
-    fontFamily: fonts.display.bold,
-    fontSize: fontSize['4xl'],
+    fontFamily: fonts.mono.semiBold,
+    fontSize: fontSize['5xl'],
     color: colors.text.primary,
     padding: 0,
   },
   changeInline: {
     alignItems: 'flex-end',
-    marginLeft: 8,
+    marginLeft: spacing.sm,
   },
   changeLabel: {
     fontFamily: fonts.body.medium,
-    fontSize: fontSize.xs,
+    fontSize: fontSize.sm,
     color: colors.status.success,
   },
   changeAmount: {
     fontFamily: fonts.mono.semiBold,
-    fontSize: fontSize['2xl'],
+    fontSize: fontSize['3xl'],
     color: colors.status.success,
   },
   remainingInlineLabel: {
@@ -1183,26 +1194,30 @@ const styles = StyleSheet.create({
   /* ── 5. Quick Amount Buttons ── */
   quickRow: {
     flexDirection: 'row',
-    gap: 5,
+    gap: spacing.sm,
     paddingVertical: spacing.xs,
   },
   quickBtnLg: {
     flex: 1.5,
-    paddingVertical: 10,
-    borderRadius: radius.sm,
-    backgroundColor: colors.bg.overlay,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.border.default,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 40,
+    minHeight: 44,
   },
   quickBtnSm: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: radius.sm,
-    backgroundColor: colors.bg.overlay,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.border.default,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 40,
+    minHeight: 44,
   },
   quickBtnText: {
     fontFamily: fonts.mono.semiBold,
@@ -1211,14 +1226,14 @@ const styles = StyleSheet.create({
   },
   quickBtnExact: {
     flex: 1.2,
-    paddingVertical: 10,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accent.muted,
-    borderWidth: 1,
-    borderColor: colors.accent.primary + '60',
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent.glow,
+    borderWidth: 1.5,
+    borderColor: colors.accent.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 40,
+    minHeight: 44,
   },
   quickBtnExactText: {
     fontFamily: fonts.display.bold,
@@ -1226,13 +1241,15 @@ const styles = StyleSheet.create({
     color: colors.accent.primary,
   },
   quickBtnClear: {
-    width: 42,
-    paddingVertical: 10,
-    borderRadius: radius.sm,
+    width: 44,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
     backgroundColor: colors.status.dangerBg,
+    borderWidth: 1,
+    borderColor: colors.status.danger,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 40,
+    minHeight: 44,
   },
   quickBtnClearText: {
     fontFamily: fonts.display.bold,
@@ -1256,11 +1273,12 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border.subtle,
   },
   completeSaleBtn: {
-    backgroundColor: colors.status.success,
-    paddingVertical: 16,
+    backgroundColor: colors.accent.primary,
+    height: 64,
     borderRadius: radius.lg,
     alignItems: 'center',
-    shadowColor: colors.status.success,
+    justifyContent: 'center',
+    shadowColor: colors.accent.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
     shadowRadius: 8,
@@ -1268,22 +1286,24 @@ const styles = StyleSheet.create({
   },
   completeSaleBtnText: {
     fontFamily: fonts.display.bold,
-    fontSize: fontSize.xl,
+    fontSize: fontSize['2xl'],
     color: '#FFFFFF',
     letterSpacing: 0.5,
   },
   addPaymentBtn: {
     backgroundColor: colors.accent.primary,
-    paddingVertical: 16,
+    height: 64,
     borderRadius: radius.lg,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   addPaymentBtnDisabled: {
     backgroundColor: colors.bg.overlay,
+    opacity: 0.5,
   },
   addPaymentBtnText: {
     fontFamily: fonts.display.bold,
-    fontSize: fontSize.xl,
+    fontSize: fontSize['2xl'],
     color: colors.text.inverse,
     letterSpacing: 0.5,
   },

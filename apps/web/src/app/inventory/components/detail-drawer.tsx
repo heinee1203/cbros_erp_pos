@@ -230,6 +230,35 @@ export function DetailDrawer({
     setEditing(false);
   }, [product]);
 
+  // ── Inline price editing (non-edit-mode quick edit) ──
+  const [inlineEditField, setInlineEditField] = useState<"sell" | "cost" | null>(null);
+  const [inlineEditValue, setInlineEditValue] = useState("");
+
+  const handleInlinePriceSave = useCallback(async () => {
+    if (!inlineEditField) return;
+    const val = parseFloat(inlineEditValue);
+    if (isNaN(val) || val < 0) { setInlineEditField(null); return; }
+
+    const payload: Record<string, any> = { id: product.id };
+    if (inlineEditField === "sell") payload.unitPrice = val.toFixed(2);
+    else payload.costPrice = val.toFixed(2);
+
+    try {
+      await updateMut.mutateAsync(payload as any);
+    } catch {}
+    setInlineEditField(null);
+  }, [inlineEditField, inlineEditValue, product.id, updateMut]);
+
+  const handleInlinePriceKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); handleInlinePriceSave(); }
+    if (e.key === "Escape") { setInlineEditField(null); }
+  }, [handleInlinePriceSave]);
+
+  // Live margin when inline editing
+  const liveSell = inlineEditField === "sell" ? (parseFloat(inlineEditValue) || 0) : sell;
+  const liveCost = inlineEditField === "cost" ? (parseFloat(inlineEditValue) || 0) : cost;
+  const liveMargin = getMarginPercent(liveSell, liveCost);
+
   // ── Stores / availability ──
   const { data: locData, isLoading: locLoading } = useProductLocations(token, locationId, product.id);
   const toggleMutation = useToggleAvailability(token, locationId);
@@ -518,11 +547,54 @@ export function DetailDrawer({
                   <InfoRow label="SKU" value={product.sku} mono />
                   {product.barcode && <InfoRow label="Barcode" value={product.barcode} mono />}
                   {product.oemNumber && <InfoRow label="OEM Number" value={product.oemNumber} mono />}
-                  <InfoRow label="Sell Price" value={product.isVariablePrice ? "Variable" : `\u20B1 ${formatPrice(sell)}`} />
+                  {/* Sell Price — inline editable */}
+                  <div className="flex justify-between py-0.5">
+                    <span className="text-xs text-muted-foreground">Sell Price</span>
+                    {inlineEditField === "sell" ? (
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-muted-foreground">{"\u20B1"}</span>
+                        <input type="number" min="0" step="0.01" value={inlineEditValue}
+                          onChange={(e) => setInlineEditValue(e.target.value)}
+                          onKeyDown={handleInlinePriceKeyDown}
+                          onBlur={handleInlinePriceSave}
+                          autoFocus
+                          className="h-6 w-24 rounded border border-primary/40 bg-background px-1.5 text-right text-sm tabular-nums outline-none focus:ring-1 focus:ring-primary/20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                      </div>
+                    ) : product.isVariablePrice ? (
+                      <span className="text-sm font-medium text-muted-foreground italic cursor-help" title="Edit prices on individual variants">Variable</span>
+                    ) : (
+                      <span className="group cursor-pointer text-sm font-medium text-foreground hover:text-emerald-600 transition-colors"
+                        onClick={() => { setInlineEditField("sell"); setInlineEditValue(String(sell)); }}>
+                        {"\u20B1"} {formatPrice(sell)}
+                        <Pencil size={11} className="inline ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </span>
+                    )}
+                  </div>
                   {showFinancials && (
                     <>
-                      <InfoRow label="Cost" value={cost > 0 ? `\u20B1 ${formatPrice(cost)}` : "\u2014"} />
-                      <InfoRow label="Margin" value={getMarginPercent(sell, cost).display} />
+                      {/* Cost Price — inline editable */}
+                      <div className="flex justify-between py-0.5">
+                        <span className="text-xs text-muted-foreground">Cost</span>
+                        {inlineEditField === "cost" ? (
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-muted-foreground">{"\u20B1"}</span>
+                            <input type="number" min="0" step="0.01" value={inlineEditValue}
+                              onChange={(e) => setInlineEditValue(e.target.value)}
+                              onKeyDown={handleInlinePriceKeyDown}
+                              onBlur={handleInlinePriceSave}
+                              autoFocus
+                              className="h-6 w-24 rounded border border-primary/40 bg-background px-1.5 text-right text-sm tabular-nums outline-none focus:ring-1 focus:ring-primary/20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                          </div>
+                        ) : (
+                          <span className="group cursor-pointer text-sm font-medium text-foreground hover:text-emerald-600 transition-colors"
+                            onClick={() => { setInlineEditField("cost"); setInlineEditValue(String(cost)); }}>
+                            {cost > 0 ? `\u20B1 ${formatPrice(cost)}` : "\u2014"}
+                            <Pencil size={11} className="inline ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </span>
+                        )}
+                      </div>
+                      {/* Margin — live updates during inline edit */}
+                      <InfoRow label="Margin" value={inlineEditField ? liveMargin.display : getMarginPercent(sell, cost).display} />
                     </>
                   )}
                 </div>
@@ -769,7 +841,7 @@ function OptionTypesAndVariants({
   const optionsQuery = useProductOptions(token, locationId, product.id);
   const optionTypes = optionsQuery.data?.data ?? [];
   const variantsQuery = useVariants(token, locationId, product.id);
-  const variants = variantsQuery.data?.data ?? [];
+  const variants = (variantsQuery.data?.data ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
   const createOptionType = useCreateOptionType(token, locationId);
   const deleteOptionType = useDeleteOptionType(token, locationId);
   const addOptionValue = useAddOptionValue(token, locationId);
@@ -980,24 +1052,26 @@ function OptionTypesAndVariants({
           <div className="space-y-1">
             {variants.map((v) => {
               const optLabel = v.options.map((o) => o.value).join(" \u00B7 ");
+              const price = parseFloat(v.unitPrice) || 0;
               return (
                 <div key={v.id} className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5">
                   <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap gap-1 mb-0.5">
-                      {v.options.map((o, i) => (
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-[12px] font-semibold text-foreground truncate">{v.name}</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground ml-2 shrink-0">Stock: {v.stockLevel}</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                      <span className="font-mono tracking-tight">SKU: {v.sku}</span>
+                      <span className="tabular-nums">{price > 0 ? formatPrice(price) : "Variable"}</span>
+                      {v.options.length > 0 && v.options.map((o, i) => (
                         <span key={i} className="rounded-full bg-primary/[0.06] px-1.5 py-px text-[10px] font-medium text-primary">
                           {o.value}
                         </span>
                       ))}
                     </div>
-                    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                      <span className="font-mono tracking-tight">{v.sku}</span>
-                      <span className="tabular-nums">{formatPrice(parseFloat(v.unitPrice) || 0)}</span>
-                      <span className="tabular-nums">Stock: {v.stockLevel}</span>
-                    </div>
                   </div>
                   <button
-                    onClick={() => handleDeleteVariant(v.id, optLabel || v.sku)}
+                    onClick={() => handleDeleteVariant(v.id, v.name || optLabel || v.sku)}
                     className="shrink-0 rounded p-1 text-muted-foreground hover:text-destructive"
                   >
                     <Trash2 size={12} />

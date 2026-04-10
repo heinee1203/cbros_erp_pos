@@ -712,7 +712,29 @@ export async function executeImport(
     throw new Error("Preview token expired or invalid. Please re-upload the CSV.");
   }
 
-  const { data: parsedRows, orgId, locationMapping } = cached;
+  const { data: allParsedRows, orgId, locationMapping } = cached;
+
+  // ── Early filter: only process rows relevant to the import mode ──
+  // This avoids iterating through 46K rows when only 4 are new (create_only)
+  const mode = options.importMode || "smart_sync";
+  const parsedRows = mode === "create_only"
+    ? allParsedRows.filter((r) => r.action === "CREATE" || r.errors.length > 0)
+    : mode === "update_only"
+      ? allParsedRows.filter((r) => r.action === "UPDATE" || r.errors.length > 0)
+      : allParsedRows;
+
+  // ── HARD BLOCK: inventory_sync NEVER touches categories/brands ──
+  if (mode === "inventory_sync") {
+    console.warn("[IMPORT] inventory_sync mode — categories/brands BLOCKED");
+    // Strip ALL category/brand data from rows so no code path can use it
+    for (const row of parsedRows) {
+      row.categoryName = "";
+      row.brandName = "";
+    }
+    // Also strip category mapping from options
+    delete options.categoryMapping;
+    options.createNewCategories = false;
+  }
 
   // Apply location mapping overrides
   if (options.locationMapping) {
@@ -811,10 +833,11 @@ export async function executeImport(
 
           let parentCategoryId: string | null = null;
           let parentBrandId: string | null = null;
-          if (parentRow.categoryName) {
+          // inventory_sync: NEVER assign category/brand to parent products
+          if (parentRow.categoryName && mode !== "inventory_sync") {
             parentCategoryId = categoryCache.get(parentRow.categoryName.toLowerCase()) ?? null;
           }
-          if (parentRow.brandName) {
+          if (parentRow.brandName && mode !== "inventory_sync") {
             parentBrandId = brandCache.get(parentRow.brandName.toLowerCase()) ?? null;
           }
 
@@ -871,7 +894,6 @@ export async function executeImport(
             // ── INVENTORY SYNC FAST PATH ──
             // For existing items in inventory_sync mode, update stock + availability + prices
             // Skip name/category — massive performance improvement
-            const mode = options.importMode || "smart_sync";
             if (mode === "inventory_sync" && row.action === "UPDATE" && row.existingProductId) {
               // Update prices on the product
               const priceFields: Record<string, unknown> = {};
@@ -924,8 +946,9 @@ export async function executeImport(
             }
 
             // Resolve category — check user mapping first, then cache, then auto-create
+            // HARD BLOCK: inventory_sync NEVER resolves categories (for ANY row type)
             let categoryId: string | null = null;
-            if (row.categoryName) {
+            if (row.categoryName && mode !== "inventory_sync") {
               const catMapping = options.categoryMapping?.[row.categoryName];
               if (catMapping) {
                 if (catMapping.action === "map" && catMapping.targetCategoryId) {
@@ -972,7 +995,7 @@ export async function executeImport(
               } else {
                 // No explicit mapping — try auto-match by name
                 categoryId = categoryCache.get(row.categoryName.toLowerCase()) ?? null;
-                if (!categoryId && options.createNewCategories && mode !== "inventory_sync") {
+                if (!categoryId && options.createNewCategories && (mode as string) !== "inventory_sync") {
                   const autoSlug = row.categoryName
                     .toLowerCase()
                     .replace(/[^a-z0-9]+/g, "-")
@@ -1006,8 +1029,9 @@ export async function executeImport(
             }
 
             // Resolve sub-category from mapping
+            // HARD BLOCK: inventory_sync NEVER resolves subcategories
             let subcategoryId: string | null = null;
-            if (row.categoryName) {
+            if (row.categoryName && mode !== "inventory_sync") {
               const catMapping = options.categoryMapping?.[row.categoryName];
               if (catMapping?.targetSubcategoryId) {
                 subcategoryId = catMapping.targetSubcategoryId;
@@ -1015,8 +1039,9 @@ export async function executeImport(
             }
 
             // Resolve brand from parsed category name
+            // HARD BLOCK: inventory_sync NEVER resolves brands
             let brandId: string | null = null;
-            if (row.brandName) {
+            if (row.brandName && mode !== "inventory_sync") {
               brandId = brandCache.get(row.brandName.toLowerCase()) ?? null;
               if (!brandId) {
                 // Create brand — use onConflictDoNothing to avoid aborting transaction
@@ -1051,8 +1076,7 @@ export async function executeImport(
               }
             }
 
-            // Import mode filter: skip rows that don't match the selected mode
-            // (mode already declared above in the fast path)
+            // Import mode safety check (rows are pre-filtered above, but double-check)
             if (mode === "create_only" && row.action === "UPDATE") {
               skipped++;
               await tx.execute(sql`RELEASE SAVEPOINT row_${sql.raw(String(row.rowIndex))}`);
@@ -1091,9 +1115,9 @@ export async function executeImport(
                   isVariablePrice: row.isVariablePrice,
                   barcode,
                   category: "HARD_PARTS",
-                  categoryId,
-                  subcategoryId,
-                  brandId,
+                  categoryId: mode === "inventory_sync" ? null : categoryId,
+                  subcategoryId: mode === "inventory_sync" ? null : subcategoryId,
+                  brandId: mode === "inventory_sync" ? null : brandId,
                   description: row.description || null,
                   parentProductId,
                   isParent: false,
@@ -1119,10 +1143,11 @@ export async function executeImport(
               // Update product fields — inventory_sync mode: stock + availability only (no name/price)
               const updateFields: Record<string, unknown> = {};
               if (mode === "inventory_sync") {
-                // Inventory Sync: only prices — no name/category/description changes
-                if (row.unitPrice !== "0.00") updateFields.unitPrice = row.unitPrice;
-                if (row.costPrice !== "0.00") updateFields.costPrice = row.costPrice;
+                // Inventory Sync: ONLY prices — NEVER update name/category/brand/description
+                if (row.unitPrice && row.unitPrice !== "0.00") updateFields.unitPrice = row.unitPrice;
+                if (row.costPrice && row.costPrice !== "0.00") updateFields.costPrice = row.costPrice;
                 if (row.isVariablePrice) updateFields.isVariablePrice = true;
+                // Hard block: do NOT include categoryId, subcategoryId, brandId, name, barcode, description
               } else {
                 // Smart Sync / Update Only: update all fields
                 if (row.name) updateFields.name = row.name;

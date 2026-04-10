@@ -88,7 +88,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
     // Parse pagination
     const page = Math.max(1, parseInt(q.page ?? "1", 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? "50", 10) || 50));
+    const limit = Math.min(500, Math.max(1, parseInt(q.limit ?? "50", 10) || 50));
     const offset = (page - 1) * limit;
 
     // Parse sort
@@ -160,21 +160,50 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (q.search && q.search.length >= 2) {
+      // Prefix-based search modes
+      const rawSearch = q.search.trim();
+      const beginsMatch = rawSearch.match(/^begins:(.+)/i);
+      const skuMatch = rawSearch.match(/^sku:(.+)/i);
+      const barcodeMatch = rawSearch.match(/^barcode:(.+)/i);
+
+      if (beginsMatch) {
+        const term = beginsMatch[1].trim();
+        if (term.length >= 1) {
+          conditions.push(sql`(${products.name} ILIKE ${term + "%"})`);
+        }
+      } else if (skuMatch) {
+        const term = skuMatch[1].trim();
+        if (term.length >= 1) {
+          conditions.push(sql`(${products.sku} ILIKE ${term + "%"} OR EXISTS (SELECT 1 FROM products child WHERE child.parent_product_id = ${products.id} AND child.sku ILIKE ${term + "%"}))`);
+        }
+      } else if (barcodeMatch) {
+        const term = barcodeMatch[1].trim();
+        if (term.length >= 1) {
+          conditions.push(sql`(${products.barcode} ILIKE ${term + "%"} OR EXISTS (SELECT 1 FROM products child WHERE child.parent_product_id = ${products.id} AND child.barcode ILIKE ${term + "%"}))`);
+        }
+      } else
       // Comma-separated search: OR logic across terms
       if (q.search.includes(",")) {
         const commaTerms = q.search.split(",").map((t: string) => t.trim()).filter((t: string) => t.length >= 2);
         if (commaTerms.length > 0) {
           const orParts = commaTerms.map((term: string) => {
             const pat = "%" + term + "%";
-            const startPat = term + "%";
-            const wordPat = "% " + term + "%";
-            const hyphenPat = "%-" + term + "%";
+            // For multi-word terms like "casp ranger", each word must match in the name (AND within term)
+            const words = term.split(/\s+/).filter((w: string) => w.length >= 1);
+            const nameCondition = words.length > 1
+              ? sql`(${sql.join(words.map((w: string) => sql`${products.name} ILIKE ${"%" + w + "%"}`), sql` AND `)})`
+              : sql`${products.name} ILIKE ${pat}`;
             return sql`(
-              ${products.name} ILIKE ${startPat} OR ${products.name} ILIKE ${wordPat} OR ${products.name} ILIKE ${hyphenPat}
-              OR ${products.sku} ILIKE ${startPat} OR ${products.sku} ILIKE ${hyphenPat}
+              ${nameCondition}
+              OR ${products.sku} ILIKE ${pat}
               OR ${products.barcode} ILIKE ${pat}
               OR ${products.oemNumber} ILIKE ${pat}
               OR ${brands.name} ILIKE ${pat}
+              OR EXISTS (
+                SELECT 1 FROM products child
+                WHERE child.parent_product_id = ${products.id}
+                AND (child.name ILIKE ${pat} OR child.sku ILIKE ${pat})
+              )
             )`;
           });
           conditions.push(sql`(${sql.join(orParts, sql` OR `)})`);
@@ -421,6 +450,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         primarySupplierId: products.primarySupplierId,
         isSerialized: products.isSerialized,
         isTire: products.isTire,
+        trackInventory: products.trackInventory,
         specialOrder: products.specialOrder,
         discontinued: products.discontinued,
         vehicleModel: q.vehicleMake && q.vehicleMake !== "__none__"
@@ -1204,6 +1234,20 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             .limit(1);
           if (currentProduct && !currentProduct.categoryId) {
             productUpdates.categoryId = sub.categoryId;
+          }
+        }
+      }
+
+      // Log price changes before update
+      if (productUpdates.unitPrice !== undefined || productUpdates.costPrice !== undefined) {
+        const [oldProduct] = await tx.select({ unitPrice: products.unitPrice, costPrice: products.costPrice }).from(products).where(eq(products.id, id)).limit(1);
+        if (oldProduct) {
+          const { logPriceChange } = await import("../pricing/price-change-logger");
+          if (productUpdates.unitPrice !== undefined) {
+            logPriceChange({ orgId, productId: id, field: "SELL_PRICE", oldValue: parseFloat(oldProduct.unitPrice ?? "0"), newValue: parseFloat(String(productUpdates.unitPrice)), source: "manual", changedBy: (request.user as any)?.userId });
+          }
+          if (productUpdates.costPrice !== undefined) {
+            logPriceChange({ orgId, productId: id, field: "COST_PRICE", oldValue: parseFloat(oldProduct.costPrice ?? "0"), newValue: parseFloat(String(productUpdates.costPrice)), source: "manual", changedBy: (request.user as any)?.userId });
           }
         }
       }
@@ -3032,21 +3076,47 @@ async function handleAllLocationsQuery(
   const searchFilter = (() => {
     if (!q.search || q.search.length < 2) return sql``;
 
+    // Prefix-based search modes
+    const rawSearch = q.search.trim();
+    const beginsMatch = rawSearch.match(/^begins:(.+)/i);
+    const skuMatch = rawSearch.match(/^sku:(.+)/i);
+    const barcodeMatch = rawSearch.match(/^barcode:(.+)/i);
+
+    if (beginsMatch) {
+      const term = beginsMatch[1].trim();
+      return term.length >= 1 ? sql`AND (p.name ILIKE ${term + "%"})` : sql``;
+    }
+    if (skuMatch) {
+      const term = skuMatch[1].trim();
+      return term.length >= 1 ? sql`AND (p.sku ILIKE ${term + "%"} OR EXISTS (SELECT 1 FROM products child WHERE child.parent_product_id = p.id AND child.sku ILIKE ${term + "%"}))` : sql``;
+    }
+    if (barcodeMatch) {
+      const term = barcodeMatch[1].trim();
+      return term.length >= 1 ? sql`AND (p.barcode ILIKE ${term + "%"} OR EXISTS (SELECT 1 FROM products child WHERE child.parent_product_id = p.id AND child.barcode ILIKE ${term + "%"}))` : sql``;
+    }
+
     // Comma-separated OR search
     if (q.search.includes(",")) {
       const commaTerms = q.search.split(",").map((t: string) => t.trim()).filter((t: string) => t.length >= 2);
       if (commaTerms.length === 0) return sql``;
       const orParts = commaTerms.map((term: string) => {
         const pat = "%" + term + "%";
-        const startPat = term + "%";
-        const wordPat = "% " + term + "%";
-        const hyphenPat = "%-" + term + "%";
+        // Multi-word terms: each word must match in name (AND within term)
+        const words = term.split(/\s+/).filter((w: string) => w.length >= 1);
+        const nameCondition = words.length > 1
+          ? sql`(${sql.join(words.map((w: string) => sql`p.name ILIKE ${"%" + w + "%"}`), sql` AND `)})`
+          : sql`p.name ILIKE ${pat}`;
         return sql`(
-          p.name ILIKE ${startPat} OR p.name ILIKE ${wordPat} OR p.name ILIKE ${hyphenPat}
-          OR p.sku ILIKE ${startPat} OR p.sku ILIKE ${hyphenPat}
+          ${nameCondition}
+          OR p.sku ILIKE ${pat}
           OR p.barcode ILIKE ${pat}
           OR p.oem_number ILIKE ${pat}
           OR b.name ILIKE ${pat}
+          OR EXISTS (
+            SELECT 1 FROM products child
+            WHERE child.parent_product_id = p.id
+            AND (child.name ILIKE ${pat} OR child.sku ILIKE ${pat})
+          )
         )`;
       });
       return sql`AND (${sql.join(orParts, sql` OR `)})`;

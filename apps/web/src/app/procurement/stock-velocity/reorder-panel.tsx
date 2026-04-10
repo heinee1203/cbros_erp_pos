@@ -68,9 +68,10 @@ function getUrgencyColor(val: number | null): string {
 
 // ── Panel ──
 
-export function ReorderSuggestionsPanel({ open, onClose, lastSoldAfter, lastSoldBefore, urgencyAll, urgency12M, urgency6M, urgency3M, urgency1M, velocityClass }: {
+export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, lastSoldBefore, urgencyAll, urgency12M, urgency6M, urgency3M, urgency1M, velocityClass }: {
   open: boolean;
   onClose: () => void;
+  inline?: boolean;
   lastSoldAfter?: string;
   lastSoldBefore?: string;
   urgencyAll?: string;
@@ -329,35 +330,23 @@ export function ReorderSuggestionsPanel({ open, onClose, lastSoldAfter, lastSold
 
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex">
-      {/* Backdrop */}
-      <div className="flex-1 bg-black/30" onClick={onClose} />
+  // Inline mode: render directly in flow (as a tab), no overlay
+  const wrapperClass = inline
+    ? "mt-2 flex flex-col"
+    : "flex w-[65vw] min-w-[600px] max-w-[900px] flex-col border-l border-border bg-background shadow-2xl";
 
-      {/* Panel */}
-      <div className="flex w-[65vw] min-w-[600px] max-w-[900px] flex-col border-l border-border bg-background shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2">
-            <ShoppingCart size={16} className="text-primary" />
-            <div>
+  const content = (
+    <div className={wrapperClass}>
+        {/* Header — compact when inline (tab label already visible) */}
+        {inline ? null : (
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div className="flex items-center gap-2">
+              <ShoppingCart size={16} className="text-primary" />
               <h2 className="text-sm font-semibold">Reorder Suggestions</h2>
-              {(lastSoldAfter || lastSoldBefore || urgencyAll || urgency12M || urgency6M || urgency3M || urgency1M || velocityClass) && (
-                <div className="text-[10px] text-muted-foreground mt-0.5">
-                  Filtered:
-                  {lastSoldAfter || lastSoldBefore ? ` Last sold ${lastSoldAfter || "..."} – ${lastSoldBefore || "..."}` : ""}
-                  {velocityClass ? ` · Class: ${velocityClass}` : ""}
-                  {urgencyAll ? ` · LEFT ALL: ${urgencyAll}` : ""}
-                  {urgency12M ? ` · LEFT 12M: ${urgency12M}` : ""}
-                  {urgency6M ? ` · LEFT 6M: ${urgency6M}` : ""}
-                  {urgency3M ? ` · LEFT 3M: ${urgency3M}` : ""}
-                  {urgency1M ? ` · LEFT 1M: ${urgency1M}` : ""}
-                </div>
-              )}
             </div>
+            <button onClick={onClose} className="rounded p-1 hover:bg-muted"><X size={16} /></button>
           </div>
-          <button onClick={onClose} className="rounded p-1 hover:bg-muted"><X size={16} /></button>
-        </div>
+        )}
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
@@ -448,21 +437,23 @@ export function ReorderSuggestionsPanel({ open, onClose, lastSoldAfter, lastSold
                     {suppliers.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
-                {/* Search within suggestions */}
-                <div className="px-2 pb-2">
-                  <input
-                    type="text"
-                    value={panelSearch}
-                    onChange={(e) => setPanelSearch(e.target.value)}
-                    placeholder="Search items..."
-                    className="w-full h-7 rounded border border-border bg-background px-2 text-[11px] outline-none placeholder:text-muted-foreground/60 focus:border-primary"
-                  />
-                  {panelSearch && (
-                    <div className="mt-1 text-[10px] text-muted-foreground">
-                      Showing {items.length} of {allItems.length} items
-                    </div>
-                  )}
-                </div>
+                {/* Search within suggestions — hidden when inline (main page search handles it) */}
+                {!inline && (
+                  <div className="px-2 pb-2">
+                    <input
+                      type="text"
+                      value={panelSearch}
+                      onChange={(e) => setPanelSearch(e.target.value)}
+                      placeholder="Search items..."
+                      className="w-full h-7 rounded border border-border bg-background px-2 text-[11px] outline-none placeholder:text-muted-foreground/60 focus:border-primary"
+                    />
+                    {panelSearch && (
+                      <div className="mt-1 text-[10px] text-muted-foreground">
+                        Showing {items.length} of {allItems.length} items
+                      </div>
+                    )}
+                  </div>
+                )}
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
                     <tr>
@@ -606,6 +597,14 @@ export function ReorderSuggestionsPanel({ open, onClose, lastSoldAfter, lastSold
           </div>
         )}
       </div>
+  );
+
+  if (inline) return content as JSX.Element;
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="flex-1 bg-black/30" onClick={onClose} />
+      {content}
     </div>
   );
 }

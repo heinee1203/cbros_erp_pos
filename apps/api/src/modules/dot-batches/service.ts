@@ -210,3 +210,120 @@ export async function getDotBatchSummary(orgId: string, productId: string) {
     oldestAgeMonths: ageMonths,
   };
 }
+
+// ── DOT Entry (manual bulk entry for existing inventory) ──
+
+export async function getTiresForDotEntry(orgId: string, locationId: string) {
+  const rows = await db.execute(sql`
+    SELECT
+      p.id AS product_id,
+      p.name AS product_name,
+      p.sku,
+      i.stock_level,
+      COALESCE(
+        (SELECT SUM(db.quantity_in_stock)::int FROM dot_batches db WHERE db.product_id = p.id AND db.location_id = ${locationId} AND db.quantity_in_stock > 0),
+        0
+      ) AS tagged_count
+    FROM products p
+    INNER JOIN inventory i ON i.product_id = p.id AND i.location_id = ${locationId}
+    WHERE p.org_id = ${orgId}
+      AND p.is_tire = true
+      AND i.stock_level > 0
+    ORDER BY p.name ASC
+  `);
+
+  let totalTires = 0;
+  let taggedTires = 0;
+
+  const products = (rows as any[]).map((r: any) => {
+    const stock = r.stock_level;
+    const tagged = r.tagged_count;
+    totalTires += stock;
+    taggedTires += Math.min(tagged, stock);
+    return {
+      productId: r.product_id,
+      productName: r.product_name,
+      sku: r.sku,
+      stockAtLocation: stock,
+      taggedCount: tagged,
+      untaggedCount: Math.max(0, stock - tagged),
+    };
+  });
+
+  return {
+    products,
+    summary: { totalTires, taggedTires, untaggedTires: totalTires - taggedTires },
+  };
+}
+
+export async function getDotBatchesForProduct(orgId: string, productId: string, locationId: string) {
+  const rows = await db.execute(sql`
+    SELECT id, dot_code, quantity_in_stock, manufacture_date, manufacture_week, manufacture_year, notes
+    FROM dot_batches
+    WHERE org_id = ${orgId} AND product_id = ${productId} AND location_id = ${locationId} AND quantity_in_stock > 0
+    ORDER BY dot_code ASC
+  `);
+  return (rows as any[]).map((r: any) => ({
+    id: r.id,
+    dotCode: r.dot_code,
+    quantity: r.quantity_in_stock,
+    manufactureDate: r.manufacture_date,
+    manufactureWeek: r.manufacture_week,
+    manufactureYear: r.manufacture_year,
+    notes: r.notes,
+  }));
+}
+
+export async function saveDotEntry(
+  orgId: string,
+  productId: string,
+  locationId: string,
+  dotCode: string,
+  quantity: number,
+) {
+  const parsed = parseDotCode(dotCode);
+  if (!parsed.valid) throw new Error(parsed.warning || "Invalid DOT code");
+
+  // Upsert: if same product + location + dotCode (no PO), increment
+  const existing = await db.execute(sql`
+    SELECT id, quantity_in_stock, quantity_received FROM dot_batches
+    WHERE org_id = ${orgId} AND product_id = ${productId} AND location_id = ${locationId}
+      AND dot_code = ${dotCode} AND purchase_order_id IS NULL
+    LIMIT 1
+  `);
+
+  if ((existing as any[]).length > 0) {
+    const row = (existing as any[])[0];
+    await db.execute(sql`
+      UPDATE dot_batches
+      SET quantity_in_stock = quantity_in_stock + ${quantity},
+          quantity_received = quantity_received + ${quantity},
+          updated_at = now()
+      WHERE id = ${row.id}
+    `);
+    return { id: row.id, action: "incremented" };
+  }
+
+  // Insert new batch
+  const [batch] = await db.insert(dotBatches).values({
+    orgId,
+    productId,
+    locationId,
+    dotCode,
+    manufactureWeek: parsed.week,
+    manufactureYear: parsed.year,
+    manufactureDate: parsed.date ? parsed.date.toISOString().slice(0, 10) : null,
+    quantityReceived: quantity,
+    quantityInStock: quantity,
+    quantitySold: 0,
+    quantityReturned: 0,
+    receivedAt: new Date(),
+    notes: "Manual DOT entry",
+  }).returning({ id: dotBatches.id });
+
+  return { id: batch.id, action: "created" };
+}
+
+export async function removeDotEntry(id: string, orgId: string) {
+  await db.execute(sql`DELETE FROM dot_batches WHERE id = ${id} AND org_id = ${orgId}`);
+}

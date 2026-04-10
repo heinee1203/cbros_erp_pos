@@ -74,6 +74,7 @@ export function useCheckout() {
           : undefined,
         serials: l.isSerialized && l.serials.length > 0 ? l.serials : undefined,
         dotAllocation: l.isTire && l.dotAllocation ? l.dotAllocation : undefined,
+        technicianId: l.technicianId ?? undefined,
       })),
     };
 

@@ -231,6 +231,7 @@ export async function createSale(
         discountAmount: discount.toFixed(2),
         lineTotal: lineTotal.toFixed(2),
         notes: line.notes ?? null,
+        technicianId: (line as any).technicianId ?? null,
       });
     }
 
@@ -442,6 +443,16 @@ export async function completeSale(
         // Job card part line — stock already issued via JOB_CARD_ISSUE journal.
         // Skip inventory deduction entirely. Still record a SALE journal for
         // financial audit trail but with zero changeQuantity.
+        continue;
+      }
+
+      // Non-inventory items (labor, counts, price adds) — skip stock operations entirely
+      const [productCheck] = await tx
+        .select({ trackInventory: products.trackInventory })
+        .from(products)
+        .where(eq(products.id, line.productId))
+        .limit(1);
+      if (productCheck && productCheck.trackInventory === false) {
         continue;
       }
 
@@ -1139,12 +1150,14 @@ export async function listHistoricalReceipts(
     q?: string;
     employeeName?: string;
     cursor?: string;
+    offset?: number;
     limit: number;
   },
 ) {
   const limit = opts.limit;
+  const offset = opts.offset ?? 0;
 
-  // Build a raw SQL query for receipt-level grouping
+  // Build conditions
   const conditions: string[] = [
     `hs.org_id = '${orgId}'`,
     `hs.reason_type IN ('SALE', 'REFUND')`,
@@ -1158,25 +1171,27 @@ export async function listHistoricalReceipts(
   if (opts.from) conditions.push(`hs.movement_date >= '${opts.from}'`);
   if (opts.to) conditions.push(`hs.movement_date <= '${opts.to}'`);
 
-  // Search on receipt number, employee, location
   let searchCondition = "";
   if (opts.q && opts.q.length >= 1) {
     const q = opts.q.replace(/'/g, "''");
     searchCondition = `AND (hs.reason_reference ILIKE '%${q}%' OR hs.employee_name ILIKE '%${q}%' OR hs.location_name ILIKE '%${q}%' OR hs.product_name ILIKE '%${q}%')`;
   }
 
-  // Cursor pagination on receipt date
-  let cursorCondition = "";
-  if (opts.cursor) {
-    // cursor format: "date|reference" — decode
-    const [cursorDate, cursorRef] = opts.cursor.split("|");
-    if (cursorDate && cursorRef) {
-      cursorCondition = `HAVING MAX(hs.movement_date) < '${cursorDate}' OR (MAX(hs.movement_date) = '${cursorDate}' AND hs.reason_reference < '${cursorRef}')`;
-    }
-  }
-
   const whereClause = conditions.join(" AND ");
 
+  // Get total count + total revenue for KPIs
+  const [totalsRow] = await db.execute(sql.raw(`
+    SELECT COUNT(*)::int AS total_count, COALESCE(SUM(receipt_total), 0)::numeric(14,2) AS total_revenue
+    FROM (
+      SELECT hs.reason_reference,
+        COALESCE(SUM(CASE WHEN hs.reason_type = 'SALE' THEN hs.net_sales::numeric ELSE -hs.net_sales::numeric END), 0) AS receipt_total
+      FROM historical_sales hs
+      WHERE ${whereClause} ${searchCondition}
+      GROUP BY hs.reason_reference, hs.location_name, hs.employee_name, hs.reason_type
+    ) sub
+  `)) as any[];
+
+  // Get page of data
   const rows = await db.execute(sql.raw(`
     SELECT
       hs.reason_reference AS receipt_number,
@@ -1191,19 +1206,15 @@ export async function listHistoricalReceipts(
     FROM historical_sales hs
     WHERE ${whereClause} ${searchCondition}
     GROUP BY hs.reason_reference, hs.location_name, hs.employee_name, hs.reason_type
-    ${cursorCondition}
     ORDER BY MAX(hs.movement_date) DESC, hs.reason_reference DESC
-    LIMIT ${limit + 1}
+    LIMIT ${limit}
+    OFFSET ${offset}
   `));
 
-  const hasMore = rows.length > limit;
-  const data = hasMore ? rows.slice(0, limit) : rows;
-  const nextCursor = hasMore && data.length > 0
-    ? `${(data[data.length - 1] as any).receipt_date}|${(data[data.length - 1] as any).receipt_number}`
-    : null;
+  const total = (totalsRow as any)?.total_count ?? 0;
 
   return {
-    data: data.map((r: any) => ({
+    data: (rows as any[]).map((r: any) => ({
       receiptNumber: r.receipt_number,
       date: new Date(r.receipt_date).toISOString(),
       store: r.store,
@@ -1215,7 +1226,8 @@ export async function listHistoricalReceipts(
       customerName: r.customer_name || null,
       source: "imported" as const,
     })),
-    nextCursor,
-    hasMore,
+    total,
+    totalRevenue: parseFloat((totalsRow as any)?.total_revenue ?? "0"),
+    hasMore: offset + limit < total,
   };
 }

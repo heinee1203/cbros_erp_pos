@@ -49,3 +49,7 @@ export * from "./vehicles";
 export * from "./pricing-config";
 export * from "./printers";
 export * from "./audit-log";
+export * from "./discount-rules";
+export * from "./technicians";
+export * from "./soa-records";
+export * from "./ar-payment-allocations";

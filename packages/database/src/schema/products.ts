@@ -87,10 +87,14 @@ export const products = pgTable(
     isTire: boolean("is_tire").notNull().default(false),
     /** Maximum tire age in years before it's considered expired (default 5) */
     maxTireAgeYears: integer("max_tire_age_years"),
+    /** Track inventory — false for labor, counts, price adds (no stock deduction on sale) */
+    trackInventory: boolean("track_inventory").notNull().default(true),
     /** Special order item — ordered on demand, zero stock is intentional */
     specialOrder: boolean("special_order").notNull().default(false),
     /** Discontinued — no longer sold or restocked */
     discontinued: boolean("discontinued").notNull().default(false),
+    /** Fixed commission per unit sold — used for installation labor. NULL = use technician's default % rate */
+    commissionAmount: numeric("commission_amount", { precision: 10, scale: 2 }),
     reorderEnabled: boolean("reorder_enabled").notNull().default(true),
     customReorderPoint: integer("custom_reorder_point"),
     /** Hide this product from Low Stock lists until this date */

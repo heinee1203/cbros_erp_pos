@@ -22,6 +22,7 @@ import {
   // Reports
   getAgingReport,
   getSupplierSOA,
+  getSupplierSOAOverview,
   getSummary,
   getPDCReport,
   // Bank Accounts
@@ -484,6 +485,13 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
       }
       return reply.status(400).send({ error: err.message });
     }
+  });
+
+  // ─── GET /reports/supplier-soa ────────────────────
+  app.get("/reports/supplier-soa", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const result = await getSupplierSOAOverview(orgId);
+    return reply.send(result);
   });
 
   // ─── GET /reports/summary ─────────────────────────

@@ -1,0 +1,177 @@
+"use client";
+
+import { useState, useCallback, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { FileText, Search, X, Loader2 } from "lucide-react";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { cn } from "@/lib/utils";
+import { fmtPeso } from "@/lib/format";
+import { useAuth } from "@/app/auth-context";
+import { apiFetch } from "@/lib/api";
+import { buildSOAHtml } from "@/lib/soa-html";
+
+interface SOARecord {
+  id: string;
+  soaNumber: string;
+  customerId: string;
+  customerName: string;
+  dateFrom: string;
+  dateTo: string;
+  generatedAt: string;
+  totalCharges: number;
+  totalCredits: number;
+  totalPayable: number;
+  transactionCount: number;
+  status: string;
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  GENERATED: "bg-blue-100 text-blue-700",
+  SENT: "bg-amber-100 text-amber-700",
+  PAID: "bg-emerald-100 text-emerald-700",
+  VOID: "bg-red-100 text-red-700",
+};
+
+export default function SOASearchPage() {
+  const { token, locationId, loading: authLoading } = useAuth();
+  const router = useRouter();
+
+  const [records, setRecords] = useState<SOARecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [committedSearch, setCommittedSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const fetchData = useCallback(async () => {
+    if (!token || !locationId) return;
+    setLoading(true);
+    const params = new URLSearchParams();
+    if (committedSearch) params.set("search", committedSearch);
+    if (statusFilter) params.set("status", statusFilter);
+    if (dateFrom) params.set("dateFrom", `${dateFrom}T00:00:00Z`);
+    if (dateTo) params.set("dateTo", `${dateTo}T23:59:59Z`);
+    params.set("limit", "100");
+    try {
+      const res = await apiFetch<{ data: SOARecord[]; total: number }>(`/customers/soa/search?${params.toString()}`, { token, locationId });
+      setRecords(res.data || []);
+      setTotal(res.total || 0);
+    } catch {} finally { setLoading(false); }
+  }, [token, locationId, committedSearch, statusFilter, dateFrom, dateTo]);
+
+  useEffect(() => { if (!authLoading) fetchData(); }, [authLoading, fetchData]);
+
+  const submitSearch = () => setCommittedSearch(search.trim());
+  const clearSearch = () => { setSearch(""); setCommittedSearch(""); };
+
+  const handleReprint = async (r: SOARecord) => {
+    try {
+      const soaRes = await apiFetch<any>(`/customers/reports/soa/${r.customerId}?from=${r.dateFrom}&to=${r.dateTo}`, { token, locationId });
+      const html = buildSOAHtml({ customer: soaRes.customer, transactions: soaRes.transactions, openingBalance: soaRes.openingBalance, closingBalance: soaRes.closingBalance, from: r.dateFrom, to: r.dateTo, soaNumber: r.soaNumber });
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
+    } catch {}
+  };
+
+  const totalPayable = records.reduce((s, r) => s + (r.status !== "VOID" ? r.totalPayable : 0), 0);
+
+  return (
+    <div className="mx-auto flex h-full max-w-6xl flex-col">
+      <div className="mb-5">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.06]"><FileText size={16} className="text-primary" /></div>
+          <div>
+            <h1 className="text-[18px] font-semibold tracking-tight text-foreground">SOA Search</h1>
+            <p className="text-[13px] text-muted-foreground">Search and manage all Statements of Account</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="mb-3 rounded-xl border border-border bg-background p-3 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[180px] max-w-sm">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submitSearch(); }}
+              placeholder="Search SOA #, customer... (Enter)"
+              className="h-8 w-full rounded-lg border border-border bg-background pl-9 pr-14 text-[12px] text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20" />
+            <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+              {search && <button onClick={clearSearch} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X size={12} /></button>}
+              <button onClick={submitSearch} className="rounded p-0.5 text-muted-foreground hover:text-primary"><Search size={12} /></button>
+            </div>
+          </div>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+            className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] outline-none">
+            <option value="">All Status</option>
+            <option value="GENERATED">Generated</option>
+            <option value="SENT">Sent</option>
+            <option value="PAID">Paid</option>
+            <option value="VOID">Void</option>
+          </select>
+          <DateRangePicker startDate={dateFrom} endDate={dateTo} onChange={(s, e) => { setDateFrom(s); setDateTo(e); }} />
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
+        <div className="flex items-center border-b border-border bg-muted/40 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+          <div className="w-32">SOA #</div>
+          <div className="flex-1">Customer</div>
+          <div className="w-40">Period</div>
+          <div className="w-24 text-right">Charges</div>
+          <div className="w-24 text-right">Credits</div>
+          <div className="w-24 text-right">Payable</div>
+          <div className="w-20 text-center">Status</div>
+          <div className="w-32 text-right">Actions</div>
+        </div>
+
+        {loading ? (
+          <div className="flex h-48 items-center justify-center"><Loader2 size={18} className="animate-spin text-muted-foreground" /></div>
+        ) : records.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <FileText size={24} className="text-muted-foreground/30" />
+            <p className="mt-3 text-[13px] font-medium">No SOA records found</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {records.map((r) => (
+              <div key={r.id} className="flex items-center px-4 py-2.5 text-[13px] hover:bg-accent/30">
+                <div className="w-32 font-mono text-[12px] font-semibold text-primary">{r.soaNumber}</div>
+                <div className="flex-1 min-w-0">
+                  <button onClick={() => router.push(`/customers/${r.customerId}`)} className="text-[13px] font-medium text-foreground hover:text-primary hover:underline truncate block text-left">
+                    {r.customerName}
+                  </button>
+                </div>
+                <div className="w-40 text-[12px] text-muted-foreground">
+                  {new Date(r.dateFrom).toLocaleDateString("en-PH", { month: "short", day: "numeric" })} &ndash;{" "}
+                  {new Date(r.dateTo).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                </div>
+                <div className="w-24 text-right tabular-nums text-[12px]">{fmtPeso(r.totalCharges)}</div>
+                <div className="w-24 text-right tabular-nums text-[12px]">{r.totalCredits > 0 ? fmtPeso(r.totalCredits) : "\u2014"}</div>
+                <div className="w-24 text-right tabular-nums font-semibold text-[12px]">{fmtPeso(r.totalPayable)}</div>
+                <div className="w-20 text-center">
+                  <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[9px] font-semibold uppercase", STATUS_COLORS[r.status] ?? "bg-muted text-muted-foreground")}>{r.status}</span>
+                </div>
+                <div className="w-32 flex items-center justify-end gap-1">
+                  <button onClick={() => handleReprint(r)} className="rounded px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10">Reprint</button>
+                  {(r.status === "GENERATED" || r.status === "SENT" || r.status === "PARTIAL") && (
+                    <button onClick={() => router.push(`/customers/${r.customerId}?pay=${r.soaNumber}`)} className="rounded px-2 py-0.5 text-[10px] font-medium text-emerald-600 hover:bg-emerald-50">Pay</button>
+                  )}
+                  <button onClick={() => router.push(`/customers/${r.customerId}`)} className="rounded px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted">View</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-2">
+          <span className="text-[11px] text-muted-foreground">{total} SOA{total !== 1 ? "s" : ""}</span>
+          {totalPayable > 0 && <span className="text-[11px] font-semibold tabular-nums text-foreground">Total Payable: {fmtPeso(totalPayable)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}

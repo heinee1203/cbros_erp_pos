@@ -50,6 +50,8 @@ export default function NewCheckVoucherPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const preselectedInvoiceId = searchParams.get("invoiceId");
+  const preselectedSupplierId = searchParams.get("supplierId");
+  const preselectedInvoiceIds = searchParams.get("invoiceIds")?.split(",").filter(Boolean) ?? [];
 
   // Step state
   const [step, setStep] = useState(1);
@@ -103,20 +105,24 @@ export default function NewCheckVoucherPage() {
       );
       setOpenInvoices(res.data);
 
-      // If preselected invoice, auto-add it
-      if (preselectedInvoiceId) {
-        const inv = res.data.find((i) => i.id === preselectedInvoiceId);
-        if (inv) {
-          setLines([
-            {
-              invoiceId: inv.id,
-              invoiceNo: inv.invoiceNo,
-              invoiceDate: inv.invoiceDate,
-              amount: inv.balance,
-              payAmount: inv.balance,
-              deduction: "0",
-            },
-          ]);
+      // If preselected invoices (from Supplier SOA), auto-add them
+      const idsToSelect = preselectedInvoiceIds.length > 0
+        ? preselectedInvoiceIds
+        : preselectedInvoiceId ? [preselectedInvoiceId] : [];
+
+      if (idsToSelect.length > 0) {
+        const matchedLines = res.data
+          .filter((i) => idsToSelect.includes(i.id))
+          .map((inv) => ({
+            invoiceId: inv.id,
+            invoiceNo: inv.invoiceNo,
+            invoiceDate: inv.invoiceDate,
+            amount: inv.balance,
+            payAmount: inv.balance,
+            deduction: "0",
+          }));
+        if (matchedLines.length > 0) {
+          setLines(matchedLines);
         }
       }
     } catch {}
@@ -131,6 +137,13 @@ export default function NewCheckVoucherPage() {
       setLines([]);
     }
   }, [selectedSupplier, fetchInvoices]);
+
+  // Handle pre-selected supplier from URL (from Supplier SOA page)
+  useEffect(() => {
+    if (preselectedSupplierId && token && locationId && !selectedSupplier) {
+      setSelectedSupplier(preselectedSupplierId);
+    }
+  }, [preselectedSupplierId, token, locationId, selectedSupplier]);
 
   // Handle pre-selected invoice — find its supplier
   useEffect(() => {

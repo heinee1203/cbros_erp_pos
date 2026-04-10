@@ -1,5 +1,5 @@
 import { db, type DbOrTx } from "@apex/database";
-import { priceChanges, products } from "@apex/database/schema";
+import { priceChanges, products, brands, users } from "@apex/database/schema";
 import {
   eq,
   and,
@@ -80,18 +80,25 @@ export interface PriceHistoryRow {
   oldValue: string;
   newValue: string;
   changeReason: string | null;
+  source: string;
   batchId: string | null;
   changedBy: string | null;
+  changedByName: string | null;
   changedAt: string;
+  pctChange: number | null;
 }
 
 export interface MarginAlertRow {
+  id: string;
   productId: string;
   productName: string;
   sku: string;
+  brandName: string | null;
+  categoryName: string | null;
   costPrice: string;
-  unitPrice: string;
+  sellPrice: string;
   marginPct: string;
+  stock: number;
 }
 
 // ── Helpers ──
@@ -146,7 +153,9 @@ export async function previewBulkPriceUpdate(
   const matchedProducts = await db
     .select({
       id: products.id,
-      name: products.name,
+      name: sql<string>`CASE WHEN ${products.parentProductId} IS NOT NULL
+        THEN (SELECT p2.name FROM products p2 WHERE p2.id = ${products.parentProductId}) || ' \u2014 ' || ${products.name}
+        ELSE ${products.name} END`.as("display_name"),
       sku: products.sku,
       costPrice: products.costPrice,
       unitPrice: products.unitPrice,
@@ -329,60 +338,60 @@ export async function applyBulkPriceUpdate(
 export async function getMarginAlerts(
   orgId: string,
   threshold: number,
+  inStockOnly: boolean = true,
   cursor?: string,
-  limit: number = 50,
+  limit: number = 100,
 ): Promise<{ data: MarginAlertRow[]; nextCursor: string | null; hasMore: boolean }> {
-  const conditions: SQL[] = [
-    eq(products.orgId, orgId),
-    eq(products.isActive, true),
-    // margin < threshold: (unitPrice - costPrice) / unitPrice * 100 < threshold
-    // Only for products with unitPrice > 0
-    gt(sql`${products.unitPrice}::numeric`, sql`0`),
-    lt(
-      sql`(${products.unitPrice}::numeric - ${products.costPrice}::numeric) / ${products.unitPrice}::numeric * 100`,
-      sql`${threshold}`,
-    ),
-  ];
+  const cursorCond = cursor ? sql`AND p.id > ${cursor}` : sql``;
+  const havingCond = inStockOnly ? sql`HAVING COALESCE(SUM(i.stock_level), 0) > 0` : sql``;
 
-  if (cursor) {
-    conditions.push(gt(products.id, cursor));
-  }
+  const rows = await db.execute(sql`
+    SELECT
+      p.id AS product_id,
+      CASE WHEN p.parent_product_id IS NOT NULL
+        THEN (SELECT p2.name FROM products p2 WHERE p2.id = p.parent_product_id) || ' — ' || p.name
+        ELSE p.name END AS product_name,
+      p.sku,
+      b.name AS brand_name,
+      c.name AS category_name,
+      p.cost_price,
+      p.unit_price,
+      COALESCE(SUM(i.stock_level), 0)::int AS stock,
+      CASE WHEN p.unit_price::numeric > 0
+        THEN ROUND((p.unit_price::numeric - p.cost_price::numeric) / p.unit_price::numeric * 100, 2)
+        ELSE 0 END AS margin_pct
+    FROM products p
+    LEFT JOIN products parent ON parent.id = p.parent_product_id
+    LEFT JOIN brands b ON b.id = COALESCE(p.brand_id, parent.brand_id)
+    LEFT JOIN categories c ON c.id = COALESCE(p.category_id, parent.category_id)
+    LEFT JOIN inventory i ON i.product_id = p.id
+    WHERE p.org_id = ${orgId}
+      AND p.is_active = true
+      AND p.unit_price::numeric > 0
+      AND (p.unit_price::numeric - p.cost_price::numeric) / p.unit_price::numeric * 100 < ${threshold}
+      ${cursorCond}
+    GROUP BY p.id, p.name, p.parent_product_id, p.sku, p.cost_price, p.unit_price, parent.brand_id, parent.category_id, b.name, c.name
+    ${havingCond}
+    ORDER BY (p.unit_price::numeric - p.cost_price::numeric) / p.unit_price::numeric * 100 ASC, p.id ASC
+    LIMIT ${limit + 1}
+  `);
 
-  const rows = await db
-    .select({
-      productId: products.id,
-      productName: products.name,
-      sku: products.sku,
-      costPrice: products.costPrice,
-      unitPrice: products.unitPrice,
-    })
-    .from(products)
-    .where(and(...conditions))
-    .orderBy(
-      asc(
-        sql`(${products.unitPrice}::numeric - ${products.costPrice}::numeric) / ${products.unitPrice}::numeric * 100`,
-      ),
-      asc(products.id),
-    )
-    .limit(limit + 1);
+  const hasMore = (rows as any[]).length > limit;
+  const data = hasMore ? (rows as any[]).slice(0, limit) : (rows as any[]);
+  const nextCursor = hasMore ? data[data.length - 1]!.product_id : null;
 
-  const hasMore = rows.length > limit;
-  const data = hasMore ? rows.slice(0, limit) : rows;
-  const nextCursor = hasMore ? data[data.length - 1]!.productId : null;
-
-  const enriched: MarginAlertRow[] = data.map((r) => {
-    const sell = parseFloat(r.unitPrice);
-    const cost = parseFloat(r.costPrice);
-    const marginPct = computeMarginPct(sell, cost);
-    return {
-      productId: r.productId,
-      productName: r.productName,
-      sku: r.sku,
-      costPrice: r.costPrice,
-      unitPrice: r.unitPrice,
-      marginPct: marginPct.toFixed(2),
-    };
-  });
+  const enriched: MarginAlertRow[] = data.map((r: any) => ({
+    id: r.product_id,
+    productId: r.product_id,
+    productName: r.product_name,
+    sku: r.sku,
+    brandName: r.brand_name ?? null,
+    categoryName: r.category_name ?? null,
+    costPrice: r.cost_price ?? "0",
+    sellPrice: r.unit_price ?? "0",
+    marginPct: String(r.margin_pct ?? "0"),
+    stock: r.stock ?? 0,
+  }));
 
   return { data: enriched, nextCursor, hasMore };
 }
@@ -397,6 +406,8 @@ export async function getPriceHistory(
     dateFrom?: string;
     dateTo?: string;
     field?: "SELL_PRICE" | "COST_PRICE";
+    source?: string;
+    search?: string;
     batchId?: string;
     cursor?: string;
     limit?: number;
@@ -422,6 +433,15 @@ export async function getPriceHistory(
     conditions.push(eq(priceChanges.field, params.field));
   }
 
+  if (params.source) {
+    conditions.push(eq(priceChanges.source, params.source));
+  }
+
+  if (params.search && params.search.length >= 2) {
+    const pat = `%${params.search}%`;
+    conditions.push(sql`(${products.name} ILIKE ${pat} OR ${products.sku} ILIKE ${pat})`);
+  }
+
   if (params.batchId) {
     conditions.push(eq(priceChanges.batchId, params.batchId));
   }
@@ -434,18 +454,23 @@ export async function getPriceHistory(
     .select({
       id: priceChanges.id,
       productId: priceChanges.productId,
-      productName: products.name,
+      productName: sql<string>`CASE WHEN ${products.parentProductId} IS NOT NULL
+        THEN (SELECT p2.name FROM products p2 WHERE p2.id = ${products.parentProductId}) || ' \u2014 ' || ${products.name}
+        ELSE ${products.name} END`.as("product_name"),
       productSku: products.sku,
       field: priceChanges.field,
       oldValue: priceChanges.oldValue,
       newValue: priceChanges.newValue,
       changeReason: priceChanges.changeReason,
+      source: priceChanges.source,
       batchId: priceChanges.batchId,
       changedBy: priceChanges.changedBy,
+      changedByName: users.fullName,
       changedAt: priceChanges.changedAt,
     })
     .from(priceChanges)
     .innerJoin(products, eq(priceChanges.productId, products.id))
+    .leftJoin(users, eq(priceChanges.changedBy, users.id))
     .where(and(...conditions))
     .orderBy(desc(priceChanges.changedAt), asc(priceChanges.id))
     .limit(limit + 1);
@@ -454,19 +479,27 @@ export async function getPriceHistory(
   const data = hasMore ? rows.slice(0, limit) : rows;
   const nextCursor = hasMore ? data[data.length - 1]!.id : null;
 
-  const enriched: PriceHistoryRow[] = data.map((r) => ({
-    id: r.id,
-    productId: r.productId,
-    productName: r.productName,
-    productSku: r.productSku,
-    field: r.field,
-    oldValue: r.oldValue,
-    newValue: r.newValue,
-    changeReason: r.changeReason,
-    batchId: r.batchId,
-    changedBy: r.changedBy,
-    changedAt: r.changedAt.toISOString(),
-  }));
+  const enriched: PriceHistoryRow[] = data.map((r) => {
+    const oldVal = parseFloat(r.oldValue ?? "0");
+    const newVal = parseFloat(r.newValue ?? "0");
+    const pctChange = oldVal > 0 ? Math.round(((newVal - oldVal) / oldVal) * 1000) / 10 : null;
+    return {
+      id: r.id,
+      productId: r.productId,
+      productName: r.productName,
+      productSku: r.productSku,
+      field: r.field,
+      oldValue: r.oldValue,
+      newValue: r.newValue,
+      changeReason: r.changeReason,
+      source: r.source ?? "manual",
+      batchId: r.batchId,
+      changedBy: r.changedBy,
+      changedByName: r.changedByName ?? null,
+      changedAt: r.changedAt instanceof Date ? r.changedAt.toISOString() : String(r.changedAt),
+      pctChange,
+    };
+  });
 
   return { data: enriched, nextCursor, hasMore };
 }

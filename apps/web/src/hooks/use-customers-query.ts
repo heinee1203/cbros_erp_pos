@@ -23,8 +23,16 @@ export interface Customer {
   totalPurchases: string;
   notes: string | null;
   isActive: boolean;
+  txnCount: number;
+  unbilledCount: number;
+  totalChargeCount: number;
+  tierId: string | null;
+  tierName: string | null;
+  tierColor: string | null;
+  tierDiscount: string | null;
   createdAt: string;
   updatedAt: string;
+  matchedRef?: string | null; // JSON string with {type, number, date, amount, txnType} when found via invoice/payment search
 }
 
 export interface CustomerTransaction {
@@ -41,6 +49,15 @@ export interface CustomerTransaction {
   notes: string | null;
   recordedBy: string;
   recordedAt: string;
+  billed: boolean | null;
+  billedSoaId: string | null;
+  paymentNumber: string | null;
+  batchNumber: string | null;
+  traceNumber: string | null;
+  cardType: string | null;
+  paymentLines: any[] | null;
+  allocatedAmount?: string;
+  paymentStatus?: "PAID" | "PARTIAL" | "UNPAID" | null;
 }
 
 export interface CustomerDetail {
@@ -96,6 +113,8 @@ export interface CustomerListFilters {
   sortBy?: string;
   cursor?: string;
   limit?: number;
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export interface TransactionFilters {
@@ -125,6 +144,8 @@ export function useCustomerList(
         params.set("hasBalance", String(filters.hasBalance));
       if (filters.sortBy) params.set("sortBy", filters.sortBy);
       if (filters.cursor) params.set("cursor", filters.cursor);
+      if (filters.dateFrom) params.set("dateFrom", filters.dateFrom);
+      if (filters.dateTo) params.set("dateTo", filters.dateTo);
       params.set("limit", String(filters.limit || 50));
       const qs = params.toString();
 
@@ -183,10 +204,10 @@ export function useCustomerTransactions(
 }
 
 export function useAgingReport(token: string, locationId: string) {
-  return useQuery<AgingRow[]>({
+  return useQuery<{ data: AgingRow[] }>({
     queryKey: ["customers", "aging"],
     queryFn: () =>
-      apiFetch<AgingRow[]>("/customers/reports/aging", {
+      apiFetch<{ data: AgingRow[] }>("/customers/reports/aging", {
         token,
         locationId,
       }),

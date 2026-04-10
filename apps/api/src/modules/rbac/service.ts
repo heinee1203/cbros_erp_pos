@@ -29,6 +29,7 @@ const LEGACY_MAP: Record<string, string[]> = {
   ],
   CASHIER: ["pos.accept_payments","pos.view_receipts","pos.reprint_receipts","pos.view_shift_report"],
   WAREHOUSE_STAFF: ["bo.manage_inventory","bo.manage_items","bo.view_cost","bo.manage_purchase_orders"],
+  STAFF: ["bo.manage_items","bo.manage_inventory"],
 };
 
 /**

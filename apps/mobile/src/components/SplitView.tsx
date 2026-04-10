@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ViewStyle } from 'react-native';
+import { View, Text, StyleSheet, Platform, ViewStyle } from 'react-native';
 import { colors } from '@/theme';
 
 interface SplitViewProps {
@@ -24,7 +24,7 @@ export function SplitView({
   const styles = createStyles();
   return (
     <View style={[styles.container, style]}>
-      <View style={[styles.pane, secondaryCollapsed ? { flex: 1 } : { flex: primaryRatio }]}>
+      <View style={[styles.primaryPane, secondaryCollapsed ? { flex: 1 } : { flex: primaryRatio }]}>
         {primary}
       </View>
       <View style={styles.divider} />
@@ -38,7 +38,7 @@ export function SplitView({
           )}
         </View>
       ) : (
-        <View style={[styles.pane, { flex: 1 - primaryRatio }]}>
+        <View style={[styles.secondaryPane, { flex: 1 - primaryRatio }]}>
           {secondary}
         </View>
       )}
@@ -51,12 +51,28 @@ const createStyles = () => StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
   },
-  pane: {
+  primaryPane: {
     flex: 1,
+    backgroundColor: colors.bg.base,
+  },
+  secondaryPane: {
+    flex: 1,
+    backgroundColor: colors.bg.surface,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: -2, height: 0 },
+        shadowOpacity: 0.08,
+        shadowRadius: 6,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
   },
   divider: {
     width: 1,
-    backgroundColor: colors.border.default,
+    backgroundColor: colors.border.light,
   },
   collapsedPane: {
     width: 48,

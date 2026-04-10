@@ -136,15 +136,15 @@ export function PinPad({ visible, onClose, onVerified, verifyPin }: PinPadProps)
 const createStyles = () => StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   container: {
-    backgroundColor: colors.bg.elevated,
-    borderRadius: radius.md,
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.xl,
     padding: spacing['2xl'],
-    width: 300,
+    width: 320,
     alignItems: 'center',
   },
   title: {
@@ -159,7 +159,7 @@ const createStyles = () => StyleSheet.create({
   },
   dotsRow: {
     flexDirection: 'row',
-    gap: spacing.lg,
+    gap: spacing.md,
     marginBottom: spacing.md,
   },
   dot: {
@@ -167,7 +167,7 @@ const createStyles = () => StyleSheet.create({
     height: 16,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: colors.border.default,
+    borderColor: colors.border.medium,
     backgroundColor: colors.transparent,
   },
   dotFilled: {
@@ -176,6 +176,7 @@ const createStyles = () => StyleSheet.create({
   },
   dotError: {
     borderColor: colors.status.danger,
+    backgroundColor: colors.status.danger,
   },
   error: {
     ...textStyles.captionSmall,
@@ -190,16 +191,17 @@ const createStyles = () => StyleSheet.create({
   keypad: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    width: 240,
-    gap: spacing.sm,
+    width: 264,
+    gap: spacing.md,
   },
   key: {
-    width: 72,
-    height: 56,
-    borderRadius: radius.sm,
-    backgroundColor: colors.bg.surface,
+    width: 76,
+    height: 60,
+    borderRadius: radius.lg,
+    backgroundColor: colors.bg.elevated,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden' as any,
   },
   keyEmpty: {
     backgroundColor: colors.transparent,
@@ -208,11 +210,13 @@ const createStyles = () => StyleSheet.create({
     backgroundColor: colors.border.default,
   },
   keyText: {
-    ...textStyles.heading,
+    fontFamily: textStyles.heading.fontFamily,
+    fontSize: textStyles.heading.fontSize,
     color: colors.text.primary,
   },
   keyBackspace: {
     fontSize: 22,
+    color: colors.text.muted,
   },
   cancelButton: {
     marginTop: spacing.xl,

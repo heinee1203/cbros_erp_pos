@@ -39,9 +39,10 @@ export default function AgingReportPage() {
   const { token, locationId } = useAuth();
   const agingQuery = useAgingReport(token, locationId);
 
-  const rows = agingQuery.data ?? [];
+  const rows = agingQuery.data?.data ?? [];
 
   const totals = useMemo(() => {
+    if (!rows.length) return { current: 0, days31to60: 0, days61to90: 0, over90: 0, total: 0 };
     return rows.reduce(
       (acc, r) => ({
         current: acc.current + r.current,

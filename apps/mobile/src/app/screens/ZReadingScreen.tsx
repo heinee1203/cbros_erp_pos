@@ -222,7 +222,7 @@ export default function ZReadingScreen() {
             <Text style={styles.emptyText}>No payments recorded</Text>
           ) : (
             zReading.paymentBreakdown.map((p, i) => (
-              <View key={i} style={styles.summaryRow}>
+              <View key={i} style={[styles.summaryRow, i % 2 === 1 && styles.altRow]}>
                 <Text style={styles.summaryLabel}>{formatMethod(p.method)} ({p.count})</Text>
                 <Text style={styles.summaryValue}>{fmtPHP(p.total)}</Text>
               </View>
@@ -408,7 +408,7 @@ export default function ZReadingScreen() {
             </Pressable>
             <Pressable
               style={[styles.closeShiftBtn, closing && styles.btnDisabled]}
-              android_ripple={{ color: colors.accent.glow }}
+              android_ripple={{ color: 'rgba(255,255,255,0.3)' }}
               onPress={handleCloseShift}
               disabled={closing}
             >
@@ -496,7 +496,6 @@ const createStyles = () => StyleSheet.create({
   },
   scrollContent: {
     padding: layout.screenPadding,
-    gap: spacing.md,
   },
   shiftMeta: {
     gap: 2,
@@ -508,10 +507,11 @@ const createStyles = () => StyleSheet.create({
   },
   card: {
     backgroundColor: colors.bg.surface,
-    borderRadius: 8,
-    padding: spacing.md,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border.default,
+    marginBottom: spacing.lg,
   },
   cardTitle: {
     ...textStyles.subheading,
@@ -530,6 +530,12 @@ const createStyles = () => StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: spacing.xs,
+  },
+  altRow: {
+    backgroundColor: colors.bg.elevated,
+    marginHorizontal: -spacing.xs,
+    paddingHorizontal: spacing.xs,
+    borderRadius: radius.xs,
   },
   summaryLabel: {
     ...textStyles.caption,
@@ -564,7 +570,7 @@ const createStyles = () => StyleSheet.create({
   denomChip: {
     width: '23%' as any,
     paddingVertical: spacing.sm,
-    borderRadius: 6,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border.default,
     backgroundColor: colors.bg.elevated,
@@ -599,10 +605,10 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.sm,
+    height: 56,
     paddingHorizontal: spacing.md,
     backgroundColor: colors.bg.elevated,
-    borderRadius: 6,
+    borderRadius: radius.md,
     marginBottom: spacing.xs,
   },
   cashDisplayLabel: {
@@ -623,7 +629,7 @@ const createStyles = () => StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderLeftWidth: 3,
     backgroundColor: colors.bg.elevated,
-    borderRadius: 4,
+    borderRadius: radius.sm,
   },
   varianceLabel: {
     ...textStyles.caption,
@@ -711,7 +717,7 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.body,
     color: colors.text.primary,
     backgroundColor: colors.bg.input,
-    borderRadius: 6,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border.default,
     padding: spacing.sm,
@@ -731,8 +737,8 @@ const createStyles = () => StyleSheet.create({
   },
   printBtn: {
     flex: 1,
-    paddingVertical: spacing.md,
-    borderRadius: 8,
+    height: 56,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.accent.primary,
     alignItems: 'center',
@@ -740,23 +746,21 @@ const createStyles = () => StyleSheet.create({
     overflow: 'hidden',
   },
   printBtnText: {
-    ...textStyles.body,
+    ...textStyles.button,
     color: colors.accent.primary,
-    fontFamily: fonts.display.bold,
   },
   closeShiftBtn: {
     flex: 1,
-    paddingVertical: spacing.md,
-    borderRadius: 8,
-    backgroundColor: colors.shift.bannerBtnBg,
+    height: 56,
+    borderRadius: radius.lg,
+    backgroundColor: colors.status.danger,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   closeShiftBtnText: {
-    ...textStyles.body,
-    color: colors.shift.bannerBtnText,
-    fontFamily: fonts.display.bold,
+    ...textStyles.button,
+    color: colors.text.inverse,
   },
   btnDisabled: {
     opacity: 0.6,

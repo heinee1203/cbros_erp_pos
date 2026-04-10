@@ -428,6 +428,7 @@ export const createSaleSchema = z.object({
           dotCode: z.string(),
           quantity: z.number().int().positive(),
         })).optional(),
+        technicianId: z.string().uuid().optional(),
       }),
     )
     .min(1, "At least one line item is required"),
@@ -895,6 +896,7 @@ export const createCustomerSchema = z.object({
   ),
   paymentTermsDays: z.number().int().min(1).max(365).default(30),
   notes: z.string().max(5000).optional(),
+  tierId: z.string().uuid().nullable().optional(),
 });
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
 
@@ -914,6 +916,7 @@ export const updateCustomerSchema = z.object({
   paymentTermsDays: z.number().int().min(1).max(365).optional(),
   notes: z.string().max(5000).nullable().optional(),
   isActive: z.boolean().optional(),
+  tierId: z.string().uuid().nullable().optional(),
 });
 export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
 
@@ -923,9 +926,31 @@ export const recordPaymentSchema = z.object({
     (val) => /^\d+(\.\d{1,2})?$/.test(val) && parseFloat(val) > 0,
     { message: "Amount must be a positive decimal" },
   ),
-  paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHECK", "GCASH", "MAYA", "QRPH", "OTHER"]),
+  paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHECK", "CREDIT_CARD", "GCASH", "MAYA", "QRPH", "SPLIT", "OTHER"]),
+  paymentDate: z.string().optional(),
   referenceNumber: z.string().max(100).optional(),
   notes: z.string().max(1000).optional(),
+  batchNumber: z.string().max(50).optional(),
+  traceNumber: z.string().max(50).optional(),
+  cardType: z.string().max(50).optional(),
+  paymentLines: z.array(z.object({
+    method: z.enum(["CASH", "BANK_TRANSFER", "CHECK", "CREDIT_CARD", "GCASH", "MAYA", "QRPH", "EWT", "OTHER"]),
+    amount: z.number(),
+    reference: z.string().optional(),
+    bank: z.string().optional(),
+    checkNumber: z.string().optional(),
+    checkDate: z.string().optional(),
+    cardType: z.string().optional(),
+    batchNumber: z.string().optional(),
+    traceNumber: z.string().optional(),
+    rate: z.number().optional(),
+    bir2307: z.string().optional(),
+    baseAmount: z.number().optional(),
+  })).optional(),
+  allocations: z.array(z.object({
+    chargeTransactionId: z.string(),
+    amount: z.number().positive(),
+  })).optional(),
 });
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
 

@@ -260,6 +260,7 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
       locationId?: string;
       employeeName?: string;
       cursor?: string;
+      offset?: string;
       limit?: string;
     };
     const result = await listHistoricalReceipts(orgId, {
@@ -269,6 +270,7 @@ export const salesRoutes: FastifyPluginAsync = async (app) => {
       q: q.q,
       employeeName: q.employeeName || undefined,
       cursor: q.cursor,
+      offset: q.offset ? parseInt(q.offset) : undefined,
       limit: q.limit ? parseInt(q.limit) : 50,
     });
     return reply.send(result);

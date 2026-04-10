@@ -1,4 +1,4 @@
-const PAGE_SIZES = [25, 50, 100] as const;
+const PAGE_SIZES = [25, 50, 100, 200, 500] as const;
 const DEFAULT_PAGE_SIZE = 50;
 
 type StockStatus = "in-stock" | "low" | "out";

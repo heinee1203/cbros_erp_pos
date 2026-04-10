@@ -14,6 +14,7 @@ export const priceChanges = pgTable(
     oldValue: numeric("old_value", { precision: 12, scale: 2 }).notNull(),
     newValue: numeric("new_value", { precision: 12, scale: 2 }).notNull(),
     changeReason: varchar("change_reason", { length: 255 }),
+    source: varchar("source", { length: 30 }).notNull().default("manual"),
     batchId: uuid("batch_id"),
     changedBy: uuid("changed_by"),
     changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),

@@ -14,6 +14,7 @@ import {
   XCircle,
   Package,
 } from "lucide-react";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import {
@@ -57,7 +58,7 @@ export default function StockVelocityPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortField>("daysOfStock");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  const [viewMode, setViewMode] = useState<"classification" | "velocity">("classification");
+  const [viewMode, setViewMode] = useState<"classification" | "velocity" | "reorder">("classification");
   const [urgencyFilter, setUrgencyFilter] = useState("");
   const [urgencyWindow, setUrgencyWindow] = useState("");
   // Per-window LEFT column urgency filters (server-side)
@@ -77,6 +78,14 @@ export default function StockVelocityPage() {
     if (typeof window !== "undefined") {
       return localStorage.getItem("stockVelocity.hideNegativeStock") !== "false";
     }
+    return true;
+  });
+  const [hideDC, setHideDC] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("stockVelocity.hideDC") !== "false";
+    return true;
+  });
+  const [hideSO, setHideSO] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("stockVelocity.hideSO") !== "false";
     return true;
   });
 
@@ -110,6 +119,8 @@ export default function StockVelocityPage() {
     brandId: brandFilter || undefined,
     familyId: familyFilter || undefined,
     hideNegativeStock: hideNegativeStock || undefined,
+    hideDiscontinued: hideDC || undefined,
+    hideSpecialOrder: hideSO || undefined,
     urgency: urgencyFilter || undefined,
     urgencyWindow: urgencyWindow || undefined,
     velocityClass: velocityFilter && velocityFilter !== "all" ? velocityFilter : undefined,
@@ -184,15 +195,15 @@ export default function StockVelocityPage() {
           {refreshMutation.isPending ? "Computing..." : "Recompute"}
         </button>
         <button
-          onClick={() => setReorderPanelOpen(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          onClick={() => setViewMode("reorder")}
+          className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium", viewMode === "reorder" ? "bg-primary text-primary-foreground" : "bg-primary text-primary-foreground hover:bg-primary/90")}
         >
           <ShoppingCart size={13} />
           Reorder Suggestions
         </button>
       </div>
 
-      {/* Summary Cards */}
+      {/* Summary Cards — visible on ALL tabs for context */}
       {summary && (
         <div className="mb-4 flex flex-wrap gap-2">
           {VELOCITY_CLASSES.map((vc) => {
@@ -224,21 +235,21 @@ export default function StockVelocityPage() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters — visible on ALL tabs */}
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <select value={familyFilter} onChange={(e) => { setFamilyFilter(e.target.value); setCategoryFilter(""); setSubcategoryFilter(""); }} className="h-7 rounded-md border border-border bg-background px-2 text-[11px] outline-none">
+        <select value={familyFilter} onChange={(e) => { setFamilyFilter(e.target.value); setCategoryFilter(""); setSubcategoryFilter(""); }} className="h-8 min-w-[130px] rounded-lg border border-border bg-background px-2.5 text-xs outline-none">
           <option value="">All Families</option>
           {families.map((f: any) => <option key={f.id} value={f.id}>{f.name}</option>)}
         </select>
-        <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setSubcategoryFilter(""); }} className="h-7 rounded-md border border-border bg-background px-2 text-[11px] outline-none">
+        <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setSubcategoryFilter(""); }} className="h-8 min-w-[130px] rounded-lg border border-border bg-background px-2.5 text-xs outline-none">
           <option value="">All Categories</option>
           {(familyFilter ? categories.filter((c: any) => c.familyId === familyFilter) : categories).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <select value={subcategoryFilter} onChange={(e) => setSubcategoryFilter(e.target.value)} className="h-7 rounded-md border border-border bg-background px-2 text-[11px] outline-none">
+        <select value={subcategoryFilter} onChange={(e) => setSubcategoryFilter(e.target.value)} className="h-8 min-w-[130px] rounded-lg border border-border bg-background px-2.5 text-xs outline-none">
           <option value="">All Sub-categories</option>
           {filteredSubcategories.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <select value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)} className="h-7 rounded-md border border-border bg-background px-2 text-[11px] outline-none">
+        <select value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)} className="h-8 min-w-[130px] rounded-lg border border-border bg-background px-2.5 text-xs outline-none">
           <option value="">All Brands</option>
           {brands.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
@@ -247,36 +258,36 @@ export default function StockVelocityPage() {
         )}
       </div>
 
-      {/* Search + View Toggle */}
-      <div className="mb-3 flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+      {/* Search + Tab Toggle row */}
+      <div className="mb-3 flex items-center gap-3">
+        <div className="relative w-full max-w-md">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search product, SKU..."
-            className="h-8 w-full rounded-lg border border-border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-primary"
+            className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm outline-none placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary/20"
           />
         </div>
         {velocityFilter !== "all" && (
-          <button onClick={() => setVelocityFilter("all")} className="text-xs text-primary hover:underline">
+          <button onClick={() => setVelocityFilter("all")} className="text-xs text-primary hover:underline whitespace-nowrap">
             Clear class filter
           </button>
         )}
-        <div className="flex rounded-md border border-border">
-          <button
-            onClick={() => setViewMode("classification")}
-            className={cn("px-3 py-1.5 text-[11px] font-medium rounded-l-md transition-colors", viewMode === "classification" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}
-          >
-            Classification
-          </button>
-          <button
-            onClick={() => setViewMode("velocity")}
-            className={cn("px-3 py-1.5 text-[11px] font-medium rounded-r-md transition-colors", viewMode === "velocity" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}
-          >
-            Velocity Analysis
-          </button>
+        <div className="inline-flex rounded-lg border border-border bg-muted/30 p-1">
+          {(["classification", "velocity", "reorder"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setViewMode(tab)}
+              className={cn(
+                "px-4 py-2 text-xs font-semibold rounded-md transition-all whitespace-nowrap",
+                viewMode === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {tab === "classification" ? "Classification" : tab === "velocity" ? "Velocity Analysis" : "Reorder"}
+            </button>
+          ))}
         </div>
         <label className="flex items-center gap-1.5 cursor-pointer select-none">
           <input
@@ -290,13 +301,21 @@ export default function StockVelocityPage() {
           />
           <span className="text-[11px] text-muted-foreground">Hide negative stock</span>
         </label>
+        <button onClick={() => { setHideDC(!hideDC); localStorage.setItem("stockVelocity.hideDC", String(!hideDC)); }}
+          className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${hideDC ? "bg-gray-200 text-gray-700" : "bg-background border border-border text-muted-foreground hover:bg-muted"}`}>
+          {hideDC ? "DC Hidden" : "Show DC"}
+        </button>
+        <button onClick={() => { setHideSO(!hideSO); localStorage.setItem("stockVelocity.hideSO", String(!hideSO)); }}
+          className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${hideSO ? "bg-blue-100 text-blue-700" : "bg-background border border-border text-muted-foreground hover:bg-muted"}`}>
+          {hideSO ? "SO Hidden" : "Show SO"}
+        </button>
         {/* Urgency filter — only for Classification view (Velocity Analysis uses per-window filters in the table header) */}
         {viewMode === "classification" && (
           <>
             <select
               value={urgencyFilter}
               onChange={(e) => { setUrgencyFilter(e.target.value); if (!e.target.value) setUrgencyWindow(""); }}
-              className="h-7 rounded-md border border-border bg-background px-2 text-[11px] outline-none"
+              className="h-8 min-w-[130px] rounded-lg border border-border bg-background px-2.5 text-xs outline-none"
             >
               <option value="">All Urgency</option>
               <option value="critical">🟤 Critical (&lt; 0.5 mo)</option>
@@ -307,7 +326,7 @@ export default function StockVelocityPage() {
               <select
                 value={urgencyWindow}
                 onChange={(e) => setUrgencyWindow(e.target.value)}
-                className="h-7 rounded-md border border-border bg-background px-2 text-[11px] outline-none"
+                className="h-8 min-w-[130px] rounded-lg border border-border bg-background px-2.5 text-xs outline-none"
               >
                 <option value="">All Windows</option>
                 <option value="12m">12M Rate</option>
@@ -320,29 +339,13 @@ export default function StockVelocityPage() {
         )}
 
         {/* Last Sold date filter */}
-        <div className="flex items-center gap-1 text-[11px]">
+        <div className="flex items-center gap-1.5 text-[11px]">
           <span className="text-muted-foreground">Last sold:</span>
-          <input
-            type="date"
-            value={lastSoldAfter}
-            onChange={(e) => setLastSoldAfter(e.target.value)}
-            className="h-7 rounded-md border border-border bg-background px-1.5 text-[11px] outline-none"
+          <DateRangePicker
+            startDate={lastSoldAfter}
+            endDate={lastSoldBefore}
+            onChange={(start, end) => { setLastSoldAfter(start); setLastSoldBefore(end); }}
           />
-          <span className="text-muted-foreground">–</span>
-          <input
-            type="date"
-            value={lastSoldBefore}
-            onChange={(e) => setLastSoldBefore(e.target.value)}
-            className="h-7 rounded-md border border-border bg-background px-1.5 text-[11px] outline-none"
-          />
-          {(lastSoldAfter || lastSoldBefore) && (
-            <button
-              onClick={() => { setLastSoldAfter(""); setLastSoldBefore(""); }}
-              className="text-[10px] text-muted-foreground hover:text-foreground"
-            >
-              Clear
-            </button>
-          )}
         </div>
       </div>
 
@@ -396,25 +399,28 @@ export default function StockVelocityPage() {
         />
       )}
 
-      {/* Load more */}
-      {hasNextPage && (
-        <div className="mt-2 text-center">
-          <button onClick={() => fetchNextPage()} className="text-xs text-primary hover:underline">
-            Load more
-          </button>
-        </div>
+      {/* Load more + Footer — only for Classification/Velocity tabs */}
+      {viewMode !== "reorder" && (
+        <>
+          {hasNextPage && (
+            <div className="mt-2 text-center">
+              <button onClick={() => fetchNextPage()} className="text-xs text-primary hover:underline">
+                Load more
+              </button>
+            </div>
+          )}
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            Showing {allRows.length} items{velocityFilter !== "all" ? ` (filtered: ${VELOCITY_CLASSES.find(v => v.key === velocityFilter)?.label})` : ""}
+            {summary ? ` of ${summary.total.toLocaleString()} total` : ""}
+          </div>
+        </>
       )}
 
-      {/* Footer */}
-      <div className="mt-2 text-[10px] text-muted-foreground">
-        Showing {allRows.length} items{velocityFilter !== "all" ? ` (filtered: ${VELOCITY_CLASSES.find(v => v.key === velocityFilter)?.label})` : ""}
-        {summary ? ` of ${summary.total.toLocaleString()} total` : ""}
-      </div>
-
-      {/* Reorder Suggestions Panel */}
+      {/* Reorder Suggestions — inline when tab active, slide-over when button clicked */}
       <ReorderSuggestionsPanel
-        open={reorderPanelOpen}
-        onClose={() => setReorderPanelOpen(false)}
+        open={reorderPanelOpen || viewMode === "reorder"}
+        onClose={() => { setReorderPanelOpen(false); if (viewMode === "reorder") setViewMode("classification"); }}
+        inline={viewMode === "reorder"}
         lastSoldAfter={lastSoldAfter}
         lastSoldBefore={lastSoldBefore}
         urgencyAll={leftFilterAll !== "all" ? leftFilterAll : undefined}

@@ -48,6 +48,7 @@ export const customers = pgTable(
       .default("0.00"),
     isActive: boolean("is_active").notNull().default(true),
     notes: text("notes"),
+    tierId: uuid("tier_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

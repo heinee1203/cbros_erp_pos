@@ -67,8 +67,8 @@ export default function PDCReportPage() {
         token,
         locationId,
       });
-      setEntries(res.data);
-      setMonthlySummary(res.monthlySummary || []);
+      setEntries(Array.isArray(res.data) ? res.data : []);
+      setMonthlySummary(Array.isArray(res.monthlySummary) ? res.monthlySummary : []);
     } catch (err: any) {
       setError(err.message || "Failed to load PDC report");
     } finally {

@@ -5,6 +5,8 @@ import {
   varchar,
   text,
   numeric,
+  boolean,
+  jsonb,
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
@@ -40,6 +42,18 @@ export const customerTransactions = pgTable(
     recordedAt: timestamp("recorded_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /** Whether this CHARGE has been included in a billing statement */
+    billed: boolean("billed").default(false),
+    /** Which SOA this transaction was billed in */
+    billedSoaId: uuid("billed_soa_id"),
+    /** Payment receipt number (PAY-2026-0001) */
+    paymentNumber: varchar("payment_number", { length: 20 }),
+    /** Credit card payment fields */
+    batchNumber: varchar("batch_number", { length: 50 }),
+    traceNumber: varchar("trace_number", { length: 50 }),
+    cardType: varchar("card_type", { length: 20 }),
+    /** Split payment details: array of { method, amount, reference?, bank?, checkNumber?, checkDate?, cardType?, batchNumber?, traceNumber? } */
+    paymentLines: jsonb("payment_lines"),
   },
   (table) => [
     index("idx_customer_txn_org_cust_date").on(

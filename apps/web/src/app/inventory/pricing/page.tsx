@@ -50,13 +50,15 @@ interface BulkApplyResponse {
 
 interface MarginAlertRow {
   id: string;
+  productId: string;
   productName: string;
   sku: string;
   brandName: string | null;
+  categoryName: string | null;
   costPrice: number;
   sellPrice: number;
   marginPct: number;
-  lastCostChange: string | null;
+  stock: number;
 }
 
 interface MarginAlertPage {
@@ -71,11 +73,14 @@ interface DeadStockRow {
   productName: string;
   productSku: string;
   brandName: string | null;
-  costPrice: number;
-  sellPrice: number;
-  daysSinceSale: number;
+  categoryName: string | null;
+  costPrice: string | number;
+  avgSellingPrice: string | number;
+  daysSinceLastSale: number | null;
+  lastSaleDate: string | null;
   totalStock: number;
-  stockValue: number;
+  velocityClass: string;
+  sold12m: number;
 }
 
 interface DeadStockPage {
@@ -86,16 +91,19 @@ interface DeadStockPage {
 
 interface PriceHistoryRow {
   id: string;
-  date: string;
+  productId: string;
   productName: string;
-  sku: string;
-  field: "COST" | "SELL";
-  oldPrice: number;
-  newPrice: number;
-  pctChange: number;
-  reason: string | null;
-  changedBy: string | null;
+  productSku: string;
+  field: string;
+  oldValue: string;
+  newValue: string;
+  changeReason: string | null;
+  source: string;
   batchId: string | null;
+  changedBy: string | null;
+  changedByName: string | null;
+  changedAt: string;
+  pctChange: number | null;
 }
 
 interface PriceHistoryPage {
@@ -117,12 +125,14 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-function fmtCurrency(v: number): string {
-  return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function fmtCurrency(v: unknown): string {
+  const n = Number(v) || 0;
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function fmtPct(v: number): string {
-  return v.toFixed(1) + "%";
+function fmtPct(v: unknown): string {
+  const n = Number(v) || 0;
+  return n.toFixed(1) + "%";
 }
 
 function getDeadStockTier(daysSinceSale: number): { label: string; color: string; marginPct: number } {
@@ -131,8 +141,9 @@ function getDeadStockTier(daysSinceSale: number): { label: string; color: string
   return { label: "Slow Mover", color: "bg-amber-500/20 text-amber-400", marginPct: 12 };
 }
 
-function calcSuggestedPrice(costPrice: number, tierMarginPct: number): number {
-  return costPrice * (1 + tierMarginPct / 100);
+function calcSuggestedPrice(costPrice: number | unknown, tierMarginPct: number): number {
+  const c = Number(costPrice) || 0;
+  return c * (1 + tierMarginPct / 100);
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -466,7 +477,7 @@ function BulkUpdateTab() {
                   {previewRows.map((r) => (
                     <tr key={r.sku} className="border-b border-border/50 hover:bg-muted/30">
                       <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{r.sku}</td>
-                      <td className="max-w-[180px] truncate px-4 py-2 text-foreground">{r.name}</td>
+                      <td className="px-4 py-2 text-foreground">{r.name}</td>
                       <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
                         {fmtCurrency(r.currentCost)}
                       </td>
@@ -551,7 +562,15 @@ function BulkUpdateTab() {
 
 function MarginAlertsTab() {
   const { token, apiLocationId: locationId } = useAuth();
+  const qc = useQueryClient();
   const [threshold, setThreshold] = useState(15);
+  const [inStockOnly, setInStockOnly] = useState(true);
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [brandFilter, setBrandFilter] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPrice, setEditPrice] = useState("");
+  const [sortBy, setSortBy] = useState<"marginPct" | "costPrice" | "sellPrice" | "stock">("marginPct");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   const {
     data,
@@ -561,11 +580,12 @@ function MarginAlertsTab() {
     isLoading,
     isError,
   } = useInfiniteQuery<MarginAlertPage>({
-    queryKey: ["margin-alerts", threshold],
+    queryKey: ["margin-alerts", threshold, inStockOnly],
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
       params.set("threshold", String(threshold));
-      params.set("limit", "50");
+      params.set("limit", "100");
+      params.set("inStockOnly", String(inStockOnly));
       if (pageParam) params.set("cursor", pageParam as string);
       return apiFetch<MarginAlertPage>(
         `/inventory/pricing/margin-alerts?${params.toString()}`,
@@ -577,29 +597,95 @@ function MarginAlertsTab() {
     enabled: !!token,
   });
 
-  const rows = useMemo(() => data?.pages.flatMap((p) => p.data) ?? [], [data]);
+  const rawRows = useMemo(() => data?.pages.flatMap((p) => p.data) ?? [], [data]);
+
+  // Unique categories and brands for filter dropdowns
+  const uniqueCategories = useMemo(() => [...new Set(rawRows.map(r => r.categoryName).filter(Boolean))].sort() as string[], [rawRows]);
+  const uniqueBrands = useMemo(() => [...new Set(rawRows.map(r => r.brandName).filter(Boolean))].sort() as string[], [rawRows]);
+
+  const rows = useMemo(() => {
+    let filtered = rawRows;
+    if (categoryFilter) filtered = filtered.filter(r => r.categoryName === categoryFilter);
+    if (brandFilter) filtered = filtered.filter(r => r.brandName === brandFilter);
+    return [...filtered].sort((a, b) => {
+      const va = Number((a as any)[sortBy]) || 0;
+      const vb = Number((b as any)[sortBy]) || 0;
+      return sortDir === "asc" ? va - vb : vb - va;
+    });
+  }, [rawRows, categoryFilter, brandFilter, sortBy, sortDir]);
+
+  const losingMoney = rows.filter(r => Number(r.marginPct) < 0).length;
+  const totalGap = rows.reduce((sum, r) => {
+    const cost = Number(r.costPrice) || 0;
+    const stock = Number(r.stock) || 0;
+    const suggested = cost > 0 ? cost / (1 - threshold / 100) : 0;
+    const current = Number(r.sellPrice) || 0;
+    return sum + Math.max(0, (suggested - current) * stock);
+  }, 0);
+
+  const saveMut = useMutation({
+    mutationFn: async ({ id, price }: { id: string; price: string }) => {
+      await apiFetch(`/products/${id}`, { token: token!, locationId, method: "PATCH", body: JSON.stringify({ unitPrice: price }) });
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["margin-alerts"] }); setEditingId(null); },
+  });
+
+  const handleSort = (field: typeof sortBy) => {
+    if (field === sortBy) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortBy(field); setSortDir(field === "marginPct" ? "asc" : "desc"); }
+  };
+
+  function SortTh({ label, field, align = "right" }: { label: string; field: typeof sortBy; align?: string }) {
+    const active = sortBy === field;
+    return (
+      <th onClick={() => handleSort(field)}
+        className={cn("whitespace-nowrap px-4 py-2.5 font-medium cursor-pointer select-none transition-colors hover:text-foreground", align === "right" ? "text-right" : "text-left", active && "text-foreground")}>
+        {label} {active && (sortDir === "asc" ? "\u25B2" : "\u25BC")}
+      </th>
+    );
+  }
+
+  function marginCellClass(pct: number): string {
+    if (pct < -25) return "bg-red-600 text-white font-bold";
+    if (pct < 0) return "bg-red-100 text-red-700 font-semibold";
+    if (pct < 5) return "bg-amber-100 text-amber-700 font-semibold";
+    return "bg-yellow-50 text-yellow-700 font-semibold";
+  }
 
   return (
     <div className="flex h-full flex-col">
-      {/* Filter bar */}
-      <div className="border-b border-border bg-background/50 px-6 py-3">
-        <div className="flex items-center gap-3">
-          <label className="text-xs text-muted-foreground">Margin threshold:</label>
+      {/* Filter bar + summary */}
+      <div className="border-b border-border bg-background/50 px-6 py-3 space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-xs text-muted-foreground">Threshold:</label>
           <div className="relative">
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={threshold}
+            <input type="number" min={0} max={100} value={threshold}
               onChange={(e) => setThreshold(parseInt(e.target.value) || 0)}
-              className="h-8 w-20 rounded-md border border-border bg-background px-2.5 text-xs tabular-nums text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-            />
+              className="h-8 w-20 rounded-md border border-border bg-background px-2.5 text-xs tabular-nums text-foreground outline-none focus:border-primary" />
             <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
           </div>
-          <span className="text-xs text-muted-foreground">
-            Showing items with margin below {threshold}%
-          </span>
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs text-muted-foreground">
+            <input type="checkbox" checked={inStockOnly} onChange={e => setInStockOnly(e.target.checked)} className="h-3.5 w-3.5 rounded accent-primary" />
+            In-stock only
+          </label>
+          <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+            className="h-8 rounded-md border border-border bg-background px-2 text-[11px] font-medium outline-none">
+            <option value="">All Categories</option>
+            {uniqueCategories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={brandFilter} onChange={e => setBrandFilter(e.target.value)}
+            className="h-8 rounded-md border border-border bg-background px-2 text-[11px] font-medium outline-none">
+            <option value="">All Brands</option>
+            {uniqueBrands.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
         </div>
+        {rows.length > 0 && (
+          <div className="flex items-center gap-4 text-xs">
+            <span className="text-amber-600 font-medium">{"\u26A0\uFE0F"} {rows.length} items below {threshold}%</span>
+            <span className="text-red-500 font-medium">{"\uD83D\uDD34"} {losingMoney} losing money</span>
+            <span className="text-muted-foreground">{"\uD83D\uDCB0"} Revenue gap: {"\u20B1"}{Math.round(totalGap).toLocaleString()}</span>
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -609,67 +695,72 @@ function MarginAlertsTab() {
             <Loader2 size={24} className="animate-spin text-muted-foreground" />
           </div>
         ) : isError ? (
-          <div className="flex h-64 items-center justify-center text-sm text-destructive">
-            Failed to load margin alerts
-          </div>
+          <div className="flex h-64 items-center justify-center text-sm text-destructive">Failed to load margin alerts</div>
         ) : rows.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
             <Check size={32} className="text-emerald-500" />
             <p className="text-sm font-medium text-foreground">All margins look healthy</p>
-            <p className="text-xs text-muted-foreground">
-              No items found with margins below {threshold}%
-            </p>
+            <p className="text-xs text-muted-foreground">No items with margins below {threshold}%</p>
           </div>
         ) : (
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Product</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">SKU</th>
+                <th className="px-4 py-2.5 font-medium">Product</th>
                 <th className="whitespace-nowrap px-4 py-2.5 font-medium">Brand</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Cost</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Sell Price</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Margin %</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Last Cost Change</th>
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Category</th>
+                <SortTh label="Stock" field="stock" />
+                <SortTh label="Cost" field="costPrice" />
+                <SortTh label="Sell Price" field="sellPrice" />
+                <SortTh label="Margin" field="marginPct" />
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Suggested</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rows.map((r) => (
-                <tr key={r.id} className="hover:bg-muted/30">
-                  <td className="max-w-[220px] truncate px-4 py-2.5 text-sm font-medium text-foreground">
-                    {r.productName}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                    {r.sku}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
-                    {r.brandName ?? "—"}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
-                    {fmtCurrency(r.costPrice)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
-                    {fmtCurrency(r.sellPrice)}
-                  </td>
-                  <td
-                    className={cn(
-                      "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-semibold",
-                      r.marginPct < 0 ? "text-red-500" : r.marginPct < 10 ? "text-red-400" : "text-amber-500",
-                    )}
-                  >
-                    {fmtPct(r.marginPct)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
-                    {r.lastCostChange
-                      ? new Date(r.lastCostChange).toLocaleDateString("en-PH", {
-                          day: "2-digit",
-                          month: "short",
-                          year: "numeric",
-                        })
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
+              {rows.map((r, idx) => {
+                const cost = Number(r.costPrice) || 0;
+                const sell = Number(r.sellPrice) || 0;
+                const margin = Number(r.marginPct) || 0;
+                const suggested = cost > 0 ? Math.ceil(cost / (1 - threshold / 100)) : 0;
+                const isEditing = editingId === (r.id ?? idx);
+                return (
+                  <tr key={r.id ?? idx} className="hover:bg-muted/30">
+                    <td className="px-4 py-2.5">
+                      <div className="text-sm font-medium text-foreground">{r.productName}</div>
+                      <div className="text-[10px] font-mono text-muted-foreground">SKU: {r.sku}</div>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-foreground">{r.brandName ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">{r.categoryName ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs text-foreground">{(Number(r.stock) || 0).toLocaleString()}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">{"\u20B1"}{fmtCurrency(cost)}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">
+                      {isEditing ? (
+                        <input type="number" value={editPrice} autoFocus
+                          onChange={e => setEditPrice(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter" && editPrice) saveMut.mutate({ id: r.id ?? r.productId, price: editPrice }); if (e.key === "Escape") setEditingId(null); }}
+                          onBlur={() => { if (editPrice && editPrice !== String(sell)) saveMut.mutate({ id: r.id ?? r.productId, price: editPrice }); else setEditingId(null); }}
+                          className="w-28 rounded border border-primary bg-background px-2 py-1 text-right text-xs tabular-nums outline-none" />
+                      ) : (
+                        <button onClick={() => { setEditingId(r.id ?? String(idx)); setEditPrice(String(sell)); }}
+                          className="tabular-nums text-foreground hover:text-emerald-600 hover:underline cursor-pointer transition-colors">
+                          {"\u20B1"}{fmtCurrency(sell)}
+                        </button>
+                      )}
+                    </td>
+                    <td className={cn("whitespace-nowrap px-4 py-2 text-right tabular-nums text-xs rounded-md", marginCellClass(margin))}>
+                      {fmtPct(margin)}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs text-muted-foreground">
+                      {suggested > 0 ? (
+                        <button onClick={() => { setEditingId(r.id ?? String(idx)); setEditPrice(String(suggested)); }}
+                          className="hover:text-emerald-600 hover:underline cursor-pointer transition-colors">
+                          {"\u20B1"}{suggested.toLocaleString()}
+                        </button>
+                      ) : "\u2014"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -709,268 +800,215 @@ function DeadStockTab() {
   const { token, apiLocationId: locationId } = useAuth();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [brandFilter, setBrandFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPrice, setEditPrice] = useState("");
 
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-    isError,
-  } = useInfiniteQuery<DeadStockPage>({
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError } = useInfiniteQuery<DeadStockPage>({
     queryKey: ["dead-stock-clearance"],
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
       params.set("status", "DEAD_STOCK");
-      params.set("limit", "50");
+      params.set("limit", "100");
       if (pageParam) params.set("cursor", pageParam as string);
-      return apiFetch<DeadStockPage>(
-        `/inventory/stock-monitor?${params.toString()}`,
-        { token: token!, locationId },
-      );
+      return apiFetch<DeadStockPage>(`/inventory/stock-monitor?${params.toString()}`, { token: token!, locationId });
     },
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextCursor : undefined),
     enabled: !!token,
   });
 
-  const rows = useMemo(() => data?.pages.flatMap((p) => p.data) ?? [], [data]);
+  const rawRows = useMemo(() => data?.pages.flatMap((p) => p.data) ?? [], [data]);
 
-  const enrichedRows = useMemo(
-    () =>
-      rows.map((r) => {
-        const tier = getDeadStockTier(r.daysSinceSale);
-        const suggestedPrice = calcSuggestedPrice(r.costPrice, tier.marginPct);
-        const currentMargin = r.sellPrice > 0 ? ((r.sellPrice - r.costPrice) / r.sellPrice) * 100 : 0;
-        const newMargin = suggestedPrice > 0 ? ((suggestedPrice - r.costPrice) / suggestedPrice) * 100 : 0;
-        return { ...r, tier, suggestedPrice, currentMargin, newMargin };
-      }),
-    [rows],
-  );
+  // Unique brands/categories for filters
+  const uniqueBrands = useMemo(() => [...new Set(rawRows.map(r => r.brandName).filter(Boolean))].sort() as string[], [rawRows]);
+  const uniqueCategories = useMemo(() => [...new Set(rawRows.map(r => r.categoryName).filter(Boolean))].sort() as string[], [rawRows]);
 
-  /* Summary */
-  const summary = useMemo(() => {
-    const totalItems = enrichedRows.length;
-    const totalValue = enrichedRows.reduce((sum, r) => sum + r.stockValue, 0);
-    const potentialRecovery = enrichedRows.reduce((sum, r) => sum + r.suggestedPrice * r.totalStock, 0);
-    return { totalItems, totalValue, potentialRecovery };
-  }, [enrichedRows]);
+  // Enrich + filter + sort
+  const enrichedRows = useMemo(() => {
+    let filtered = rawRows;
+    if (search.length >= 2) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter(r => r.productName.toLowerCase().includes(q) || r.productSku.toLowerCase().includes(q));
+    }
+    if (brandFilter) filtered = filtered.filter(r => r.brandName === brandFilter);
+    if (categoryFilter) filtered = filtered.filter(r => r.categoryName === categoryFilter);
 
-  /* Apply single */
-  const applyMutation = useMutation({
-    mutationFn: async ({ productId, newPrice }: { productId: string; newPrice: number }) =>
-      apiFetch(`/inventory/pricing/${productId}`, {
-        method: "PATCH",
-        token: token!,
-        locationId,
-        body: JSON.stringify({ sellPrice: newPrice }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["dead-stock-clearance"] });
-    },
+    return filtered.map(r => {
+      const cost = Number(r.costPrice) || 0;
+      const days = Number(r.daysSinceLastSale) || 9999;
+      // Clearance pricing based on age
+      let clearancePrice: number;
+      if (days > 365) clearancePrice = Math.round(cost * 0.5); // fire sale: 50% of cost
+      else if (days > 180) clearancePrice = Math.round(cost); // at cost
+      else if (days > 90) clearancePrice = Math.round(cost * 1.1); // 10% above cost
+      else clearancePrice = Math.round(cost * 1.2); // 20% margin
+      const stock = Number(r.totalStock) || 0;
+      const recovery = clearancePrice * stock;
+      const capitalTied = cost * stock;
+      return { ...r, cost, days, clearancePrice, stock, recovery, capitalTied };
+    }).sort((a, b) => b.days - a.days); // worst first
+  }, [rawRows, search, brandFilter, categoryFilter]);
+
+  // Summary
+  const capitalTied = enrichedRows.reduce((s, r) => s + r.capitalTied, 0);
+  const potentialRecovery = enrichedRows.reduce((s, r) => s + r.recovery, 0);
+  const oldestDays = enrichedRows.length > 0 ? enrichedRows[0].days : 0;
+
+  // Mutations
+  const applyMut = useMutation({
+    mutationFn: async ({ productId, price }: { productId: string; price: number }) =>
+      apiFetch(`/products/${productId}`, { token: token!, locationId, method: "PATCH", body: JSON.stringify({ unitPrice: String(price) }) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["dead-stock-clearance"] }); setEditingId(null); },
   });
 
-  /* Apply all selected */
   const handleApplySelected = useCallback(async () => {
-    const toApply = enrichedRows.filter((r) => selected.has(r.productId));
-    for (const r of toApply) {
-      await applyMutation.mutateAsync({ productId: r.productId, newPrice: r.suggestedPrice });
+    for (const r of enrichedRows.filter(r => selected.has(r.productId))) {
+      await applyMut.mutateAsync({ productId: r.productId, price: r.clearancePrice });
     }
     setSelected(new Set());
-  }, [enrichedRows, selected, applyMutation]);
+  }, [enrichedRows, selected, applyMut]);
 
-  const toggleSelect = useCallback((id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const toggleSelect = (id: string) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSelected(prev => prev.size === enrichedRows.length ? new Set() : new Set(enrichedRows.map(r => r.productId)));
 
-  const toggleAll = useCallback(() => {
-    if (selected.size === enrichedRows.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(enrichedRows.map((r) => r.productId)));
-    }
-  }, [enrichedRows, selected.size]);
+  function fmtLastSold(days: number | null): { text: string; color: string } {
+    if (!days || days >= 9999) return { text: "Never", color: "text-red-500" };
+    if (days > 365) return { text: `${Math.round(days / 30)}mo ago`, color: "text-red-500" };
+    if (days > 180) return { text: `${Math.round(days / 30)}mo ago`, color: "text-red-400" };
+    if (days > 90) return { text: `${days}d ago`, color: "text-amber-500" };
+    return { text: `${days}d ago`, color: "text-muted-foreground" };
+  }
 
   return (
     <div className="flex h-full flex-col">
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4 border-b border-border bg-background/50 px-6 py-4">
+      {/* Summary KPIs */}
+      <div className="grid grid-cols-4 gap-3 border-b border-border bg-background/50 px-6 py-4">
         {[
-          { label: "Total Dead Items", value: summary.totalItems.toLocaleString() },
-          { label: "Total Dead Stock Value", value: fmtCurrency(summary.totalValue) },
-          { label: "Potential Recovery", value: fmtCurrency(summary.potentialRecovery) },
-        ].map((card) => (
-          <div key={card.label} className="rounded-lg border border-border bg-background p-4">
-            <div className="text-xs text-muted-foreground">{card.label}</div>
-            <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">{card.value}</div>
+          { label: "Dead Items", value: enrichedRows.length.toLocaleString() },
+          { label: "Capital Tied Up", value: "\u20B1" + fmtCurrency(capitalTied) },
+          { label: "Potential Recovery", value: "\u20B1" + fmtCurrency(potentialRecovery) },
+          { label: "Oldest Item", value: oldestDays > 0 ? `${oldestDays} days` : "\u2014" },
+        ].map(c => (
+          <div key={c.label} className="rounded-lg border border-border bg-background p-3">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{c.label}</div>
+            <div className="mt-1 text-lg font-bold tabular-nums text-foreground">{c.value}</div>
           </div>
         ))}
       </div>
 
-      {/* Bulk action bar */}
-      {selected.size > 0 && (
-        <div className="flex items-center gap-3 border-b border-border bg-primary/5 px-6 py-2.5">
-          <span className="text-xs font-medium text-foreground">
-            {selected.size} item{selected.size !== 1 ? "s" : ""} selected
-          </span>
-          <button
-            onClick={handleApplySelected}
-            disabled={applyMutation.isPending}
-            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
-          >
-            {applyMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-            Apply All Selected
-          </button>
-          <button
-            onClick={() => setSelected(new Set())}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            Clear selection
-          </button>
+      {/* Filters + bulk bar */}
+      <div className="border-b border-border bg-background/50 px-6 py-2.5 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[150px]">
+            <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..."
+              className="h-7 w-full rounded border border-border bg-background pl-8 pr-6 text-[11px] outline-none focus:border-primary/40" />
+            {search && <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"><X size={10} /></button>}
+          </div>
+          <select value={brandFilter} onChange={e => setBrandFilter(e.target.value)} className="h-7 rounded border border-border bg-background px-2 text-[11px] outline-none">
+            <option value="">All Brands</option>
+            {uniqueBrands.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className="h-7 rounded border border-border bg-background px-2 text-[11px] outline-none">
+            <option value="">All Categories</option>
+            {uniqueCategories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
         </div>
-      )}
+        {selected.size > 0 && (
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium">{selected.size} selected</span>
+            <button onClick={handleApplySelected} disabled={applyMut.isPending}
+              className="flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-[11px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+              {applyMut.isPending ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} Apply Clearance Prices
+            </button>
+            <button onClick={() => setSelected(new Set())} className="text-[11px] text-muted-foreground hover:text-foreground">Clear</button>
+          </div>
+        )}
+      </div>
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
         {isLoading ? (
-          <div className="flex h-64 items-center justify-center">
-            <Loader2 size={24} className="animate-spin text-muted-foreground" />
-          </div>
+          <div className="flex h-64 items-center justify-center"><Loader2 size={24} className="animate-spin text-muted-foreground" /></div>
         ) : isError ? (
-          <div className="flex h-64 items-center justify-center text-sm text-destructive">
-            Failed to load dead stock data
-          </div>
+          <div className="flex h-64 items-center justify-center text-sm text-destructive">Failed to load dead stock</div>
         ) : enrichedRows.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
             <Check size={32} className="text-emerald-500" />
-            <p className="text-sm font-medium text-foreground">No dead stock found</p>
+            <p className="text-sm font-medium">No dead stock found</p>
             <p className="text-xs text-muted-foreground">All items have recent sales activity</p>
           </div>
         ) : (
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th className="px-4 py-2.5 font-medium">
-                  <input
-                    type="checkbox"
-                    checked={selected.size === enrichedRows.length && enrichedRows.length > 0}
-                    onChange={toggleAll}
-                    className="accent-primary"
-                  />
-                </th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Product</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">SKU</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Brand</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Current Price</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Cost</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Days Since Sale</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Tier</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Suggested Price</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Current Margin</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">New Margin</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Stock Qty</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Stock Value</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium"></th>
+                <th className="px-3 py-2.5"><input type="checkbox" checked={selected.size === enrichedRows.length && enrichedRows.length > 0} onChange={toggleAll} className="accent-primary" /></th>
+                <th className="px-3 py-2.5 font-medium">Product</th>
+                <th className="px-3 py-2.5 font-medium">Brand</th>
+                <th className="px-3 py-2.5 font-medium">Category</th>
+                <th className="px-3 py-2.5 font-medium text-right">Stock</th>
+                <th className="px-3 py-2.5 font-medium text-right">Cost</th>
+                <th className="px-3 py-2.5 font-medium text-right">Sell Price</th>
+                <th className="px-3 py-2.5 font-medium text-right">Last Sold</th>
+                <th className="px-3 py-2.5 font-medium text-right">Clearance</th>
+                <th className="px-3 py-2.5 font-medium text-right">Recovery</th>
+                <th className="px-3 py-2.5 font-medium" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {enrichedRows.map((r) => (
-                <tr key={r.id} className="hover:bg-muted/30">
-                  <td className="px-4 py-2.5">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(r.productId)}
-                      onChange={() => toggleSelect(r.productId)}
-                      className="accent-primary"
-                    />
-                  </td>
-                  <td className="max-w-[180px] truncate px-4 py-2.5 text-sm font-medium text-foreground">
-                    {r.productName}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                    {r.productSku}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
-                    {r.brandName ?? "—"}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
-                    {fmtCurrency(r.sellPrice)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
-                    {fmtCurrency(r.costPrice)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
-                    {r.daysSinceSale}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5">
-                    <span
-                      className={cn(
-                        "inline-block rounded px-2 py-0.5 text-[10px] font-semibold",
-                        r.tier.color,
+              {enrichedRows.map((r, idx) => {
+                const sold = fmtLastSold(r.days);
+                const isEd = editingId === r.productId;
+                return (
+                  <tr key={r.id ?? idx} className="hover:bg-muted/30">
+                    <td className="px-3 py-2"><input type="checkbox" checked={selected.has(r.productId)} onChange={() => toggleSelect(r.productId)} className="accent-primary" /></td>
+                    <td className="px-3 py-2">
+                      <div className="text-sm font-medium text-foreground">{r.productName}</div>
+                      <div className="text-[10px] font-mono text-muted-foreground">SKU: {r.productSku}</div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs">{r.brandName ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{r.categoryName ?? "\u2014"}</td>
+                    <td className={cn("whitespace-nowrap px-3 py-2 text-right tabular-nums text-xs", r.stock > 10 ? "text-red-500 font-semibold" : "")}>{r.stock.toLocaleString()}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-xs">{"\u20B1"}{fmtCurrency(r.cost)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-xs">
+                      {isEd ? (
+                        <input type="number" value={editPrice} autoFocus onChange={e => setEditPrice(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter" && editPrice) applyMut.mutate({ productId: r.productId, price: Number(editPrice) }); if (e.key === "Escape") setEditingId(null); }}
+                          onBlur={() => setEditingId(null)}
+                          className="w-24 rounded border border-primary bg-background px-1.5 py-0.5 text-right text-xs outline-none" />
+                      ) : (
+                        <button onClick={() => { setEditingId(r.productId); setEditPrice(String(Number(r.avgSellingPrice) || 0)); }}
+                          className="tabular-nums hover:text-emerald-600 hover:underline">{"\u20B1"}{fmtCurrency(r.avgSellingPrice)}</button>
                       )}
-                    >
-                      {r.tier.label}
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium text-foreground">
-                    {fmtCurrency(r.suggestedPrice)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
-                    {fmtPct(r.currentMargin)}
-                  </td>
-                  <td
-                    className={cn(
-                      "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium",
-                      r.newMargin < 0 ? "text-red-500" : "text-foreground",
-                    )}
-                  >
-                    {fmtPct(r.newMargin)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
-                    {r.totalStock}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
-                    {fmtCurrency(r.stockValue)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5">
-                    <button
-                      onClick={() =>
-                        applyMutation.mutate({ productId: r.productId, newPrice: r.suggestedPrice })
-                      }
-                      disabled={applyMutation.isPending}
-                      className="rounded-md bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary transition hover:bg-primary/20 disabled:opacity-50"
-                    >
-                      Apply
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className={cn("whitespace-nowrap px-3 py-2 text-right text-xs font-medium", sold.color)}>{sold.text}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-xs">
+                      <button onClick={() => { setEditingId(r.productId); setEditPrice(String(r.clearancePrice)); }}
+                        className="text-amber-600 hover:underline">{"\u20B1"}{r.clearancePrice.toLocaleString()}</button>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-xs font-medium text-emerald-600">{"\u20B1"}{r.recovery.toLocaleString()}</td>
+                    <td className="px-3 py-2">
+                      <button onClick={() => applyMut.mutate({ productId: r.productId, price: r.clearancePrice })} disabled={applyMut.isPending}
+                        className="rounded bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary/20 disabled:opacity-50">Apply</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </div>
 
-      {/* Footer */}
       <div className="border-t border-border bg-background px-6 py-2.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{enrichedRows.length} dead stock items</span>
           {hasNextPage && (
-            <button
-              onClick={() => fetchNextPage()}
-              disabled={isFetchingNextPage}
-              className="flex items-center gap-1.5 rounded-md bg-muted px-3 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
-            >
-              {isFetchingNextPage ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                <ChevronsDown size={12} />
-              )}
-              Load More
+            <button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}
+              className="flex items-center gap-1 rounded bg-muted px-3 py-1 text-xs font-medium hover:bg-accent disabled:opacity-50">
+              {isFetchingNextPage ? <Loader2 size={12} className="animate-spin" /> : <ChevronsDown size={12} />} Load More
             </button>
           )}
         </div>
@@ -988,7 +1026,7 @@ function PriceHistoryTab() {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [fieldFilter, setFieldFilter] = useState<"" | "COST" | "SELL">("");
+  const [fieldFilter, setFieldFilter] = useState<"" | "COST_PRICE" | "SELL_PRICE">("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [batchId, setBatchId] = useState("");
@@ -1061,12 +1099,12 @@ function PriceHistoryTab() {
           <div className="relative">
             <select
               value={fieldFilter}
-              onChange={(e) => setFieldFilter(e.target.value as "" | "COST" | "SELL")}
+              onChange={(e) => setFieldFilter(e.target.value as "" | "COST_PRICE" | "SELL_PRICE")}
               className="h-8 appearance-none rounded-md border border-border bg-background pl-2.5 pr-7 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
             >
-              <option value="">Cost & Sell</option>
-              <option value="COST">Cost Only</option>
-              <option value="SELL">Sell Only</option>
+              <option value="">All Types</option>
+              <option value="COST_PRICE">Cost Only</option>
+              <option value="SELL_PRICE">Sell Only</option>
             </select>
             <ChevronDown
               size={12}
@@ -1130,78 +1168,56 @@ function PriceHistoryTab() {
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
                 <th className="whitespace-nowrap px-4 py-2.5 font-medium">Date</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Product</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">SKU</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Field</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Old Price</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">New Price</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">% Change</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Reason</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Changed By</th>
+                <th className="px-4 py-2.5 font-medium">Product</th>
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Type</th>
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Old</th>
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">New</th>
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Change</th>
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Source</th>
+                <th className="whitespace-nowrap px-4 py-2.5 font-medium">By</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {rows.map((r) => {
-                const d = new Date(r.date);
-                const dateStr = d.toLocaleDateString("en-PH", {
-                  day: "2-digit",
-                  month: "short",
-                  year: "numeric",
-                });
-                const timeStr = d.toLocaleTimeString("en-PH", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                });
+              {rows.map((r, idx) => {
+                const d = r.changedAt ? new Date(r.changedAt) : new Date();
+                const dateStr = d.toLocaleDateString("en-PH", { day: "2-digit", month: "short" });
+                const timeStr = d.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", hour12: false });
+                const pct = Number(r.pctChange) || 0;
+                const isSell = r.field === "SELL_PRICE";
+                const SOURCE_STYLES: Record<string, string> = {
+                  manual: "bg-muted text-muted-foreground",
+                  margin_alert: "bg-amber-500/10 text-amber-600",
+                  bulk_update: "bg-blue-500/10 text-blue-600",
+                  po_received: "bg-emerald-500/10 text-emerald-600",
+                  dead_stock_clearance: "bg-red-500/10 text-red-600",
+                  import: "bg-violet-500/10 text-violet-600",
+                };
                 return (
-                  <tr key={r.id} className="hover:bg-muted/30">
+                  <tr key={r.id ?? idx} className="hover:bg-muted/30">
                     <td className="whitespace-nowrap px-4 py-2.5">
-                      <div className="text-sm text-foreground">{dateStr}</div>
+                      <div className="text-xs text-foreground">{dateStr}</div>
                       <div className="text-[10px] text-muted-foreground">{timeStr}</div>
                     </td>
-                    <td className="max-w-[180px] truncate px-4 py-2.5 text-sm font-medium text-foreground">
-                      {r.productName}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                      {r.sku}
+                    <td className="px-4 py-2">
+                      <div className="text-sm font-medium text-foreground">{r.productName}</div>
+                      <div className="text-[10px] font-mono text-muted-foreground">SKU: {r.productSku}</div>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5">
-                      <span
-                        className={cn(
-                          "inline-block rounded px-2 py-0.5 text-[10px] font-semibold",
-                          r.field === "COST"
-                            ? "bg-blue-500/20 text-blue-400"
-                            : "bg-emerald-500/20 text-emerald-400",
-                        )}
-                      >
-                        {r.field}
+                      <span className={cn("inline-block rounded px-2 py-0.5 text-[10px] font-semibold", isSell ? "bg-emerald-500/10 text-emerald-600" : "bg-blue-500/10 text-blue-600")}>
+                        {isSell ? "Sell" : "Cost"}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
-                      {fmtCurrency(r.oldPrice)}
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs text-muted-foreground">{"\u20B1"}{fmtCurrency(r.oldValue)}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs font-medium">{"\u20B1"}{fmtCurrency(r.newValue)}</td>
+                    <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs font-semibold", pct > 0 ? "text-emerald-600" : pct < 0 ? "text-red-500" : "text-muted-foreground")}>
+                      {pct > 0 ? "\u2191+" : pct < 0 ? "\u2193" : ""}{fmtPct(pct)}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium text-foreground">
-                      {fmtCurrency(r.newPrice)}
+                    <td className="whitespace-nowrap px-4 py-2.5">
+                      <span className={cn("inline-block rounded-full px-2 py-0.5 text-[9px] font-semibold", SOURCE_STYLES[r.source] ?? "bg-muted text-muted-foreground")}>
+                        {r.source?.replace(/_/g, " ") ?? "manual"}
+                      </span>
                     </td>
-                    <td
-                      className={cn(
-                        "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium",
-                        r.pctChange > 0
-                          ? "text-red-500"
-                          : r.pctChange < 0
-                            ? "text-emerald-500"
-                            : "text-muted-foreground",
-                      )}
-                    >
-                      {r.pctChange > 0 ? "+" : ""}
-                      {fmtPct(r.pctChange)}
-                    </td>
-                    <td className="max-w-[140px] truncate whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
-                      {r.reason ?? "—"}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
-                      {r.changedBy ?? "System"}
-                    </td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">{r.changedByName ?? "System"}</td>
                   </tr>
                 );
               })}

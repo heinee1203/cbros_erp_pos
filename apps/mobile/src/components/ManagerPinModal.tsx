@@ -79,15 +79,16 @@ export function ManagerPinModal({
         <Pressable style={styles.container} onPress={(e) => e.stopPropagation()}>
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.title}>Manager Approval</Text>
+            <Text style={styles.lockIcon}>{'\uD83D\uDD12'}</Text>
+            <Text style={styles.title}>Manager Authorization Required</Text>
             <Text style={styles.subtitle}>
-              {requiredLevel >= 3 ? 'Admin' : 'Manager'} PIN required
+              Enter {requiredLevel >= 3 ? 'Admin' : 'Manager'} PIN to continue
             </Text>
           </View>
 
           {/* Action description */}
           <View style={styles.actionBox}>
-            <Text style={styles.actionLabel}>Action:</Text>
+            <Text style={styles.actionLabel}>Requested Action</Text>
             <Text style={styles.actionText}>{action}</Text>
           </View>
 
@@ -99,10 +100,9 @@ export function ManagerPinModal({
           {/* PIN pad */}
           <PinPad
             visible={true}
-            title=""
+            onClose={handleCancel}
             verifyPin={verifyPin}
             onVerified={() => {}} // handled in verifyPin callback
-            onCancel={handleCancel}
           />
         </Pressable>
       </Pressable>
@@ -121,56 +121,64 @@ function getRoleLevel(role: string): number {
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   container: {
-    width: 340,
+    width: 360,
     backgroundColor: colors.bg.surface,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
+    borderRadius: radius.xl,
+    padding: spacing['2xl'],
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.3,
+    shadowRadius: 24,
+    elevation: 12,
   },
   header: {
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  lockIcon: {
+    fontSize: 32,
+    marginBottom: spacing.sm,
   },
   title: {
-    fontSize: fontSize.lg,
-    fontFamily: fonts.heading,
+    fontSize: fontSize.xl,
+    fontFamily: fonts.display.bold,
     color: colors.text.primary,
+    textAlign: 'center',
   },
   subtitle: {
-    fontSize: fontSize.xs,
+    fontSize: fontSize.sm,
     color: colors.text.muted,
-    marginTop: 4,
+    marginTop: spacing.xs,
+    textAlign: 'center',
   },
   actionBox: {
     backgroundColor: colors.bg.elevated,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     padding: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent.primary,
   },
   actionLabel: {
     fontSize: fontSize.xs,
-    fontFamily: fonts.bodyMedium,
+    fontFamily: fonts.body.medium,
     color: colors.text.muted,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   actionText: {
-    fontSize: fontSize.sm,
-    fontFamily: fonts.bodyMedium,
+    fontSize: fontSize.base,
+    fontFamily: fonts.body.medium,
     color: colors.text.primary,
   },
   error: {
-    fontSize: fontSize.xs,
+    fontSize: fontSize.sm,
     color: colors.status.danger,
     textAlign: 'center',
     marginBottom: spacing.sm,

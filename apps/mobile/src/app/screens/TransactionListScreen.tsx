@@ -20,7 +20,7 @@ import { SplitView } from '@/components/SplitView';
 import { TransactionDetailPane } from '@/components/TransactionDetailPane';
 import { RefundFlow } from '@/components/RefundFlow';
 import { apiFetch } from '@/services/api-client';
-import { colors, textStyles, spacing, layout, fonts } from '@/theme';
+import { colors, textStyles, spacing, layout, fonts, radius, touchTarget } from '@/theme';
 import { useTheme } from '@/theme/ThemeContext';
 import { Badge } from '@/components/ui';
 import { usePosPermission } from '@/hooks/use-pos-permission';
@@ -263,6 +263,7 @@ export default function TransactionListScreen() {
         keyExtractor={item => item.id}
         renderItem={renderItem}
         extraData={selectedSaleId}
+        contentContainerStyle={{ flexGrow: 1 }}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
@@ -362,9 +363,9 @@ const createStyles = () => StyleSheet.create({
     marginTop: spacing.xs,
   },
   filterBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: touchTarget.min,
+    height: touchTarget.min,
+    borderRadius: radius.pill,
     backgroundColor: colors.bg.surface,
     borderWidth: 1,
     borderColor: colors.border.default,
@@ -395,17 +396,17 @@ const createStyles = () => StyleSheet.create({
     flex: 1,
     color: colors.text.primary,
     backgroundColor: colors.bg.input,
-    borderRadius: 8,
+    borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.border.default,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     fontFamily: fonts.mono.medium,
   },
   clearBtn: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: radius.pill,
     backgroundColor: colors.bg.surface,
     alignItems: 'center',
     justifyContent: 'center',
@@ -432,6 +433,7 @@ const createStyles = () => StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: layout.screenPadding,
     paddingVertical: spacing.md,
+    minHeight: 60,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border.default,
   },
@@ -454,7 +456,7 @@ const createStyles = () => StyleSheet.create({
     marginTop: spacing.xs,
   },
   rowTotal: {
-    ...textStyles.monoMd,
+    ...textStyles.price,
     color: colors.text.primary,
     marginBottom: spacing.xs,
   },
@@ -502,7 +504,7 @@ const createStyles = () => StyleSheet.create({
   shiftBtnSecondary: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs + 2,
-    borderRadius: 6,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.shift.bannerText,
     overflow: 'hidden',
@@ -515,7 +517,7 @@ const createStyles = () => StyleSheet.create({
   shiftBtnPrimary: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs + 2,
-    borderRadius: 6,
+    borderRadius: radius.md,
     backgroundColor: colors.shift.bannerBtnBg,
     overflow: 'hidden',
   },

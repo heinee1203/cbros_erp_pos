@@ -466,6 +466,8 @@ export interface StockMonitorQueryParams {
   subcategoryId?: string;
   familyId?: string;
   hideNegativeStock?: boolean;
+  hideDiscontinued?: boolean;
+  hideSpecialOrder?: boolean;
   urgency?: string;
   urgencyWindow?: string;
   velocityClass?: string;
@@ -773,6 +775,12 @@ export async function queryStockMonitor(
 
   if (params.hideNegativeStock) {
     conditions.push(sql`${stockMetrics.totalStock} >= 0`);
+  }
+  if (params.hideDiscontinued) {
+    conditions.push(eq(products.discontinued, false));
+  }
+  if (params.hideSpecialOrder) {
+    conditions.push(eq(products.specialOrder, false));
   }
 
   if (params.urgency) {
@@ -1087,6 +1095,12 @@ export async function exportStockMonitorCSV(
 
   if (params.hideNegativeStock) {
     conditions.push(sql`${stockMetrics.totalStock} >= 0`);
+  }
+  if (params.hideDiscontinued) {
+    conditions.push(eq(products.discontinued, false));
+  }
+  if (params.hideSpecialOrder) {
+    conditions.push(eq(products.specialOrder, false));
   }
 
   if (params.familyId) {
@@ -1417,6 +1431,8 @@ export async function getReorderSuggestions(
     lastSoldAfter?: string;
     lastSoldBefore?: string;
     hideNegativeStock?: boolean;
+    hideDiscontinued?: boolean;
+    hideSpecialOrder?: boolean;
     limit?: number;
   } = {},
 ): Promise<ReorderSuggestion[]> {
@@ -1439,6 +1455,8 @@ export async function getReorderSuggestions(
     // Default: hide negative stock in reorder suggestions
     conditions.push(sql`${stockMetrics.totalStock} >= 0`);
   }
+  if (opts.hideDiscontinued !== false) conditions.push(eq(products.discontinued, false));
+  if (opts.hideSpecialOrder !== false) conditions.push(eq(products.specialOrder, false));
   if (opts.categoryId) conditions.push(eq(products.categoryId, opts.categoryId));
   if (opts.brandId) conditions.push(eq(products.brandId, opts.brandId));
   if (opts.lastSoldAfter) conditions.push(sql`${stockMetrics.lastSaleDate} >= ${opts.lastSoldAfter}::date`);

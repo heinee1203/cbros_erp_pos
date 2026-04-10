@@ -49,6 +49,8 @@ export interface CartLine {
   // Price override
   overridePrice: number | null;     // null = no override, use unitPrice
   overrideApprovedBy: string | null; // manager name who approved
+  // Technician assignment (labor items)
+  technicianId: string | null;
 }
 
 export interface PaymentEntry {
@@ -103,6 +105,7 @@ interface CartActions {
   setLineWarrantyPhoto: (lineId: string, uri: string | null) => void;
   setLinePriceOverride: (lineId: string, newPrice: number, approvedBy: string) => void;
   clearLinePriceOverride: (lineId: string) => void;
+  setLineTechnician: (lineId: string, technicianId: string | null) => void;
   holdCurrentCart: () => boolean;            // save current cart, clear, return success
   restoreHeldCart: (heldCartId: string) => void;  // load held cart as active
   deleteHeldCart: (heldCartId: string) => void;
@@ -229,6 +232,7 @@ export const useCartStore = create<CartState>((set, get) => ({
           dotAllocation: null,
           overridePrice: null,
           overrideApprovedBy: null,
+          technicianId: null,
         };
         newLines = [...state.lines, newLine];
       }
@@ -422,6 +426,17 @@ export const useCartStore = create<CartState>((set, get) => ({
         restored.lineTotal = computeLineTotal(restored);
         return restored;
       });
+      const newState = { ...state, lines: newLines };
+      persist(newState);
+      return newState;
+    });
+  },
+
+  setLineTechnician: (lineId, technicianId) => {
+    set(state => {
+      const newLines = state.lines.map(l =>
+        l.id === lineId ? { ...l, technicianId } : l
+      );
       const newState = { ...state, lines: newLines };
       persist(newState);
       return newState;
