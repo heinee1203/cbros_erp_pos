@@ -30,6 +30,11 @@ export const supplierInvoices = pgTable("supplier_invoices", {
   rtvCreditAmount: numeric("rtv_credit_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   notes: varchar("notes", { length: 2000 }),
   recordedBy: uuid("recorded_by"),
+  // SOA billing tracking — mirrors customer_transactions.billed / billed_soa_id.
+  // Set to true when an invoice is included in a generated supplier_soa_records row;
+  // cleared back to false if the SOA is voided.
+  billed: boolean("billed").notNull().default(false),
+  billedSoaId: uuid("billed_soa_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 }, (table) => [
@@ -38,6 +43,7 @@ export const supplierInvoices = pgTable("supplier_invoices", {
   index("idx_supplier_invoices_due").on(table.orgId, table.dueDate),
   index("idx_supplier_invoices_supplier_status").on(table.orgId, table.supplierId, table.status),
   index("idx_supplier_invoices_po").on(table.orgId, table.sourcePoId),
+  index("idx_supplier_invoices_billed_soa").on(table.billedSoaId),
 ]);
 
 // check_vouchers

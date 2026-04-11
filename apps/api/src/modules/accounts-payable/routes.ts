@@ -25,6 +25,16 @@ import {
   getSupplierSOAOverview,
   getSummary,
   getPDCReport,
+  // Persistent supplier SOAs
+  generateSupplierSOA,
+  listSupplierSOAs,
+  getSupplierSOAById,
+  updateSupplierSOAStatus,
+  // Supplier master (AP-flavored CRUD)
+  listSuppliersWithAPStats,
+  getSupplierAPDetail,
+  createSupplierAP,
+  updateSupplierAP,
   // Bank Accounts
   listBankAccounts,
   createBankAccount,
@@ -492,6 +502,173 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     const { orgId } = request.storeContext!;
     const result = await getSupplierSOAOverview(orgId);
     return reply.send(result);
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // PERSISTENT SUPPLIER SOAs  (mirror of customer SOA history)
+  // ═══════════════════════════════════════════════════════════════
+
+  // ─── POST /supplier-soa/generate ──────────────────
+  // Generate a persistent supplier SOA from the given invoice IDs.
+  // Marks each invoice billed + creates frozen snapshot line items.
+  app.post("/supplier-soa/generate", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    try {
+      assertApRole(role);
+    } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+
+    const body = request.body as {
+      supplierId?: string;
+      invoiceIds?: string[];
+      notes?: string;
+    };
+    if (!body?.supplierId) {
+      return reply.status(400).send({ error: "supplierId is required" });
+    }
+    if (!Array.isArray(body.invoiceIds) || body.invoiceIds.length === 0) {
+      return reply.status(400).send({ error: "invoiceIds must be a non-empty array" });
+    }
+
+    try {
+      const result = await generateSupplierSOA(
+        orgId,
+        body.supplierId,
+        body.invoiceIds,
+        userId,
+        body.notes,
+      );
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── GET /suppliers/:supplierId/soa-history ───────
+  // List all persistent SOAs for a supplier (newest first).
+  app.get("/suppliers/:supplierId/soa-history", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { supplierId } = request.params as { supplierId: string };
+    try {
+      const data = await listSupplierSOAs(orgId, supplierId);
+      return reply.send({ data });
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── GET /supplier-soa/:soaId ─────────────────────
+  // Return a historical supplier SOA snapshot by id — used by the
+  // "Reprint" flow in the SOA history mini-list.
+  app.get("/supplier-soa/:soaId", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { soaId } = request.params as { soaId: string };
+    try {
+      const result = await getSupplierSOAById(orgId, soaId);
+      return reply.send(result);
+    } catch (err: any) {
+      if (err.message === "Supplier SOA not found") {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── PATCH /supplier-soa/:soaId ───────────────────
+  // Change status (GENERATED | SENT | VOID). Voiding unmarks the
+  // invoices so they can be included in a future SOA.
+  app.patch("/supplier-soa/:soaId", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try {
+      assertApRole(role);
+    } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+
+    const { soaId } = request.params as { soaId: string };
+    const { status } = (request.body as { status?: string }) ?? {};
+    if (!status) {
+      return reply.status(400).send({ error: "status is required" });
+    }
+
+    try {
+      const result = await updateSupplierSOAStatus(orgId, soaId, status as any);
+      return reply.send(result);
+    } catch (err: any) {
+      if (err.message === "Supplier SOA not found") {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // SUPPLIER MASTER (AP list page + edit drawer)
+  // ═══════════════════════════════════════════════════════════════
+  // Full-feature CRUD with per-supplier AP rollups. Lives under /ap/
+  // so the frontend can reach it without touching the procurement
+  // module's thinner /procurement/suppliers endpoint (which stays for
+  // backwards compatibility with the existing PO + invoice forms).
+
+  // ─── GET /ap/suppliers ────────────────────────────
+  // Supplier list with per-row AP stats (open invoices, payable, overdue).
+  app.get("/suppliers", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const data = await listSuppliersWithAPStats(orgId);
+    return reply.send({ data });
+  });
+
+  // ─── GET /ap/suppliers/:id ────────────────────────
+  // Single supplier detail for the edit drawer.
+  app.get("/suppliers/:id", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { id } = request.params as { id: string };
+    const result = await getSupplierAPDetail(orgId, id);
+    if (!result) return reply.status(404).send({ error: "Supplier not found" });
+    return reply.send(result);
+  });
+
+  // ─── POST /ap/suppliers ───────────────────────────
+  // Create a new supplier with full AP fields.
+  app.post("/suppliers", async (request, reply) => {
+    const { role } = request.user;
+    try {
+      assertApRole(role);
+    } catch (err: any) {
+      return reply.status(err.statusCode ?? 403).send({ error: err.message });
+    }
+    const { orgId } = request.storeContext!;
+    try {
+      const result = await createSupplierAP(orgId, request.body as any);
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── PATCH /ap/suppliers/:id ──────────────────────
+  // Partial update. Supports deactivation via { isActive: false }.
+  app.patch("/suppliers/:id", async (request, reply) => {
+    const { role } = request.user;
+    try {
+      assertApRole(role);
+    } catch (err: any) {
+      return reply.status(err.statusCode ?? 403).send({ error: err.message });
+    }
+    const { orgId } = request.storeContext!;
+    const { id } = request.params as { id: string };
+    try {
+      const result = await updateSupplierAP(orgId, id, request.body as any);
+      return reply.send(result);
+    } catch (err: any) {
+      if (err.message === "Supplier not found") {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
   });
 
   // ─── GET /reports/summary ─────────────────────────

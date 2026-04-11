@@ -12,6 +12,11 @@ export interface SupplierSOAData {
     paidAmount: number;
     balance: number;
   }>;
+  /**
+   * Optional persistent SOA number (e.g. "SUPP-SOA-2026-0001") — rendered
+   * in the info block when present. Omitted for ephemeral "Preview All" prints.
+   */
+  soaNumber?: string;
 }
 
 function fmt(v: number): string {
@@ -74,6 +79,7 @@ td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; }
 
 <div class="info">
 <div><b>Supplier:</b> ${esc(d.supplierName)}</div>
+${d.soaNumber ? `<div><b>SOA #:</b> <span style="font-family:monospace;font-weight:700">${esc(d.soaNumber)}</span></div>` : ""}
 <div><b>Period:</b> ${dateRange}</div>
 <div><b>Date:</b> ${fmtDate(now.toISOString())}</div>
 </div>

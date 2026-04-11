@@ -13,11 +13,75 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso, fmtDate } from "@/lib/format";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { cn } from "@/lib/utils";
+
+/* ─── Sortable column header ─── */
+
+type SortField =
+  | "invoiceNumber"
+  | "invoiceDate"
+  | "supplier"
+  | "dueDate"
+  | "totalAmount"
+  | "paidAmount"
+  | "balance"
+  | "status";
+type SortDir = "asc" | "desc";
+
+function SortableHeader({
+  label,
+  field,
+  activeField,
+  activeDir,
+  onSort,
+  align = "left",
+}: {
+  label: string;
+  field: SortField;
+  activeField: SortField;
+  activeDir: SortDir;
+  onSort: (f: SortField) => void;
+  align?: "left" | "right";
+}) {
+  const isActive = field === activeField;
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onSort(field);
+      }}
+      className={cn(
+        "group inline-flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors select-none",
+        isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+        align === "right" && "flex-row-reverse",
+      )}
+    >
+      {label}
+      <span className="inline-flex w-3 justify-center">
+        {isActive ? (
+          activeDir === "asc" ? (
+            <ChevronUp size={11} className="text-primary" strokeWidth={2.5} />
+          ) : (
+            <ChevronDown size={11} className="text-primary" strokeWidth={2.5} />
+          )
+        ) : (
+          <ChevronsUpDown
+            size={11}
+            className="text-muted-foreground/30 group-hover:text-muted-foreground/60"
+          />
+        )}
+      </span>
+    </button>
+  );
+}
 
 /* ─── Types ─── */
 
@@ -354,6 +418,12 @@ export default function SupplierInvoicesPage() {
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // Client-side text search — narrows the current page in place.
+  const [searchText, setSearchText] = useState("");
+
+  // Client-side sort state. Default: invoice date descending.
+  const [sortField, setSortField] = useState<SortField>("invoiceDate");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -427,6 +497,67 @@ export default function SupplierInvoicesPage() {
       fetchSuppliers();
     }
   }, [authLoading, token, locationId, fetchInvoices, fetchSuppliers]);
+
+  // ── Client-side filter + sort ──
+  const displayedInvoices = useMemo(() => {
+    let rows = invoices;
+    if (searchText.trim().length >= 1) {
+      const q = searchText.toLowerCase();
+      rows = rows.filter(
+        (inv) =>
+          inv.invoiceNumber.toLowerCase().includes(q) ||
+          inv.supplierName.toLowerCase().includes(q) ||
+          (inv.notes ?? "").toLowerCase().includes(q),
+      );
+    }
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      let cmp: number;
+      switch (sortField) {
+        case "invoiceNumber":
+          cmp = a.invoiceNumber.localeCompare(b.invoiceNumber);
+          break;
+        case "invoiceDate":
+          cmp = new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime();
+          break;
+        case "supplier":
+          cmp = a.supplierName.localeCompare(b.supplierName);
+          break;
+        case "dueDate":
+          cmp = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+          break;
+        case "totalAmount":
+          cmp = parseFloat(a.totalAmount) - parseFloat(b.totalAmount);
+          break;
+        case "paidAmount":
+          cmp = parseFloat(a.paidAmount) - parseFloat(b.paidAmount);
+          break;
+        case "balance":
+          cmp = parseFloat(a.balance) - parseFloat(b.balance);
+          break;
+        case "status":
+          cmp = (a.status || "").localeCompare(b.status || "");
+          break;
+        default:
+          cmp = 0;
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+    return copy;
+  }, [invoices, searchText, sortField, sortDir]);
+
+  const handleSort = (field: SortField) => {
+    if (field === sortField) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDir(
+        field === "invoiceDate" || field === "dueDate" || field === "totalAmount" || field === "balance"
+          ? "desc"
+          : "asc",
+      );
+    }
+  };
 
   const handleNextPage = () => {
     if (cursor) {
@@ -518,6 +649,31 @@ export default function SupplierInvoicesPage() {
 
       {/* Filters */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
+        {/* Text search — filters the current page client-side by invoice
+            number / supplier name / notes. For a full search across pages,
+            combine with the supplier dropdown below. */}
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search
+            size={14}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+          />
+          <input
+            type="text"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Search invoice #, supplier, notes…"
+            className="h-8 w-full rounded-lg border border-border bg-background pl-9 pr-8 text-[12px] outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20"
+          />
+          {searchText && (
+            <button
+              onClick={() => setSearchText("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+
         <select
           value={supplierFilter}
           onChange={(e) => setSupplierFilter(e.target.value)}
@@ -579,29 +735,29 @@ export default function SupplierInvoicesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Invoice #
+                <th className="px-3 py-2.5 text-left">
+                  <SortableHeader label="Invoice #" field="invoiceNumber" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Date
+                <th className="px-3 py-2.5 text-left">
+                  <SortableHeader label="Date" field="invoiceDate" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Supplier
+                <th className="px-3 py-2.5 text-left">
+                  <SortableHeader label="Supplier" field="supplier" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Due Date
+                <th className="px-3 py-2.5 text-left">
+                  <SortableHeader label="Due Date" field="dueDate" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Amount
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader label="Amount" field="totalAmount" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Paid
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader label="Paid" field="paidAmount" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Balance
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader label="Balance" field="balance" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Status
+                <th className="px-3 py-2.5 text-left">
+                  <SortableHeader label="Status" field="status" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
                 <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Actions
@@ -617,18 +773,19 @@ export default function SupplierInvoicesPage() {
                     </td>
                   </tr>
                 ))
-              ) : invoices.length === 0 ? (
+              ) : displayedInvoices.length === 0 ? (
                 <tr>
                   <td
                     colSpan={9}
                     className="px-3 py-12 text-center text-sm text-muted-foreground"
                   >
-                    No invoices found. Click &quot;Record Invoice&quot; to
-                    create one.
+                    {invoices.length === 0
+                      ? "No invoices found. Click \u201cRecord Invoice\u201d to create one."
+                      : "No invoices match the current filters."}
                   </td>
                 </tr>
               ) : (
-                invoices.map((inv, i) => (
+                displayedInvoices.map((inv, i) => (
                   <tr
                     key={inv.id}
                     className={`border-b border-border transition-colors hover:bg-accent/50 ${
@@ -694,7 +851,11 @@ export default function SupplierInvoicesPage() {
         {/* Pagination footer */}
         <div className="flex items-center justify-between border-t border-border bg-muted/30 px-3 py-2">
           <span className="text-[10px] text-muted-foreground">
-            Showing {invoices.length} invoice{invoices.length !== 1 ? "s" : ""}
+            Showing {displayedInvoices.length}
+            {searchText && displayedInvoices.length !== invoices.length
+              ? ` of ${invoices.length}`
+              : ""}{" "}
+            invoice{displayedInvoices.length !== 1 ? "s" : ""}
           </span>
           <div className="flex items-center gap-2">
             {prevCursors.length > 0 && (

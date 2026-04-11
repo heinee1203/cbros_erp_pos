@@ -37,6 +37,8 @@ interface NavChild {
   href: string;
   match?: RegExp;
   permission?: string;
+  /** If set, only users whose role equals this value see the entry. */
+  requireRole?: "ADMIN" | "MANAGER";
 }
 
 interface NavGroup {
@@ -45,6 +47,8 @@ interface NavGroup {
   icon: LucideIcon;
   match: RegExp;
   permission?: string;
+  /** If set, only users whose role equals this value see the entry. */
+  requireRole?: "ADMIN" | "MANAGER";
   children: NavChild[];
 }
 
@@ -55,6 +59,8 @@ interface NavDirect {
   href: string;
   match: RegExp;
   permission?: string;
+  /** If set, only users whose role equals this value see the entry. */
+  requireRole?: "ADMIN" | "MANAGER";
 }
 
 type NavEntry = NavGroup | NavDirect;
@@ -189,6 +195,7 @@ const NAV_TOP: NavEntry[] = [
     match: /^\/ap/,
     permission: "bo.manage_customers",
     children: [
+      { label: "Suppliers", href: "/ap/suppliers", match: /^\/ap\/suppliers/ },
       { label: "Supplier Invoices", href: "/ap/invoices", match: /^\/ap\/invoices/ },
       { label: "Supplier SOA", href: "/ap/supplier-soa", match: /^\/ap\/supplier-soa/ },
       { label: "Check Vouchers", href: "/ap/check-vouchers", match: /^\/ap\/check-vouchers/ },
@@ -206,6 +213,17 @@ const NAV_TOP: NavEntry[] = [
       { label: "Cash Flow Forecast", href: "/cashflow", match: /^\/cashflow$/ },
       { label: "Recurring Expenses", href: "/cashflow/expenses", match: /^\/cashflow\/expenses/ },
     ],
+  },
+  {
+    // Strategic analytics — restricted to ADMIN users. The page itself
+    // double-checks the role and renders an access-denied screen for
+    // non-admins, so the sidebar-level filter is defense-in-depth.
+    kind: "direct",
+    label: "Daily Sales",
+    icon: BarChart3,
+    href: "/analytics/daily-sales",
+    match: /^\/analytics\/daily-sales/,
+    requireRole: "ADMIN",
   },
 ];
 
@@ -272,6 +290,20 @@ export function Sidebar() {
   const { user } = useAuth();
   // If no permissions data (legacy session), show everything — don't filter
   const userPermissions: string[] | null = user?.permissions && user.permissions.length > 0 ? user.permissions : null;
+  const userRole = user?.role;
+
+  // Shared helper: returns true if the current user should see this entry.
+  // Both permission and requireRole must pass when set.
+  const isEntryVisible = useCallback(
+    (entry: NavEntry) => {
+      if (entry.requireRole && userRole !== entry.requireRole) return false;
+      if (userPermissions && entry.permission && !userPermissions.includes(entry.permission)) {
+        return false;
+      }
+      return true;
+    },
+    [userPermissions, userRole],
+  );
 
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const initial = [
@@ -354,12 +386,7 @@ export function Sidebar() {
       <nav className={cn("flex flex-1 flex-col pt-2 pb-3", isCollapsed ? "px-1.5 overflow-visible" : "px-3 overflow-y-auto")}>
         {/* Top nav */}
         <div className="flex flex-col gap-px">
-          {NAV_TOP.filter((entry) => {
-            if (!userPermissions) return true; // No permissions data — show all
-            const perm = entry.kind === "group" ? entry.permission : (entry as NavDirect).permission;
-            if (!perm) return true;
-            return userPermissions.includes(perm);
-          }).map((entry) =>
+          {NAV_TOP.filter(isEntryVisible).map((entry) =>
             entry.kind === "group" ? (
               <NavGroupItem
                 key={entry.label}
@@ -386,7 +413,7 @@ export function Sidebar() {
 
         {/* Bottom nav */}
         <div className="flex flex-col gap-px border-t border-sidebar-border pt-2 mt-2">
-          {NAV_BOTTOM.map((entry) =>
+          {NAV_BOTTOM.filter(isEntryVisible).map((entry) =>
             entry.kind === "group" ? (
               <NavGroupItem
                 key={entry.label}

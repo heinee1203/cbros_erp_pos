@@ -129,6 +129,10 @@ export async function listInvoices(
       currency: supplierInvoices.currency,
       rtvCreditAmount: supplierInvoices.rtvCreditAmount,
       notes: supplierInvoices.notes,
+      // SOA billing flags — the UI uses these to grey out rows already
+      // on a previous supplier SOA and to power the Select Unbilled shortcut.
+      billed: supplierInvoices.billed,
+      billedSoaId: supplierInvoices.billedSoaId,
       createdAt: supplierInvoices.createdAt,
     })
     .from(supplierInvoices)
@@ -830,7 +834,9 @@ export async function voidCheckVoucher(
 // ════════════════════════════════════════════════════════════════════
 
 export async function getAgingReport(orgId: string) {
-  const rows = await db.execute(
+  // Raw SQL returns snake_case column names. We map to camelCase here so
+  // the frontend can consume the data directly without guessing field names.
+  const rows = (await db.execute(
     sql`
       SELECT
         si.supplier_id,
@@ -850,9 +856,22 @@ export async function getAgingReport(orgId: string) {
       GROUP BY si.supplier_id, s.name
       ORDER BY total DESC
     `,
-  );
+  )) as any[];
 
-  return { data: rows };
+  return {
+    data: rows.map((r: any) => ({
+      supplierId: r.supplier_id,
+      supplierName: r.supplier_name,
+      current: parseFloat(r.current ?? "0"),
+      days1to30: parseFloat(r.days_1_30 ?? "0"),
+      days31to60: parseFloat(r.days_31_60 ?? "0"),
+      days61to90: parseFloat(r.days_61_90 ?? "0"),
+      days91to120: parseFloat(r.days_91_120 ?? "0"),
+      days121to180: parseFloat(r.days_121_180 ?? "0"),
+      over180: parseFloat(r.days_180_plus ?? "0"),
+      total: parseFloat(r.total ?? "0"),
+    })),
+  };
 }
 
 export async function getSupplierSOA(
@@ -1068,6 +1087,528 @@ export async function getSupplierSOAOverview(orgId: string) {
       dueThisWeek: parseFloat((dueThisWeek as any[])[0]?.amount ?? "0"),
     },
   };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SUPPLIER MASTER (AP list page + edit drawer)
+// ═══════════════════════════════════════════════════════════════
+// Full CRUD against the suppliers table lives in the procurement module
+// (`listSuppliers`, `createSupplier`, `updateSupplier`, `deleteSupplier`).
+// This section adds AP-flavored extensions that the Supplier List page needs:
+// per-supplier rollups (invoice counts, payables, oldest overdue, status)
+// and an update path that covers the new AP fields (contact_person, tin,
+// payment_terms_days, credit_limit, bank details, notes, is_active).
+
+/**
+ * Supplier list with per-row AP stats — for the Supplier List page.
+ *
+ * Returns ALL suppliers (including inactive) so the UI can offer a toggle
+ * to include deactivated rows. Sorting / filtering / search is done
+ * client-side since a typical business has fewer than a few hundred
+ * suppliers.
+ */
+export async function listSuppliersWithAPStats(orgId: string) {
+  const rows = (await db.execute(sql`
+    SELECT
+      s.id,
+      s.name,
+      s.contact_person,
+      s.contact_phone,
+      s.contact_email,
+      s.address,
+      s.tin,
+      s.mnemonic_code,
+      s.payment_terms_days,
+      s.credit_limit::text AS credit_limit,
+      s.bank_name,
+      s.bank_account_number,
+      s.bank_account_name,
+      s.notes,
+      s.is_active,
+      s.created_at,
+      s.updated_at,
+
+      -- Invoice rollups (only count non-void invoices)
+      COALESCE(agg.open_count, 0)::int        AS open_count,
+      COALESCE(agg.total_payable, 0)::text    AS total_payable,
+      COALESCE(agg.overdue_count, 0)::int     AS overdue_count,
+      COALESCE(agg.overdue_amount, 0)::text   AS overdue_amount,
+      agg.oldest_overdue_date::text           AS oldest_overdue_date
+    FROM suppliers s
+    LEFT JOIN (
+      SELECT
+        supplier_id,
+        COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID'))::int AS open_count,
+        SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')) AS total_payable,
+        COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                          AND due_date < CURRENT_DATE)::int AS overdue_count,
+        SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                                        AND due_date < CURRENT_DATE) AS overdue_amount,
+        MIN(due_date) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                                AND due_date < CURRENT_DATE) AS oldest_overdue_date
+      FROM supplier_invoices
+      WHERE org_id = ${orgId}
+      GROUP BY supplier_id
+    ) agg ON agg.supplier_id = s.id
+    WHERE s.org_id = ${orgId}
+    ORDER BY s.name ASC
+  `)) as any[];
+
+  return rows.map((r: any) => ({
+    id: r.id,
+    name: r.name,
+    contactPerson: r.contact_person,
+    contactPhone: r.contact_phone,
+    contactEmail: r.contact_email,
+    address: r.address,
+    tin: r.tin,
+    mnemonicCode: r.mnemonic_code,
+    paymentTermsDays: r.payment_terms_days,
+    creditLimit: parseFloat(r.credit_limit),
+    bankName: r.bank_name,
+    bankAccountNumber: r.bank_account_number,
+    bankAccountName: r.bank_account_name,
+    notes: r.notes,
+    isActive: r.is_active,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    // AP rollups
+    openCount: r.open_count,
+    totalPayable: parseFloat(r.total_payable),
+    overdueCount: r.overdue_count,
+    overdueAmount: parseFloat(r.overdue_amount),
+    oldestOverdueDate: r.oldest_overdue_date,
+  }));
+}
+
+/**
+ * Get a single supplier with every AP field. Used by the detail drawer.
+ */
+export async function getSupplierAPDetail(orgId: string, supplierId: string) {
+  const [row] = (await db.execute(sql`
+    SELECT
+      s.id, s.name, s.contact_person, s.contact_phone, s.contact_email,
+      s.address, s.tin, s.mnemonic_code,
+      s.payment_terms_days, s.credit_limit::text AS credit_limit,
+      s.bank_name, s.bank_account_number, s.bank_account_name,
+      s.notes, s.is_active,
+      s.avg_lead_time_days,
+      s.created_at, s.updated_at
+    FROM suppliers s
+    WHERE s.id = ${supplierId} AND s.org_id = ${orgId}
+  `)) as any[];
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    name: row.name,
+    contactPerson: row.contact_person,
+    contactPhone: row.contact_phone,
+    contactEmail: row.contact_email,
+    address: row.address,
+    tin: row.tin,
+    mnemonicCode: row.mnemonic_code,
+    paymentTermsDays: row.payment_terms_days,
+    creditLimit: parseFloat(row.credit_limit),
+    bankName: row.bank_name,
+    bankAccountNumber: row.bank_account_number,
+    bankAccountName: row.bank_account_name,
+    notes: row.notes,
+    isActive: row.is_active,
+    avgLeadTimeDays: row.avg_lead_time_days,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Update the AP master fields of a supplier. Partial — only the fields
+ * present in `input` are touched. Uses Drizzle's typed update API which
+ * picks up the expanded suppliers schema (contact_person, tin,
+ * payment_terms_days, credit_limit, bank_*, notes, is_active).
+ */
+export async function updateSupplierAP(
+  orgId: string,
+  supplierId: string,
+  input: {
+    name?: string;
+    contactPerson?: string | null;
+    contactPhone?: string | null;
+    contactEmail?: string | null;
+    address?: string | null;
+    tin?: string | null;
+    mnemonicCode?: string | null;
+    paymentTermsDays?: number;
+    creditLimit?: string;
+    bankName?: string | null;
+    bankAccountNumber?: string | null;
+    bankAccountName?: string | null;
+    notes?: string | null;
+    isActive?: boolean;
+  },
+) {
+  const setFields: Record<string, any> = {};
+  if (input.name !== undefined) setFields.name = input.name;
+  if (input.contactPerson !== undefined) setFields.contactPerson = input.contactPerson;
+  if (input.contactPhone !== undefined) setFields.contactPhone = input.contactPhone;
+  if (input.contactEmail !== undefined) setFields.contactEmail = input.contactEmail;
+  if (input.address !== undefined) setFields.address = input.address;
+  if (input.tin !== undefined) setFields.tin = input.tin;
+  if (input.mnemonicCode !== undefined) setFields.mnemonicCode = input.mnemonicCode;
+  if (input.paymentTermsDays !== undefined) setFields.paymentTermsDays = input.paymentTermsDays;
+  if (input.creditLimit !== undefined) setFields.creditLimit = input.creditLimit;
+  if (input.bankName !== undefined) setFields.bankName = input.bankName;
+  if (input.bankAccountNumber !== undefined) setFields.bankAccountNumber = input.bankAccountNumber;
+  if (input.bankAccountName !== undefined) setFields.bankAccountName = input.bankAccountName;
+  if (input.notes !== undefined) setFields.notes = input.notes;
+  if (input.isActive !== undefined) setFields.isActive = input.isActive;
+
+  if (Object.keys(setFields).length === 0) {
+    throw new Error("No fields to update");
+  }
+
+  const [updated] = await db
+    .update(suppliers)
+    .set(setFields)
+    .where(and(eq(suppliers.id, supplierId), eq(suppliers.orgId, orgId)))
+    .returning();
+
+  if (!updated) throw new Error("Supplier not found");
+
+  return { id: updated.id, name: updated.name, isActive: updated.isActive };
+}
+
+/**
+ * Create a new supplier. Thin wrapper that fills in the AP defaults if
+ * not provided.
+ */
+export async function createSupplierAP(
+  orgId: string,
+  input: {
+    name: string;
+    contactPerson?: string | null;
+    contactPhone?: string | null;
+    contactEmail?: string | null;
+    address?: string | null;
+    tin?: string | null;
+    mnemonicCode?: string | null;
+    paymentTermsDays?: number;
+    creditLimit?: string;
+    bankName?: string | null;
+    bankAccountNumber?: string | null;
+    bankAccountName?: string | null;
+    notes?: string | null;
+  },
+) {
+  if (!input.name?.trim()) throw new Error("Supplier name is required");
+
+  const [row] = (await db.execute(sql`
+    INSERT INTO suppliers (
+      org_id, name,
+      contact_person, contact_phone, contact_email, address, tin, mnemonic_code,
+      payment_terms_days, credit_limit,
+      bank_name, bank_account_number, bank_account_name,
+      notes, is_active
+    )
+    VALUES (
+      ${orgId}, ${input.name.trim()},
+      ${input.contactPerson ?? null}, ${input.contactPhone ?? null},
+      ${input.contactEmail ?? null}, ${input.address ?? null},
+      ${input.tin ?? null}, ${input.mnemonicCode ?? null},
+      ${input.paymentTermsDays ?? 30}, ${input.creditLimit ?? "0.00"},
+      ${input.bankName ?? null}, ${input.bankAccountNumber ?? null},
+      ${input.bankAccountName ?? null},
+      ${input.notes ?? null}, true
+    )
+    RETURNING id, name
+  `)) as any[];
+
+  return { id: row.id, name: row.name };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SUPPLIER SOA HISTORY (persistent statements)
+// ═══════════════════════════════════════════════════════════════
+// Mirrors the customer-side SOA module (soa_records / soa_line_items).
+// Generates a persistent SOA record with frozen per-invoice snapshots
+// so historical reprints are deterministic even after check voucher
+// releases mutate paid/balance on the underlying supplier_invoices.
+
+/**
+ * Generate a persistent Supplier SOA for the given invoice IDs.
+ *
+ * Every invoice must belong to the target supplier and org, and must not
+ * already be billed to a previous non-void SOA. The operation runs inside
+ * a transaction: on any failure, no record / line items / billed flags
+ * are written.
+ *
+ * Returns the new SOA record plus the count of invoices attached.
+ */
+export async function generateSupplierSOA(
+  orgId: string,
+  supplierId: string,
+  invoiceIds: string[],
+  userId?: string,
+  notes?: string,
+) {
+  if (invoiceIds.length === 0) {
+    throw new Error("At least one invoice must be selected");
+  }
+
+  return db.transaction(async (tx) => {
+    // ── Guard: supplier exists in this org ──
+    const [supplier] = (await tx.execute(sql`
+      SELECT id, name FROM suppliers WHERE id = ${supplierId} AND org_id = ${orgId}
+    `)) as any[];
+    if (!supplier) throw new Error("Supplier not found");
+
+    // ── Load target invoices, ownership + billed guards ──
+    const idList = sql.join(
+      Array.from(new Set(invoiceIds)).map((id) => sql`${id}::uuid`),
+      sql`, `,
+    );
+    const invoices = (await tx.execute(sql`
+      SELECT id, supplier_id, invoice_number, invoice_date,
+             total_amount::text, paid_amount::text, balance::text,
+             billed, billed_soa_id
+      FROM supplier_invoices
+      WHERE org_id = ${orgId}
+        AND id IN (${idList})
+      ORDER BY invoice_date ASC, invoice_number ASC
+    `)) as any[];
+
+    if (invoices.length === 0) {
+      throw new Error("No matching invoices found");
+    }
+    if (invoices.length !== new Set(invoiceIds).size) {
+      throw new Error(
+        `Expected ${new Set(invoiceIds).size} invoices, got ${invoices.length}`,
+      );
+    }
+    for (const inv of invoices) {
+      if (inv.supplier_id !== supplierId) {
+        throw new Error(
+          `Invoice ${inv.invoice_number} belongs to a different supplier`,
+        );
+      }
+      if (inv.billed === true && inv.billed_soa_id !== null) {
+        throw new Error(
+          `Invoice ${inv.invoice_number} is already on a previous SOA`,
+        );
+      }
+    }
+
+    // ── Reserve the next yearly SOA number ──
+    const year = new Date().getFullYear();
+    const [seq] = (await tx.execute(sql`
+      INSERT INTO supplier_soa_number_sequence (org_id, year, last_number)
+      VALUES (${orgId}, ${year}, 1)
+      ON CONFLICT (org_id, year)
+      DO UPDATE SET last_number = supplier_soa_number_sequence.last_number + 1
+      RETURNING last_number
+    `)) as any[];
+    const soaNumber = `SUPP-SOA-${year}-${String(seq.last_number).padStart(4, "0")}`;
+
+    // ── Compute totals + date range ──
+    let totalAmount = 0;
+    let totalPaid = 0;
+    let totalBalance = 0;
+    for (const inv of invoices) {
+      totalAmount += parseFloat(inv.total_amount);
+      totalPaid += parseFloat(inv.paid_amount);
+      totalBalance += parseFloat(inv.balance);
+    }
+    const dates = invoices.map((r: any) => r.invoice_date).sort();
+    const dateFrom = dates[0];
+    const dateTo = dates[dates.length - 1];
+
+    // ── Insert SOA record ──
+    const [soa] = (await tx.execute(sql`
+      INSERT INTO supplier_soa_records (
+        org_id, supplier_id, soa_number, date_from, date_to,
+        generated_by, total_amount, total_paid, total_balance,
+        invoice_count, notes
+      ) VALUES (
+        ${orgId}, ${supplierId}, ${soaNumber}, ${dateFrom}, ${dateTo},
+        ${userId ?? null},
+        ${totalAmount.toFixed(2)}, ${totalPaid.toFixed(2)}, ${totalBalance.toFixed(2)},
+        ${invoices.length}, ${notes ?? null}
+      )
+      RETURNING id, soa_number, status,
+                total_amount::text, total_paid::text, total_balance::text,
+                invoice_count, date_from::text, date_to::text
+    `)) as any[];
+
+    // ── Insert line items with frozen snapshots + mark invoices billed ──
+    for (const inv of invoices) {
+      await tx.execute(sql`
+        INSERT INTO supplier_soa_line_items (
+          soa_id, invoice_id,
+          invoice_amount, paid_at_generation, balance_at_generation
+        ) VALUES (
+          ${soa.id}, ${inv.id},
+          ${inv.total_amount}, ${inv.paid_amount}, ${inv.balance}
+        )
+      `);
+      await tx.execute(sql`
+        UPDATE supplier_invoices
+        SET billed = true, billed_soa_id = ${soa.id}
+        WHERE id = ${inv.id}
+      `);
+    }
+
+    return {
+      id: soa.id,
+      soaNumber: soa.soa_number,
+      status: soa.status,
+      totalAmount: parseFloat(soa.total_amount),
+      totalPaid: parseFloat(soa.total_paid),
+      totalBalance: parseFloat(soa.total_balance),
+      invoiceCount: soa.invoice_count,
+      dateFrom: soa.date_from,
+      dateTo: soa.date_to,
+    };
+  });
+}
+
+/**
+ * List persistent SOAs for a supplier (newest first).
+ * Powers the SOA history mini-list in the expanded supplier detail row.
+ */
+export async function listSupplierSOAs(orgId: string, supplierId: string) {
+  const rows = (await db.execute(sql`
+    SELECT id, soa_number, date_from::text, date_to::text,
+           generated_at, total_amount::text, total_paid::text,
+           total_balance::text, invoice_count, status, notes
+    FROM supplier_soa_records
+    WHERE org_id = ${orgId} AND supplier_id = ${supplierId}
+    ORDER BY generated_at DESC
+  `)) as any[];
+
+  return rows.map((r: any) => ({
+    id: r.id,
+    soaNumber: r.soa_number,
+    dateFrom: r.date_from,
+    dateTo: r.date_to,
+    generatedAt: r.generated_at,
+    totalAmount: parseFloat(r.total_amount),
+    totalPaid: parseFloat(r.total_paid),
+    totalBalance: parseFloat(r.total_balance),
+    invoiceCount: r.invoice_count,
+    status: r.status,
+    notes: r.notes,
+  }));
+}
+
+/**
+ * Fetch a persistent supplier SOA by ID with its frozen line item snapshots.
+ * Used for reprints — returns the paid/balance as they were at generation
+ * time, NOT the invoices' current mutable state.
+ */
+export async function getSupplierSOAById(orgId: string, soaId: string) {
+  const [soa] = (await db.execute(sql`
+    SELECT sr.id, sr.soa_number, sr.supplier_id, sr.date_from::text, sr.date_to::text,
+           sr.generated_at, sr.total_amount::text, sr.total_paid::text,
+           sr.total_balance::text, sr.invoice_count, sr.status, sr.notes,
+           s.name AS supplier_name, s.contact_phone, s.address, s.contact_email
+    FROM supplier_soa_records sr
+    JOIN suppliers s ON s.id = sr.supplier_id
+    WHERE sr.id = ${soaId} AND sr.org_id = ${orgId}
+  `)) as any[];
+  if (!soa) throw new Error("Supplier SOA not found");
+
+  const lines = (await db.execute(sql`
+    SELECT sli.id, sli.invoice_id,
+           sli.invoice_amount::text, sli.paid_at_generation::text,
+           sli.balance_at_generation::text,
+           si.invoice_number, si.invoice_date::text, si.due_date::text
+    FROM supplier_soa_line_items sli
+    JOIN supplier_invoices si ON si.id = sli.invoice_id
+    WHERE sli.soa_id = ${soaId}
+    ORDER BY si.invoice_date ASC, si.invoice_number ASC
+  `)) as any[];
+
+  return {
+    id: soa.id,
+    soaNumber: soa.soa_number,
+    supplierId: soa.supplier_id,
+    supplier: {
+      name: soa.supplier_name,
+      contactPhone: soa.contact_phone,
+      address: soa.address,
+      contactEmail: soa.contact_email,
+    },
+    dateFrom: soa.date_from,
+    dateTo: soa.date_to,
+    generatedAt: soa.generated_at,
+    totalAmount: parseFloat(soa.total_amount),
+    totalPaid: parseFloat(soa.total_paid),
+    totalBalance: parseFloat(soa.total_balance),
+    invoiceCount: soa.invoice_count,
+    status: soa.status,
+    notes: soa.notes,
+    invoices: lines.map((r: any) => ({
+      id: r.invoice_id,
+      invoiceNumber: r.invoice_number,
+      invoiceDate: r.invoice_date,
+      dueDate: r.due_date,
+      // Frozen snapshot values
+      totalAmount: parseFloat(r.invoice_amount),
+      paidAmount: parseFloat(r.paid_at_generation),
+      balance: parseFloat(r.balance_at_generation),
+    })),
+  };
+}
+
+/**
+ * Change supplier SOA status.
+ *
+ * Allowed transitions:
+ *   GENERATED \u2192 SENT | VOID
+ *   SENT      \u2192 GENERATED | VOID
+ *   VOID      \u2192 (terminal — no further transitions)
+ *
+ * Voiding unmarks all invoices that were billed to this SOA so they can
+ * be included in a future SOA again. Line items are preserved for audit.
+ */
+export async function updateSupplierSOAStatus(
+  orgId: string,
+  soaId: string,
+  status: "GENERATED" | "SENT" | "VOID",
+) {
+  const allowed = new Set(["GENERATED", "SENT", "VOID"]);
+  if (!allowed.has(status)) {
+    throw new Error(`Unsupported status: ${status}`);
+  }
+
+  return db.transaction(async (tx) => {
+    const [current] = (await tx.execute(sql`
+      SELECT id, status FROM supplier_soa_records
+      WHERE id = ${soaId} AND org_id = ${orgId}
+      FOR UPDATE
+    `)) as any[];
+    if (!current) throw new Error("Supplier SOA not found");
+    if (current.status === "VOID" && status !== "VOID") {
+      throw new Error("VOID SOAs cannot be reactivated");
+    }
+
+    if (status === "VOID") {
+      // Unmark invoices so they can be re-billed
+      await tx.execute(sql`
+        UPDATE supplier_invoices
+        SET billed = false, billed_soa_id = NULL
+        WHERE billed_soa_id = ${soaId}
+      `);
+    }
+
+    await tx.execute(sql`
+      UPDATE supplier_soa_records
+      SET status = ${status}
+      WHERE id = ${soaId} AND org_id = ${orgId}
+    `);
+
+    return { success: true, previousStatus: current.status, newStatus: status };
+  });
 }
 
 export async function getSummary(orgId: string) {

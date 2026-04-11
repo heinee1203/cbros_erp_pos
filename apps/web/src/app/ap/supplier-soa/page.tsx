@@ -17,6 +17,9 @@ import {
   Printer,
   CheckSquare,
   Square,
+  MinusSquare,
+  History,
+  Ban,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -56,6 +59,25 @@ interface Invoice {
   paidAmount: string;
   balance: string;
   status: string;
+  /** True if the invoice is already on a previous non-void supplier SOA. */
+  billed?: boolean;
+  /** The supplier SOA id that billed this invoice, or null if unbilled. */
+  billedSoaId?: string | null;
+}
+
+/** Shape returned by GET /ap/suppliers/:id/soa-history */
+interface SupplierSOAHistoryRow {
+  id: string;
+  soaNumber: string;
+  dateFrom: string;
+  dateTo: string;
+  generatedAt: string;
+  totalAmount: number;
+  totalPaid: number;
+  totalBalance: number;
+  invoiceCount: number;
+  status: string; // GENERATED | SENT | VOID
+  notes: string | null;
 }
 
 function daysAgo(dateStr: string | null): string {
@@ -72,44 +94,98 @@ function dueStatus(row: SupplierRow): { label: string; color: string } {
 }
 
 /* ═══════════════════════════════════════════════════════
- * Expanded Supplier Detail — invoice list with selection
+ * Expanded Supplier Detail — invoice list with selection + BILLED tracking
  * ═══════════════════════════════════════════════════════ */
-function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerateCV }: {
+function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerateCV, onAfterMutation }: {
   supplierId: string; supplierName: string; token: string; locationId: string;
   onGenerateCV: (supplierId: string, invoiceIds: string[]) => void;
+  /** Called after generate / void actions so the outer supplier list can refresh totals. */
+  onAfterMutation?: () => void;
 }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [soaHistory, setSoaHistory] = useState<SupplierSOAHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [generating, setGenerating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
-  useEffect(() => {
+  // Derived: only UNBILLED invoices are checkbox-eligible
+  const unbilledInvoices = useMemo(
+    () => invoices.filter((i) => !i.billed),
+    [invoices],
+  );
+
+  const fetchAll = useCallback(async () => {
     setLoading(true);
-    apiFetch<{ data: Invoice[] }>(`/ap/invoices?supplierId=${supplierId}&status=OPEN&status=PARTIALLY_PAID`, { token, locationId })
-      .then((res) => setInvoices(Array.isArray(res.data) ? res.data : []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    setLoadError(null);
+    try {
+      // NOTE: status must be a single comma-separated value, NOT a repeated
+      // query param. The backend parses `filters.status.split(",")`. Fastify's
+      // default fast-querystring parser turns `?status=OPEN&status=PARTIALLY_PAID`
+      // into an array, which fails the `z.string().optional()` zod schema
+      // and returns 400 — previously swallowed by `.catch(() => {})`.
+      const [invRes, histRes] = await Promise.all([
+        apiFetch<{ data: Invoice[] }>(
+          `/ap/invoices?supplierId=${supplierId}&status=OPEN,PARTIALLY_PAID&limit=100`,
+          { token, locationId },
+        ),
+        apiFetch<{ data: SupplierSOAHistoryRow[] }>(
+          `/ap/suppliers/${supplierId}/soa-history`,
+          { token, locationId },
+        ),
+      ]);
+      setInvoices(Array.isArray(invRes.data) ? invRes.data : []);
+      setSoaHistory(Array.isArray(histRes.data) ? histRes.data : []);
+      // Drop any selections that are no longer eligible (e.g. after a refresh)
+      setSelected((prev) => {
+        const eligibleIds = new Set(
+          (invRes.data ?? []).filter((i: any) => !i.billed).map((i: any) => i.id),
+        );
+        return new Set([...prev].filter((id) => eligibleIds.has(id)));
+      });
+    } catch (err: any) {
+      setLoadError(err?.message || "Failed to load invoices");
+      setInvoices([]);
+      setSoaHistory([]);
+    } finally {
+      setLoading(false);
+    }
   }, [supplierId, token, locationId]);
 
-  const toggle = (id: string) => setSelected((prev) => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  const toggleAll = () => {
-    if (selected.size === invoices.length) setSelected(new Set());
-    else setSelected(new Set(invoices.map((i) => i.id)));
+  // Checkbox toggle — skipped if the invoice is already billed
+  const toggle = (id: string, billed: boolean) => {
+    if (billed) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   };
 
-  const selectedTotal = invoices.filter((i) => selected.has(i.id)).reduce((s, i) => s + parseFloat(i.balance || i.totalAmount), 0);
+  // Select / deselect EVERY unbilled row at once. Billed rows are never touched.
+  const selectAllUnbilled = () => {
+    if (selected.size === unbilledInvoices.length && unbilledInvoices.length > 0) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(unbilledInvoices.map((i) => i.id)));
+    }
+  };
 
-  const handlePrintSOA = () => {
-    const printInvoices = selected.size > 0
-      ? invoices.filter((i) => selected.has(i.id))
-      : invoices;
+  const selectedTotal = invoices
+    .filter((i) => selected.has(i.id))
+    .reduce((s, i) => s + parseFloat(i.balance || i.totalAmount), 0);
+
+  // ── Preview (all invoices, no persistence) ──
+  // Ephemeral print of the current outstanding list. Does NOT mark invoices
+  // billed and does NOT create a supplier_soa_records row.
+  const handlePreviewAll = () => {
     const html = buildSupplierSOAHtml({
       supplierName,
-      invoices: printInvoices.map((i) => ({
+      invoices: invoices.map((i) => ({
         invoiceNumber: i.invoiceNumber,
         invoiceDate: i.invoiceDate,
         dueDate: i.dueDate,
@@ -122,12 +198,129 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
     if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
   };
 
-  if (loading) return <div className="flex items-center gap-2 px-6 py-4 text-[12px] text-muted-foreground"><Loader2 size={14} className="animate-spin" /> Loading invoices...</div>;
+  // ── Generate persistent SOA from selected invoices ──
+  // POST /ap/supplier-soa/generate creates the supplier_soa_records row,
+  // snapshots each invoice into supplier_soa_line_items, and marks the
+  // invoices billed. The response is then used to print the document.
+  const handleGenerateSOA = async () => {
+    if (selected.size === 0) return;
+    setGenerating(true);
+    setActionError(null);
+    try {
+      const created = await apiFetch<{
+        id: string;
+        soaNumber: string;
+        totalAmount: number;
+        totalPaid: number;
+        totalBalance: number;
+        invoiceCount: number;
+      }>(`/ap/supplier-soa/generate`, {
+        method: "POST",
+        token,
+        locationId,
+        body: JSON.stringify({
+          supplierId,
+          invoiceIds: Array.from(selected),
+        }),
+      });
+
+      // Print from the just-generated persistent snapshot so the printed
+      // document reflects exactly what was persisted.
+      const snap = await apiFetch<any>(`/ap/supplier-soa/${created.id}`, { token, locationId });
+      const html = buildSupplierSOAHtml({
+        supplierName: snap.supplier?.name || supplierName,
+        invoices: (snap.invoices || []).map((i: any) => ({
+          invoiceNumber: i.invoiceNumber,
+          invoiceDate: i.invoiceDate,
+          dueDate: i.dueDate,
+          totalAmount: i.totalAmount,
+          paidAmount: i.paidAmount,
+          balance: i.balance,
+        })),
+        soaNumber: snap.soaNumber,
+      });
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
+
+      // Refresh so the just-billed invoices grey out and the new SOA shows in history.
+      setSelected(new Set());
+      await fetchAll();
+      onAfterMutation?.();
+    } catch (err: any) {
+      setActionError(err?.message || "Failed to generate SOA");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // ── Reprint a historical SOA from snapshot ──
+  const handleReprintHistory = async (soaId: string) => {
+    setActionError(null);
+    try {
+      const snap = await apiFetch<any>(`/ap/supplier-soa/${soaId}`, { token, locationId });
+      const html = buildSupplierSOAHtml({
+        supplierName: snap.supplier?.name || supplierName,
+        invoices: (snap.invoices || []).map((i: any) => ({
+          invoiceNumber: i.invoiceNumber,
+          invoiceDate: i.invoiceDate,
+          dueDate: i.dueDate,
+          totalAmount: i.totalAmount,
+          paidAmount: i.paidAmount,
+          balance: i.balance,
+        })),
+        soaNumber: snap.soaNumber,
+      });
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
+    } catch (err: any) {
+      setActionError(err?.message || "Failed to reprint");
+    }
+  };
+
+  // ── Void a historical SOA (unmarks its invoices) ──
+  const handleVoidHistory = async (row: SupplierSOAHistoryRow) => {
+    if (!confirm(`Void ${row.soaNumber}? Invoices will be unmarked and available for a new SOA.`)) return;
+    setActionError(null);
+    try {
+      await apiFetch(`/ap/supplier-soa/${row.id}`, {
+        method: "PATCH",
+        token,
+        locationId,
+        body: JSON.stringify({ status: "VOID" }),
+      });
+      await fetchAll();
+      onAfterMutation?.();
+    } catch (err: any) {
+      setActionError(err?.message || "Failed to void SOA");
+    }
+  };
+
+  if (loading)
+    return (
+      <div className="flex items-center gap-2 px-6 py-4 text-[12px] text-muted-foreground">
+        <Loader2 size={14} className="animate-spin" /> Loading invoices...
+      </div>
+    );
+
+  if (loadError) {
+    return (
+      <div className="bg-red-50 border-t border-red-200 px-6 py-3 text-[12px] text-red-700">
+        <span className="font-semibold">Failed to load invoices:</span> {loadError}
+      </div>
+    );
+  }
+
+  // Pick the right Select-Unbilled icon based on current selection state
+  const selectAllIcon =
+    unbilledInvoices.length === 0 ? null
+    : selected.size === 0 ? <Square size={12} className="text-primary/60" />
+    : selected.size === unbilledInvoices.length ? <CheckSquare size={12} className="text-primary" />
+    : <MinusSquare size={12} className="text-primary" />;
 
   return (
     <div className="bg-muted/20 border-t border-border">
-      {/* Invoice table header */}
-      <div className="grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_70px_70px] gap-1 px-6 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border/50">
+      {/* Invoice table header — extra narrow 'Billed' column at the end */}
+      <div className="grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_70px_70px_60px] gap-1 px-6 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border/50">
         <span />
         <span>Invoice #</span>
         <span className="text-right">Date</span>
@@ -137,31 +330,70 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
         <span className="text-right">Balance</span>
         <span className="text-right">Age</span>
         <span>Status</span>
+        <span className="text-center">Billed</span>
       </div>
+
+      {invoices.length === 0 && (
+        <div className="px-6 py-4 text-[12px] italic text-muted-foreground">
+          No outstanding invoices for this supplier.
+        </div>
+      )}
 
       {invoices.map((inv) => {
         const isOverdue = new Date(inv.dueDate) < new Date();
         const age = daysAgo(inv.dueDate);
         const isSelected = selected.has(inv.id);
+        const isBilled = inv.billed === true;
         return (
-          <div key={inv.id} onClick={() => toggle(inv.id)}
-            className={cn("grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_70px_70px] gap-1 px-6 py-2 text-[12px] border-b border-border/30 cursor-pointer transition-colors",
-              isSelected ? "bg-primary/[0.04]" : "hover:bg-accent/30")}>
+          <div
+            key={inv.id}
+            onClick={() => toggle(inv.id, isBilled)}
+            className={cn(
+              "grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_70px_70px_60px] gap-1 px-6 py-2 text-[12px] border-b border-border/30 transition-colors",
+              isBilled && "opacity-50 cursor-not-allowed bg-muted/30",
+              !isBilled && (isSelected ? "bg-primary/[0.04] cursor-pointer" : "hover:bg-accent/30 cursor-pointer"),
+            )}
+          >
             <div className="flex items-center">
-              {isSelected ? <CheckSquare size={14} className="text-primary" /> : <Square size={14} className="text-muted-foreground/40" />}
+              {isBilled ? (
+                <Square size={14} className="text-muted-foreground/30" />
+              ) : isSelected ? (
+                <CheckSquare size={14} className="text-primary" />
+              ) : (
+                <Square size={14} className="text-muted-foreground/40" />
+              )}
             </div>
-            <span className="font-mono font-semibold text-foreground">{inv.invoiceNumber || `INV-${inv.id.slice(0, 8)}`}</span>
+            <span className="font-mono font-semibold text-foreground truncate">
+              {inv.invoiceNumber || `INV-${inv.id.slice(0, 8)}`}
+            </span>
             <span className="text-right text-muted-foreground">{fmtDate(inv.invoiceDate)}</span>
-            <span className={cn("text-right", isOverdue ? "text-red-600 font-medium" : "text-muted-foreground")}>{fmtDate(inv.dueDate)}</span>
+            <span className={cn("text-right", isOverdue ? "text-red-600 font-medium" : "text-muted-foreground")}>
+              {fmtDate(inv.dueDate)}
+            </span>
             <span className="text-right tabular-nums text-foreground">{fmtPeso(inv.totalAmount)}</span>
             <span className="text-right tabular-nums text-muted-foreground">{fmtPeso(inv.paidAmount || "0")}</span>
-            <span className="text-right tabular-nums font-medium text-foreground">{fmtPeso(inv.balance || inv.totalAmount)}</span>
-            <span className={cn("text-right tabular-nums", isOverdue ? "text-red-600" : "text-muted-foreground")}>{age}</span>
+            <span className="text-right tabular-nums font-medium text-foreground">
+              {fmtPeso(inv.balance || inv.totalAmount)}
+            </span>
+            <span className={cn("text-right tabular-nums", isOverdue ? "text-red-600" : "text-muted-foreground")}>
+              {age}
+            </span>
             <span>
               {isOverdue ? (
-                <span className="inline-flex rounded-md bg-red-50 px-1.5 py-0.5 text-[9px] font-semibold text-red-600">Overdue</span>
+                <span className="inline-flex rounded-md bg-red-50 px-1.5 py-0.5 text-[9px] font-semibold text-red-600">
+                  Overdue
+                </span>
               ) : (
-                <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">Current</span>
+                <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                  Current
+                </span>
+              )}
+            </span>
+            <span className="text-center">
+              {isBilled && (
+                <span className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                  BILLED
+                </span>
               )}
             </span>
           </div>
@@ -169,30 +401,126 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       })}
 
       {/* Action bar */}
-      <div className="flex items-center justify-between px-6 py-3 bg-muted/30 border-t border-border/50">
-        <div className="flex items-center gap-3">
-          <button onClick={toggleAll} className="text-[11px] font-medium text-primary hover:underline">
-            {selected.size === invoices.length ? "Deselect All" : "Select All"}
-          </button>
+      <div className="flex items-center justify-between px-6 py-3 bg-muted/30 border-t border-border/50 flex-wrap gap-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          {unbilledInvoices.length > 0 && (
+            <button
+              onClick={selectAllUnbilled}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+            >
+              {selectAllIcon}
+              {selected.size === unbilledInvoices.length && unbilledInvoices.length > 0
+                ? "Deselect All"
+                : "Select Unbilled"}
+            </button>
+          )}
           {selected.size > 0 && (
             <span className="text-[11px] text-muted-foreground">
               {selected.size} selected &middot; {fmtPeso(selectedTotal)}
             </span>
           )}
+          {soaHistory.length > 0 && (
+            <button
+              onClick={() => setShowHistory((v) => !v)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            >
+              <History size={12} />
+              {showHistory ? "Hide" : "Show"} SOA history ({soaHistory.length})
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={handlePrintSOA}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted transition-colors">
-            <Printer size={12} /> Print SOA {selected.size > 0 ? `(${selected.size})` : "(All)"}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handlePreviewAll}
+            disabled={invoices.length === 0}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Printer size={12} /> Preview All (no record)
+          </button>
+          <button
+            onClick={handleGenerateSOA}
+            disabled={selected.size === 0 || generating}
+            className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {generating ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
+            Generate SOA {selected.size > 0 ? `(${selected.size})` : ""}
           </button>
           {selected.size > 0 && (
-            <button onClick={() => onGenerateCV(supplierId, Array.from(selected))}
-              className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90">
-              <FileText size={12} /> Generate Check Voucher
+            <button
+              onClick={() => onGenerateCV(supplierId, Array.from(selected))}
+              className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <FileText size={12} /> Check Voucher
             </button>
           )}
         </div>
       </div>
+
+      {actionError && (
+        <div className="px-6 py-2 text-[11px] text-red-600 bg-red-50 border-t border-red-200">
+          {actionError}
+        </div>
+      )}
+
+      {/* SOA history mini-list */}
+      {showHistory && soaHistory.length > 0 && (
+        <div className="border-t border-border/50 bg-background/60">
+          <div className="px-6 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border/50">
+            Supplier SOA History
+          </div>
+          <div className="divide-y divide-border/40">
+            {soaHistory.map((h) => (
+              <div
+                key={h.id}
+                className={cn(
+                  "grid grid-cols-[160px_1fr_80px_110px_110px_80px_200px] gap-2 px-6 py-2 text-[11px] items-center",
+                  h.status === "VOID" && "opacity-50",
+                )}
+              >
+                <span className="font-mono font-semibold text-foreground">{h.soaNumber}</span>
+                <span className="text-muted-foreground">
+                  {fmtDate(h.dateFrom)} &ndash; {fmtDate(h.dateTo)}
+                </span>
+                <span className="text-right tabular-nums text-muted-foreground">
+                  {h.invoiceCount} inv
+                </span>
+                <span className="text-right tabular-nums text-foreground">{fmtPeso(h.totalAmount)}</span>
+                <span className="text-right tabular-nums font-semibold text-foreground">{fmtPeso(h.totalBalance)}</span>
+                <span className="text-center">
+                  <span
+                    className={cn(
+                      "inline-flex rounded-md px-1.5 py-0.5 text-[9px] font-semibold",
+                      h.status === "VOID"
+                        ? "bg-red-50 text-red-600"
+                        : h.status === "SENT"
+                        ? "bg-blue-50 text-blue-600"
+                        : "bg-slate-100 text-slate-700",
+                    )}
+                  >
+                    {h.status}
+                  </span>
+                </span>
+                <span className="flex items-center justify-end gap-1">
+                  <button
+                    onClick={() => handleReprintHistory(h.id)}
+                    className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10"
+                  >
+                    <Printer size={10} /> Reprint
+                  </button>
+                  {h.status !== "VOID" && (
+                    <button
+                      onClick={() => handleVoidHistory(h)}
+                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium text-red-600 hover:bg-red-50"
+                    >
+                      <Ban size={10} /> Void
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -366,6 +694,7 @@ export default function SupplierSOAPage() {
                       token={token}
                       locationId={locationId}
                       onGenerateCV={handleGenerateCV}
+                      onAfterMutation={fetchData}
                     />
                   )}
                 </div>

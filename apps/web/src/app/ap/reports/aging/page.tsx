@@ -1,11 +1,19 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { BarChart3, Download, Printer } from "lucide-react";
+import {
+  BarChart3,
+  Download,
+  Printer,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
+} from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso } from "@/lib/format";
 import { downloadCSV } from "@/lib/csv-export";
+import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
 
@@ -22,6 +30,64 @@ interface APAgingRow {
   total: number;
 }
 
+type SortCol =
+  | "supplier"
+  | "current"
+  | "days1to30"
+  | "days31to60"
+  | "days61to90"
+  | "days91to120"
+  | "days121to180"
+  | "over180"
+  | "total";
+type SortDir = "asc" | "desc";
+
+/* ─── Sortable column header — mirrors the AR Aging / inventory pattern ─── */
+
+function SortableHeader({
+  label,
+  field,
+  activeField,
+  activeDir,
+  onSort,
+  align = "left",
+}: {
+  label: string;
+  field: SortCol;
+  activeField: SortCol;
+  activeDir: SortDir;
+  onSort: (field: SortCol) => void;
+  align?: "left" | "right";
+}) {
+  const isActive = field === activeField;
+  return (
+    <button
+      onClick={() => onSort(field)}
+      className={cn(
+        "group inline-flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors select-none",
+        isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+        align === "right" && "flex-row-reverse",
+      )}
+    >
+      {label}
+      <span className="inline-flex w-3 justify-center">
+        {isActive ? (
+          activeDir === "asc" ? (
+            <ChevronUp size={11} className="text-primary" strokeWidth={2.5} />
+          ) : (
+            <ChevronDown size={11} className="text-primary" strokeWidth={2.5} />
+          )
+        ) : (
+          <ChevronsUpDown
+            size={11}
+            className="text-muted-foreground/30 group-hover:text-muted-foreground/60"
+          />
+        )}
+      </span>
+    </button>
+  );
+}
+
 /* ═══════════════════════════════════════════════════ */
 /*  AP Aging Report Page                               */
 /* ═══════════════════════════════════════════════════ */
@@ -32,6 +98,10 @@ export default function APAgingReportPage() {
   const [rows, setRows] = useState<APAgingRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Default sort: TOTAL descending (biggest payables first).
+  const [sortCol, setSortCol] = useState<SortCol>("total");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const fetchAging = useCallback(async () => {
     if (!token || !locationId) return;
@@ -56,8 +126,41 @@ export default function APAgingReportPage() {
     }
   }, [authLoading, token, locationId, fetchAging]);
 
+  const handleSort = (field: SortCol) => {
+    if (field === sortCol) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(field);
+      setSortDir(field === "supplier" ? "asc" : "desc");
+    }
+  };
+
+  const sortedRows = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      let cmp: number;
+      if (sortCol === "supplier") {
+        cmp = (a.supplierName || "").localeCompare(b.supplierName || "");
+      } else {
+        cmp = (a[sortCol] as number) - (b[sortCol] as number);
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+    return copy;
+  }, [rows, sortCol, sortDir]);
+
   const totals = useMemo(() => {
-    if (!rows.length) return { current: 0, days1to30: 0, days31to60: 0, days61to90: 0, days91to120: 0, days121to180: 0, over180: 0, total: 0 };
+    if (!rows.length)
+      return {
+        current: 0,
+        days1to30: 0,
+        days31to60: 0,
+        days61to90: 0,
+        days91to120: 0,
+        days121to180: 0,
+        over180: 0,
+        total: 0,
+      };
     return rows.reduce(
       (acc, r) => ({
         current: acc.current + r.current,
@@ -94,7 +197,8 @@ export default function APAgingReportPage() {
       "180+",
       "Total",
     ];
-    const csvRows = rows.map((r) => [
+    // Export in the currently-displayed sort order
+    const csvRows = sortedRows.map((r) => [
       r.supplierName,
       String(r.current),
       String(r.days1to30),
@@ -210,37 +314,100 @@ export default function APAgingReportPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Supplier
+                <th className="px-3 py-2.5 text-left">
+                  <SortableHeader
+                    label="Supplier"
+                    field="supplier"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="left"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Current
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="Current"
+                    field="current"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  1-30
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="1-30"
+                    field="days1to30"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  31-60
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="31-60"
+                    field="days31to60"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  61-90
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="61-90"
+                    field="days61to90"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  91-120
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="91-120"
+                    field="days91to120"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  121-180
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="121-180"
+                    field="days121to180"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  180+
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="180+"
+                    field="over180"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Total
+                <th className="px-3 py-2.5 text-right">
+                  <SortableHeader
+                    label="Total"
+                    field="total"
+                    activeField={sortCol}
+                    activeDir={sortDir}
+                    onSort={handleSort}
+                    align="right"
+                  />
                 </th>
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
+              {sortedRows.length === 0 ? (
                 <tr>
                   <td
                     colSpan={9}
@@ -250,9 +417,13 @@ export default function APAgingReportPage() {
                   </td>
                 </tr>
               ) : (
-                rows.map((r, i) => (
+                sortedRows.map((r, i) => (
                   <tr
-                    key={r.supplierId}
+                    // Composite key — defends against any future backend bug
+                    // that returns multiple rows per supplier (which was
+                    // previously triggering a React duplicate-key warning
+                    // because the snake_case response left supplierId undefined).
+                    key={`${r.supplierId ?? "unk"}-${i}`}
                     className={`border-b border-border transition-colors hover:bg-accent/50 ${
                       i % 2 === 0 ? "bg-background" : "bg-muted/10"
                     }`}
