@@ -58,6 +58,10 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Loader2,
+  Pencil,
+  Plus,
+  X,
+  Save,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -324,6 +328,12 @@ export default function DailySalesDashboardPage() {
   const [compareYesterday, setCompareYesterday] = useState(false);
   const [autoSnappedToLatest, setAutoSnappedToLatest] = useState(false);
 
+  // ── Manual entry modal (Step 7) ──
+  // Mode 'create' opens an empty form for a no-data date.
+  // Mode 'edit'   prefills the form from the current singleDay snapshot.
+  const [entryModalOpen, setEntryModalOpen] = useState(false);
+  const [entryModalMode, setEntryModalMode] = useState<"create" | "edit">("create");
+
   // Auto-pick a sensible groupBy when the window changes — day for <=60d,
   // week for <=1y, month for everything longer.
   useEffect(() => {
@@ -418,6 +428,31 @@ export default function DailySalesDashboardPage() {
       cancelled = true;
     };
   }, [isAdmin, token, locationId, selectedDate, compareYesterday]);
+
+  // ── Manual entry handlers ──
+  const openCreateModal = useCallback(() => {
+    setEntryModalMode("create");
+    setEntryModalOpen(true);
+  }, []);
+  const openEditModal = useCallback(() => {
+    setEntryModalMode("edit");
+    setEntryModalOpen(true);
+  }, []);
+  const closeEntryModal = useCallback(() => setEntryModalOpen(false), []);
+
+  // After a successful upsert, replace the single-day state with the
+  // server's response and refresh the row-level data so Section 3's
+  // data table reflects the change too.
+  const handleEntrySaved = useCallback(
+    (saved: SingleDayResponse) => {
+      setSingleDay(saved);
+      setEntryModalOpen(false);
+      // Refetch the broader rows + summary so charts/table stay in sync.
+      // We don't await this — the modal close shouldn't block on it.
+      fetchAll();
+    },
+    [fetchAll],
+  );
 
   // ── Date navigation (arrows + ◄ ► buttons) ──
   const stepDate = useCallback((deltaDays: number) => {
@@ -529,7 +564,22 @@ export default function DailySalesDashboardPage() {
         onSetDate={(d) => setSelectedDate(d)}
         onStepDate={stepDate}
         onToggleCompare={() => setCompareYesterday((v) => !v)}
+        onCreateEntry={openCreateModal}
+        onEditEntry={openEditModal}
       />
+
+      {/* Manual entry modal — opened from the no-data CTA or the Edit pencil */}
+      {entryModalOpen && token && locationId && (
+        <ManualEntryModal
+          mode={entryModalMode}
+          date={selectedDate}
+          existing={entryModalMode === "edit" ? singleDay : null}
+          token={token}
+          locationId={locationId}
+          onClose={closeEntryModal}
+          onSaved={handleEntrySaved}
+        />
+      )}
 
       <div className="mb-4 mt-2 flex items-center gap-2 px-1">
         <div className="h-px flex-1 bg-border" />
@@ -1217,6 +1267,10 @@ interface DailyReportCardProps {
   onSetDate: (iso: string) => void;
   onStepDate: (deltaDays: number) => void;
   onToggleCompare: () => void;
+  /** Opens the manual entry modal in CREATE mode (no-data CTA) */
+  onCreateEntry: () => void;
+  /** Opens the manual entry modal in EDIT mode (Edit pencil on populated card) */
+  onEditEntry: () => void;
 }
 
 function DailyReportCard({
@@ -1228,6 +1282,8 @@ function DailyReportCard({
   onSetDate,
   onStepDate,
   onToggleCompare,
+  onCreateEntry,
+  onEditEntry,
 }: DailyReportCardProps) {
   const longDate = new Date(date + "T12:00:00Z").toLocaleDateString("en-US", {
     month: "long",
@@ -1303,6 +1359,19 @@ function DailyReportCard({
             <ArrowUpRight size={12} />
             Compare to Yesterday
           </button>
+          {/* Edit pencil — only shown for dates that already have data.
+              Dates with no data get the bigger "Enter Sales" CTA inside
+              the NoDataPanel below. */}
+          {data?.hasData && (
+            <button
+              onClick={onEditEntry}
+              className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Edit this day's sales"
+            >
+              <Pencil size={12} />
+              Edit
+            </button>
+          )}
           <button
             onClick={handlePrint}
             className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -1326,7 +1395,7 @@ function DailyReportCard({
           <Loader2 size={16} className="mr-2 animate-spin" /> Loading…
         </div>
       ) : !data || !data.hasData ? (
-        <NoDataPanel date={date} dayOfWeek={dayOfWeek} />
+        <NoDataPanel date={date} dayOfWeek={dayOfWeek} onCreateEntry={onCreateEntry} />
       ) : (
         <ReportRows data={data} previous={previous} />
       )}
@@ -1334,7 +1403,18 @@ function DailyReportCard({
   );
 }
 
-function NoDataPanel({ date, dayOfWeek }: { date: string; dayOfWeek: string }) {
+function NoDataPanel({
+  date,
+  dayOfWeek,
+  onCreateEntry,
+}: {
+  date: string;
+  dayOfWeek: string;
+  onCreateEntry: () => void;
+}) {
+  // Refuse to show the "Enter Sales" CTA for future dates — sales can't
+  // be reported before they happen, and the API will reject it anyway.
+  const isFuture = date > toIso(new Date());
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -1346,11 +1426,20 @@ function NoDataPanel({ date, dayOfWeek }: { date: string; dayOfWeek: string }) {
           Nothing on file for {dayOfWeek}, {new Date(date + "T12:00:00Z").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" })}.
         </p>
       </div>
-      {/* Manual entry CTA — wired to a future modal in Step 7. For now,
-          surface the intent so the user can navigate to a date with data. */}
-      <p className="text-[11px] italic text-muted-foreground/70">
-        Manual daily entry will land in Step 7 — for now use ← → to find a day with data.
-      </p>
+      {!isFuture && (
+        <button
+          onClick={onCreateEntry}
+          className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90"
+        >
+          <Plus size={14} />
+          Enter Sales for This Day
+        </button>
+      )}
+      {isFuture && (
+        <p className="text-[11px] italic text-muted-foreground/70">
+          This is a future date — sales can be entered once the day has passed.
+        </p>
+      )}
     </div>
   );
 }
@@ -1571,6 +1660,355 @@ function DeltaPill({ delta }: { delta: number }) {
       {positive ? "+" : ""}
       {fmtPesoFull(delta)}
     </span>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════════
+ *  Manual Entry Modal — POST /analytics/daily-sales/upsert
+ *
+ *  Mode 'create' opens an empty form (used by the no-data CTA).
+ *  Mode 'edit'   prefills from the existing SingleDayResponse so the user
+ *                can correct individual values.
+ *
+ *  Submitting writes to daily_sales_summary with source='MANUAL' and
+ *  recorded_by set to the current admin user. The parent page is told via
+ *  onSaved so it can replace its local state without a follow-up GET.
+ * ═════════════════════════════════════════════════════════════ */
+
+interface EntryForm {
+  apOldSales: string;
+  apNewSales: string;
+  apOnAccount: string;
+  acSales: string;
+  acOnAccount: string;
+  serviceSales: string;
+  serviceOnAccount: string;
+  paintingSales: string;
+  paintingOnAccount: string;
+  juniorSales: string;
+  payments: string;
+  notes: string;
+}
+
+const EMPTY_ENTRY_FORM: EntryForm = {
+  apOldSales: "",
+  apNewSales: "",
+  apOnAccount: "",
+  acSales: "",
+  acOnAccount: "",
+  serviceSales: "",
+  serviceOnAccount: "",
+  paintingSales: "",
+  paintingOnAccount: "",
+  juniorSales: "",
+  payments: "",
+  notes: "",
+};
+
+function ManualEntryModal({
+  mode,
+  date,
+  existing,
+  token,
+  locationId,
+  onClose,
+  onSaved,
+}: {
+  mode: "create" | "edit";
+  date: string;
+  existing: SingleDayResponse | null;
+  token: string;
+  locationId: string;
+  onClose: () => void;
+  onSaved: (saved: SingleDayResponse) => void;
+}) {
+  // Prefill from existing data when editing. We use string state (not number)
+  // so empty inputs stay empty rather than rendering "0" — and the user can
+  // type partial decimals without React fighting them.
+  const [form, setForm] = useState<EntryForm>(() => {
+    if (mode === "edit" && existing && existing.hasData) {
+      const fmt = (n: number) => (n === 0 ? "" : String(n));
+      return {
+        apOldSales: fmt(existing.ap.old),
+        apNewSales: fmt(existing.ap.new),
+        apOnAccount: fmt(existing.ap.onAccount),
+        acSales: fmt(existing.ac.cash),
+        acOnAccount: fmt(existing.ac.onAccount),
+        serviceSales: fmt(existing.service.cash),
+        serviceOnAccount: fmt(existing.service.onAccount),
+        paintingSales: fmt(existing.painting.cash),
+        paintingOnAccount: fmt(existing.painting.onAccount),
+        juniorSales: fmt(existing.junior.cash),
+        payments: fmt(existing.totals.payments),
+        notes: "",
+      };
+    }
+    return { ...EMPTY_ENTRY_FORM };
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Live grand-total preview (sums all sales fields, excludes payments).
+  const grandTotal = useMemo(() => {
+    const fields: Array<keyof EntryForm> = [
+      "apOldSales",
+      "apNewSales",
+      "apOnAccount",
+      "acSales",
+      "acOnAccount",
+      "serviceSales",
+      "serviceOnAccount",
+      "paintingSales",
+      "paintingOnAccount",
+      "juniorSales",
+    ];
+    return fields.reduce((sum, key) => {
+      const n = parseFloat(form[key]);
+      return sum + (isFinite(n) ? n : 0);
+    }, 0);
+  }, [form]);
+
+  // ESC closes the modal (unless mid-save).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !saving) onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose, saving]);
+
+  const setField = (key: keyof EntryForm, value: string) => {
+    setForm((f) => ({ ...f, [key]: value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      // Convert string fields to numbers, omitting empty strings (treated as 0)
+      const toNum = (s: string) => {
+        const n = parseFloat(s);
+        return isFinite(n) && n >= 0 ? n : 0;
+      };
+      // Validate: at least one positive value (otherwise saving an
+      // all-zero row is pointless and would confuse the auto-snap logic).
+      const hasAnyValue =
+        toNum(form.apOldSales) > 0 ||
+        toNum(form.apNewSales) > 0 ||
+        toNum(form.apOnAccount) > 0 ||
+        toNum(form.acSales) > 0 ||
+        toNum(form.acOnAccount) > 0 ||
+        toNum(form.serviceSales) > 0 ||
+        toNum(form.serviceOnAccount) > 0 ||
+        toNum(form.paintingSales) > 0 ||
+        toNum(form.paintingOnAccount) > 0 ||
+        toNum(form.juniorSales) > 0 ||
+        toNum(form.payments) > 0;
+      if (!hasAnyValue) {
+        throw new Error("Enter at least one non-zero value before saving");
+      }
+      const payload = {
+        date,
+        apOldSales: toNum(form.apOldSales),
+        apNewSales: toNum(form.apNewSales),
+        apOnAccount: toNum(form.apOnAccount),
+        acSales: toNum(form.acSales),
+        acOnAccount: toNum(form.acOnAccount),
+        serviceSales: toNum(form.serviceSales),
+        serviceOnAccount: toNum(form.serviceOnAccount),
+        paintingSales: toNum(form.paintingSales),
+        paintingOnAccount: toNum(form.paintingOnAccount),
+        juniorSales: toNum(form.juniorSales),
+        payments: toNum(form.payments),
+        notes: form.notes.trim() || null,
+      };
+      const result = await apiFetch<SingleDayResponse>(
+        "/analytics/daily-sales/upsert",
+        {
+          method: "POST",
+          token,
+          locationId,
+          body: JSON.stringify(payload),
+        },
+      );
+      onSaved(result);
+    } catch (err: any) {
+      setError(err?.message || "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const longDate = new Date(date + "T12:00:00Z").toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
+        onClick={() => !saving && onClose()}
+      />
+
+      {/* Dialog */}
+      <div className="relative w-full max-w-2xl rounded-2xl border border-border bg-background shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-border bg-gradient-to-b from-amber-50 to-background px-6 py-4">
+          <div>
+            <h2 className="text-[15px] font-semibold text-foreground">
+              {mode === "edit" ? "Edit Daily Sales" : "Enter Daily Sales"}
+            </h2>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{longDate}</p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body — scrollable form */}
+        <form onSubmit={handleSubmit} className="max-h-[70vh] overflow-y-auto">
+          <div className="space-y-4 px-6 py-4">
+            <EntrySection title="Auto Parts (A/P)" tint="bg-blue-50/40">
+              <EntryField label="OLD" value={form.apOldSales} onChange={(v) => setField("apOldSales", v)} />
+              <EntryField label="NEW" value={form.apNewSales} onChange={(v) => setField("apNewSales", v)} />
+              <EntryField label="On Account" value={form.apOnAccount} onChange={(v) => setField("apOnAccount", v)} />
+            </EntrySection>
+
+            <EntrySection title="Accessories (A/C)" tint="bg-emerald-50/40">
+              <EntryField label="Cash" value={form.acSales} onChange={(v) => setField("acSales", v)} />
+              <EntryField label="On Account" value={form.acOnAccount} onChange={(v) => setField("acOnAccount", v)} />
+            </EntrySection>
+
+            <EntrySection title="A/R (Service)" tint="bg-amber-50/40">
+              <EntryField label="Cash" value={form.serviceSales} onChange={(v) => setField("serviceSales", v)} />
+              <EntryField label="On Account" value={form.serviceOnAccount} onChange={(v) => setField("serviceOnAccount", v)} />
+            </EntrySection>
+
+            <EntrySection title="Painting" tint="bg-violet-50/40">
+              <EntryField label="Cash" value={form.paintingSales} onChange={(v) => setField("paintingSales", v)} />
+              <EntryField label="On Account" value={form.paintingOnAccount} onChange={(v) => setField("paintingOnAccount", v)} />
+            </EntrySection>
+
+            <EntrySection title="Junior Branch" tint="bg-rose-50/40">
+              <EntryField label="Cash" value={form.juniorSales} onChange={(v) => setField("juniorSales", v)} />
+            </EntrySection>
+
+            <EntrySection title="AR Collections (separate from sales)" tint="bg-muted/40">
+              <EntryField label="Payments Received" value={form.payments} onChange={(v) => setField("payments", v)} />
+            </EntrySection>
+
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Notes (optional)
+              </label>
+              <textarea
+                value={form.notes}
+                onChange={(e) => setField("notes", e.target.value)}
+                rows={2}
+                placeholder="e.g. half-day, holiday, system was down…"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20"
+              />
+            </div>
+
+            {error && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+                {error}
+              </div>
+            )}
+          </div>
+
+          {/* Footer with grand-total preview */}
+          <div className="flex items-center justify-between gap-3 border-t border-border bg-muted/20 px-6 py-3">
+            <div className="text-[11px] text-muted-foreground">
+              Grand total preview:{" "}
+              <span className="ml-1 text-[14px] font-bold tabular-nums text-foreground">
+                {grandTotal > 0 ? fmtPesoFull(grandTotal) : "—"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={saving}
+                className="rounded-md border border-border px-3 py-1.5 text-[12px] font-medium hover:bg-muted disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-1.5 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+              >
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                {mode === "edit" ? "Save Changes" : "Save Entry"}
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EntrySection({
+  title,
+  tint,
+  children,
+}: {
+  title: string;
+  tint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("rounded-lg border border-border p-3", tint)}>
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {title}
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">{children}</div>
+    </div>
+  );
+}
+
+function EntryField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-0.5 block text-[10px] font-medium text-muted-foreground">
+        {label}
+      </label>
+      <div className="relative">
+        <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+          ₱
+        </span>
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="0.01"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="0.00"
+          className="h-8 w-full rounded-md border border-border bg-background pl-5 pr-2 text-right text-[12px] tabular-nums outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20"
+        />
+      </div>
+    </div>
   );
 }
 

@@ -16,7 +16,9 @@ import {
   getDailySalesYoY,
   getDailySalesByDayOfWeek,
   getDailySalesRows,
+  upsertDailySales,
   type GroupBy,
+  type ManualDailySalesInput,
 } from "./service";
 
 const VALID_GROUP_BY = new Set<GroupBy>(["day", "week", "month", "quarter", "year"]);
@@ -166,6 +168,40 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
 
     const data = await getDailySalesByDayOfWeek(orgId, from, to);
     return reply.send({ from, to, data });
+  });
+
+  // ─── POST /daily-sales/upsert ───────────────────────────────
+  // Manual daily entry — replaces the legacy Excel workflow for dates
+  // going forward (Mar 2026+). Used by the dashboard's manual entry modal.
+  // Re-saving the same date overwrites the row in place; the row is
+  // tagged source='MANUAL' and recorded_by is set for audit.
+  app.post("/daily-sales/upsert", async (request, reply) => {
+    try {
+      assertAdmin(request.user.role);
+    } catch (err: any) {
+      return reply.status(err.statusCode ?? 403).send({ error: err.message });
+    }
+
+    const { orgId } = request.storeContext!;
+    const { userId } = request.user;
+    const body = (request.body ?? {}) as { date?: string } & ManualDailySalesInput;
+
+    const date = parseIsoDate(body.date);
+    if (!date) {
+      return reply.status(400).send({ error: "date must be YYYY-MM-DD" });
+    }
+    // Refuse future dates — sales can't be reported before they happen.
+    const today = new Date().toISOString().slice(0, 10);
+    if (date > today) {
+      return reply.status(400).send({ error: "Cannot record sales for a future date" });
+    }
+
+    try {
+      const result = await upsertDailySales(orgId, date, body, userId);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
   });
 
   // ─── GET /daily-sales/rows ──────────────────────────────────

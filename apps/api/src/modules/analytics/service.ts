@@ -543,6 +543,119 @@ export async function getDailySalesByDayOfWeek(
 }
 
 // ════════════════════════════════════════════════════════════════
+//   1c. MANUAL UPSERT  — POST /analytics/daily-sales/upsert
+// ════════════════════════════════════════════════════════════════
+/**
+ * Insert or update a single day of sales for the given org. Used by the
+ * dashboard's manual entry modal — replaces the legacy Excel workflow for
+ * dates going forward (Mar 2026+).
+ *
+ * The input shape mirrors the Excel column layout: peso amounts per
+ * division (cash + on-account separately for the four divisions that
+ * have credit, plus junior cash, plus payments). Values are stored as
+ * integer centavos to match the importer's precision.
+ *
+ * Behavior:
+ *   - UPSERT on (org_id, date) — re-saving the same date overwrites the
+ *     row in place. The unique index makes this single-statement.
+ *   - source is set to 'MANUAL' so the dashboard can distinguish manually
+ *     entered rows from the original import.
+ *   - recorded_by is set to the supplied userId for audit.
+ *   - Negative values are rejected (sales can't be negative; this is
+ *     defense against bad input).
+ */
+export interface ManualDailySalesInput {
+  apOldSales?: number;
+  apNewSales?: number;
+  apOnAccount?: number;
+  acSales?: number;
+  acOnAccount?: number;
+  serviceSales?: number;
+  serviceOnAccount?: number;
+  paintingSales?: number;
+  paintingOnAccount?: number;
+  juniorSales?: number;
+  payments?: number;
+  notes?: string | null;
+}
+
+function pesoToCentavos(v: unknown): number {
+  if (v == null || v === "") return 0;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  if (!isFinite(n)) return 0;
+  if (n < 0) {
+    throw new Error("Sales values cannot be negative");
+  }
+  return Math.round(n * 100);
+}
+
+export async function upsertDailySales(
+  orgId: string,
+  date: string,
+  input: ManualDailySalesInput,
+  userId: string,
+) {
+  // Convert every numeric field to centavos. The helper enforces non-negative
+  // and uses Math.round to defeat IEEE-754 drift on the multiplication.
+  const cents = {
+    apOld: pesoToCentavos(input.apOldSales),
+    apNew: pesoToCentavos(input.apNewSales),
+    apOnAccount: pesoToCentavos(input.apOnAccount),
+    ac: pesoToCentavos(input.acSales),
+    acOnAccount: pesoToCentavos(input.acOnAccount),
+    service: pesoToCentavos(input.serviceSales),
+    serviceOnAccount: pesoToCentavos(input.serviceOnAccount),
+    painting: pesoToCentavos(input.paintingSales),
+    paintingOnAccount: pesoToCentavos(input.paintingOnAccount),
+    junior: pesoToCentavos(input.juniorSales),
+    payments: pesoToCentavos(input.payments),
+  };
+  const notes = input.notes?.trim() || null;
+
+  await db.execute(sql`
+    INSERT INTO daily_sales_summary (
+      org_id, date,
+      ap_old_sales, ap_new_sales, ap_on_account,
+      ac_sales, ac_on_account,
+      service_sales, service_on_account,
+      painting_sales, painting_on_account,
+      junior_sales,
+      payments,
+      source, notes, recorded_by
+    ) VALUES (
+      ${orgId}, ${date}::date,
+      ${cents.apOld}, ${cents.apNew}, ${cents.apOnAccount},
+      ${cents.ac}, ${cents.acOnAccount},
+      ${cents.service}, ${cents.serviceOnAccount},
+      ${cents.painting}, ${cents.paintingOnAccount},
+      ${cents.junior},
+      ${cents.payments},
+      'MANUAL', ${notes}, ${userId}
+    )
+    ON CONFLICT (org_id, date) DO UPDATE SET
+      ap_old_sales        = EXCLUDED.ap_old_sales,
+      ap_new_sales        = EXCLUDED.ap_new_sales,
+      ap_on_account       = EXCLUDED.ap_on_account,
+      ac_sales            = EXCLUDED.ac_sales,
+      ac_on_account       = EXCLUDED.ac_on_account,
+      service_sales       = EXCLUDED.service_sales,
+      service_on_account  = EXCLUDED.service_on_account,
+      painting_sales      = EXCLUDED.painting_sales,
+      painting_on_account = EXCLUDED.painting_on_account,
+      junior_sales        = EXCLUDED.junior_sales,
+      payments            = EXCLUDED.payments,
+      source              = 'MANUAL',
+      notes               = EXCLUDED.notes,
+      recorded_by         = EXCLUDED.recorded_by,
+      updated_at          = NOW()
+  `);
+
+  // Return the post-upsert single-day shape so the client can replace its
+  // local state without a follow-up GET.
+  return getDailySalesSingleDay(orgId, date);
+}
+
+// ════════════════════════════════════════════════════════════════
 //   6.  RAW DAILY DATA TABLE  — /analytics/daily-sales/rows
 // ════════════════════════════════════════════════════════════════
 /**
