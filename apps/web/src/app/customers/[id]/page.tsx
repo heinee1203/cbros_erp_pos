@@ -24,6 +24,7 @@ import { apiFetch } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { buildSOAHtml } from "@/lib/soa-html";
+import { buildConsolidatedBillingHtml } from "@/lib/consolidated-billing-html";
 import { buildSOARemainingHtml } from "@/lib/soa-remaining-html";
 import { buildCollectionSummaryHtml, type CollectionPayment } from "@/lib/soa-collection-summary-html";
 import { buildPaymentReceiptHtml, type PaymentReceiptData } from "@/lib/payment-receipt-html";
@@ -646,6 +647,55 @@ export default function CustomerDetailPage() {
           className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
         >
           Edit
+        </button>
+        <button
+          onClick={async () => {
+            if (!customer || !token || !locationId) return;
+            try {
+              // Reuse existing endpoints — no new API surface needed.
+              //   /soa/history  → all SOAs (same as SOA History tab)
+              //   /transactions → payments for the Payment History table
+              const [soaRes, txnRes] = await Promise.all([
+                apiFetch<{ data: any[] }>(
+                  `/customers/${id}/soa/history`,
+                  { token, locationId },
+                ),
+                apiFetch<{ data: any[] }>(
+                  `/customers/${id}/transactions?type=PAYMENT&limit=200`,
+                  { token, locationId },
+                ),
+              ]);
+              const soas = soaRes.data || [];
+              const payments = txnRes.data || [];
+              const html = buildConsolidatedBillingHtml({
+                customer: {
+                  name: customer.name,
+                  customerType: customer.customerType,
+                  contactPerson: customer.contactPerson,
+                  phone: customer.phone,
+                  email: customer.email,
+                  address: customer.address,
+                  paymentTermsDays: customer.paymentTermsDays,
+                  currentBalance: customer.currentBalance,
+                },
+                soas,
+                payments,
+                asOf: new Date(),
+                filter: "all",
+              });
+              const w = window.open("", "_blank");
+              if (w) {
+                w.document.write(html);
+                w.document.close();
+                w.onload = () => w.print();
+              }
+            } catch {
+              // fall through silently — matches the pattern used by handleReprint
+            }
+          }}
+          className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
+        >
+          Print Billing Summary
         </button>
       </div>
 
