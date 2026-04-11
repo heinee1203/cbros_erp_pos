@@ -419,18 +419,32 @@ export async function recomputeSOAStatus(
 /**
  * Recompute status for every SOA that owns any of the given charge transactions.
  * Used after a payment is allocated so all affected SOAs stay consistent.
+ *
+ * NOTE: postgres.js binds a JS array passed through a single ${} placeholder
+ * as a composite `record` type, not as a PostgreSQL array, so `ANY(${arr}::uuid[])`
+ * fails with "cannot cast type record to uuid[]". We expand the IDs into a
+ * proper IN (...) list via sql.join instead — works for both empty and large
+ * input arrays and stays parametrized (no string interpolation).
  */
 export async function recomputeSOAStatusForCharges(
   tx: any,
   orgId: string,
   chargeTransactionIds: string[],
 ): Promise<void> {
-  if (chargeTransactionIds.length === 0) return;
+  // De-duplicate to keep the IN list minimal
+  const uniqueIds = Array.from(new Set(chargeTransactionIds));
+  if (uniqueIds.length === 0) return;
+
+  const idList = sql.join(
+    uniqueIds.map((id) => sql`${id}::uuid`),
+    sql`, `,
+  );
   const affected = (await tx.execute(sql`
     SELECT DISTINCT sli.soa_id AS id
     FROM soa_line_items sli
-    WHERE sli.transaction_id = ANY(${chargeTransactionIds}::uuid[])
+    WHERE sli.transaction_id IN (${idList})
   `)) as any[];
+
   for (const row of affected) {
     await recomputeSOAStatus(tx, orgId, row.id);
   }

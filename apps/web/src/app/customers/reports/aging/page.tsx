@@ -1,9 +1,77 @@
 "use client";
 
-import { useMemo } from "react";
-import { BarChart3, Download } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  BarChart3,
+  Download,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
+} from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { useAgingReport, type AgingRow } from "@/hooks/use-customers-query";
+import { cn } from "@/lib/utils";
+
+/* ------------------------------------------------------------------ */
+/*  Sort types                                                         */
+/* ------------------------------------------------------------------ */
+
+type SortCol = "customer" | "current" | "days31to60" | "days61to90" | "over90" | "total";
+type SortDir = "asc" | "desc";
+
+/* ------------------------------------------------------------------ */
+/*  Sortable Column Header                                             */
+/*  Matches the pattern used by apps/web/src/app/inventory/components/ */
+/*  inventory-table.tsx SortableHeader — ChevronUp / ChevronDown for   */
+/*  the active column, ChevronsUpDown (dim) for inactive columns.      */
+/* ------------------------------------------------------------------ */
+
+function SortableHeader({
+  label,
+  field,
+  activeField,
+  activeDir,
+  onSort,
+  align = "left",
+  className,
+}: {
+  label: string;
+  field: SortCol;
+  activeField: SortCol;
+  activeDir: SortDir;
+  onSort: (field: SortCol) => void;
+  align?: "left" | "right";
+  className?: string;
+}) {
+  const isActive = field === activeField;
+  return (
+    <button
+      onClick={() => onSort(field)}
+      className={cn(
+        "group inline-flex items-center gap-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] transition-colors select-none",
+        isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+        align === "right" && "flex-row-reverse",
+        className,
+      )}
+    >
+      {label}
+      <span className="inline-flex w-3 justify-center">
+        {isActive ? (
+          activeDir === "asc" ? (
+            <ChevronUp size={11} className="text-primary" strokeWidth={2.5} />
+          ) : (
+            <ChevronDown size={11} className="text-primary" strokeWidth={2.5} />
+          )
+        ) : (
+          <ChevronsUpDown
+            size={11}
+            className="text-muted-foreground/30 group-hover:text-muted-foreground/60"
+          />
+        )}
+      </span>
+    </button>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -40,6 +108,37 @@ export default function AgingReportPage() {
   const agingQuery = useAgingReport(token, locationId);
 
   const rows = agingQuery.data?.data ?? [];
+
+  // Default sort: TOTAL descending — biggest outstanding balances first.
+  // Matches the existing screenshot's implicit ordering.
+  const [sortCol, setSortCol] = useState<SortCol>("total");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const handleSort = (field: SortCol) => {
+    if (field === sortCol) {
+      // Same column clicked — toggle direction
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      // New column — amounts default to desc (biggest first),
+      // customer column defaults to asc (A–Z).
+      setSortCol(field);
+      setSortDir(field === "customer" ? "asc" : "desc");
+    }
+  };
+
+  const sortedRows = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      let cmp: number;
+      if (sortCol === "customer") {
+        cmp = (a.customer.name || "").localeCompare(b.customer.name || "");
+      } else {
+        cmp = (a[sortCol] as number) - (b[sortCol] as number);
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+    return copy;
+  }, [rows, sortCol, sortDir]);
 
   const totals = useMemo(() => {
     if (!rows.length) return { current: 0, days31to60: 0, days61to90: 0, over90: 0, total: 0 };
@@ -92,7 +191,7 @@ export default function AgingReportPage() {
         </div>
         {rows.length > 0 && (
           <button
-            onClick={() => exportCSV(rows)}
+            onClick={() => exportCSV(sortedRows)}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
           >
             <Download size={14} />
@@ -130,23 +229,65 @@ export default function AgingReportPage() {
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
         <div className="flex items-center border-b border-border bg-muted/40 px-4 py-2">
-          <div className="flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Customer
+          <div className="flex-1">
+            <SortableHeader
+              label="Customer"
+              field="customer"
+              activeField={sortCol}
+              activeDir={sortDir}
+              onSort={handleSort}
+              align="left"
+            />
           </div>
-          <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Current (0-30)
+          <div className="w-28 flex justify-end">
+            <SortableHeader
+              label="Current (0-30)"
+              field="current"
+              activeField={sortCol}
+              activeDir={sortDir}
+              onSort={handleSort}
+              align="right"
+            />
           </div>
-          <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            31-60 Days
+          <div className="w-28 flex justify-end">
+            <SortableHeader
+              label="31-60 Days"
+              field="days31to60"
+              activeField={sortCol}
+              activeDir={sortDir}
+              onSort={handleSort}
+              align="right"
+            />
           </div>
-          <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            61-90 Days
+          <div className="w-28 flex justify-end">
+            <SortableHeader
+              label="61-90 Days"
+              field="days61to90"
+              activeField={sortCol}
+              activeDir={sortDir}
+              onSort={handleSort}
+              align="right"
+            />
           </div>
-          <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Over 90 Days
+          <div className="w-28 flex justify-end">
+            <SortableHeader
+              label="Over 90 Days"
+              field="over90"
+              activeField={sortCol}
+              activeDir={sortDir}
+              onSort={handleSort}
+              align="right"
+            />
           </div>
-          <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-            Total
+          <div className="w-28 flex justify-end">
+            <SortableHeader
+              label="Total"
+              field="total"
+              activeField={sortCol}
+              activeDir={sortDir}
+              onSort={handleSort}
+              align="right"
+            />
           </div>
         </div>
 
@@ -161,7 +302,7 @@ export default function AgingReportPage() {
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {rows.map((r) => (
+            {sortedRows.map((r) => (
               <div
                 key={r.customer.id}
                 className="flex w-full items-center px-4 py-3 text-left transition-colors duration-100 hover:bg-accent/60"
