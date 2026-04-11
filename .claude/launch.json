@@ -9,10 +9,11 @@
     },
     {
       "name": "web",
+      "cwd": "apps/web",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "pnpm", "web:dev"],
-      "port": 3002,
-      "autoPort": true
+      "runtimeArgs": ["/c", "npx", "next", "dev", "--port", "3003"],
+      "port": 3003,
+      "autoPort": false
     }
   ]
 }

@@ -53,6 +53,7 @@ import { printingRoutes } from "./modules/printing/routes";
 import auditRoutes from "./modules/audit/routes";
 import discountRoutes from "./modules/discounts/routes";
 import { technicianRoutes } from "./modules/technicians/routes";
+import { analyticsRoutes } from "./modules/analytics/routes";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const JWT_SECRET = process.env.JWT_SECRET;
@@ -135,6 +136,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(auditRoutes, { prefix: "/audit-log" });
   await app.register(discountRoutes, { prefix: "/discounts" });
   await app.register(technicianRoutes, { prefix: "/technicians" });
+  await app.register(analyticsRoutes, { prefix: "/analytics" });
 
   return app;
 }

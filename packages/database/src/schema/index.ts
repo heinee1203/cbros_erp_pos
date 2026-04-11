@@ -53,3 +53,4 @@ export * from "./discount-rules";
 export * from "./technicians";
 export * from "./soa-records";
 export * from "./ar-payment-allocations";
+export * from "./daily-sales-summary";
