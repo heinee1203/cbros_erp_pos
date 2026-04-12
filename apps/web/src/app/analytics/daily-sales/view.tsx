@@ -20,6 +20,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
 } from "react";
@@ -62,6 +63,8 @@ import {
   Plus,
   X,
   Save,
+  Camera,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -298,7 +301,7 @@ const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /* ═════════════════════════════════════════════════════════════
  *  Page
  * ═════════════════════════════════════════════════════════════ */
-export default function DailySalesDashboardPage() {
+export function DailySalesView() {
   const { user, token, locationId, loading: authLoading } = useAuth();
   const isAdmin = user?.role === "ADMIN";
 
@@ -1273,6 +1276,381 @@ interface DailyReportCardProps {
   onEditEntry: () => void;
 }
 
+/**
+ * Builds a static, print-ready HTML string for the Daily Sales Report image.
+ *
+ * Design brief: mirror the live on-screen `#daily-report-card` element-for-
+ * element at its full 640px width, so the captured PNG is visually identical
+ * to what the user sees in the browser. The on-screen card is rendered by
+ * `DailyReportCard` → `ReportRows` → `DivisionCard`; this template hand-
+ * rewrites the same layout in inline-styled HTML that survives the
+ * dom-to-image-more cloning pass without Tailwind class lookups.
+ *
+ * Why a static string instead of capturing the live React card directly:
+ * dom-to-image-more struggles with the live card's modern CSS (oklch color
+ * vars, flexbox gaps, backdrop filters, responsive breakpoints). An earlier
+ * attempt in this codebase produced mangled output with cut-off text and
+ * washed colors. The static-HTML + scoped-reset approach is robust and we've
+ * already proved it captures cleanly at 1:1.
+ *
+ * Template rules — all chosen to survive dom-to-image-more's CSS inlining:
+ *  • A scoped `<style>` reset (`.ds-img-root *, ...`) zeroes out every
+ *    descendant's border/outline/box-shadow so Tailwind's preflight
+ *    `border:0 solid #E5E7EB` can't leak through as ghost 0.666…px
+ *    hairlines. Specificity (0,1,0) beats preflight's `*` (0,0,0) but
+ *    stays below inline styles (1,0,0,0), so the elements that explicitly
+ *    declare a border still get one.
+ *  • Every <div>, <table>, and <td> starts its inline style with
+ *    `NO_BORDER` belt-and-suspenders; elements with real borders declare
+ *    them after.
+ *  • Flex layouts are replaced with 2-cell <table> rows (baseline-aligned).
+ *  • Proportion bars are divs with nested fill divs — no table cells.
+ *  • A/P's segmented OLD/NEW bar uses a `width:${barPct}%` outer div
+ *    containing a 2-cell table whose widths are `${oldRatio*100}%` and
+ *    `${newRatio*100}%`. Left cell gets 0.55 opacity for the OLD segment.
+ *  • All colors are hex; no CSS variables, no oklch.
+ *  • Geist/SF stack with Arial/Courier fallbacks since web fonts may not
+ *    load inside the foreignObject pipeline.
+ *  • Dimensions and font sizes match the on-screen card verbatim.
+ */
+function buildDailySalesImageHtml(
+  data: SingleDayResponse,
+  longDate: string,
+  dayOfWeek: string,
+): string {
+  const peso = (v: number): string =>
+    v > 0
+      ? `\u20B1${v.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : "\u2014";
+  const pct = (v: number): string => `${v.toFixed(1)}%`;
+
+  const SANS = "'Geist','SF Pro Display',-apple-system,'Segoe UI',Arial,sans-serif";
+  const MONO = "'Geist Mono','SF Mono','Cascadia Code','Courier New',monospace";
+  const SERIF = "Georgia,'Times New Roman',serif";
+
+  // Mirrors DIVISION_STYLES at the top of this file. Kept as a local copy
+  // so the template is a pure string function with no cross-cutting deps.
+  // If the on-screen palette ever changes, update both places.
+  const DS = {
+    ap:       { bar: "#2563eb", headerBg: "#eff6ff", text: "#1e40af" },
+    ac:       { bar: "#16a34a", headerBg: "#f0fdf4", text: "#15803d" },
+    service:  { bar: "#ea580c", headerBg: "#fff7ed", text: "#c2410c" },
+    painting: { bar: "#7c3aed", headerBg: "#f5f3ff", text: "#6d28d9" },
+    junior:   { bar: "#0891b2", headerBg: "#ecfeff", text: "#0e7490" },
+  };
+
+  const NO_BORDER = "border:0;";
+  const TD = `${NO_BORDER}padding:0;`;
+
+  type DivisionStyleKey = keyof typeof DS;
+  type SubItemSpec = {
+    label: string;
+    value: number;
+    ratio?: number | null;
+  };
+
+  // Renders an inline SubItem — label + amount + optional ratio — matching
+  // the on-screen `SubItem` component at `page.tsx:2117`.
+  const renderSubItem = (spec: SubItemSpec, accentColor: string, isZero: boolean): string => {
+    const valueColor = isZero ? "#CBD5E1" : "#334155";
+    const labelColor = isZero ? "#CBD5E1" : accentColor;
+    const ratioText =
+      spec.ratio != null && spec.value > 0
+        ? `<span style="${NO_BORDER}font-size:9px;color:#94A3B8;margin-left:4px;font-family:${MONO};">(${spec.ratio.toFixed(2)})</span>`
+        : "";
+    return `<span style="${NO_BORDER}font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:${labelColor};opacity:0.7;margin-right:4px;font-family:${SANS};">${spec.label}</span><span style="${NO_BORDER}font-size:12px;font-weight:600;color:${valueColor};font-family:${MONO};white-space:nowrap;">${peso(spec.value)}</span>${ratioText}`;
+  };
+
+  // Renders one DivisionCard: header strip (tinted bg with label+amount+pct),
+  // progress bar row, and sub-row with CASH/OLD/NEW/ACCT SubItems.
+  const section = (opts: {
+    styleKey: DivisionStyleKey;
+    label: string;
+    sublabel?: string;
+    total: number;
+    percentage: number;
+    segmented?: { old: { value: number; ratio: number | null }; new: { value: number; ratio: number | null } };
+    cash?: number;
+    acct?: number;
+  }): string => {
+    const { styleKey, label, sublabel, total, percentage, segmented, cash, acct } = opts;
+    const style = DS[styleKey];
+    const isZero = total <= 0;
+    const barPct = Math.max(0, Math.min(100, percentage));
+
+    // Header strip bg/colors match on-screen: zero sections use slate-50
+    // wash with muted label colors, active sections use the per-division
+    // headerBg tint with full-strength label colors.
+    const headerBg = isZero ? "#F8FAFC" : style.headerBg;
+    const labelColor = isZero ? "#94A3B8" : style.text;
+    const sublabelColor = isZero ? "#CBD5E1" : style.text;
+    const amountColor = isZero ? "#94A3B8" : "#0F172A";
+    const percentColor = isZero ? "#CBD5E1" : "#64748B";
+    const cardBg = isZero ? "#F8FAFCcc" : "#FFFFFF"; // slate-50/40 equiv for zero
+    const cardOpacity = isZero ? "opacity:0.7;" : "";
+
+    // Header row: label [+ sublabel] left, amount + percent right.
+    const sublabelSpan = sublabel
+      ? `<span style="${NO_BORDER}font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;color:${sublabelColor};opacity:0.7;margin-left:8px;font-family:${SANS};">${sublabel}</span>`
+      : "";
+    const headerRow = `
+      <table style="${NO_BORDER}width:100%;border-collapse:collapse;background:${headerBg};">
+        <tr>
+          <td style="${TD}padding:6px 14px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:${labelColor};font-family:${SANS};vertical-align:middle;">${label}${sublabelSpan}</td>
+          <td style="${TD}padding:6px 14px;text-align:right;vertical-align:middle;white-space:nowrap;"><span style="${NO_BORDER}font-size:16px;font-weight:800;color:${amountColor};font-family:${MONO};">${isZero ? "\u2014" : peso(total)}</span><span style="${NO_BORDER}font-size:11px;font-weight:700;color:${percentColor};font-family:${MONO};margin-left:8px;min-width:42px;display:inline-block;text-align:right;">${pct(percentage)}</span></td>
+        </tr>
+      </table>`;
+
+    // Progress bar row. Track is a gray rounded div; fill is either a
+    // single colored div (non-segmented) or a percentage-width div
+    // containing a 2-cell table whose cells hold OLD (55% opacity) + NEW.
+    let fillHtml = "";
+    if (!isZero) {
+      if (segmented) {
+        const oldPct = (segmented.old.ratio ?? 0) * 100;
+        const newPct = (segmented.new.ratio ?? 0) * 100;
+        fillHtml = `
+          <div style="${NO_BORDER}width:${barPct.toFixed(1)}%;height:10px;">
+            <table style="${NO_BORDER}width:100%;height:10px;border-collapse:collapse;table-layout:fixed;">
+              <tr>
+                <td style="${TD}width:${oldPct.toFixed(1)}%;background:${style.bar};opacity:0.55;height:10px;font-size:0;line-height:0;">&nbsp;</td>
+                <td style="${TD}width:${newPct.toFixed(1)}%;background:${style.bar};height:10px;font-size:0;line-height:0;">&nbsp;</td>
+              </tr>
+            </table>
+          </div>`;
+      } else {
+        fillHtml = `<div style="${NO_BORDER}width:${barPct.toFixed(1)}%;height:10px;background:${style.bar};border-radius:9999px;"></div>`;
+      }
+    }
+    const barRow = `
+      <div style="${NO_BORDER}padding:8px 14px 0 14px;">
+        <div style="${NO_BORDER}height:10px;background:#F1F5F9;border-radius:9999px;overflow:hidden;">
+          ${fillHtml}
+        </div>
+      </div>`;
+
+    // Sub-row: SubItems on the left (OLD·NEW or CASH), ACCT on the right.
+    let leftContent = "";
+    if (segmented) {
+      leftContent = `${renderSubItem({ label: "OLD", value: segmented.old.value, ratio: segmented.old.ratio }, style.text, isZero)}<span style="${NO_BORDER}color:#CBD5E1;margin:0 8px;">\u00B7</span>${renderSubItem({ label: "NEW", value: segmented.new.value, ratio: segmented.new.ratio }, style.text, isZero)}`;
+    } else if (cash !== undefined) {
+      leftContent = renderSubItem({ label: "CASH", value: cash }, style.text, isZero);
+    }
+    const rightContent =
+      acct !== undefined
+        ? renderSubItem({ label: "ACCT", value: acct }, style.text, isZero)
+        : "";
+    const subRow = `
+      <table style="${NO_BORDER}width:100%;border-collapse:collapse;">
+        <tr>
+          <td style="${TD}padding:8px 14px 10px 14px;vertical-align:middle;">${leftContent}</td>
+          <td style="${TD}padding:8px 14px 10px 14px;text-align:right;vertical-align:middle;white-space:nowrap;">${rightContent}</td>
+        </tr>
+      </table>`;
+
+    return `
+    <div style="${NO_BORDER}border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;background:${cardBg};${cardOpacity}margin-bottom:10px;">
+      ${headerRow}
+      ${barRow}
+      ${subRow}
+    </div>`;
+  };
+
+  // Grand-total footer: 3-column table (Total Cash | Total On Acct | Grand
+  // Total) plus a PAYMENTS row underneath. The on-screen card uses
+  // `grid-cols-[1fr_1fr_1.4fr]`, which at 3.4 total fractions gives
+  // 29.4% / 29.4% / 41.2%.
+  const totalCashCell = `
+    <td style="${TD}padding:10px 18px;vertical-align:middle;border-right:1px solid #FDE68A;width:29.4%;">
+      <div style="${NO_BORDER}font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.16em;color:#B45309;opacity:0.8;font-family:${SANS};">Total Cash</div>
+      <div style="${NO_BORDER}margin-top:2px;font-size:14px;font-weight:700;color:#78350F;font-family:${MONO};white-space:nowrap;">${peso(data.totals.cash)}</div>
+    </td>`;
+  const totalAcctCell = `
+    <td style="${TD}padding:10px 18px;vertical-align:middle;border-right:1px solid #FDE68A;width:29.4%;">
+      <div style="${NO_BORDER}font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.16em;color:#B45309;opacity:0.8;font-family:${SANS};">Total On Acct</div>
+      <div style="${NO_BORDER}margin-top:2px;font-size:14px;font-weight:700;color:#78350F;font-family:${MONO};white-space:nowrap;">${peso(data.totals.onAccount)}</div>
+    </td>`;
+  const grandTotalCell = `
+    <td style="${TD}padding:10px 18px;text-align:right;vertical-align:middle;width:41.2%;">
+      <div style="${NO_BORDER}font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.18em;color:#B45309;font-family:${SANS};">Grand Total</div>
+      <div style="${NO_BORDER}margin-top:2px;font-size:22px;font-weight:800;color:#78350F;font-family:${MONO};white-space:nowrap;">${peso(data.totals.grandTotal)}</div>
+    </td>`;
+
+  return `
+<div class="ds-img-root" style="${NO_BORDER}width:640px;background:#FFFFFF;color:#0F172A;box-sizing:border-box;font-family:${SANS};border:1px solid #E5E7EB;border-radius:16px;overflow:hidden;">
+  <style>
+    .ds-img-root *, .ds-img-root *::before, .ds-img-root *::after {
+      border-width: 0;
+      border-style: none;
+      border-color: transparent;
+      outline-style: none;
+      outline-width: 0;
+      box-shadow: none;
+    }
+  </style>
+
+  <div style="${NO_BORDER}padding:16px 24px;text-align:center;border-bottom:1px solid #E5E7EB;background:linear-gradient(180deg,#FFFBEB 0%,#FFFFFF 100%);">
+    <div style="${NO_BORDER}font-family:${SERIF};font-size:15px;font-weight:700;letter-spacing:0.02em;color:#0F172A;">
+      C-BROS GENUINE AUTO PARTS &amp; ACCESSORIES, INC
+    </div>
+    <div style="${NO_BORDER}font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.18em;color:#64748B;margin-top:2px;font-family:${SANS};">
+      Daily Sales Report
+    </div>
+    <div style="${NO_BORDER}font-size:12px;font-weight:600;color:#334155;margin-top:8px;font-family:${SANS};">
+      ${longDate} <span style="color:#94A3B8;">&middot;</span> <span style="text-transform:uppercase;letter-spacing:0.06em;color:#64748B;">${dayOfWeek}</span>
+    </div>
+  </div>
+
+  <div style="${NO_BORDER}padding:16px 20px;">
+    ${section({
+      styleKey: "ap",
+      label: "A/P",
+      sublabel: "Auto Parts",
+      total: data.ap.total,
+      percentage: data.percentages.ap,
+      segmented: {
+        old: { value: data.ap.old, ratio: data.ap.oldRatio },
+        new: { value: data.ap.new, ratio: data.ap.newRatio },
+      },
+      acct: data.ap.onAccount,
+    })}
+    ${section({
+      styleKey: "ac",
+      label: "A/C",
+      sublabel: "Accessories",
+      total: data.ac.total,
+      percentage: data.percentages.ac,
+      cash: data.ac.cash,
+      acct: data.ac.onAccount,
+    })}
+    ${section({
+      styleKey: "service",
+      label: "A/R",
+      sublabel: "Service",
+      total: data.service.total,
+      percentage: data.percentages.service,
+      cash: data.service.cash,
+      acct: data.service.onAccount,
+    })}
+    ${section({
+      styleKey: "painting",
+      label: "Painting",
+      total: data.painting.total,
+      percentage: data.percentages.painting,
+      cash: data.painting.cash,
+      acct: data.painting.onAccount,
+    })}
+    ${section({
+      styleKey: "junior",
+      label: "Junior",
+      total: data.junior.total,
+      percentage: data.percentages.junior,
+      cash: data.junior.cash,
+    })}
+
+    <div style="${NO_BORDER}margin-top:12px;border:1px solid #FCD34D;border-radius:12px;overflow:hidden;background:linear-gradient(180deg,#FFFBEB 0%,#FEF3C7 100%);">
+      <table style="${NO_BORDER}width:100%;border-collapse:collapse;table-layout:fixed;">
+        <tr>
+          ${totalCashCell}
+          ${totalAcctCell}
+          ${grandTotalCell}
+        </tr>
+      </table>
+      <table style="${NO_BORDER}width:100%;border-collapse:collapse;border-top:1px solid #FDE68A;background:#FFFBEB;">
+        <tr>
+          <td style="${TD}padding:8px 18px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.16em;color:#B45309;font-family:${SANS};">Payments (AR Collections)</td>
+          <td style="${TD}padding:8px 18px;text-align:right;font-size:13px;font-weight:700;color:#78350F;font-family:${MONO};white-space:nowrap;">${peso(data.totals.payments)}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</div>
+  `.trim();
+}
+
+/**
+ * Renders the static image template into an off-screen container, captures
+ * it with dom-to-image-more, and writes the PNG to the clipboard.
+ *
+ * Why dom-to-image-more (not html2canvas): html2canvas crashes on the modern
+ * Tailwind/shadcn `oklch()` color function. Even though this template uses
+ * only hex colors, the rest of the page still has oklch(), and html2canvas
+ * walks the stylesheet list globally. dom-to-image-more's SVG-foreignObject
+ * pipeline sidesteps that by letting the browser do color resolution.
+ *
+ * Dynamic import keeps the library (~150kB) out of the initial bundle — it
+ * loads on first click only. ClipboardItem is not available in some browsers
+ * (Safari < 13.4, older Firefox), so we fall back to a download.
+ */
+async function copyReportAsImage(
+  data: SingleDayResponse,
+  date: string,
+  longDate: string,
+  dayOfWeek: string,
+): Promise<"copied" | "downloaded" | "failed"> {
+  const html = buildDailySalesImageHtml(data, longDate, dayOfWeek);
+
+  // Offscreen container — positioned far off-screen so it doesn't flash
+  // visibly, but still laid out so offsetHeight is real.
+  const container = document.createElement("div");
+  container.style.position = "fixed";
+  container.style.left = "-10000px";
+  container.style.top = "0";
+  container.style.width = "640px";
+  container.style.background = "#ffffff";
+  container.innerHTML = html;
+  document.body.appendChild(container);
+
+  try {
+    const mod = await import("dom-to-image-more");
+    const domtoimage = (mod as any).default ?? mod;
+
+    // 2x scale via transform → sharper output without relying on a `scale`
+    // option that dom-to-image-more doesn't have. Matches what the previous
+    // implementation did and is the documented way to get retina PNGs.
+    const w = 640;
+    const h = container.offsetHeight;
+    const blob: Blob | null = await domtoimage.toBlob(container, {
+      bgcolor: "#ffffff",
+      width: w * 2,
+      height: h * 2,
+      style: {
+        transform: "scale(2)",
+        transformOrigin: "top left",
+        width: `${w}px`,
+        height: `${h}px`,
+      },
+    });
+    if (!blob) return "failed";
+
+    if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ "image/png": blob }),
+        ]);
+        return "copied";
+      } catch {
+        // fall through to download
+      }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `daily-sales-${date}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return "downloaded";
+  } catch (e) {
+    console.error("copyReportAsImage failed:", e);
+    return "failed";
+  } finally {
+    document.body.removeChild(container);
+  }
+}
+
 function DailyReportCard({
   date,
   data,
@@ -1296,25 +1674,36 @@ function DailyReportCard({
     timeZone: "UTC",
   });
 
+  // Two-second confirmation pill on the Copy button after a successful capture
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "downloaded" | "failed">("idle");
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handlePrint = () => window.print();
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.value) onSetDate(e.target.value);
   };
 
-  return (
-    <div className="mb-4 overflow-hidden rounded-2xl border border-border bg-background shadow-[0_4px_24px_-12px_rgba(0,0,0,0.12)] print:shadow-none print:border-black">
-      {/* Title strip — matches the Excel report header */}
-      <div className="border-b border-border bg-gradient-to-b from-amber-50 to-background px-6 py-4 text-center print:bg-white">
-        <div className="font-serif text-[15px] font-bold tracking-wide text-foreground">
-          C-BROS GENUINE AUTO PARTS &amp; ACCESSORIES, INC
-        </div>
-        <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Daily Sales Report
-        </div>
-      </div>
+  const handleCopy = async () => {
+    if (copyState === "copying") return;
+    if (!data || !data.hasData) return;
+    setCopyState("copying");
+    const result = await copyReportAsImage(data, date, longDate, dayOfWeek);
+    setCopyState(result);
+    if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    copyResetRef.current = setTimeout(() => setCopyState("idle"), 2200);
+  };
 
-      {/* Date navigator + actions */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/20 px-6 py-3 print:hidden">
+  useEffect(() => {
+    return () => {
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    };
+  }, []);
+
+  return (
+    <div className="mb-4 print:shadow-none">
+      {/* Date navigator + actions — kept OUTSIDE the capture target so the
+          screenshot is just the report card, not the navigation chrome. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-2.5 print:hidden">
         <div className="flex items-center gap-2">
           <button
             onClick={() => onStepDate(-1)}
@@ -1338,11 +1727,11 @@ function DailyReportCard({
           >
             <ChevronRight size={14} />
           </button>
-          <div className="ml-2 flex flex-col leading-tight">
-            <span className="text-[14px] font-bold text-foreground">{longDate}</span>
+          <div className="ml-2 hidden flex-col leading-tight sm:flex">
+            <span className="text-[13px] font-bold text-foreground">{longDate}</span>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
               {dayOfWeek}
-              <span className="ml-2 text-muted-foreground/60">← → arrow keys to navigate</span>
+              <span className="ml-2 text-muted-foreground/60">← → arrow keys</span>
             </span>
           </div>
         </div>
@@ -1357,11 +1746,39 @@ function DailyReportCard({
             )}
           >
             <ArrowUpRight size={12} />
-            Compare to Yesterday
+            Compare
           </button>
-          {/* Edit pencil — only shown for dates that already have data.
-              Dates with no data get the bigger "Enter Sales" CTA inside
-              the NoDataPanel below. */}
+          {data?.hasData && (
+            <button
+              onClick={handleCopy}
+              disabled={copyState === "copying"}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
+                copyState === "copied" || copyState === "downloaded"
+                  ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                  : copyState === "failed"
+                    ? "border-red-500 bg-red-50 text-red-700"
+                    : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                copyState === "copying" && "cursor-wait opacity-70",
+              )}
+              title="Copy as image — paste directly into Viber/Messenger"
+            >
+              {copyState === "copying" ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : copyState === "copied" || copyState === "downloaded" ? (
+                <Check size={12} />
+              ) : (
+                <Camera size={12} />
+              )}
+              {copyState === "copied"
+                ? "Copied!"
+                : copyState === "downloaded"
+                  ? "Downloaded"
+                  : copyState === "failed"
+                    ? "Failed"
+                    : "Copy"}
+            </button>
+          )}
           {data?.hasData && (
             <button
               onClick={onEditEntry}
@@ -1382,23 +1799,41 @@ function DailyReportCard({
         </div>
       </div>
 
-      {/* Print-only header (visible only when printing) */}
-      <div className="hidden border-b border-black px-6 py-2 text-center print:block">
-        <div className="text-[11px] font-bold uppercase">
-          {longDate} · {dayOfWeek}
+      {/* ── Capture target ──
+          Everything inside #daily-report-card ends up in the screenshot.
+          Max-w-[640px] keeps the captured PNG at a chat-friendly width.
+          Width: max-w-[640px] desktop / full-width mobile.
+      */}
+      <div
+        id="daily-report-card"
+        data-date={date}
+        className="mx-auto max-w-[640px] overflow-hidden rounded-2xl border border-border bg-white shadow-[0_4px_24px_-12px_rgba(0,0,0,0.12)] print:max-w-none print:shadow-none print:border-black"
+      >
+        {/* Title strip — matches the Excel report header */}
+        <div className="border-b border-border bg-gradient-to-b from-amber-50 to-white px-6 py-4 text-center print:bg-white">
+          <div className="font-serif text-[15px] font-bold tracking-wide text-slate-900">
+            C-BROS GENUINE AUTO PARTS &amp; ACCESSORIES, INC
+          </div>
+          <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Daily Sales Report
+          </div>
+          <div className="mt-2 text-[12px] font-semibold text-slate-700">
+            {longDate} <span className="text-slate-400">·</span>{" "}
+            <span className="uppercase tracking-wider text-slate-500">{dayOfWeek}</span>
+          </div>
         </div>
-      </div>
 
-      {/* Body */}
-      {loading && !data ? (
-        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-          <Loader2 size={16} className="mr-2 animate-spin" /> Loading…
-        </div>
-      ) : !data || !data.hasData ? (
-        <NoDataPanel date={date} dayOfWeek={dayOfWeek} onCreateEntry={onCreateEntry} />
-      ) : (
-        <ReportRows data={data} previous={previous} />
-      )}
+        {/* Body */}
+        {loading && !data ? (
+          <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+            <Loader2 size={16} className="mr-2 animate-spin" /> Loading…
+          </div>
+        ) : !data || !data.hasData ? (
+          <NoDataPanel date={date} dayOfWeek={dayOfWeek} onCreateEntry={onCreateEntry} />
+        ) : (
+          <ReportRows data={data} previous={previous} />
+        )}
+      </div>
     </div>
   );
 }
@@ -1444,14 +1879,27 @@ function NoDataPanel({
   );
 }
 
-/* ─── Body rows (5 divisions + totals) ─── */
+/* ─── Body cards (5 divisions + totals) ─── */
 
-const DIVISION_TINTS: Record<string, string> = {
-  ap: "bg-blue-50/40",
-  ac: "bg-emerald-50/40",
-  service: "bg-amber-50/40",
-  painting: "bg-violet-50/40",
-  junior: "bg-rose-50/40",
+/**
+ * Per-division visual identity. Each division gets its own color so the report
+ * can be scanned at a glance. The hex strings are used directly on inline
+ * styles for the progress bar fill so html2canvas captures them faithfully —
+ * Tailwind arbitrary classes occasionally get purged when serialized.
+ */
+interface DivisionStyle {
+  bar: string;       // solid bar fill
+  barSoft: string;   // 12% tint for the empty track + card outline
+  text: string;      // header text color
+  headerBg: string;  // soft tint for the card header strip
+}
+
+const DIVISION_STYLES: Record<"ap" | "ac" | "service" | "painting" | "junior", DivisionStyle> = {
+  ap:       { bar: "#2563eb", barSoft: "#dbeafe", text: "#1e40af", headerBg: "#eff6ff" },
+  ac:       { bar: "#16a34a", barSoft: "#dcfce7", text: "#15803d", headerBg: "#f0fdf4" },
+  service:  { bar: "#ea580c", barSoft: "#ffedd5", text: "#c2410c", headerBg: "#fff7ed" },
+  painting: { bar: "#7c3aed", barSoft: "#ede9fe", text: "#6d28d9", headerBg: "#f5f3ff" },
+  junior:   { bar: "#0891b2", barSoft: "#cffafe", text: "#0e7490", headerBg: "#ecfeff" },
 };
 
 function ReportRows({
@@ -1464,176 +1912,310 @@ function ReportRows({
   const compare = previous?.hasData ? previous : null;
 
   return (
-    <div className="px-6 py-4">
-      <div className="overflow-hidden rounded-lg border border-border print:border-black">
-        {/* AUTO PARTS */}
-        <DivisionRow
-          tintClass={DIVISION_TINTS.ap}
-          label="A/P"
-          total={data.ap.total}
-          previousTotal={compare?.ap.total ?? null}
-          percentage={data.percentages.ap}
-          subRows={[
-            { label: "OLD", value: data.ap.old, ratio: data.ap.oldRatio },
-            { label: "NEW", value: data.ap.new, ratio: data.ap.newRatio },
-            { label: "ACCT", value: data.ap.onAccount },
-          ]}
-        />
-        {/* ACCESSORIES */}
-        <DivisionRow
-          tintClass={DIVISION_TINTS.ac}
-          label="A/C"
-          total={data.ac.total}
-          previousTotal={compare?.ac.total ?? null}
-          percentage={data.percentages.ac}
-          subRows={[
-            { label: "CASH", value: data.ac.cash },
-            { label: "ACCT", value: data.ac.onAccount },
-          ]}
-        />
-        {/* SERVICE (the Excel labels this row "A/R") */}
-        <DivisionRow
-          tintClass={DIVISION_TINTS.service}
-          label="A/R (SERVICE)"
-          total={data.service.total}
-          previousTotal={compare?.service.total ?? null}
-          percentage={data.percentages.service}
-          subRows={[
-            { label: "CASH", value: data.service.cash },
-            { label: "ACCT", value: data.service.onAccount },
-          ]}
-        />
-        {/* PAINTING */}
-        <DivisionRow
-          tintClass={DIVISION_TINTS.painting}
-          label="PAINTING"
-          total={data.painting.total}
-          previousTotal={compare?.painting.total ?? null}
-          percentage={data.percentages.painting}
-          subRows={[
-            { label: "CASH", value: data.painting.cash },
-            { label: "ACCT", value: data.painting.onAccount },
-          ]}
-        />
-        {/* JUNIOR */}
-        <DivisionRow
-          tintClass={DIVISION_TINTS.junior}
-          label="JUNIOR"
-          total={data.junior.total}
-          previousTotal={compare?.junior.total ?? null}
-          percentage={data.percentages.junior}
-          subRows={[
-            { label: "CASH", value: data.junior.cash },
-          ]}
-          isLast
-        />
-      </div>
+    <div className="space-y-2.5 px-5 py-4">
+      {/* AUTO PARTS — special: OLD/NEW segmented bar */}
+      <DivisionCard
+        styleKey="ap"
+        label="A/P"
+        sublabel="Auto Parts"
+        total={data.ap.total}
+        previousTotal={compare?.ap.total ?? null}
+        percentage={data.percentages.ap}
+        segmented={{
+          old: { value: data.ap.old, ratio: data.ap.oldRatio },
+          new: { value: data.ap.new, ratio: data.ap.newRatio },
+        }}
+        acct={data.ap.onAccount}
+      />
+      {/* ACCESSORIES */}
+      <DivisionCard
+        styleKey="ac"
+        label="A/C"
+        sublabel="Accessories"
+        total={data.ac.total}
+        previousTotal={compare?.ac.total ?? null}
+        percentage={data.percentages.ac}
+        cash={data.ac.cash}
+        acct={data.ac.onAccount}
+      />
+      {/* SERVICE */}
+      <DivisionCard
+        styleKey="service"
+        label="A/R"
+        sublabel="Service"
+        total={data.service.total}
+        previousTotal={compare?.service.total ?? null}
+        percentage={data.percentages.service}
+        cash={data.service.cash}
+        acct={data.service.onAccount}
+      />
+      {/* PAINTING */}
+      <DivisionCard
+        styleKey="painting"
+        label="Painting"
+        total={data.painting.total}
+        previousTotal={compare?.painting.total ?? null}
+        percentage={data.percentages.painting}
+        cash={data.painting.cash}
+        acct={data.painting.onAccount}
+      />
+      {/* JUNIOR — no ACCT column at all */}
+      <DivisionCard
+        styleKey="junior"
+        label="Junior"
+        total={data.junior.total}
+        previousTotal={compare?.junior.total ?? null}
+        percentage={data.percentages.junior}
+        cash={data.junior.cash}
+      />
 
-      {/* TOTALS block */}
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <TotalsTile label="TOTAL CASH" value={data.totals.cash} />
-        <TotalsTile label="TOTAL ON ACCT" value={data.totals.onAccount} />
-        <TotalsTile label="GRAND TOTAL" value={data.totals.grandTotal} highlight />
-      </div>
-
-      {/* PAYMENTS row (separate — these are AR collections, not sales) */}
-      <div className="mt-2 flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Payments Received (AR Collections)
-        </span>
-        <span className="text-[15px] font-bold tabular-nums text-emerald-600">
-          {data.totals.payments > 0 ? fmtPesoFull(data.totals.payments) : "—"}
-        </span>
+      {/* GRAND TOTAL — prominent footer card */}
+      <div
+        className="mt-3 overflow-hidden rounded-xl border border-amber-300"
+        style={{ background: "linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%)" }}
+      >
+        <div className="grid grid-cols-1 gap-0 sm:grid-cols-[1fr_1fr_1.4fr]">
+          <FooterStat label="Total Cash" value={data.totals.cash} />
+          <FooterStat label="Total On Acct" value={data.totals.onAccount} />
+          <div className="flex flex-col items-end justify-center px-5 py-3 sm:items-end sm:border-l sm:border-amber-300">
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-700">
+              Grand Total
+            </span>
+            <span className="mt-0.5 text-[22px] font-extrabold tabular-nums text-amber-900">
+              {fmtPesoFull(data.totals.grandTotal)}
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center justify-between border-t border-amber-200 bg-amber-50/50 px-5 py-2">
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-700">
+            Payments (AR Collections)
+          </span>
+          <span className="text-[13px] font-bold tabular-nums text-amber-900">
+            {data.totals.payments > 0 ? fmtPesoFull(data.totals.payments) : "—"}
+          </span>
+        </div>
       </div>
     </div>
   );
 }
 
-/* ─── One division row (label + total + sub-rows + % bar) ─── */
-
-interface SubRow {
-  label: string;
-  value: number;
-  /** Optional ratio (0..1) — used for A/P OLD/NEW */
-  ratio?: number | null;
+/** Cell for the Cash / On Acct columns of the GRAND TOTAL footer. */
+function FooterStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex flex-col items-start justify-center px-5 py-3 sm:border-r sm:border-amber-200 sm:last:border-r-0">
+      <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-700/80">
+        {label}
+      </span>
+      <span className="mt-0.5 text-[14px] font-bold tabular-nums text-amber-900">
+        {value > 0 ? fmtPesoFull(value) : "—"}
+      </span>
+    </div>
+  );
 }
 
-function DivisionRow({
-  tintClass,
-  label,
-  total,
-  previousTotal,
-  percentage,
-  subRows,
-  isLast,
-}: {
-  tintClass: string;
+/* ─── One division card ─── */
+
+interface DivisionCardProps {
+  styleKey: keyof typeof DIVISION_STYLES;
   label: string;
+  sublabel?: string;
   total: number;
   previousTotal: number | null;
   percentage: number;
-  subRows: SubRow[];
-  isLast?: boolean;
-}) {
+  /** A/C / Service / Painting / Junior — single CASH amount */
+  cash?: number;
+  /** A/P only — OLD/NEW split with the OLD ratio */
+  segmented?: {
+    old: { value: number; ratio: number | null };
+    new: { value: number; ratio: number | null };
+  };
+  acct?: number;
+}
+
+function DivisionCard({
+  styleKey,
+  label,
+  sublabel,
+  total,
+  previousTotal,
+  percentage,
+  cash,
+  segmented,
+  acct,
+}: DivisionCardProps) {
+  const style = DIVISION_STYLES[styleKey];
+  const isZero = total <= 0;
   const delta = previousTotal != null ? total - previousTotal : null;
+  // Cap visible bar width to 100%; clamp negatives to 0
+  const barPct = Math.min(100, Math.max(0, percentage));
+
+  // For A/P: split the colored fill between OLD and NEW so the user can see
+  // the mix at a glance. ratios are 0..1 of the AP TOTAL (not grand total).
+  const oldRatio = segmented?.old.ratio ?? 0;
+  const newRatio = segmented?.new.ratio ?? 0;
+
   return (
     <div
       className={cn(
-        tintClass,
-        !isLast && "border-b border-border print:border-black",
-        "px-4 py-3",
+        "overflow-hidden rounded-xl border transition-all",
+        isZero ? "border-slate-200 bg-slate-50/40 opacity-70" : "border-slate-200 bg-white",
       )}
     >
-      <div className="flex items-baseline justify-between gap-4">
-        {/* Label */}
-        <div className="min-w-[140px] text-[13px] font-bold uppercase tracking-wider text-foreground">
-          {label}
-        </div>
-        {/* Total + delta */}
-        <div className="flex flex-1 items-baseline justify-end gap-3">
-          {delta != null && (
-            <DeltaPill delta={delta} />
+      {/* Header strip — division name, total, percentage */}
+      <div
+        className="flex items-center justify-between px-4 py-2"
+        style={{ backgroundColor: isZero ? "#f8fafc" : style.headerBg }}
+      >
+        <div className="flex items-baseline gap-2">
+          <span
+            className="text-[13px] font-extrabold uppercase tracking-wider"
+            style={{ color: isZero ? "#94a3b8" : style.text }}
+          >
+            {label}
+          </span>
+          {sublabel && (
+            <span
+              className="text-[10px] font-medium uppercase tracking-wider"
+              style={{ color: isZero ? "#cbd5e1" : style.text, opacity: 0.7 }}
+            >
+              {sublabel}
+            </span>
           )}
-          <div className="text-[18px] font-bold tabular-nums text-foreground">
-            {total > 0 ? fmtPesoFull(total) : "—"}
-          </div>
-          {/* Percent of grand total + bar */}
-          <div className="ml-2 flex w-20 flex-col items-end">
-            <div className="text-[11px] font-semibold tabular-nums text-muted-foreground">
-              {percentage.toFixed(1)}%
-            </div>
-            <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-border">
-              <div
-                className="h-full rounded-full bg-foreground/60"
-                style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }}
-              />
-            </div>
-          </div>
+        </div>
+        <div className="flex items-baseline gap-2">
+          {delta != null && !isZero && <DeltaPill delta={delta} />}
+          <span
+            className={cn(
+              "text-[16px] font-extrabold tabular-nums",
+              isZero ? "text-slate-400" : "text-slate-900",
+            )}
+          >
+            {isZero ? "—" : fmtPesoFull(total)}
+          </span>
+          <span
+            className={cn(
+              "min-w-[42px] text-right text-[11px] font-bold tabular-nums",
+              isZero ? "text-slate-300" : "text-slate-500",
+            )}
+          >
+            {percentage.toFixed(1)}%
+          </span>
         </div>
       </div>
-      {/* Sub-rows */}
-      <div className="mt-1.5 grid grid-cols-[140px_1fr] gap-y-0.5 text-[12px]">
-        {subRows.map((sub) => (
-          <SubRowDisplay key={sub.label} sub={sub} />
-        ))}
+
+      {/* Full-width progress bar — proportional to grand total */}
+      <div className="px-4 pt-2">
+        <div
+          className="relative h-2.5 w-full overflow-hidden rounded-full"
+          style={{ backgroundColor: "#f1f5f9" }}
+        >
+          {!isZero && segmented ? (
+            // A/P: two segments side-by-side, both filling to barPct total
+            <div className="flex h-full" style={{ width: `${barPct}%` }}>
+              <div
+                className="h-full"
+                style={{
+                  backgroundColor: style.bar,
+                  width: `${(oldRatio || 0) * 100}%`,
+                  opacity: 0.55,
+                }}
+              />
+              <div
+                className="h-full"
+                style={{
+                  backgroundColor: style.bar,
+                  width: `${(newRatio || 0) * 100}%`,
+                }}
+              />
+            </div>
+          ) : !isZero ? (
+            <div
+              className="h-full rounded-full"
+              style={{ backgroundColor: style.bar, width: `${barPct}%` }}
+            />
+          ) : null}
+        </div>
+      </div>
+
+      {/* Sub-row: CASH/OLD/NEW on left, ACCT on right */}
+      <div className="flex items-center justify-between gap-3 px-4 pb-2.5 pt-2 text-[11px]">
+        <div className="flex flex-1 items-center gap-3 tabular-nums">
+          {segmented ? (
+            <>
+              <SubItem
+                label="OLD"
+                value={segmented.old.value}
+                ratio={segmented.old.ratio}
+                color={style.text}
+                isZero={isZero}
+              />
+              <span className="text-slate-300">·</span>
+              <SubItem
+                label="NEW"
+                value={segmented.new.value}
+                ratio={segmented.new.ratio}
+                color={style.text}
+                isZero={isZero}
+              />
+            </>
+          ) : cash !== undefined ? (
+            <SubItem label="CASH" value={cash} color={style.text} isZero={isZero} />
+          ) : null}
+        </div>
+        {acct !== undefined && (
+          <SubItem
+            label="ACCT"
+            value={acct}
+            color={style.text}
+            isZero={isZero}
+            align="right"
+          />
+        )}
       </div>
     </div>
   );
 }
 
-function SubRowDisplay({ sub }: { sub: SubRow }) {
+function SubItem({
+  label,
+  value,
+  ratio,
+  color,
+  isZero,
+  align = "left",
+}: {
+  label: string;
+  value: number;
+  ratio?: number | null;
+  color: string;
+  isZero: boolean;
+  align?: "left" | "right";
+}) {
   return (
-    <>
-      <div className="pl-6 text-muted-foreground">{sub.label}</div>
-      <div className="flex items-baseline justify-end gap-2 tabular-nums text-foreground/80">
-        <span>{sub.value > 0 ? fmtPesoFull(sub.value) : "—"}</span>
-        {sub.ratio != null && (
-          <span className="text-[10px] text-muted-foreground/70">
-            ({sub.ratio.toFixed(2)})
-          </span>
+    <div
+      className={cn(
+        "flex items-baseline gap-1.5",
+        align === "right" && "justify-end",
+      )}
+    >
+      <span
+        className="text-[9px] font-bold uppercase tracking-wider"
+        style={{ color: isZero ? "#cbd5e1" : color, opacity: 0.7 }}
+      >
+        {label}
+      </span>
+      <span
+        className={cn(
+          "text-[12px] font-semibold tabular-nums",
+          isZero ? "text-slate-300" : "text-slate-700",
         )}
-      </div>
-    </>
+      >
+        {value > 0 ? fmtPesoFull(value) : "—"}
+      </span>
+      {ratio != null && value > 0 && (
+        <span className="text-[9px] text-slate-400">({ratio.toFixed(2)})</span>
+      )}
+    </div>
   );
 }
 
@@ -1641,7 +2223,7 @@ function SubRowDisplay({ sub }: { sub: SubRow }) {
 function DeltaPill({ delta }: { delta: number }) {
   if (delta === 0) {
     return (
-      <span className="inline-flex items-center gap-0.5 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+      <span className="inline-flex items-center gap-0.5 rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
         ±0
       </span>
     );
@@ -1650,13 +2232,13 @@ function DeltaPill({ delta }: { delta: number }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
+        "inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[9px] font-semibold tabular-nums",
         positive
           ? "bg-emerald-50 text-emerald-700"
           : "bg-red-50 text-red-700",
       )}
     >
-      {positive ? <ArrowUpRight size={10} /> : <ArrowDownRight size={10} />}
+      {positive ? <ArrowUpRight size={9} /> : <ArrowDownRight size={9} />}
       {positive ? "+" : ""}
       {fmtPesoFull(delta)}
     </span>
@@ -2012,40 +2594,3 @@ function EntryField({
   );
 }
 
-function TotalsTile({
-  label,
-  value,
-  highlight,
-}: {
-  label: string;
-  value: number;
-  highlight?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border px-4 py-3",
-        highlight
-          ? "border-amber-300 bg-amber-50 print:border-black"
-          : "border-border bg-muted/30 print:border-black print:bg-white",
-      )}
-    >
-      <div
-        className={cn(
-          "text-[10px] font-semibold uppercase tracking-[0.12em]",
-          highlight ? "text-amber-700" : "text-muted-foreground",
-        )}
-      >
-        {label}
-      </div>
-      <div
-        className={cn(
-          "mt-1 tabular-nums font-bold",
-          highlight ? "text-[22px] text-amber-900" : "text-[16px] text-foreground",
-        )}
-      >
-        {value > 0 ? fmtPesoFull(value) : "—"}
-      </div>
-    </div>
-  );
-}

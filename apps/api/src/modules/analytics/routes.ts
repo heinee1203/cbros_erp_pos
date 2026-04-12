@@ -17,11 +17,14 @@ import {
   getDailySalesByDayOfWeek,
   getDailySalesRows,
   upsertDailySales,
+  getMonthlySalesSingleMonth,
   type GroupBy,
   type ManualDailySalesInput,
+  type MonthlyCompareMode,
 } from "./service";
 
 const VALID_GROUP_BY = new Set<GroupBy>(["day", "week", "month", "quarter", "year"]);
+const VALID_COMPARE_MODES = new Set<MonthlyCompareMode>(["none", "mom", "yoy", "both"]);
 
 function assertAdmin(role: string) {
   if (role !== "ADMIN") {
@@ -40,6 +43,17 @@ function parseIsoDate(s: unknown): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const d = new Date(s + "T00:00:00Z");
   if (isNaN(d.getTime())) return null;
+  return s;
+}
+
+function parseIsoMonth(s: unknown): string | null {
+  if (typeof s !== "string") return null;
+  const m = /^(\d{4})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  const year = Number(m[1]);
+  if (year < 1900 || year > 9999) return null;
   return s;
 }
 
@@ -223,5 +237,28 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
 
     const data = await getDailySalesRows(orgId, from, to);
     return reply.send({ from, to, data });
+  });
+
+  // ─── GET /monthly-sales/single-month ────────────────────────
+  // One month of aggregated sales data with optional MoM / YoY comparisons.
+  app.get("/monthly-sales/single-month", async (request, reply) => {
+    try {
+      assertAdmin(request.user.role);
+    } catch (err: any) {
+      return reply.status(err.statusCode ?? 403).send({ error: err.message });
+    }
+
+    const { orgId } = request.storeContext!;
+    const q = request.query as { month?: string; compare?: string };
+    const month = parseIsoMonth(q.month);
+    if (!month) {
+      return reply.status(400).send({ error: "month must be YYYY-MM" });
+    }
+    const compare: MonthlyCompareMode = VALID_COMPARE_MODES.has(q.compare as MonthlyCompareMode)
+      ? (q.compare as MonthlyCompareMode)
+      : "none";
+
+    const data = await getMonthlySalesSingleMonth(orgId, month, compare);
+    return reply.send(data);
   });
 };

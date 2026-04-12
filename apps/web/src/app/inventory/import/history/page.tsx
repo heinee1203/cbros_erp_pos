@@ -28,6 +28,16 @@ type Step = "upload" | "parsing" | "preview" | "progress" | "results";
 
 type ReasonType = "Sale" | "Refund" | "PO Receipt" | "Transfer" | "Count" | "Damage" | "Loss";
 
+/**
+ * Subset of reason types importable on this page. "Sale" and "Refund" are
+ * excluded — sales receipts are imported via the separate /inventory/import-sales tab.
+ */
+type ImportableReasonType = Exclude<ReasonType, "Sale" | "Refund">;
+
+function isImportableReason(r: ReasonType): r is ImportableReasonType {
+  return r !== "Sale" && r !== "Refund";
+}
+
 interface ReasonBreakdown {
   reason: string;
   count: number;
@@ -79,10 +89,11 @@ interface ImportBatch {
   dateRangeTo: string;
 }
 
-const ALL_REASONS: ReasonType[] = ["Sale", "Refund", "PO Receipt", "Transfer", "Count", "Damage", "Loss"];
-const DEFAULT_CHECKED: ReasonType[] = ["Sale", "Refund", "PO Receipt"];
+const ALL_REASONS: ImportableReasonType[] = ["PO Receipt", "Transfer", "Count", "Damage", "Loss"];
+const DEFAULT_CHECKED: ImportableReasonType[] = ["PO Receipt"];
 
-// Map API internal reason types ↔ display names
+// Map API internal reason types → display names (includes Sale/Refund so
+// CSV previews containing those rows still render in the breakdown table).
 const REASON_TO_DISPLAY: Record<string, ReasonType> = {
   SALE: "Sale",
   REFUND: "Refund",
@@ -94,9 +105,7 @@ const REASON_TO_DISPLAY: Record<string, ReasonType> = {
   LOSS: "Loss",
 };
 
-const DISPLAY_TO_REASONS: Record<ReasonType, string[]> = {
-  "Sale": ["SALE"],
-  "Refund": ["REFUND"],
+const DISPLAY_TO_REASONS: Record<ImportableReasonType, string[]> = {
   "PO Receipt": ["PO_RECEIPT"],
   "Transfer": ["TRANSFER_IN", "TRANSFER_OUT"],
   "Count": ["COUNT_ADJUSTMENT"],
@@ -122,7 +131,7 @@ export default function ImportHistoryPage() {
   const [unmatchedExpanded, setUnmatchedExpanded] = useState(false);
   const [startTime, setStartTime] = useState<number>(0);
   const [elapsed, setElapsed] = useState(0);
-  const [selectedReasons, setSelectedReasons] = useState<Set<ReasonType>>(
+  const [selectedReasons, setSelectedReasons] = useState<Set<ImportableReasonType>>(
     () => new Set(DEFAULT_CHECKED),
   );
   const [deletingBatch, setDeletingBatch] = useState<string | null>(null);
@@ -165,7 +174,7 @@ export default function ImportHistoryPage() {
   }, [preview]);
 
   /* ── Reason checkbox toggle ── */
-  const toggleReason = useCallback((reason: ReasonType) => {
+  const toggleReason = useCallback((reason: ImportableReasonType) => {
     setSelectedReasons((prev) => {
       const next = new Set(prev);
       if (next.has(reason)) {
@@ -593,7 +602,9 @@ export default function ImportHistoryPage() {
                 <tbody>
                   {(preview?.summary?.reasonBreakdown ?? []).map((rb) => {
                     const displayName = REASON_TO_DISPLAY[rb.reason] ?? rb.reason;
-                    const importing = selectedReasons.has(displayName as ReasonType);
+                    const importing =
+                      isImportableReason(displayName as ReasonType) &&
+                      selectedReasons.has(displayName as ImportableReasonType);
                     return (
                       <tr
                         key={rb.reason}

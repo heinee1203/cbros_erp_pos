@@ -190,7 +190,7 @@ const NAV_TOP: NavEntry[] = [
   },
   {
     kind: "group",
-    label: "Accounts Payable",
+    label: "Suppliers",
     icon: CreditCard,
     match: /^\/ap/,
     permission: "bo.manage_customers",
@@ -218,11 +218,14 @@ const NAV_TOP: NavEntry[] = [
     // Strategic analytics — restricted to ADMIN users. The page itself
     // double-checks the role and renders an access-denied screen for
     // non-admins, so the sidebar-level filter is defense-in-depth.
+    // Unified page: contains a Daily/Monthly tab switcher. The old
+    // /analytics/daily-sales and /analytics/monthly-sales URLs still
+    // redirect here via next.config.ts.
     kind: "direct",
-    label: "Daily Sales",
+    label: "Sales Report",
     icon: BarChart3,
-    href: "/analytics/daily-sales",
-    match: /^\/analytics\/daily-sales/,
+    href: "/analytics/sales-report",
+    match: /^\/analytics\/(sales-report|daily-sales|monthly-sales)/,
     requireRole: "ADMIN",
   },
 ];

@@ -685,3 +685,176 @@ export async function getDailySalesRows(
 
   return rows.map(centavosRowToPeso);
 }
+
+// ════════════════════════════════════════════════════════════════
+//   8.  MONTHLY AGGREGATE  — GET /analytics/monthly-sales/single-month
+// ════════════════════════════════════════════════════════════════
+
+export type MonthlyCompareMode = "none" | "mom" | "yoy" | "both";
+
+interface MonthRange {
+  month: string;
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+}
+
+function monthRange(ym: string): MonthRange {
+  const [y, m] = ym.split("-").map(Number);
+  const startUtc = new Date(Date.UTC(y, m - 1, 1));
+  const endUtc = new Date(Date.UTC(y, m, 0));
+  return {
+    month: ym,
+    startDate: startUtc.toISOString().slice(0, 10),
+    endDate: endUtc.toISOString().slice(0, 10),
+    totalDays: endUtc.getUTCDate(),
+  };
+}
+
+function shiftMonth(ym: string, deltaMonths: number): string {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + deltaMonths, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+interface MonthlyAggregates {
+  period: MonthRange & { weekdays: number; sundays: number };
+  ap: { total: number; old: number; new: number; onAccount: number; oldRatio: number | null; newRatio: number | null; pctOfTotal: number };
+  ac: { total: number; cash: number; onAccount: number; pctOfTotal: number };
+  service: { total: number; cash: number; onAccount: number; pctOfTotal: number };
+  painting: { total: number; cash: number; onAccount: number; pctOfTotal: number };
+  junior: { total: number; cash: number; pctOfTotal: number };
+  totals: { cash: number; onAccount: number; grandTotal: number; payments: number };
+  averages: { weekday: number; sunday: number; daily: number };
+  hasData: boolean;
+}
+
+async function aggregateOneMonth(orgId: string, ym: string): Promise<MonthlyAggregates> {
+  const range = monthRange(ym);
+
+  let weekdays = 0;
+  let sundays = 0;
+  const [ry, rm] = ym.split("-").map(Number);
+  for (let d = 1; d <= range.totalDays; d++) {
+    const dow = new Date(Date.UTC(ry, rm - 1, d)).getUTCDay();
+    if (dow === 0) sundays += 1;
+    else weekdays += 1;
+  }
+
+  const rows = (await db.execute(sql`
+    SELECT
+      to_char(date, 'YYYY-MM-DD') AS date,
+      ap_old_sales, ap_new_sales, ap_on_account,
+      ac_sales, ac_on_account,
+      service_sales, service_on_account,
+      painting_sales, painting_on_account,
+      junior_sales,
+      payments
+    FROM daily_sales_summary
+    WHERE org_id = ${orgId}
+      AND date >= ${range.startDate}::date
+      AND date <= ${range.endDate}::date
+    ORDER BY date ASC
+  `)) as any[];
+
+  let apOld = 0, apNew = 0, apAcct = 0;
+  let acCash = 0, acAcct = 0;
+  let svcCash = 0, svcAcct = 0;
+  let pntCash = 0, pntAcct = 0;
+  let juniorCash = 0;
+  let paymentsSum = 0;
+  let weekdayTotal = 0;
+  let sundayTotal = 0;
+
+  for (const r of rows) {
+    const rowCents =
+      Number(r.ap_old_sales ?? 0) + Number(r.ap_new_sales ?? 0) + Number(r.ap_on_account ?? 0) +
+      Number(r.ac_sales ?? 0) + Number(r.ac_on_account ?? 0) +
+      Number(r.service_sales ?? 0) + Number(r.service_on_account ?? 0) +
+      Number(r.painting_sales ?? 0) + Number(r.painting_on_account ?? 0) +
+      Number(r.junior_sales ?? 0);
+
+    apOld += Number(r.ap_old_sales ?? 0);
+    apNew += Number(r.ap_new_sales ?? 0);
+    apAcct += Number(r.ap_on_account ?? 0);
+    acCash += Number(r.ac_sales ?? 0);
+    acAcct += Number(r.ac_on_account ?? 0);
+    svcCash += Number(r.service_sales ?? 0);
+    svcAcct += Number(r.service_on_account ?? 0);
+    pntCash += Number(r.painting_sales ?? 0);
+    pntAcct += Number(r.painting_on_account ?? 0);
+    juniorCash += Number(r.junior_sales ?? 0);
+    paymentsSum += Number(r.payments ?? 0);
+
+    const dow = new Date(r.date + "T12:00:00Z").getUTCDay();
+    if (dow === 0) { sundayTotal += rowCents; }
+    else { weekdayTotal += rowCents; }
+  }
+
+  const toPeso = (c: number) => c / 100;
+  const apOldP = toPeso(apOld), apNewP = toPeso(apNew), apAcctP = toPeso(apAcct);
+  const acCashP = toPeso(acCash), acAcctP = toPeso(acAcct);
+  const svcCashP = toPeso(svcCash), svcAcctP = toPeso(svcAcct);
+  const pntCashP = toPeso(pntCash), pntAcctP = toPeso(pntAcct);
+  const juniorP = toPeso(juniorCash), paymentsP = toPeso(paymentsSum);
+
+  const apTotal = apOldP + apNewP + apAcctP;
+  const acTotal = acCashP + acAcctP;
+  const svcTotal = svcCashP + svcAcctP;
+  const pntTotal = pntCashP + pntAcctP;
+  const juniorTotal = juniorP;
+
+  const cashTotal = apOldP + apNewP + acCashP + svcCashP + pntCashP + juniorP;
+  const creditTotal = apAcctP + acAcctP + svcAcctP + pntAcctP;
+  const grandTotal = cashTotal + creditTotal;
+
+  const apCashTotal = apOldP + apNewP;
+  const oldRatio = apCashTotal > 0 ? apOldP / apCashTotal : null;
+  const newRatio = apCashTotal > 0 ? apNewP / apCashTotal : null;
+
+  const pct = (n: number) => (grandTotal > 0 ? (n / grandTotal) * 100 : 0);
+  const totalRowsSumPeso = toPeso(weekdayTotal + sundayTotal);
+
+  return {
+    period: { ...range, weekdays, sundays },
+    ap: { total: apTotal, old: apOldP, new: apNewP, onAccount: apAcctP, oldRatio, newRatio, pctOfTotal: pct(apTotal) },
+    ac: { total: acTotal, cash: acCashP, onAccount: acAcctP, pctOfTotal: pct(acTotal) },
+    service: { total: svcTotal, cash: svcCashP, onAccount: svcAcctP, pctOfTotal: pct(svcTotal) },
+    painting: { total: pntTotal, cash: pntCashP, onAccount: pntAcctP, pctOfTotal: pct(pntTotal) },
+    junior: { total: juniorTotal, cash: juniorP, pctOfTotal: pct(juniorTotal) },
+    totals: { cash: cashTotal, onAccount: creditTotal, grandTotal, payments: paymentsP },
+    averages: {
+      weekday: weekdays > 0 ? toPeso(weekdayTotal) / weekdays : 0,
+      sunday: sundays > 0 ? toPeso(sundayTotal) / sundays : 0,
+      daily: range.totalDays > 0 ? totalRowsSumPeso / range.totalDays : 0,
+    },
+    hasData: rows.length > 0 && grandTotal > 0,
+  };
+}
+
+export async function getMonthlySalesSingleMonth(
+  orgId: string,
+  month: string,
+  compare: MonthlyCompareMode = "none",
+) {
+  const wantMom = compare === "mom" || compare === "both";
+  const wantYoy = compare === "yoy" || compare === "both";
+
+  const [current, mom, yoy] = await Promise.all([
+    aggregateOneMonth(orgId, month),
+    wantMom ? aggregateOneMonth(orgId, shiftMonth(month, -1)) : Promise.resolve(null),
+    wantYoy ? aggregateOneMonth(orgId, shiftMonth(month, -12)) : Promise.resolve(null),
+  ]);
+
+  const response: MonthlyAggregates & { comparisons?: { mom?: MonthlyAggregates; yoy?: MonthlyAggregates } } = {
+    ...current,
+  };
+
+  if (mom || yoy) {
+    response.comparisons = {};
+    if (mom) response.comparisons.mom = mom;
+    if (yoy) response.comparisons.yoy = yoy;
+  }
+
+  return response;
+}
