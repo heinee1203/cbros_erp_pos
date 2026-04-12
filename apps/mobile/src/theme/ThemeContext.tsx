@@ -53,7 +53,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     <ThemeContext.Provider value={value}>
       <StatusBar
         barStyle={isDark ? 'light-content' : 'dark-content'}
-        backgroundColor={isDark ? '#0D0D0F' : '#F5F3EF'}
+        backgroundColor={isDark ? '#0F172A' : '#F5F3EF'}
       />
       {children}
     </ThemeContext.Provider>

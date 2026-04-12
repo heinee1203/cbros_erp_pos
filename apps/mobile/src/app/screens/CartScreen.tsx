@@ -743,7 +743,7 @@ const createStyles = () => StyleSheet.create({
   cartLineSKU: {
     fontSize: 13,
     fontFamily: 'JetBrainsMono-Regular',
-    color: '#9B978F',
+    color: '#94A3B8',
     flex: 1,
   },
   lineName: {

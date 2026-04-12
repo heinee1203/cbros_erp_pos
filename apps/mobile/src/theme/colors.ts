@@ -1,27 +1,33 @@
 /**
- * Premium Dark — Automotive blue/orange palette.
+ * Slate Dark — Tailwind slate palette with CBROS orange accent.
+ *
+ * Background tones shifted from pure-black (#0D0D0F) to navy-slate (#0F172A)
+ * to match the Base44 reference design. Text tones shifted from warm cream
+ * to cool white/slate. Orange accent (#F97316) retained for brand identity.
+ *
+ * See design-system/base44-tokens.json for extraction source.
  */
 export const darkColors = {
   bg: {
-    base: '#0D0D0F',
-    primary: '#0D0D0F',
-    surface: '#141417',
-    elevated: '#1A1A1F',
-    overlay: '#222228',
-    input: '#141417',
+    base: '#0F172A',
+    primary: '#0F172A',
+    surface: '#1E293B',
+    elevated: '#334155',
+    overlay: '#334155',
+    input: '#1E293B',
   },
   border: {
-    default: 'rgba(255,255,255,0.08)',
-    subtle: 'rgba(255,255,255,0.06)',
-    light: 'rgba(255,255,255,0.10)',
-    medium: 'rgba(255,255,255,0.16)',
+    default: 'rgba(148,163,184,0.15)',
+    subtle: 'rgba(148,163,184,0.08)',
+    light: 'rgba(148,163,184,0.20)',
+    medium: 'rgba(148,163,184,0.25)',
     focus: '#F97316',
   },
   text: {
-    primary: '#F2F0ED',
-    secondary: '#9B978F',
-    muted: '#5A5750',
-    inverse: '#0D0D0F',
+    primary: '#F8FAFC',
+    secondary: '#94A3B8',
+    muted: '#64748B',
+    inverse: '#0F172A',
   },
   accent: {
     primary: '#F97316',
@@ -75,9 +81,9 @@ export const darkColors = {
   },
   tab: {
     active: '#F97316',
-    inactive: '#5A5750',
-    bg: '#0D0D0F',
-    border: '#1A1A1F',
+    inactive: '#64748B',
+    bg: '#0F172A',
+    border: '#1E293B',
   },
   transparent: 'transparent',
   white: '#ffffff',

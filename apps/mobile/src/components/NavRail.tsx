@@ -221,6 +221,6 @@ const createStyles = () => StyleSheet.create({
   heldCartsBadgeText: {
     fontSize: 9,
     fontFamily: 'Outfit-Bold',
-    color: '#0D0D0F',
+    color: '#0F172A',
   },
 });
