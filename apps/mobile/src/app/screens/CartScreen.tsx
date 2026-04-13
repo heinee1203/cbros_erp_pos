@@ -483,13 +483,34 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             <Text style={styles.grandTotalValue}>{fmtPHP(grandTotal)}</Text>
           </View>
 
-          {/* Checkout button */}
+          {/* Payment action buttons — matches Base44 layout */}
           <Pressable
-            style={styles.checkoutButton}
+            style={styles.cashButton}
             onPress={handleProceedToPayment}
             android_ripple={{ color: 'rgba(0,0,0,0.2)' }}
           >
-            <Text style={styles.checkoutButtonText}>CHECKOUT {fmtPHP(grandTotal)}</Text>
+            <Text style={styles.cashButtonText}>{'\uD83D\uDCB5'} Cash</Text>
+          </Pressable>
+          <Pressable
+            style={styles.chargeButton}
+            onPress={handleProceedToPayment}
+            android_ripple={{ color: 'rgba(22,163,74,0.15)' }}
+          >
+            <Text style={styles.chargeButtonText}>{'\uD83D\uDCCB'} Charge to Account</Text>
+          </Pressable>
+          <Pressable
+            style={styles.splitButton}
+            onPress={handleProceedToPayment}
+            android_ripple={{ color: 'rgba(255,255,255,0.05)' }}
+          >
+            <Text style={styles.splitButtonText}>{'\u2702'} Split Payment</Text>
+          </Pressable>
+          <Pressable
+            style={styles.holdParkButton}
+            onPress={handleHoldCart}
+            android_ripple={{ color: 'rgba(255,255,255,0.05)' }}
+          >
+            <Text style={styles.holdParkButtonText}>{'\u23F8'} Hold / Park</Text>
           </Pressable>
         </View>
       )}
@@ -904,25 +925,68 @@ const createStyles = () => StyleSheet.create({
     color: colors.accent.primary,
   },
 
-  // Checkout button
-  checkoutButton: {
-    backgroundColor: colors.accent.primary,
-    height: 64,
-    borderRadius: radius.lg,
+  // Payment action buttons — Base44 style (Cash=green filled, Charge=green outlined, Split=neutral outlined, Hold=text)
+  cashButton: {
+    backgroundColor: '#16A34A',
+    height: 52,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.accent.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
   },
-  checkoutButtonText: {
-    fontFamily: fonts.display.bold,
-    fontSize: fontSize['2xl'],
-    color: colors.text.inverse,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
+  cashButtonText: {
+    fontFamily: fonts.display.semiBold,
+    fontSize: fontSize.lg,
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  chargeButton: {
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    borderWidth: 1.5,
+    borderColor: '#22C55E',
+    backgroundColor: 'transparent',
+    marginBottom: 8,
+  },
+  chargeButtonText: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.base,
+    color: '#22C55E',
+  },
+  splitButton: {
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+    backgroundColor: 'transparent',
+    marginBottom: 8,
+  },
+  splitButtonText: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.base,
+    color: colors.text.secondary,
+  },
+  holdParkButton: {
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  holdParkButtonText: {
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.sm,
+    color: colors.text.muted,
   },
 
   // Swipe to delete

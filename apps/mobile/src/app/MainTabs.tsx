@@ -1,10 +1,22 @@
+/**
+ * MainTabs — 4-tab bottom navigation matching the Base44 reference design.
+ *
+ * Tabs: POS | Inventory | Customers | More
+ *
+ * The bottom tab bar is ALWAYS visible (tablet and phone), replacing the old
+ * NavRail sidebar. A persistent TopBar sits above the tab navigator showing
+ * C-BROS branding, branch selector, and sync status.
+ *
+ * POS tab renders a split-screen on tablet (60/40 catalog + cart) and a
+ * stack navigator on phone. Other tabs render full-screen content.
+ */
 import React, { useEffect, useState, useCallback } from 'react';
-import { View } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import SyncStatusBar from '@/components/SyncStatusBar';
 import { NetworkBanner } from '@/components/NetworkBanner';
-import { NavRail, NAV_RAIL_WIDTH } from '@/components/NavRail';
+import { TopBar } from '@/components/TopBar';
 import { SplitView } from '@/components/SplitView';
 import { useCartStore } from '@/stores/cart-store';
 import { useLayout } from '@/hooks/use-layout';
@@ -20,21 +32,19 @@ import TransactionDetailScreen from './screens/TransactionDetailScreen';
 import ZReadingScreen from './screens/ZReadingScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import PrinterSetupScreen from './screens/PrinterSetupScreen';
+import InventoryScreen from './screens/InventoryScreen';
+import CustomersScreen from './screens/CustomersScreen';
+import MoreScreen from './screens/MoreScreen';
 
-// ─── Tablet offset wrapper ───
-// NavRail is absolutely positioned at left:0 inside the tabBar slot.
-// Scenes render full-width, so we offset them on tablet.
-function TabletOffset({ children }: { children: React.ReactNode }) {
-  const { isTablet } = useLayout();
-  if (!isTablet) return <>{children}</>;
-  return (
-    <View style={{ flex: 1, marginLeft: NAV_RAIL_WIDTH }}>
-      {children}
-    </View>
-  );
-}
+// ─── Tab Icons (unicode emoji — matches the existing NavRail pattern) ───
+const TAB_ICONS: Record<string, string> = {
+  POS: '\uD83D\uDED2',       // 🛒
+  Inventory: '\uD83D\uDCCB', // 📋
+  Customers: '\uD83D\uDC65', // 👥
+  More: '\u2026',              // …
+};
 
-// ─── POS Stack ───
+// ─── POS Stack (phone: stacked screens, tablet: split-screen) ───
 export type POSStackParamList = {
   Catalog: undefined;
   Cart: undefined;
@@ -79,11 +89,9 @@ function POSNavigator() {
 
   if (isTablet) {
     return (
-      <TabletOffset>
-        <POSStack.Navigator screenOptions={{ headerShown: false }}>
-          <POSStack.Screen name="Catalog" component={POSSplitScreen} />
-        </POSStack.Navigator>
-      </TabletOffset>
+      <POSStack.Navigator screenOptions={{ headerShown: false }}>
+        <POSStack.Screen name="Catalog" component={POSSplitScreen} />
+      </POSStack.Navigator>
     );
   }
 
@@ -96,7 +104,7 @@ function POSNavigator() {
   );
 }
 
-// ─── Transactions Stack ───
+// ─── Transactions Stack (accessed from More → Recent Transactions) ───
 export type TransactionsStackParamList = {
   TransactionList: undefined;
   TransactionDetail: { saleId: string };
@@ -107,17 +115,15 @@ const TxStack = createStackNavigator<TransactionsStackParamList>();
 
 function TransactionsNavigator() {
   return (
-    <TabletOffset>
-      <TxStack.Navigator screenOptions={{ headerShown: false }}>
-        <TxStack.Screen name="TransactionList">{() => <ErrorBoundary><TransactionListScreen /></ErrorBoundary>}</TxStack.Screen>
-        <TxStack.Screen name="TransactionDetail">{(props: any) => <ErrorBoundary><TransactionDetailScreen {...props} /></ErrorBoundary>}</TxStack.Screen>
-        <TxStack.Screen name="ZReading">{(props: any) => <ErrorBoundary><ZReadingScreen {...props} /></ErrorBoundary>}</TxStack.Screen>
-      </TxStack.Navigator>
-    </TabletOffset>
+    <TxStack.Navigator screenOptions={{ headerShown: false }}>
+      <TxStack.Screen name="TransactionList">{() => <ErrorBoundary><TransactionListScreen /></ErrorBoundary>}</TxStack.Screen>
+      <TxStack.Screen name="TransactionDetail">{(props: any) => <ErrorBoundary><TransactionDetailScreen {...props} /></ErrorBoundary>}</TxStack.Screen>
+      <TxStack.Screen name="ZReading">{(props: any) => <ErrorBoundary><ZReadingScreen {...props} /></ErrorBoundary>}</TxStack.Screen>
+    </TxStack.Navigator>
   );
 }
 
-// ─── Settings Stack ───
+// ─── Settings Stack (accessed from More → Settings) ───
 export type SettingsStackParamList = {
   SettingsHome: undefined;
   PrinterSetup: undefined;
@@ -127,31 +133,39 @@ const SettingsStack = createStackNavigator<SettingsStackParamList>();
 
 function SettingsNavigator() {
   return (
-    <TabletOffset>
-      <SettingsStack.Navigator screenOptions={{ headerShown: false }}>
-        <SettingsStack.Screen name="SettingsHome">{() => <ErrorBoundary><SettingsScreen /></ErrorBoundary>}</SettingsStack.Screen>
-        <SettingsStack.Screen name="PrinterSetup">{() => <ErrorBoundary><PrinterSetupScreen /></ErrorBoundary>}</SettingsStack.Screen>
-      </SettingsStack.Navigator>
-    </TabletOffset>
+    <SettingsStack.Navigator screenOptions={{ headerShown: false }}>
+      <SettingsStack.Screen name="SettingsHome">{() => <ErrorBoundary><SettingsScreen /></ErrorBoundary>}</SettingsStack.Screen>
+      <SettingsStack.Screen name="PrinterSetup">{() => <ErrorBoundary><PrinterSetupScreen /></ErrorBoundary>}</SettingsStack.Screen>
+    </SettingsStack.Navigator>
   );
 }
 
-// ─── Main Tabs ───
-const Tab = createBottomTabNavigator();
+// ─── More Stack (grid menu + sub-screens) ───
+export type MoreStackParamList = {
+  MoreMenu: undefined;
+  Transactions: undefined;
+  Settings: undefined;
+};
 
-/**
- * Custom tab bar that renders NavRail on the left via absolute positioning.
- * Returns null for the actual tab bar slot (bottom) since NavRail handles nav.
- * NavRail is absolutely positioned but the scene content is offset by
- * wrapping each screen's content with left padding in their own layouts.
- */
-function TabletTabBar(props: any) {
-  return <NavRail {...props} />;
+const MoreStack = createStackNavigator<MoreStackParamList>();
+
+function MoreNavigator() {
+  return (
+    <MoreStack.Navigator screenOptions={{ headerShown: false }}>
+      <MoreStack.Screen name="MoreMenu" component={MoreScreen} />
+      <MoreStack.Screen name="Transactions" component={TransactionsNavigator} />
+      <MoreStack.Screen name="Settings" component={SettingsNavigator} />
+    </MoreStack.Navigator>
+  );
 }
 
+// ─── Main Tab Navigator ───
+const Tab = createBottomTabNavigator();
+
+const BOTTOM_TAB_HEIGHT = 60;
+
 export default function MainTabs() {
-  const { isTablet } = useLayout();
-  const { isDark } = useTheme(); // Subscribe to theme — triggers re-render of entire tab tree
+  const { isDark } = useTheme();
 
   useEffect(() => {
     const unsub = startNetworkMonitor();
@@ -160,42 +174,37 @@ export default function MainTabs() {
 
   return (
     <View key={isDark ? 'dark' : 'light'} style={{ flex: 1, backgroundColor: colors.bg.primary }}>
+      <TopBar />
       <SyncStatusBar />
       <NetworkBanner />
       <Tab.Navigator
-        tabBar={isTablet ? TabletTabBar : undefined}
-        screenOptions={{
+        screenOptions={({ route }) => ({
           headerShown: false,
+          tabBarIcon: ({ color }) => (
+            <Text style={{ fontSize: 22, color }}>{TAB_ICONS[route.name] ?? '?'}</Text>
+          ),
           tabBarActiveTintColor: colors.tab.active,
           tabBarInactiveTintColor: colors.tab.inactive,
-          tabBarStyle: isTablet
-            ? { display: 'none' as const }
-            : {
-                backgroundColor: colors.tab.bg,
-                borderTopColor: colors.tab.border,
-                borderTopWidth: 1,
-                height: layout.tabBarHeight,
-                paddingBottom: layout.tabBarPaddingBottom,
-              },
-          tabBarLabelStyle: { ...textStyles.tabLabel },
-        }}
+          tabBarStyle: {
+            backgroundColor: colors.tab.bg,
+            borderTopColor: colors.tab.border,
+            borderTopWidth: 1,
+            height: BOTTOM_TAB_HEIGHT,
+            paddingBottom: 6,
+            paddingTop: 4,
+          },
+          tabBarLabelStyle: {
+            fontSize: 11,
+            fontWeight: '600' as const,
+          },
+        })}
       >
-        <Tab.Screen
-          name="POS"
-          component={POSNavigator}
-          options={{ tabBarLabel: 'POS' }}
-        />
-        <Tab.Screen
-          name="Transactions"
-          component={TransactionsNavigator}
-          options={{ tabBarLabel: 'Transactions' }}
-        />
-        <Tab.Screen
-          name="Settings"
-          component={SettingsNavigator}
-          options={{ tabBarLabel: 'Settings' }}
-        />
+        <Tab.Screen name="POS" component={POSNavigator} />
+        <Tab.Screen name="Inventory" component={InventoryScreen} />
+        <Tab.Screen name="Customers" component={CustomersScreen} />
+        <Tab.Screen name="More" component={MoreNavigator} />
       </Tab.Navigator>
     </View>
   );
 }
+
