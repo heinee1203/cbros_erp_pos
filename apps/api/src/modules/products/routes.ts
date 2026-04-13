@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { db } from "@apex/database";
-import { products, inventory, productFamilies, vehicleCompatibility, categories, productSubcategories, brands, locations, purchaseOrders, poLines, suppliers, backorders } from "@apex/database/schema";
+import { products, inventory, productFamilies, vehicleCompatibility, categories, productSubcategories, brands, locations, purchaseOrders, poLines, suppliers, backorders, productOptionTypes, productOptionValues, productVariantOptions } from "@apex/database/schema";
 import { eq, and, ilike, sql, asc, desc, inArray, type SQL } from "drizzle-orm";
 import { createProductSchema, updateProductSchema, addVehicleSchema, updateVehicleSchema, bulkImportSchema, generateEan13, isValidBarcode, type VariantItem } from "@apex/types";
 import { logAction } from "../audit/service";
@@ -2192,6 +2192,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
   // ────────────────────────────────────────────────────────────────────
   // GET /products/export — Denormalized export with per-location inventory
+  //
+  // Query params:
+  //   search, familyId, subCategoryId, subcategoryId, brandId, sortBy, sortDir
+  //   includeCost=true   → include costPrice in response (default: stripped)
+  //   includeStock=true  → include per-location inventory (default: stripped)
+  //   includeNonItems=true → include Non-Items family (default: excluded)
+  //   active=true|false  → filter by active+not-discontinued status
   // ────────────────────────────────────────────────────────────────────
   app.get("/export", async (request, reply) => {
     const { orgId } = request.storeContext!;
@@ -2201,13 +2208,27 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const familyId = query.familyId || "";
     const subCategoryId = query.subCategoryId || "";
     const subcategoryId = query.subcategoryId || "";
-    const stockStatus = query.stockStatus || "";
     const brandId = query.brandId || "";
     const sortBy = query.sortBy || "name";
     const sortDir = query.sortDir || "asc";
+    const includeCost = query.includeCost === "true";
+    const includeStock = query.includeStock === "true";
+    const includeNonItems = query.includeNonItems === "true";
+    const activeFilter = query.active; // "true", "false", or undefined
 
     // Build WHERE conditions
-    const conditions: SQL[] = [eq(products.orgId, orgId), eq(products.isActive, true)];
+    const conditions: SQL[] = [eq(products.orgId, orgId)];
+
+    // Active filter: by default include all; when active=true, only active+not-discontinued
+    if (activeFilter === "true") {
+      conditions.push(eq(products.isActive, true));
+      conditions.push(eq(products.discontinued, false));
+    } else if (activeFilter === "false") {
+      conditions.push(
+        sql`(${products.isActive} = false OR ${products.discontinued} = true)`,
+      );
+    }
+
     if (search && search.length >= 2) {
       conditions.push(ilike(products.name, `%${search}%`));
     }
@@ -2216,6 +2237,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (subcategoryId) conditions.push(eq(products.subcategoryId, subcategoryId));
     if (brandId) conditions.push(eq(products.brandId, brandId));
 
+    // Exclude Non-Items family by default
+    if (!includeNonItems) {
+      conditions.push(
+        sql`(${productFamilies.name} IS NULL OR ${productFamilies.name} != 'Non-Items')`,
+      );
+    }
+
     // Fetch all active locations for the org
     const orgLocations = await db
       .select({ id: locations.id, name: locations.name })
@@ -2223,7 +2251,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       .where(and(eq(locations.orgId, orgId), eq(locations.isActive, true)))
       .orderBy(asc(locations.name));
 
-    // Fetch products with taxonomy joins
+    // Fetch products with taxonomy + supplier joins
     const productRows = await db
       .select({
         id: products.id,
@@ -2237,10 +2265,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         isVariablePrice: products.isVariablePrice,
         isParent: products.isParent,
         parentProductId: products.parentProductId,
+        isActive: products.isActive,
         familyName: productFamilies.name,
         categoryName: categories.name,
         subcategoryName: productSubcategories.name,
         brandName: brands.name,
+        supplierName: suppliers.name,
         unitsPerCase: products.unitsPerCase,
         packagingUnit: products.packagingUnit,
         sellingUnit: products.sellingUnit,
@@ -2250,29 +2280,57 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         isTire: products.isTire,
         specialOrder: products.specialOrder,
         discontinued: products.discontinued,
+        createdAt: products.createdAt,
+        updatedAt: products.updatedAt,
       })
       .from(products)
       .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
       .leftJoin(categories, eq(products.categoryId, categories.id))
       .leftJoin(productSubcategories, eq(products.subcategoryId, productSubcategories.id))
       .leftJoin(brands, eq(products.brandId, brands.id))
+      .leftJoin(suppliers, eq(products.primarySupplierId, suppliers.id))
       .where(and(...conditions))
       .orderBy(sortDir === "desc" ? desc(SORT_COLUMNS[sortBy] ?? products.name) : asc(SORT_COLUMNS[sortBy] ?? products.name))
       .limit(50000);
 
-    // Fetch ALL inventory rows for these products
     const productIds = productRows.map((p) => p.id);
-    let allInventory: Array<{
-      productId: string;
-      locationId: string;
-      stockLevel: number;
-      reorderPoint: number;
-      optimalStock: number;
-      availableForSale: boolean;
-    }> = [];
 
-    if (productIds.length > 0) {
-      allInventory = await db
+    // ── Option types query: resolve variant → option type name + value ──
+    // Maps variantProductId → [{ typeName, value }]
+    const optionMap = new Map<string, Array<{ typeName: string; value: string }>>();
+    const parentIds = productRows.filter((p) => p.isParent).map((p) => p.id);
+
+    if (parentIds.length > 0) {
+      const optionRows = await db
+        .select({
+          parentProductId: productOptionTypes.productId,
+          typeName: productOptionTypes.name,
+          typeSort: productOptionTypes.sortOrder,
+          value: productOptionValues.value,
+          variantProductId: productVariantOptions.productId,
+        })
+        .from(productOptionTypes)
+        .innerJoin(productOptionValues, eq(productOptionValues.optionTypeId, productOptionTypes.id))
+        .innerJoin(productVariantOptions, eq(productVariantOptions.optionValueId, productOptionValues.id))
+        .where(inArray(productOptionTypes.productId, parentIds))
+        .orderBy(asc(productOptionTypes.sortOrder), asc(productOptionValues.sortOrder));
+
+      for (const row of optionRows) {
+        if (!optionMap.has(row.variantProductId)) {
+          optionMap.set(row.variantProductId, []);
+        }
+        optionMap.get(row.variantProductId)!.push({
+          typeName: row.typeName,
+          value: row.value,
+        });
+      }
+    }
+
+    // ── Inventory (only when requested) ──
+    let invMap = new Map<string, Map<string, { stockLevel: number; reorderPoint: number; optimalStock: number; availableForSale: boolean }>>();
+
+    if (includeStock && productIds.length > 0) {
+      const allInventory = await db
         .select({
           productId: inventory.productId,
           locationId: inventory.locationId,
@@ -2286,39 +2344,27 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           eq(inventory.orgId, orgId),
           inArray(inventory.productId, productIds),
         ));
+
+      for (const row of allInventory) {
+        if (!invMap.has(row.productId)) invMap.set(row.productId, new Map());
+        invMap.get(row.productId)!.set(row.locationId, row);
+      }
     }
 
-    // Build inventory map: productId -> locationId -> row
-    const invMap = new Map<string, Map<string, typeof allInventory[0]>>();
-    for (const row of allInventory) {
-      if (!invMap.has(row.productId)) invMap.set(row.productId, new Map());
-      invMap.get(row.productId)!.set(row.locationId, row);
-    }
-
-    // Build parent handle map
+    // ── Build parent name + handle maps ──
+    const parentNameMap = new Map<string, string>();
     const parentHandleMap = new Map<string, string>();
     for (const p of productRows) {
       if (p.isParent) {
+        parentNameMap.set(p.id, p.name);
         const handle = p.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50);
         parentHandleMap.set(p.id, handle);
       }
     }
 
-    // Enrich products
+    // ── Enrich products ──
     const enriched = productRows.map((p) => {
-      const locMap = invMap.get(p.id) ?? new Map();
-      const locData = orgLocations.map((loc) => {
-        const inv = locMap.get(loc.id);
-        return {
-          locationId: loc.id,
-          locationName: loc.name,
-          availableForSale: inv?.availableForSale ?? true,
-          stockLevel: inv?.stockLevel ?? 0,
-          reorderPoint: inv?.reorderPoint ?? 0,
-          optimalStock: inv?.optimalStock ?? 0,
-        };
-      });
-
+      // Handle
       let handle = "";
       if (p.isParent) {
         handle = parentHandleMap.get(p.id) ?? "";
@@ -2326,7 +2372,45 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         handle = parentHandleMap.get(p.parentProductId) ?? "";
       }
 
-      return { ...p, handle, locations: locData };
+      // Parent name for variants (THE CORE FIX)
+      const parentName = p.parentProductId
+        ? (parentNameMap.get(p.parentProductId) ?? null)
+        : null;
+
+      // Option entries for variants
+      const optionEntries = p.parentProductId
+        ? (optionMap.get(p.id) ?? [])
+        : [];
+
+      // Per-location stock (only when includeStock)
+      const locData = includeStock
+        ? orgLocations.map((loc) => {
+            const inv = invMap.get(p.id)?.get(loc.id);
+            return {
+              locationId: loc.id,
+              locationName: loc.name,
+              availableForSale: inv?.availableForSale ?? true,
+              stockLevel: inv?.stockLevel ?? 0,
+              reorderPoint: inv?.reorderPoint ?? 0,
+              optimalStock: inv?.optimalStock ?? 0,
+            };
+          })
+        : undefined;
+
+      const result: Record<string, any> = {
+        ...p,
+        handle,
+        parentName,
+        optionEntries,
+        locations: locData,
+      };
+
+      // Strip cost if not requested
+      if (!includeCost) {
+        delete result.costPrice;
+      }
+
+      return result;
     });
 
     return reply.send({ data: enriched, locations: orgLocations });

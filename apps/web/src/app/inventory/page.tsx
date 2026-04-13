@@ -46,18 +46,29 @@ interface ExportProduct {
   oemNumber: string | null;
   description: string | null;
   unitPrice: string;
-  costPrice: string;
+  costPrice?: string;
   isVariablePrice: boolean;
   isParent: boolean;
+  isActive: boolean;
   parentProductId: string | null;
+  parentName: string | null;
   unitsPerCase: number;
   packagingUnit: string | null;
+  sellingUnit: string | null;
   handle: string;
   familyName: string | null;
   categoryName: string | null;
   subcategoryName: string | null;
   brandName: string | null;
-  locations: Array<{
+  supplierName: string | null;
+  isSerialized: boolean;
+  isTire: boolean;
+  specialOrder: boolean;
+  discontinued: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+  optionEntries: Array<{ typeName: string; value: string }>;
+  locations?: Array<{
     locationId: string;
     locationName: string;
     availableForSale: boolean;
@@ -332,71 +343,127 @@ export default function InventoryPage() {
   }, []);
 
   /* ── CSV Export helpers ── */
+
+  /** Strip zero-width spaces, LTR/RTL marks, BOM, soft-hyphens that cause â€Ž artifacts */
+  const sanitizeText = useCallback((s: string | null | undefined): string => {
+    if (!s) return "";
+    return s.replace(/[\u200B-\u200F\u202A-\u202E\uFEFF\u00AD]/g, "");
+  }, []);
+
   const escapeCSVCell = useCallback((value: string): string => {
-    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    if (value.includes(",") || value.includes('"') || value.includes("\n") || value.includes("\r")) {
       return `"${value.replace(/"/g, '""')}"`;
     }
     return value;
   }, []);
 
-  const buildCSV = useCallback((items: ExportProduct[], locs: Array<{ id: string; name: string }>): string => {
-    const staticHeaders = [
-      "Handle", "Name", "SKU", "Barcode", "OEM Number",
-      "Family", "Category", "Sub-category", "Brand",
-      "Default Price", "Cost", "Variable Price", "Track Stock", "Description",
-      "Units per Case", "Packaging Unit",
+  // Export settings (default unchecked — cost is sensitive, stock adds many columns)
+  const [exportIncludeCost, setExportIncludeCost] = useState(false);
+  const [exportIncludeStock, setExportIncludeStock] = useState(false);
+
+  const buildCSV = useCallback((
+    items: ExportProduct[],
+    locs: Array<{ id: string; name: string }>,
+    includeCost: boolean,
+    includeStock: boolean,
+  ): string => {
+    // ── Build dynamic header ──
+    const headers: string[] = [
+      "Handle", "SKU", "Barcode", "Name", "Category", "Sub-category", "Brand", "Family",
+      "Description", "Unit", "Active", "Supplier", "Price",
     ];
-    const locationHeaders = locs.flatMap((loc) => [
-      `Available for sale [${loc.name}]`,
-      `Price [${loc.name}]`,
-      `In stock [${loc.name}]`,
-      `Low stock [${loc.name}]`,
-      `Optimal stock [${loc.name}]`,
-    ]);
-    const headers = [...staticHeaders, ...locationHeaders];
+    if (includeCost) {
+      headers.push("Cost", "Markup %");
+    }
+    headers.push(
+      "Track Serial", "Track DOT", "Special Order",
+      "Option 1", "Option 1 value", "Option 2", "Option 2 value", "Option 3", "Option 3 value",
+      "OEM Number", "Created at", "Updated at",
+    );
+    if (includeStock) {
+      for (const loc of locs) {
+        headers.push(`In stock [${loc.name}]`, `Reorder [${loc.name}]`, `Optimal [${loc.name}]`);
+      }
+    }
+
     const lines = [headers.map(escapeCSVCell).join(",")];
 
+    // ── Build rows ──
     for (const item of items) {
-      const staticCells = [
-        item.handle ?? "",
-        item.name ?? "",
+      // THE CORE FIX: Name = parent name for variants, own name for standalone
+      const displayName = item.parentProductId
+        ? sanitizeText(item.parentName ?? item.name)
+        : sanitizeText(item.name);
+
+      // Option columns from optionEntries (per-parent option type + variant value)
+      const opt1Name  = item.optionEntries?.[0]?.typeName ?? "";
+      const opt1Value = item.optionEntries?.[0]?.value ?? (item.parentProductId ? item.name : "");
+      const opt2Name  = item.optionEntries?.[1]?.typeName ?? "";
+      const opt2Value = item.optionEntries?.[1]?.value ?? "";
+      const opt3Name  = item.optionEntries?.[2]?.typeName ?? "";
+      const opt3Value = item.optionEntries?.[2]?.value ?? "";
+
+      // Active = Y only when active AND not discontinued
+      const active = (item.isActive && !item.discontinued) ? "Y" : "N";
+
+      const row: string[] = [
+        sanitizeText(item.handle),
         item.sku ?? "",
         item.barcode ?? "",
-        item.oemNumber ?? "",
-        item.familyName ?? "",
-        item.categoryName ?? "",
-        item.subcategoryName ?? "",
-        item.brandName ?? "",
+        displayName,
+        sanitizeText(item.categoryName ?? ""),
+        sanitizeText(item.subcategoryName ?? ""),
+        sanitizeText(item.brandName ?? ""),
+        sanitizeText(item.familyName ?? ""),
+        sanitizeText(item.description ?? ""),
+        sanitizeText(item.sellingUnit ?? ""),
+        active,
+        sanitizeText(item.supplierName ?? ""),
         item.unitPrice ?? "0.00",
-        item.costPrice ?? "0.00",
-        item.isVariablePrice ? "Y" : "N",
-        "Y",
-        item.description ?? "",
-        String(item.unitsPerCase ?? 1),
-        item.packagingUnit ?? "",
       ];
-      const locationCells = locs.flatMap((loc) => {
-        const inv = item.locations.find((l) => l.locationId === loc.id);
-        return [
-          inv?.availableForSale ? "Y" : "N",
-          "",
-          String(inv?.stockLevel ?? 0),
-          String(inv?.reorderPoint ?? 0),
-          String(inv?.optimalStock ?? 0),
-        ];
-      });
-      lines.push([...staticCells, ...locationCells].map(escapeCSVCell).join(","));
-    }
-    return "\uFEFF" + lines.join("\n");
-  }, [escapeCSVCell]);
 
-  const downloadCSV = useCallback((csv: string) => {
+      if (includeCost) {
+        const cost = item.costPrice ? parseFloat(item.costPrice) : 0;
+        const price = item.unitPrice ? parseFloat(item.unitPrice) : 0;
+        const markup = cost > 0 ? (((price - cost) / cost) * 100).toFixed(2) : "";
+        row.push(cost > 0 ? cost.toFixed(2) : "0.00", markup);
+      }
+
+      row.push(
+        item.isSerialized ? "Y" : "N",
+        item.isTire ? "Y" : "N",
+        item.specialOrder ? "Y" : "N",
+        opt1Name, opt1Value,
+        opt2Name, opt2Value,
+        opt3Name, opt3Value,
+        sanitizeText(item.oemNumber ?? ""),
+        item.createdAt ?? "",
+        item.updatedAt ?? "",
+      );
+
+      if (includeStock) {
+        for (const loc of locs) {
+          const inv = item.locations?.find((l) => l.locationId === loc.id);
+          row.push(
+            String(inv?.stockLevel ?? 0),
+            String(inv?.reorderPoint ?? 0),
+            String(inv?.optimalStock ?? 0),
+          );
+        }
+      }
+
+      lines.push(row.map(escapeCSVCell).join(","));
+    }
+
+    return "\uFEFF" + lines.join("\n");
+  }, [escapeCSVCell, sanitizeText]);
+
+  const downloadCSV = useCallback((csv: string, filename: string) => {
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    const date = new Date().toISOString().slice(0, 10);
     a.href = url;
-    a.download = `apex-items-${date}.csv`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -412,30 +479,42 @@ export default function InventoryPage() {
       if (familyFilter) params.set("familyId", familyFilter);
       if (categoryFilter) params.set("subCategoryId", categoryFilter);
       if (subCategoryFilter) params.set("subcategoryId", subCategoryFilter);
-      if (stockStatusFilter) params.set("stockStatus", stockStatusFilter);
       if (brandFilter) params.set("brandId", brandFilter);
+      if (exportIncludeCost) params.set("includeCost", "true");
+      if (exportIncludeStock) params.set("includeStock", "true");
 
       const resp = await apiFetch<ExportResponse>(
         `/products/export?${params.toString()}`,
         { token, locationId: apiLocationId },
       );
-      downloadCSV(buildCSV(resp.data, resp.locations));
+
+      const date = new Date().toISOString().slice(0, 10);
+      const parts = ["items-export", date];
+      if (exportIncludeCost) parts.push("with-cost");
+      if (exportIncludeStock) parts.push("with-stock");
+      const filename = parts.join("-") + ".csv";
+
+      downloadCSV(buildCSV(resp.data, resp.locations, exportIncludeCost, exportIncludeStock), filename);
     } catch {
       // Silent fail — user can retry
     }
-  }, [sortBy, sortDir, debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, stockStatusFilter, brandFilter, token, apiLocationId, buildCSV, downloadCSV]);
+  }, [sortBy, sortDir, debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, brandFilter, exportIncludeCost, exportIncludeStock, token, apiLocationId, buildCSV, downloadCSV]);
 
   const handleExportSelected = useCallback(async () => {
     if (selectedIds.size === 0) return;
     try {
+      const params = new URLSearchParams();
+      if (exportIncludeCost) params.set("includeCost", "true");
+      if (exportIncludeStock) params.set("includeStock", "true");
       const resp = await apiFetch<ExportResponse>(
-        `/products/export`,
+        `/products/export?${params.toString()}`,
         { token, locationId: apiLocationId },
       );
       const selected = resp.data.filter((p) => selectedIds.has(p.id));
-      downloadCSV(buildCSV(selected, resp.locations));
+      const date = new Date().toISOString().slice(0, 10);
+      downloadCSV(buildCSV(selected, resp.locations, exportIncludeCost, exportIncludeStock), `items-export-${date}-selected.csv`);
     } catch {}
-  }, [selectedIds, token, apiLocationId, buildCSV, downloadCSV]);
+  }, [selectedIds, exportIncludeCost, exportIncludeStock, token, apiLocationId, buildCSV, downloadCSV]);
 
   /* ── CSV Import helpers ── */
   const handleDownloadTemplate = useCallback(() => {
@@ -896,11 +975,19 @@ export default function InventoryPage() {
           {canEdit && (
             <>
               <button onClick={() => { resetImport(); setShowImportModal(true); }} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
-                <Upload size={13} />
+                <Download size={13} />
                 Import
               </button>
+              <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
+                <input type="checkbox" checked={exportIncludeCost} onChange={(e) => setExportIncludeCost(e.target.checked)} className="accent-primary w-3 h-3" />
+                Cost
+              </label>
+              <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
+                <input type="checkbox" checked={exportIncludeStock} onChange={(e) => setExportIncludeStock(e.target.checked)} className="accent-primary w-3 h-3" />
+                Stock
+              </label>
               <button onClick={handleExport} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
-                <Download size={13} />
+                <Upload size={13} />
                 Export
               </button>
               <button
