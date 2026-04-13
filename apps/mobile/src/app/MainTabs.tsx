@@ -35,6 +35,17 @@ import PrinterSetupScreen from './screens/PrinterSetupScreen';
 import InventoryScreen from './screens/InventoryScreen';
 import CustomersScreen from './screens/CustomersScreen';
 import MoreScreen from './screens/MoreScreen';
+import {
+  ParkedOrdersScreen,
+  ReturnsScreen,
+  BarcodePrintScreen,
+  ReportsScreen,
+  PriceManagementScreen,
+  SuppliersScreen,
+  UserRolesScreen,
+  SyncManagementScreen,
+  AboutScreen,
+} from './screens/PlaceholderScreens';
 
 // ─── Tab Icons (unicode emoji — matches the existing NavRail pattern) ───
 const TAB_ICONS: Record<string, string> = {
@@ -145,6 +156,16 @@ export type MoreStackParamList = {
   MoreMenu: undefined;
   Transactions: undefined;
   Settings: undefined;
+  PrinterSetup: undefined;
+  ParkedOrders: undefined;
+  Returns: undefined;
+  BarcodePrint: undefined;
+  Reports: undefined;
+  PriceManagement: undefined;
+  Suppliers: undefined;
+  UserRoles: undefined;
+  SyncManagement: undefined;
+  About: undefined;
 };
 
 const MoreStack = createStackNavigator<MoreStackParamList>();
@@ -155,6 +176,16 @@ function MoreNavigator() {
       <MoreStack.Screen name="MoreMenu" component={MoreScreen} />
       <MoreStack.Screen name="Transactions" component={TransactionsNavigator} />
       <MoreStack.Screen name="Settings" component={SettingsNavigator} />
+      <MoreStack.Screen name="PrinterSetup">{() => <ErrorBoundary><PrinterSetupScreen /></ErrorBoundary>}</MoreStack.Screen>
+      <MoreStack.Screen name="ParkedOrders" component={ParkedOrdersScreen} />
+      <MoreStack.Screen name="Returns" component={ReturnsScreen} />
+      <MoreStack.Screen name="BarcodePrint" component={BarcodePrintScreen} />
+      <MoreStack.Screen name="Reports" component={ReportsScreen} />
+      <MoreStack.Screen name="PriceManagement" component={PriceManagementScreen} />
+      <MoreStack.Screen name="Suppliers" component={SuppliersScreen} />
+      <MoreStack.Screen name="UserRoles" component={UserRolesScreen} />
+      <MoreStack.Screen name="SyncManagement" component={SyncManagementScreen} />
+      <MoreStack.Screen name="About" component={AboutScreen} />
     </MoreStack.Navigator>
   );
 }

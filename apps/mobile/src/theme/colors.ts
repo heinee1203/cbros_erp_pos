@@ -94,34 +94,40 @@ export const darkColors = {
 type DeepString<T> = { [K in keyof T]: T[K] extends object ? { [J in keyof T[K]]: string } : string };
 type ColorPalette = DeepString<typeof darkColors>;
 
+/**
+ * Light mode — Tailwind slate palette, cohesive with the dark slate theme.
+ * Shifted from the old warm-toned (#F5F3EF / #6B6560) to cool slate tones
+ * so toggling dark ↔ light feels like the same design system, not two
+ * different apps. Orange accent stays consistent across both modes.
+ */
 export const lightColors: ColorPalette = {
   bg: {
-    base: '#F5F3EF',
-    primary: '#F5F3EF',
-    surface: '#FFFFFF',
-    elevated: '#FFFFFF',
-    overlay: '#F0EDE8',
-    input: '#FFFFFF',
+    base: '#F8FAFC',       // slate-50
+    primary: '#F8FAFC',
+    surface: '#FFFFFF',     // white cards
+    elevated: '#F1F5F9',   // slate-100 (modals, dropdowns)
+    overlay: '#E2E8F0',    // slate-200
+    input: '#F1F5F9',      // slate-100 (input fields)
   },
   border: {
-    default: 'rgba(0,0,0,0.08)',
-    subtle: 'rgba(0,0,0,0.06)',
-    light: 'rgba(0,0,0,0.10)',
-    medium: 'rgba(0,0,0,0.16)',
-    focus: '#EA580C',
+    default: 'rgba(15,23,42,0.10)',   // slate-900 at 10%
+    subtle: 'rgba(15,23,42,0.06)',
+    light: 'rgba(15,23,42,0.12)',
+    medium: 'rgba(15,23,42,0.18)',
+    focus: '#F97316',                  // orange focus ring
   },
   text: {
-    primary: '#1A1A1A',
-    secondary: '#6B6560',
-    muted: '#A39E96',
-    inverse: '#FFFFFF',
+    primary: '#0F172A',    // slate-900
+    secondary: '#475569',  // slate-600
+    muted: '#94A3B8',      // slate-400
+    inverse: '#F8FAFC',    // slate-50 (text on dark surfaces)
   },
   accent: {
-    primary: '#EA580C',
-    pressed: '#C2410C',
-    hover: '#C2410C',
-    glow: 'rgba(234,88,12,0.10)',
-    muted: 'rgba(234,88,12,0.05)',
+    primary: '#F97316',    // same orange as dark mode
+    pressed: '#EA6B10',
+    hover: '#EA6B10',
+    glow: 'rgba(249,115,22,0.12)',
+    muted: 'rgba(249,115,22,0.06)',
   },
   status: {
     success: '#059669',
@@ -157,7 +163,7 @@ export const lightColors: ColorPalette = {
     bannerBg: '#EFF6FF',
     bannerBorder: '#BFDBFE',
     bannerText: '#1E3A8A',
-    bannerBtnBg: '#EA580C',
+    bannerBtnBg: '#F97316',        // orange (was #EA580C)
     bannerBtnText: '#FFFFFF',
   },
   toast: {
@@ -167,10 +173,10 @@ export const lightColors: ColorPalette = {
     errorText: '#ffffff',
   },
   tab: {
-    active: '#EA580C',
-    inactive: '#A39E96',
-    bg: '#F5F3EF',
-    border: '#E8E4DE',
+    active: '#F97316',     // orange (consistent with dark mode)
+    inactive: '#94A3B8',   // slate-400 (was warm #A39E96)
+    bg: '#FFFFFF',         // white tab bar (was warm #F5F3EF)
+    border: '#E2E8F0',    // slate-200 (was warm #E8E4DE)
   },
   transparent: 'transparent',
   white: '#ffffff',

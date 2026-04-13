@@ -20,31 +20,29 @@ interface MenuItem {
   icon: string;
   label: string;
   color: string;
-  route: string | null; // null = Coming Soon placeholder
+  route: string;
 }
 
 const MENU_ITEMS: MenuItem[] = [
-  { icon: '\u23F8', label: 'Parked Orders', color: '#F97316', route: null },
+  { icon: '\u23F8', label: 'Parked Orders', color: '#F97316', route: 'ParkedOrders' },
   { icon: '\uD83D\uDCCB', label: 'Transactions', color: '#3B82F6', route: 'Transactions' },
-  { icon: '\u21A9', label: 'Returns', color: '#EF4444', route: null },
-  { icon: '\uD83D\uDCF7', label: 'Barcode Print', color: '#22C55E', route: null },
-  { icon: '\uD83D\uDCCA', label: 'Reports', color: '#F59E0B', route: null },
-  { icon: '\uD83D\uDCB0', label: 'Price Mgmt', color: '#F59E0B', route: null },
-  { icon: '\uD83D\uDE9A', label: 'Suppliers', color: '#22C55E', route: null },
-  { icon: '\uD83D\uDC64', label: 'Users & Roles', color: '#6B7280', route: null },
-  { icon: '\uD83D\uDD04', label: 'Sync', color: '#6B7280', route: null },
-  { icon: '\uD83D\uDDA8', label: 'Printer Setup', color: '#22C55E', route: null },
+  { icon: '\u21A9', label: 'Returns', color: '#EF4444', route: 'Returns' },
+  { icon: '\uD83D\uDCF7', label: 'Barcode Print', color: '#22C55E', route: 'BarcodePrint' },
+  { icon: '\uD83D\uDCCA', label: 'Reports', color: '#F59E0B', route: 'Reports' },
+  { icon: '\uD83D\uDCB0', label: 'Price Mgmt', color: '#F59E0B', route: 'PriceManagement' },
+  { icon: '\uD83D\uDE9A', label: 'Suppliers', color: '#22C55E', route: 'Suppliers' },
+  { icon: '\uD83D\uDC64', label: 'Users & Roles', color: '#6B7280', route: 'UserRoles' },
+  { icon: '\uD83D\uDD04', label: 'Sync', color: '#6B7280', route: 'SyncManagement' },
+  { icon: '\uD83D\uDDA8', label: 'Printer Setup', color: '#22C55E', route: 'PrinterSetup' },
   { icon: '\u2699', label: 'Settings', color: '#6B7280', route: 'Settings' },
-  { icon: '\u2139', label: 'About', color: '#6B7280', route: null },
+  { icon: '\u2139', label: 'About', color: '#6B7280', route: 'About' },
 ];
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
 
   const handlePress = (item: MenuItem) => {
-    if (item.route) {
-      navigation.navigate(item.route);
-    }
+    navigation.navigate(item.route);
   };
 
   return (
@@ -78,11 +76,6 @@ export default function MoreScreen() {
           >
             <Text style={[styles.cardIcon, { color: item.color }]}>{item.icon}</Text>
             <Text style={styles.cardLabel}>{item.label}</Text>
-            {!item.route && (
-              <View style={styles.comingSoonBadge}>
-                <Text style={styles.comingSoonText}>Soon</Text>
-              </View>
-            )}
           </Pressable>
         ))}
       </View>
