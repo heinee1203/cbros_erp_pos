@@ -1017,21 +1017,27 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const replace = body.replace ?? "";
     let totalUpdated = 0;
 
+    // Validate product IDs are valid UUIDs to prevent injection via array literal
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    for (const pid of body.productIds) {
+      if (!uuidRe.test(pid)) return reply.status(400).send({ error: `Invalid product ID: ${pid}` });
+    }
+
     for (const field of fields) {
       const col = field === "name" ? "name" : field === "sku" ? "sku" : field === "oem" ? "oem_number" : null;
       if (!col) continue;
 
-      // Build a PostgreSQL array literal from the product IDs
       const likePattern = "%" + find + "%";
+      // sql.raw() is safe here: col is from a closed whitelist above, matchOp is a boolean-derived literal
       const matchOp = body.caseSensitive ? "LIKE" : "ILIKE";
-      const idsLiteral = "{" + body.productIds.join(",") + "}";
+      const idsArray = `{${body.productIds.join(",")}}`;
 
       // Count how many will be affected
       const [countResult] = await db.execute(
         sql`SELECT COUNT(*)::int as cnt FROM products
             WHERE org_id = ${orgId}
             AND ${sql.raw(col)} ${sql.raw(matchOp)} ${likePattern}
-            AND id = ANY(${idsLiteral}::uuid[])`,
+            AND id = ANY(${idsArray}::uuid[])`,
       );
 
       // Do the actual replacement
@@ -1041,7 +1047,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
               SET ${sql.raw(col)} = REPLACE(${sql.raw(col)}, ${find}, ${replace})
               WHERE org_id = ${orgId}
               AND ${sql.raw(col)} ${sql.raw(matchOp)} ${likePattern}
-              AND id = ANY(${idsLiteral}::uuid[])`,
+              AND id = ANY(${idsArray}::uuid[])`,
         );
       }
       totalUpdated += (countResult as any).cnt ?? 0;

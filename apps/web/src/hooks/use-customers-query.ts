@@ -26,6 +26,8 @@ export interface Customer {
   txnCount: number;
   unbilledCount: number;
   totalChargeCount: number;
+  lastPaymentDate: string | null;
+  isOverdue: boolean;
   tierId: string | null;
   tierName: string | null;
   tierColor: string | null;
@@ -79,11 +81,34 @@ export interface TransactionListResponse {
 
 export interface AgingRow {
   customer: { id: string; name: string };
+  customerType: string;
+  paymentTerms: number;
   current: number;
+  days1to30: number;
   days31to60: number;
   days61to90: number;
-  over90: number;
+  days90plus: number;
   total: number;
+}
+
+export interface AgingReportResponse {
+  asOfDate: string;
+  data: AgingRow[];
+  totals: {
+    current: number;
+    days1to30: number;
+    days31to60: number;
+    days61to90: number;
+    days90plus: number;
+    total: number;
+  };
+  percentages: {
+    current: number;
+    days1to30: number;
+    days31to60: number;
+    days61to90: number;
+    days90plus: number;
+  };
 }
 
 export interface SOAResponse {
@@ -100,6 +125,8 @@ export interface ARSummary {
   customerCount: number;
   overdueCount: number;
   overdueAmount: number;
+  currentCount: number;
+  currentAmount: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -203,11 +230,12 @@ export function useCustomerTransactions(
   });
 }
 
-export function useAgingReport(token: string, locationId: string) {
-  return useQuery<{ data: AgingRow[] }>({
-    queryKey: ["customers", "aging"],
+export function useAgingReport(token: string, locationId: string, asOfDate?: string) {
+  const params = asOfDate ? `?asOfDate=${asOfDate}` : "";
+  return useQuery<AgingReportResponse>({
+    queryKey: ["customers", "aging", asOfDate ?? "today"],
     queryFn: () =>
-      apiFetch<{ data: AgingRow[] }>("/customers/reports/aging", {
+      apiFetch<AgingReportResponse>(`/customers/reports/aging${params}`, {
         token,
         locationId,
       }),

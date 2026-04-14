@@ -1157,42 +1157,38 @@ export async function listHistoricalReceipts(
   const limit = opts.limit;
   const offset = opts.offset ?? 0;
 
-  // Build conditions
-  const conditions: string[] = [
-    `hs.org_id = '${orgId}'`,
-    `hs.reason_type IN ('SALE', 'REFUND')`,
+  // Build conditions (parameterized to prevent SQL injection)
+  const conditions: SQL[] = [
+    sql`hs.org_id = ${orgId}`,
+    sql`hs.reason_type IN ('SALE', 'REFUND')`,
   ];
 
-  if (opts.locationId) conditions.push(`hs.location_id = '${opts.locationId}'`);
-  if (opts.employeeName) {
-    const ename = opts.employeeName.replace(/'/g, "''");
-    conditions.push(`hs.employee_name = '${ename}'`);
-  }
-  if (opts.from) conditions.push(`hs.movement_date >= '${opts.from}'`);
-  if (opts.to) conditions.push(`hs.movement_date <= '${opts.to}'`);
+  if (opts.locationId) conditions.push(sql`hs.location_id = ${opts.locationId}::uuid`);
+  if (opts.employeeName) conditions.push(sql`hs.employee_name = ${opts.employeeName}`);
+  if (opts.from) conditions.push(sql`hs.movement_date >= ${opts.from}`);
+  if (opts.to) conditions.push(sql`hs.movement_date <= ${opts.to}`);
 
-  let searchCondition = "";
   if (opts.q && opts.q.length >= 1) {
-    const q = opts.q.replace(/'/g, "''");
-    searchCondition = `AND (hs.reason_reference ILIKE '%${q}%' OR hs.employee_name ILIKE '%${q}%' OR hs.location_name ILIKE '%${q}%' OR hs.product_name ILIKE '%${q}%')`;
+    const pattern = `%${opts.q}%`;
+    conditions.push(sql`(hs.reason_reference ILIKE ${pattern} OR hs.employee_name ILIKE ${pattern} OR hs.location_name ILIKE ${pattern} OR hs.product_name ILIKE ${pattern})`);
   }
 
-  const whereClause = conditions.join(" AND ");
+  const where = sql.join(conditions, sql` AND `);
 
   // Get total count + total revenue for KPIs
-  const [totalsRow] = await db.execute(sql.raw(`
+  const [totalsRow] = await db.execute(sql`
     SELECT COUNT(*)::int AS total_count, COALESCE(SUM(receipt_total), 0)::numeric(14,2) AS total_revenue
     FROM (
       SELECT hs.reason_reference,
         COALESCE(SUM(CASE WHEN hs.reason_type = 'SALE' THEN hs.net_sales::numeric ELSE -hs.net_sales::numeric END), 0) AS receipt_total
       FROM historical_sales hs
-      WHERE ${whereClause} ${searchCondition}
+      WHERE ${where}
       GROUP BY hs.reason_reference, hs.location_name, hs.employee_name, hs.reason_type
     ) sub
-  `)) as any[];
+  `) as any[];
 
   // Get page of data
-  const rows = await db.execute(sql.raw(`
+  const rows = await db.execute(sql`
     SELECT
       hs.reason_reference AS receipt_number,
       MAX(hs.movement_date) AS receipt_date,
@@ -1204,12 +1200,12 @@ export async function listHistoricalReceipts(
       COALESCE(SUM(hs.net_sales::numeric), 0)::numeric(14,2) AS receipt_total,
       MAX(hs.customer_name) AS customer_name
     FROM historical_sales hs
-    WHERE ${whereClause} ${searchCondition}
+    WHERE ${where}
     GROUP BY hs.reason_reference, hs.location_name, hs.employee_name, hs.reason_type
     ORDER BY MAX(hs.movement_date) DESC, hs.reason_reference DESC
     LIMIT ${limit}
     OFFSET ${offset}
-  `));
+  `);
 
   const total = (totalsRow as any)?.total_count ?? 0;
 

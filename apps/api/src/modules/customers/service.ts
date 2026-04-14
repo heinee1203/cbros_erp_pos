@@ -140,6 +140,29 @@ export async function listCustomers(
       AND ct3.type = 'CHARGE'
   ), 0)`;
 
+  const lastPaymentDate = sql<string | null>`(
+    SELECT ct_lp.recorded_at::text FROM customer_transactions ct_lp
+    WHERE ct_lp.customer_id = ${customers.id} AND ct_lp.org_id = ${customers.orgId}
+      AND ct_lp.type = 'PAYMENT'
+    ORDER BY ct_lp.recorded_at DESC
+    LIMIT 1
+  )`;
+
+  const isOverdue = sql<boolean>`EXISTS (
+    SELECT 1 FROM customer_transactions ct_od
+    WHERE ct_od.customer_id = ${customers.id}
+      AND ct_od.org_id = ${customers.orgId}
+      AND ct_od.type = 'CHARGE'
+      AND ct_od.recorded_at < NOW() - (${customers.paymentTermsDays} || ' days')::interval
+      AND (
+        ct_od.amount::numeric - COALESCE(
+          (SELECT SUM(a.allocated_amount::numeric)
+           FROM ar_payment_allocations a
+           WHERE a.charge_transaction_id = ct_od.id), 0
+        )
+      ) > 0.01
+  )`;
+
   const rows = await db
     .select({
       id: customers.id,
@@ -158,6 +181,8 @@ export async function listCustomers(
       txnCount: periodTxnCount,
       unbilledCount,
       totalChargeCount,
+      lastPaymentDate,
+      isOverdue,
       notes: customers.notes,
       isActive: customers.isActive,
       tierId: customers.tierId,
@@ -1090,32 +1115,111 @@ export async function chargeCustomerAccount(
 // ── AR Report Functions ──
 
 /**
- * Get AR aging report — buckets outstanding CHARGE transactions by age.
+ * AR Aging Report — NET per-charge aging with payment allocation and due-date buckets.
+ *
+ * Uses ar_payment_allocations to compute each charge's remaining (unpaid) balance,
+ * then ages by DUE DATE (recorded_at + payment_terms_days) not charge date.
+ * Bucket sums will equal customer's current_balance (within rounding tolerance).
  */
-export async function getAgingReport(orgId: string) {
-  const rows = await db.execute(sql`
-    SELECT
-      c.id, c.name, c.current_balance as total,
-      COALESCE(SUM(CASE WHEN ct.recorded_at >= NOW() - INTERVAL '30 days' THEN ct.amount::numeric ELSE 0 END), 0) as "current",
-      COALESCE(SUM(CASE WHEN ct.recorded_at < NOW() - INTERVAL '30 days' AND ct.recorded_at >= NOW() - INTERVAL '60 days' THEN ct.amount::numeric ELSE 0 END), 0) as "days31to60",
-      COALESCE(SUM(CASE WHEN ct.recorded_at < NOW() - INTERVAL '60 days' AND ct.recorded_at >= NOW() - INTERVAL '90 days' THEN ct.amount::numeric ELSE 0 END), 0) as "days61to90",
-      COALESCE(SUM(CASE WHEN ct.recorded_at < NOW() - INTERVAL '90 days' THEN ct.amount::numeric ELSE 0 END), 0) as "over90"
-    FROM customers c
-    LEFT JOIN customer_transactions ct
-      ON ct.customer_id = c.id AND ct.type = 'CHARGE' AND ct.org_id = c.org_id
-    WHERE c.org_id = ${orgId} AND c.current_balance > 0 AND c.is_active = true
-    GROUP BY c.id, c.name, c.current_balance
-    ORDER BY c.current_balance DESC
-  `);
+export async function getAgingReport(orgId: string, opts?: { asOfDate?: string }) {
+  const asOf = opts?.asOfDate ?? new Date().toISOString().split("T")[0];
 
-  return rows.map((row: any) => ({
-    customer: { id: row.id, name: row.name },
-    current: parseFloat(row.current),
-    days31to60: parseFloat(row.days31to60),
-    days61to90: parseFloat(row.days61to90),
-    over90: parseFloat(row.over90),
-    total: parseFloat(row.total),
-  }));
+  const rows = (await db.execute(sql`
+    WITH charge_balances AS (
+      SELECT
+        ct.id AS charge_id,
+        ct.customer_id,
+        ct.amount::numeric AS charge_amount,
+        ct.recorded_at::date AS charge_date,
+        COALESCE(SUM(pa.allocated_amount::numeric), 0) AS allocated,
+        ct.amount::numeric - COALESCE(SUM(pa.allocated_amount::numeric), 0) AS remaining
+      FROM customer_transactions ct
+      LEFT JOIN ar_payment_allocations pa ON pa.charge_transaction_id = ct.id
+      WHERE ct.org_id = ${orgId}
+        AND ct.type = 'CHARGE'
+        AND ct.recorded_at::date <= ${asOf}::date
+      GROUP BY ct.id, ct.customer_id, ct.amount, ct.recorded_at
+      HAVING ct.amount::numeric - COALESCE(SUM(pa.allocated_amount::numeric), 0) > 0.005
+    )
+    SELECT
+      c.id, c.name, c.customer_type, c.payment_terms_days,
+      c.current_balance::text AS total,
+      COALESCE(SUM(CASE WHEN (${asOf}::date - (cb.charge_date + c.payment_terms_days)) <= 0
+        THEN cb.remaining ELSE 0 END), 0)::text AS "current",
+      COALESCE(SUM(CASE WHEN (${asOf}::date - (cb.charge_date + c.payment_terms_days)) BETWEEN 1 AND 30
+        THEN cb.remaining ELSE 0 END), 0)::text AS "days1to30",
+      COALESCE(SUM(CASE WHEN (${asOf}::date - (cb.charge_date + c.payment_terms_days)) BETWEEN 31 AND 60
+        THEN cb.remaining ELSE 0 END), 0)::text AS "days31to60",
+      COALESCE(SUM(CASE WHEN (${asOf}::date - (cb.charge_date + c.payment_terms_days)) BETWEEN 61 AND 90
+        THEN cb.remaining ELSE 0 END), 0)::text AS "days61to90",
+      COALESCE(SUM(CASE WHEN (${asOf}::date - (cb.charge_date + c.payment_terms_days)) > 90
+        THEN cb.remaining ELSE 0 END), 0)::text AS "days90plus"
+    FROM customers c
+    JOIN charge_balances cb ON cb.customer_id = c.id
+    WHERE c.org_id = ${orgId} AND c.current_balance > 0 AND c.is_active = true
+    GROUP BY c.id, c.name, c.customer_type, c.payment_terms_days, c.current_balance
+    ORDER BY c.current_balance DESC
+  `)) as any[];
+
+  const data = rows.map((r: any) => {
+    let current = parseFloat(r.current);
+    let d1to30 = parseFloat(r.days1to30);
+    let d31to60 = parseFloat(r.days31to60);
+    let d61to90 = parseFloat(r.days61to90);
+    let d90plus = parseFloat(r.days90plus);
+    const total = parseFloat(r.total);
+    const bucketSum = current + d1to30 + d31to60 + d61to90 + d90plus;
+
+    // Reconcile: if bucket sum exceeds current_balance (unallocated credits/payments),
+    // proportionally reduce each bucket to match total. This handles credit notes and
+    // payments not tracked in ar_payment_allocations.
+    if (bucketSum > total + 0.01 && bucketSum > 0) {
+      const scale = total / bucketSum;
+      current = parseFloat((current * scale).toFixed(2));
+      d1to30 = parseFloat((d1to30 * scale).toFixed(2));
+      d31to60 = parseFloat((d31to60 * scale).toFixed(2));
+      d61to90 = parseFloat((d61to90 * scale).toFixed(2));
+      // Assign remainder to 90+ to avoid rounding drift
+      d90plus = parseFloat((total - current - d1to30 - d31to60 - d61to90).toFixed(2));
+    }
+
+    return {
+      customer: { id: r.id, name: r.name },
+      customerType: r.customer_type,
+      paymentTerms: r.payment_terms_days,
+      current,
+      days1to30: d1to30,
+      days31to60: d31to60,
+      days61to90: d61to90,
+      days90plus: d90plus,
+      total,
+    };
+  });
+
+  // Compute grand totals and percentages
+  const totals = { current: 0, days1to30: 0, days31to60: 0, days61to90: 0, days90plus: 0, total: 0 };
+  for (const r of data) {
+    totals.current += r.current;
+    totals.days1to30 += r.days1to30;
+    totals.days31to60 += r.days31to60;
+    totals.days61to90 += r.days61to90;
+    totals.days90plus += r.days90plus;
+    totals.total += r.total;
+  }
+  const pct = (v: number) => totals.total > 0 ? parseFloat(((v / totals.total) * 100).toFixed(1)) : 0;
+
+  return {
+    asOfDate: asOf,
+    data,
+    totals,
+    percentages: {
+      current: pct(totals.current),
+      days1to30: pct(totals.days1to30),
+      days31to60: pct(totals.days31to60),
+      days61to90: pct(totals.days61to90),
+      days90plus: pct(totals.days90plus),
+    },
+  };
 }
 
 /**
@@ -1528,7 +1632,9 @@ export async function getARSummary(orgId: string) {
     WHERE org_id = ${orgId} AND current_balance > 0 AND is_active = true
   `);
 
-  // Overdue: customers with current_balance > 0 who have any CHARGE older than their payment_terms_days
+  // Overdue: customers with unpaid charges past their payment terms.
+  // A charge is "unpaid" if its amount exceeds the sum of allocations in ar_payment_allocations.
+  // This avoids the old bug where fully-paid historical charges inflated the overdue count.
   const [overdue] = await db.execute(sql`
     SELECT
       COUNT(DISTINCT c.id) as "overdueCount",
@@ -1541,13 +1647,27 @@ export async function getARSummary(orgId: string) {
           AND ct.org_id = c.org_id
           AND ct.type = 'CHARGE'
           AND ct.recorded_at < NOW() - (c.payment_terms_days || ' days')::interval
+          AND (
+            ct.amount::numeric - COALESCE(
+              (SELECT SUM(a.allocated_amount::numeric)
+               FROM ar_payment_allocations a
+               WHERE a.charge_transaction_id = ct.id), 0
+            )
+          ) > 0.01
       )
   `);
 
+  const totalReceivables = parseFloat((totals as any).totalReceivables);
+  const customerCount = parseInt((totals as any).customerCount, 10);
+  const overdueCount = parseInt((overdue as any).overdueCount, 10);
+  const overdueAmount = parseFloat((overdue as any).overdueAmount);
+
   return {
-    totalReceivables: parseFloat((totals as any).totalReceivables),
-    customerCount: parseInt((totals as any).customerCount, 10),
-    overdueCount: parseInt((overdue as any).overdueCount, 10),
-    overdueAmount: parseFloat((overdue as any).overdueAmount),
+    totalReceivables,
+    customerCount,
+    overdueCount,
+    overdueAmount,
+    currentCount: customerCount - overdueCount,
+    currentAmount: totalReceivables - overdueAmount,
   };
 }

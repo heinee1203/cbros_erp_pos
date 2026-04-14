@@ -9,7 +9,7 @@ import {
 } from "@apex/types";
 import { db } from "@apex/database";
 import { customers, customerVehicles } from "@apex/database/schema";
-import { eq, and, ilike, or, sql } from "drizzle-orm";
+import { eq, and, ilike, or, sql, type SQL } from "drizzle-orm";
 import {
   listCustomers,
   getCustomer,
@@ -81,8 +81,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/reports/aging", async (request, reply) => {
     const { orgId } = request.storeContext!;
-    const data = await getAgingReport(orgId);
-    return reply.send({ data });
+    const q = request.query as { asOfDate?: string };
+    const result = await getAgingReport(orgId, { asOfDate: q.asOfDate });
+    return reply.send(result);
   });
 
   app.get("/reports/soa/:customerId", async (request, reply) => {
@@ -148,24 +149,24 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     const limit = Math.min(parseInt(q.limit || "50", 10) || 50, 200);
     const offset = parseInt(q.offset || "0", 10) || 0;
 
-    const conditions: string[] = [`s.org_id = '${orgId}'`];
-    if (q.status) conditions.push(`s.status = '${q.status.replace(/'/g, "''")}'`);
-    if (q.dateFrom) conditions.push(`s.generated_at >= '${q.dateFrom}'`);
-    if (q.dateTo) conditions.push(`s.generated_at <= '${q.dateTo}'`);
+    const conditions: SQL[] = [sql`s.org_id = ${orgId}`];
+    if (q.status) conditions.push(sql`s.status = ${q.status}`);
+    if (q.dateFrom) conditions.push(sql`s.generated_at >= ${q.dateFrom}::timestamptz`);
+    if (q.dateTo) conditions.push(sql`s.generated_at <= ${q.dateTo}::timestamptz`);
     if (q.search && q.search.length >= 1) {
-      const term = q.search.replace(/'/g, "''");
-      conditions.push(`(s.soa_number ILIKE '%${term}%' OR c.name ILIKE '%${term}%')`);
+      const pattern = `%${q.search}%`;
+      conditions.push(sql`(s.soa_number ILIKE ${pattern} OR c.name ILIKE ${pattern})`);
     }
 
-    const where = conditions.join(" AND ");
-    const [countRow] = await db.execute(sql.raw(`SELECT COUNT(*)::int AS total FROM soa_records s JOIN customers c ON c.id = s.customer_id WHERE ${where}`)) as any[];
-    const rows = await db.execute(sql.raw(`
+    const where = sql.join(conditions, sql` AND `);
+    const [countRow] = await db.execute(sql`SELECT COUNT(*)::int AS total FROM soa_records s JOIN customers c ON c.id = s.customer_id WHERE ${where}`) as any[];
+    const rows = await db.execute(sql`
       SELECT s.id, s.soa_number, s.customer_id, c.name AS customer_name,
         s.date_from, s.date_to, s.generated_at, s.total_charges, s.total_credits,
         s.total_payable, s.transaction_count, s.status
       FROM soa_records s JOIN customers c ON c.id = s.customer_id
       WHERE ${where} ORDER BY s.generated_at DESC LIMIT ${limit} OFFSET ${offset}
-    `));
+    `);
 
     return reply.send({
       data: (rows as any[]).map((r: any) => ({
@@ -176,6 +177,30 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       })),
       total: countRow.total,
     });
+  });
+
+  // ─── POST /customers/soa/batch-generate ──────────────
+  // Generate SOAs for multiple customers at once
+  app.post("/soa/batch-generate", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role, userId } = request.user;
+    assertArRole(role);
+    const body = request.body as { customerIds: string[]; from: string; to: string; unbilledOnly?: boolean };
+    if (!body?.customerIds?.length || !body?.from || !body?.to) {
+      return reply.status(400).send({ error: "customerIds, from, and to are required" });
+    }
+    const results: string[] = [];
+    const errors: string[] = [];
+    for (const customerId of body.customerIds) {
+      try {
+        const soa = await generateSOA(customerId, orgId, body.from, body.to, userId, body.unbilledOnly ?? true);
+        results.push(soa.soaNumber ?? customerId);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        errors.push(`${customerId}: ${msg}`);
+      }
+    }
+    return reply.send({ generated: results.length, soaNumbers: results, errors });
   });
 
   // ─── GET /customers ──────────────────────────────
