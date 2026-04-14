@@ -197,10 +197,11 @@ const NAV_TOP: NavEntry[] = [
     children: [
       { label: "Suppliers", href: "/ap/suppliers", match: /^\/ap\/suppliers/ },
       { label: "Supplier Invoices", href: "/ap/invoices", match: /^\/ap\/invoices/ },
-      { label: "Supplier SOA", href: "/ap/supplier-soa", match: /^\/ap\/supplier-soa/ },
-      { label: "Check Vouchers", href: "/ap/check-vouchers", match: /^\/ap\/check-vouchers/ },
+      { label: "Supplier SOA", href: "/ap/supplier-soa", match: /^\/ap\/supplier-soa$/ },
+      { label: "SOA History", href: "/ap/soa-history", match: /^\/ap\/soa-history/ },
+      { label: "Disbursement Vouchers", href: "/ap/disbursement-vouchers", match: /^\/ap\/disbursement-vouchers/ },
       { label: "AP Aging Report", href: "/ap/reports/aging", match: /^\/ap\/reports\/aging/ },
-      { label: "PDC Report", href: "/ap/reports/pdcs", match: /^\/ap\/reports\/pdcs/ },
+      { label: "Check Register", href: "/ap/reports/pdcs", match: /^\/ap\/reports\/pdcs/ },
     ],
   },
   {

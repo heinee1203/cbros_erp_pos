@@ -27,6 +27,9 @@ import {
   ChevronDown,
   ChevronsUpDown,
   Circle,
+  CheckSquare,
+  Square,
+  MinusSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -135,6 +138,177 @@ function SortableHeader({
 }
 
 /* ═══════════════════════════════════════════════════ */
+/*  Bulk Set Terms Dialog                               */
+/* ═══════════════════════════════════════════════════ */
+
+const PAYMENT_TERMS = [
+  { value: 0, label: "COD" },
+  { value: 7, label: "Net 7" },
+  { value: 15, label: "Net 15" },
+  { value: 30, label: "Net 30" },
+  { value: 45, label: "Net 45" },
+  { value: 60, label: "Net 60" },
+  { value: 90, label: "Net 90" },
+  { value: 120, label: "Net 120" },
+  { value: 150, label: "Net 150" },
+  { value: 180, label: "Net 180" },
+];
+
+function SetTermsDialog({
+  open,
+  onClose,
+  onSuccess,
+  supplierIds,
+  supplierNames,
+  token,
+  locationId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  supplierIds: string[];
+  supplierNames: string[];
+  token: string;
+  locationId: string;
+}) {
+  const [termsDays, setTermsDays] = useState(30);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ updatedCount: number } | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setTermsDays(30);
+      setError(null);
+      setResult(null);
+    }
+  }, [open]);
+
+  const handleConfirm = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ updatedCount: number }>(
+        "/ap/suppliers/bulk-terms",
+        {
+          token,
+          locationId,
+          method: "PATCH",
+          body: JSON.stringify({
+            supplierIds,
+            paymentTermsDays: termsDays,
+          }),
+        },
+      );
+      setResult(res);
+      setTimeout(() => {
+        onSuccess();
+        onClose();
+      }, 1000);
+    } catch (err: any) {
+      setError(err.message || "Failed to update terms");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
+        {/* Header */}
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Set Payment Terms</h2>
+          <button onClick={onClose} className="rounded-md p-1 hover:bg-muted">
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Success */}
+        {result ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-center">
+            <p className="text-sm font-semibold text-emerald-700">
+              Updated {result.updatedCount} supplier{result.updatedCount !== 1 ? "s" : ""} to{" "}
+              {termsLabel(termsDays)}
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Summary */}
+            <div className="mb-4 rounded-lg border border-primary/20 bg-primary/[0.03] p-3">
+              <p className="text-sm">
+                Update payment terms for{" "}
+                <span className="font-semibold">{supplierIds.length}</span>{" "}
+                supplier{supplierIds.length !== 1 ? "s" : ""}
+              </p>
+            </div>
+
+            {error && (
+              <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {error}
+              </div>
+            )}
+
+            {/* Terms dropdown */}
+            <div className="mb-4">
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                Payment Terms
+              </label>
+              <select
+                value={termsDays}
+                onChange={(e) => setTermsDays(Number(e.target.value))}
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+              >
+                {PAYMENT_TERMS.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Supplier names list */}
+            <div className="mb-4">
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                Selected Suppliers
+              </label>
+              <div className="max-h-32 overflow-y-auto rounded-lg border border-border bg-muted/20 p-2">
+                {supplierNames.map((name, i) => (
+                  <div
+                    key={i}
+                    className="truncate py-0.5 text-xs text-muted-foreground"
+                  >
+                    {name}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onClose}
+                className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={submitting}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {submitting ? "Updating…" : `Set to ${termsLabel(termsDays)}`}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════ */
 /*  Supplier List Page                                  */
 /* ═══════════════════════════════════════════════════ */
 
@@ -155,6 +329,10 @@ export default function SupplierListPage() {
   const [drawerSupplierId, setDrawerSupplierId] = useState<string | null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
 
+  // Bulk set terms
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showSetTermsDialog, setShowSetTermsDialog] = useState(false);
+
   const fetchData = useCallback(async () => {
     if (!token || !locationId) return;
     setLoading(true);
@@ -165,6 +343,7 @@ export default function SupplierListPage() {
         locationId,
       });
       setSuppliers(res.data || []);
+      setSelectedIds(new Set());
     } catch (err: any) {
       setError(err?.message || "Failed to load suppliers");
     } finally {
@@ -183,6 +362,16 @@ export default function SupplierListPage() {
       setSortCol(field);
       setSortDir(field === "name" || field === "contactPerson" ? "asc" : "desc");
     }
+  };
+
+  // ── Bulk selection helpers ──
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   // Filter + sort
@@ -238,6 +427,25 @@ export default function SupplierListPage() {
     });
     return copy;
   }, [suppliers, search, showInactive, sortCol, sortDir]);
+
+  const toggleSelectAll = () => {
+    if (
+      selectedIds.size === filteredAndSorted.length &&
+      filteredAndSorted.length > 0
+    ) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredAndSorted.map((s) => s.id)));
+    }
+  };
+
+  const selectedNames = useMemo(
+    () =>
+      filteredAndSorted
+        .filter((s) => selectedIds.has(s.id))
+        .map((s) => s.name),
+    [filteredAndSorted, selectedIds],
+  );
 
   // Summary cards
   const summary = useMemo(() => {
@@ -401,12 +609,51 @@ export default function SupplierListPage() {
         </div>
       )}
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="mb-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/[0.03] px-4 py-2.5">
+          <span className="text-sm font-medium">
+            {selectedIds.size} supplier{selectedIds.size !== 1 ? "s" : ""} selected
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
+            >
+              Clear
+            </button>
+            <button
+              onClick={() => setShowSetTermsDialog(true)}
+              className="rounded-lg bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              Set Terms
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
+                <th className="w-10 px-2 py-2.5">
+                  {filteredAndSorted.length > 0 && (
+                    <button
+                      onClick={toggleSelectAll}
+                      className="flex items-center justify-center"
+                    >
+                      {selectedIds.size === 0 ? (
+                        <Square size={14} className="text-muted-foreground/40" />
+                      ) : selectedIds.size === filteredAndSorted.length ? (
+                        <CheckSquare size={14} className="text-primary" />
+                      ) : (
+                        <MinusSquare size={14} className="text-primary" />
+                      )}
+                    </button>
+                  )}
+                </th>
                 <th className="px-3 py-2.5 text-left">
                   <SortableHeader label="Supplier" field="name" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
@@ -440,14 +687,14 @@ export default function SupplierListPage() {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i} className="border-b border-border">
-                    <td colSpan={9} className="px-3 py-3">
+                    <td colSpan={10} className="px-3 py-3">
                       <div className="h-5 animate-pulse rounded bg-muted" />
                     </td>
                   </tr>
                 ))
               ) : filteredAndSorted.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={10} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     {suppliers.length === 0
                       ? "No suppliers yet. Click \u201cAdd Supplier\u201d to create one."
                       : "No suppliers match the filter."}
@@ -466,6 +713,21 @@ export default function SupplierListPage() {
                         !s.isActive && "opacity-50",
                       )}
                     >
+                      <td
+                        className="w-10 px-2 py-2.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          onClick={() => toggleSelect(s.id)}
+                          className="flex items-center justify-center"
+                        >
+                          {selectedIds.has(s.id) ? (
+                            <CheckSquare size={14} className="text-primary" />
+                          ) : (
+                            <Square size={14} className="text-muted-foreground/40" />
+                          )}
+                        </button>
+                      </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-col">
                           <span className="text-[13px] font-medium text-foreground">{s.name}</span>
@@ -553,6 +815,20 @@ export default function SupplierListPage() {
           onSaved={handleAfterSave}
         />
       )}
+
+      {/* Bulk Set Terms Dialog */}
+      <SetTermsDialog
+        open={showSetTermsDialog}
+        onClose={() => setShowSetTermsDialog(false)}
+        onSuccess={() => {
+          fetchData();
+          setSelectedIds(new Set());
+        }}
+        supplierIds={Array.from(selectedIds)}
+        supplierNames={selectedNames}
+        token={token ?? ""}
+        locationId={locationId ?? ""}
+      />
     </div>
   );
 }

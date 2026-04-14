@@ -30,6 +30,7 @@ import {
   createSupplier,
   updateSupplier,
   deleteSupplier,
+  mergeSuppliers,
 } from "./service";
 import {
   getRedirectPlan,
@@ -132,6 +133,56 @@ export const procurementRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(404).send({ error: err.message });
       }
       return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /procurement/suppliers/merge ─────────────
+  // Merge two duplicate suppliers: moves all references from source → target, then deletes source
+  app.post("/suppliers/merge", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertProcurementRole(role);
+
+    const body = request.body as {
+      sourceId?: string;
+      targetId?: string;
+    };
+
+    if (!body.sourceId || !body.targetId) {
+      return reply
+        .status(400)
+        .send({ error: "sourceId and targetId are both required" });
+    }
+
+    try {
+      const result = await mergeSuppliers(orgId, body.sourceId, body.targetId);
+      logAction({
+        orgId,
+        userId,
+        action: "SUPPLIER_MERGE",
+        entityType: "SUPPLIER",
+        entityId: result.mergedInto.id,
+        details: {
+          sourceId: result.removed.id,
+          sourceName: result.removed.name,
+          targetId: result.mergedInto.id,
+          targetName: result.mergedInto.name,
+          counts: result.counts,
+        },
+        ipAddress: request.ip,
+      });
+      return reply.send(result);
+    } catch (err: any) {
+      if (
+        err.message?.includes("not found") ||
+        err.message?.includes("must be different")
+      ) {
+        return reply.status(400).send({ error: err.message });
+      }
+      if (err.message?.includes("duplicate invoice numbers")) {
+        return reply.status(409).send({ error: err.message });
+      }
+      return reply.status(500).send({ error: err.message });
     }
   });
 

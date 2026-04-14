@@ -11,6 +11,14 @@ import {
   suppliers,
   users,
   serialNumbers,
+  supplierInvoices,
+  checkVouchers,
+  supplierReturns,
+  supplierSoaRecords,
+  backorders,
+  dotBatches,
+  productSuppliers,
+  reorderSuggestions,
 } from "@apex/database/schema";
 import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
 import type { CreatePOInput, ReceivePOInput } from "@apex/types";
@@ -1484,4 +1492,179 @@ export async function deleteSupplier(orgId: string, supplierId: string) {
   }
 
   return deleted;
+}
+
+/**
+ * Merge two duplicate suppliers: moves ALL references from `sourceId`
+ * to `targetId`, then deletes the source supplier.
+ *
+ * Runs inside a single DB transaction — all-or-nothing.
+ *
+ * Returns a summary of every table that was touched and how many
+ * rows were updated so the caller can audit-log the merge.
+ */
+export async function mergeSuppliers(
+  orgId: string,
+  sourceId: string,
+  targetId: string,
+) {
+  if (sourceId === targetId) {
+    throw new Error("Source and target supplier must be different");
+  }
+
+  return await db.transaction(async (tx) => {
+    // ── 1. Validate both suppliers exist and belong to this org ──
+    const [source] = await tx
+      .select({ id: suppliers.id, name: suppliers.name })
+      .from(suppliers)
+      .where(and(eq(suppliers.id, sourceId), eq(suppliers.orgId, orgId)))
+      .limit(1);
+
+    if (!source) throw new Error("Source supplier not found");
+
+    const [target] = await tx
+      .select({ id: suppliers.id, name: suppliers.name })
+      .from(suppliers)
+      .where(and(eq(suppliers.id, targetId), eq(suppliers.orgId, orgId)))
+      .limit(1);
+
+    if (!target) throw new Error("Target supplier not found");
+
+    const counts: Record<string, number> = {};
+
+    // ── 2. productSuppliers — handle unique constraint (orgId, productId, supplierId) ──
+    // First: delete source rows where the target already supplies the same product
+    const deletedDupPS = await tx.execute(
+      sql`DELETE FROM product_suppliers
+          WHERE org_id = ${orgId}
+            AND supplier_id = ${sourceId}
+            AND product_id IN (
+              SELECT product_id FROM product_suppliers
+              WHERE org_id = ${orgId} AND supplier_id = ${targetId}
+            )`,
+    );
+    counts.productSuppliersDeduplicated = (deletedDupPS as any).count ?? 0;
+
+    // Then: re-point remaining source rows to target
+    const updatedPS = await tx.execute(
+      sql`UPDATE product_suppliers
+          SET supplier_id = ${targetId}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.productSuppliersRepointed = (updatedPS as any).count ?? 0;
+
+    // ── 3. products.primarySupplierId ──
+    const updatedProducts = await tx.execute(
+      sql`UPDATE products
+          SET primary_supplier_id = ${targetId}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND primary_supplier_id = ${sourceId}`,
+    );
+    counts.products = (updatedProducts as any).count ?? 0;
+
+    // ── 4. purchaseOrders ──
+    const updatedPOs = await tx.execute(
+      sql`UPDATE purchase_orders
+          SET supplier_id = ${targetId}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.purchaseOrders = (updatedPOs as any).count ?? 0;
+
+    // ── 5. supplierInvoices — unique on (orgId, supplierId, invoiceNumber) ──
+    // Check for conflicting invoice numbers first
+    const conflictingInvoices = await tx.execute(
+      sql`SELECT si.invoice_number FROM supplier_invoices si
+          WHERE si.org_id = ${orgId} AND si.supplier_id = ${sourceId}
+            AND si.invoice_number IN (
+              SELECT invoice_number FROM supplier_invoices
+              WHERE org_id = ${orgId} AND supplier_id = ${targetId}
+            )`,
+    );
+    if ((conflictingInvoices as any[]).length > 0) {
+      const conflicting = (conflictingInvoices as any[]).map((r: any) => r.invoice_number).join(", ");
+      throw new Error(
+        `Cannot merge: duplicate invoice numbers found on both suppliers: ${conflicting}. Resolve these manually first.`,
+      );
+    }
+
+    const updatedInvoices = await tx.execute(
+      sql`UPDATE supplier_invoices
+          SET supplier_id = ${targetId}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.supplierInvoices = (updatedInvoices as any).count ?? 0;
+
+    // ── 6. checkVouchers ──
+    const updatedCVs = await tx.execute(
+      sql`UPDATE check_vouchers
+          SET supplier_id = ${targetId}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.checkVouchers = (updatedCVs as any).count ?? 0;
+
+    // ── 7. supplierReturns ──
+    const updatedReturns = await tx.execute(
+      sql`UPDATE supplier_returns
+          SET supplier_id = ${targetId}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.supplierReturns = (updatedReturns as any).count ?? 0;
+
+    // ── 8. supplierSoaRecords (no updated_at column) ──
+    const updatedSOAs = await tx.execute(
+      sql`UPDATE supplier_soa_records
+          SET supplier_id = ${targetId}
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.supplierSoaRecords = (updatedSOAs as any).count ?? 0;
+
+    // ── 9. backorders (both supplierId and newSupplierId) ──
+    const updatedBO1 = await tx.execute(
+      sql`UPDATE backorders
+          SET supplier_id = ${targetId}, supplier_name = ${target.name}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.backordersSupplier = (updatedBO1 as any).count ?? 0;
+
+    const updatedBO2 = await tx.execute(
+      sql`UPDATE backorders
+          SET new_supplier_id = ${targetId}, new_supplier_name = ${target.name}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND new_supplier_id = ${sourceId}`,
+    );
+    counts.backordersNewSupplier = (updatedBO2 as any).count ?? 0;
+
+    // ── 10. dotBatches ──
+    const updatedDOT = await tx.execute(
+      sql`UPDATE dot_batches
+          SET supplier_id = ${targetId}, supplier_name = ${target.name}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.dotBatches = (updatedDOT as any).count ?? 0;
+
+    // ── 11. reorderSuggestions ──
+    const updatedReorder = await tx.execute(
+      sql`UPDATE reorder_suggestions
+          SET supplier_id = ${targetId}, supplier_name = ${target.name}, updated_at = NOW()
+          WHERE org_id = ${orgId} AND supplier_id = ${sourceId}`,
+    );
+    counts.reorderSuggestions = (updatedReorder as any).count ?? 0;
+
+    // ── 12. stockMetrics (denormalized text, no updated_at column) ──
+    const updatedSM = await tx.execute(
+      sql`UPDATE stock_metrics
+          SET last_po_supplier_name = ${target.name}
+          WHERE org_id = ${orgId} AND last_po_supplier_name = ${source.name}`,
+    );
+    counts.stockMetrics = (updatedSM as any).count ?? 0;
+
+    // ── 13. Delete the source supplier (cascades: supplierMetrics auto-deleted) ──
+    await tx.execute(
+      sql`DELETE FROM suppliers WHERE id = ${sourceId} AND org_id = ${orgId}`,
+    );
+
+    return {
+      mergedInto: { id: target.id, name: target.name },
+      removed: { id: source.id, name: source.name },
+      counts,
+    };
+  });
 }

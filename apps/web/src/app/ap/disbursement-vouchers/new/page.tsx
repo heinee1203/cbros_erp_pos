@@ -1,0 +1,447 @@
+"use client";
+
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FileText, ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { fmtPeso, fmtDate } from "@/lib/format";
+import { useAuth } from "@/app/auth-context";
+import { apiFetch } from "@/lib/api";
+import { buildDisbursementVoucherHtml } from "@/lib/disbursement-voucher-html";
+
+/* ── Types ── */
+
+interface DeductionLine {
+  deductionType: string;
+  description: string;
+  referenceNumber: string;
+  amount: string;
+}
+
+interface PaymentLine {
+  paymentMethod: string;
+  amount: string;
+  referenceNumber: string;
+  bankName: string;
+  transactionDate: string;
+  platform: string;
+  receivedBy: string;
+}
+
+const EMPTY_DEDUCTION: DeductionLine = {
+  deductionType: "EWT", description: "", referenceNumber: "", amount: "",
+};
+const EMPTY_PAYMENT: PaymentLine = {
+  paymentMethod: "CHECK", amount: "", referenceNumber: "", bankName: "",
+  transactionDate: "", platform: "", receivedBy: "",
+};
+
+const DEDUCTION_TYPES = [
+  { value: "EWT", label: "EWT" },
+  { value: "CREDIT_MEMO", label: "Credit Memo" },
+  { value: "RETURN", label: "Return" },
+  { value: "OTHER", label: "Other" },
+];
+const METHOD_OPTIONS = [
+  { value: "CHECK", label: "Check" },
+  { value: "CASH", label: "Cash" },
+  { value: "BANK_TRANSFER", label: "Bank Transfer" },
+  { value: "ONLINE", label: "Online" },
+];
+
+/* ── Page ── */
+
+export default function NewDisbursementVoucherPage() {
+  const { token, locationId, loading: authLoading } = useAuth();
+  const router = useRouter();
+  const params = useSearchParams();
+  const soaIdParam = params.get("soaId");
+  const supplierIdParam = params.get("supplierId");
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [soaData, setSoaData] = useState<{
+    id: string; soaNumber: string; supplierName: string; supplierId: string;
+    dateFrom: string; dateTo: string; totalBalance: number;
+  } | null>(null);
+
+  const [supplierId, setSupplierId] = useState(supplierIdParam ?? "");
+  const [grossAmount, setGrossAmount] = useState("");
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split("T")[0]);
+  const [remarks, setRemarks] = useState("");
+  const [deductions, setDeductions] = useState<DeductionLine[]>([]);
+  const [payments, setPayments] = useState<PaymentLine[]>([{ ...EMPTY_PAYMENT }]);
+
+  // Credit memos available for this supplier
+  const [availableCMs, setAvailableCMs] = useState<Array<{ id: string; invoiceNumber: string; invoiceDate: string; totalAmount: number }>>([]);
+  const [selectedCMIds, setSelectedCMIds] = useState<Set<string>>(new Set());
+
+  // Derived amounts
+  const gross = parseFloat(grossAmount) || 0;
+  const totalDed = useMemo(() => deductions.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0), [deductions]);
+  const totalCMs = useMemo(() =>
+    availableCMs.filter((cm) => selectedCMIds.has(cm.id)).reduce((s, cm) => s + Math.abs(cm.totalAmount), 0),
+    [availableCMs, selectedCMIds],
+  );
+  const netAmount = gross - totalDed - totalCMs;
+  const payTotal = useMemo(() => payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0), [payments]);
+  const payMismatch = payments.length > 0 && netAmount > 0 && Math.abs(payTotal - netAmount) > 0.01;
+
+  // Fetch SOA
+  const fetchSOA = useCallback(async () => {
+    if (!token || !locationId || !soaIdParam) { setLoading(false); return; }
+    try {
+      const snap = await apiFetch<any>(`/ap/supplier-soa/${soaIdParam}`, { token, locationId });
+      const histRes = await apiFetch<any>(`/ap/supplier-soa/history?search=${encodeURIComponent(snap.soaNumber)}&limit=1`, { token, locationId });
+      const bal = histRes.data?.[0]?.totalBalance ?? 0;
+      setSoaData({
+        id: soaIdParam, soaNumber: snap.soaNumber, supplierName: snap.supplier?.name ?? "",
+        supplierId: snap.supplierId ?? supplierIdParam ?? "", dateFrom: snap.dateFrom, dateTo: snap.dateTo,
+        totalBalance: bal,
+      });
+      const sid = snap.supplierId ?? supplierIdParam ?? "";
+      setSupplierId(sid);
+      setGrossAmount(String(bal));
+      setPayments([{ ...EMPTY_PAYMENT, amount: String(bal) }]);
+
+      // Fetch available credit memos for this supplier
+      try {
+        const cmRes = await apiFetch<{ data: any[] }>(
+          `/ap/invoices?supplierId=${sid}&status=PAID&limit=100`,
+          { token, locationId },
+        );
+        const cms = (cmRes.data || [])
+          .filter((inv: any) => inv.invoiceNumber?.startsWith("CM-") && parseFloat(inv.totalAmount) < 0 && !inv.billed)
+          .map((inv: any) => ({
+            id: inv.id,
+            invoiceNumber: inv.invoiceNumber,
+            invoiceDate: inv.invoiceDate,
+            totalAmount: parseFloat(inv.totalAmount),
+          }));
+        setAvailableCMs(cms);
+      } catch {} // Silent — CMs are optional
+    } catch { setError("Failed to load SOA data"); } finally { setLoading(false); }
+  }, [token, locationId, soaIdParam, supplierIdParam]);
+
+  useEffect(() => { if (!authLoading) fetchSOA(); }, [authLoading, fetchSOA]);
+
+  // Auto-update first payment amount when net changes
+  useEffect(() => {
+    if (payments.length === 1 && netAmount > 0) {
+      setPayments((prev) => [{ ...prev[0], amount: String(netAmount.toFixed(2)) }]);
+    }
+  }, [netAmount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deduction helpers
+  const updateDed = (i: number, f: keyof DeductionLine, v: string) => setDeductions((p) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n; });
+  const addDed = () => setDeductions((p) => [...p, { ...EMPTY_DEDUCTION }]);
+  const rmDed = (i: number) => setDeductions((p) => p.filter((_, j) => j !== i));
+
+  // Payment helpers
+  const updatePay = (i: number, f: keyof PaymentLine, v: string) => setPayments((p) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n; });
+  const addPay = () => setPayments((p) => [...p, { ...EMPTY_PAYMENT }]);
+  const rmPay = (i: number) => { if (payments.length > 1) setPayments((p) => p.filter((_, j) => j !== i)); };
+
+  const buildBody = () => {
+    // Combine manual deductions + selected CMs
+    const manualDeds = deductions.filter((d) => parseFloat(d.amount) > 0).map((d) => ({
+      deductionType: d.deductionType, description: d.description,
+      referenceNumber: d.referenceNumber || undefined, amount: d.amount,
+    }));
+    const cmDeds = availableCMs.filter((cm) => selectedCMIds.has(cm.id)).map((cm) => ({
+      deductionType: "CREDIT_MEMO",
+      description: cm.invoiceNumber,
+      referenceNumber: cm.id, // CM invoice ID for backend tracking
+      amount: String(Math.abs(cm.totalAmount).toFixed(2)),
+    }));
+    return {
+      supplierId, soaId: soaIdParam || undefined, grossAmount,
+      paymentDate, remarks: remarks || undefined,
+      deductions: [...manualDeds, ...cmDeds],
+      payments: payments.map((p) => ({
+        paymentMethod: p.paymentMethod, amount: p.amount,
+        referenceNumber: p.referenceNumber || undefined, bankName: p.bankName || undefined,
+        transactionDate: p.transactionDate || undefined, platform: p.platform || undefined,
+        receivedBy: p.receivedBy || undefined,
+      })),
+    };
+  };
+
+  const handleSaveDraft = async () => {
+    setSaving(true); setError(null);
+    try {
+      await apiFetch("/ap/disbursement-vouchers", { token, locationId, method: "POST", body: JSON.stringify(buildBody()) });
+      router.push("/ap/disbursement-vouchers");
+    } catch (err: any) { setError(err.message || "Failed to save"); setSaving(false); }
+  };
+
+  const handleSaveAndPrint = async () => {
+    setSaving(true); setError(null);
+    try {
+      const res = await apiFetch<{ id: string; dvNumber: string }>("/ap/disbursement-vouchers", { token, locationId, method: "POST", body: JSON.stringify(buildBody()) });
+      await apiFetch(`/ap/disbursement-vouchers/${res.id}/print`, { token, locationId, method: "POST" });
+      // Combine manual deductions + selected CMs for print
+      const allDedsPrint = [
+        ...deductions.filter((d) => parseFloat(d.amount) > 0).map((d) => ({
+          description: d.description, amount: parseFloat(d.amount),
+        })),
+        ...availableCMs.filter((cm) => selectedCMIds.has(cm.id)).map((cm) => ({
+          description: cm.invoiceNumber, amount: Math.abs(cm.totalAmount),
+        })),
+      ];
+      const html = buildDisbursementVoucherHtml({
+        dvNumber: res.dvNumber, supplierName: soaData?.supplierName ?? "", amount: netAmount,
+        grossAmount: gross, totalDeductions: totalDed + totalCMs, paymentDate,
+        soaNumber: soaData?.soaNumber, soaDateFrom: soaData?.dateFrom, soaDateTo: soaData?.dateTo,
+        remarks: remarks || null,
+        deductions: allDedsPrint,
+        payments: payments.map((p) => ({
+          paymentMethod: p.paymentMethod, amount: parseFloat(p.amount) || 0,
+          referenceNumber: p.referenceNumber || null, bankName: p.bankName || null,
+          transactionDate: p.transactionDate || null, platform: p.platform || null,
+        })),
+      });
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
+      router.push("/ap/disbursement-vouchers");
+    } catch (err: any) { setError(err.message || "Failed to save"); setSaving(false); }
+  };
+
+  if (authLoading || loading) return <div className="flex items-center justify-center py-20"><div className="text-sm text-muted-foreground">Loading...</div></div>;
+
+  return (
+    <div className="mx-auto flex h-full max-w-4xl flex-col">
+      {/* Header */}
+      <div className="mb-5 flex items-center gap-3">
+        <button onClick={() => router.back()} className="rounded-lg p-1.5 hover:bg-muted"><ArrowLeft size={16} /></button>
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.06]"><FileText size={16} className="text-primary" /></div>
+          <div>
+            <h1 className="text-[18px] font-semibold tracking-tight">New Disbursement Voucher</h1>
+            <p className="text-[13px] text-muted-foreground">{soaData ? `For ${soaData.soaNumber} — ${soaData.supplierName}` : "Create a disbursement voucher"}</p>
+          </div>
+        </div>
+      </div>
+
+      {error && <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">{error}</div>}
+
+      <div className="space-y-4 rounded-xl border border-border bg-background p-5 shadow-sm">
+        {/* SOA info */}
+        {soaData && (
+          <div className="rounded-lg border border-primary/20 bg-primary/[0.03] p-4 space-y-1 text-sm">
+            <div><span className="text-muted-foreground">Supplier:</span> <span className="font-medium">{soaData.supplierName}</span></div>
+            <div><span className="text-muted-foreground">SOA:</span> <span className="font-mono font-semibold">{soaData.soaNumber}</span></div>
+            <div><span className="text-muted-foreground">Period:</span> {fmtDate(soaData.dateFrom)} – {fmtDate(soaData.dateTo)}</div>
+            <div className="text-lg font-bold tabular-nums">SOA Amount: {fmtPeso(soaData.totalBalance)}</div>
+          </div>
+        )}
+
+        {/* Payment Date + Gross */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Payment Date</label>
+            <input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)}
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">SOA Amount (Gross)</label>
+            <input type="number" step="0.01" value={grossAmount} onChange={(e) => setGrossAmount(e.target.value)}
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm tabular-nums outline-none focus:border-primary" />
+          </div>
+        </div>
+
+        {/* ── Deductions ── */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <label className="text-xs font-medium text-muted-foreground">Deductions</label>
+            <button onClick={addDed} className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10">
+              <Plus size={12} /> Add Deduction
+            </button>
+          </div>
+          {deductions.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground italic">No deductions — full SOA amount will be disbursed</p>
+          ) : (
+            <div className="space-y-2">
+              {deductions.map((d, i) => (
+                <div key={i} className="flex items-center gap-2 rounded-lg border border-border bg-muted/20 p-2">
+                  <select value={d.deductionType} onChange={(e) => {
+                      updateDed(i, "deductionType", e.target.value);
+                      // Reset EWT fields when switching away
+                      if (e.target.value !== "EWT") { updateDed(i, "description", ""); updateDed(i, "amount", ""); }
+                    }}
+                    className="h-8 w-32 rounded border border-border bg-background px-2 text-[12px] outline-none">
+                    {DEDUCTION_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                  {d.deductionType === "EWT" ? (
+                    <select value={d.description} onChange={(e) => {
+                        updateDed(i, "description", e.target.value);
+                        const rateMap: Record<string, number> = {
+                          "EWT 1% - Goods": 0.01, "EWT 2% - Services": 0.02,
+                          "EWT 5% - Rentals": 0.05, "EWT 10% - Professional (Individual)": 0.10,
+                          "EWT 15% - Professional (Corporate)": 0.15,
+                        };
+                        const rate = rateMap[e.target.value];
+                        const soaBase = (soaData?.totalBalance ?? gross) / 1.12;
+                        if (rate && soaBase > 0) updateDed(i, "amount", (soaBase * rate).toFixed(2));
+                      }}
+                      className="h-8 flex-1 rounded border border-border bg-background px-2 text-[12px] outline-none">
+                      <option value="">Select EWT rate...</option>
+                      <option value="EWT 1% - Goods">1% - Goods</option>
+                      <option value="EWT 2% - Services">2% - Services</option>
+                      <option value="EWT 5% - Rentals">5% - Rentals</option>
+                      <option value="EWT 10% - Professional (Individual)">10% - Professional (Individual)</option>
+                      <option value="EWT 15% - Professional (Corporate)">15% - Professional (Corporate)</option>
+                    </select>
+                  ) : (
+                    <input type="text" value={d.description} onChange={(e) => updateDed(i, "description", e.target.value)}
+                      placeholder="Description" className="h-8 flex-1 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" />
+                  )}
+                  <input type="text" value={d.referenceNumber} onChange={(e) => updateDed(i, "referenceNumber", e.target.value)}
+                    placeholder="Ref #" className="h-8 w-24 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" />
+                  <input type="number" step="0.01" value={d.amount} onChange={(e) => updateDed(i, "amount", e.target.value)}
+                    placeholder="Amount" className="h-8 w-28 rounded border border-border bg-background px-2 text-[12px] tabular-nums outline-none focus:border-primary" />
+                  <button onClick={() => rmDed(i)} className="rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Credit Memos ── */}
+        {availableCMs.length > 0 && (
+          <div>
+            <label className="mb-2 block text-xs font-medium text-muted-foreground">
+              Available Credit Memos
+            </label>
+            <div className="space-y-1">
+              {availableCMs.map((cm) => (
+                <label
+                  key={cm.id}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg border p-2 cursor-pointer transition-colors",
+                    selectedCMIds.has(cm.id)
+                      ? "border-primary/30 bg-primary/[0.03]"
+                      : "border-border hover:bg-muted/30",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedCMIds.has(cm.id)}
+                    onChange={() => {
+                      setSelectedCMIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(cm.id)) next.delete(cm.id); else next.add(cm.id);
+                        return next;
+                      });
+                    }}
+                    className="accent-primary"
+                  />
+                  <span className="font-mono text-[12px] font-semibold">{cm.invoiceNumber}</span>
+                  <span className="text-[11px] text-muted-foreground">{fmtDate(cm.invoiceDate)}</span>
+                  <span className="ml-auto text-[12px] tabular-nums font-semibold text-red-600">
+                    ({fmtPeso(Math.abs(cm.totalAmount))})
+                  </span>
+                </label>
+              ))}
+            </div>
+            {totalCMs > 0 && (
+              <div className="mt-1 text-right text-[11px] tabular-nums text-red-600 font-semibold">
+                Selected CMs: ({fmtPeso(totalCMs)})
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Reconciliation summary */}
+        <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm tabular-nums">
+          <div className="flex justify-between"><span>SOA Amount</span><span className="font-medium">{fmtPeso(gross)}</span></div>
+          {totalDed > 0 && <div className="flex justify-between text-red-600"><span>Less: Deductions (EWT)</span><span>({fmtPeso(totalDed)})</span></div>}
+          {totalCMs > 0 && <div className="flex justify-between text-red-600"><span>Less: Credit Memos</span><span>({fmtPeso(totalCMs)})</span></div>}
+          <div className="mt-1 flex justify-between border-t border-border pt-1 text-base font-bold">
+            <span>Net Payment</span><span>{fmtPeso(netAmount)}</span>
+          </div>
+        </div>
+
+        {/* ── Payments ── */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <label className="text-xs font-medium text-muted-foreground">Payment Details</label>
+            <button onClick={addPay} className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10">
+              <Plus size={12} /> Add Payment
+            </button>
+          </div>
+          <div className="space-y-2">
+            {payments.map((p, idx) => (
+              <div key={idx} className="rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <select value={p.paymentMethod} onChange={(e) => updatePay(idx, "paymentMethod", e.target.value)}
+                    className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] outline-none">
+                    {METHOD_OPTIONS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                  <input type="number" step="0.01" value={p.amount} onChange={(e) => updatePay(idx, "amount", e.target.value)}
+                    placeholder="Amount" className="h-8 w-36 rounded-lg border border-border bg-background px-2 text-[12px] tabular-nums outline-none focus:border-primary" />
+                  {payments.length > 1 && <button onClick={() => rmPay(idx)} className="ml-auto rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {p.paymentMethod === "CHECK" && (<>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Check Number</label>
+                      <input type="text" value={p.referenceNumber} onChange={(e) => updatePay(idx, "referenceNumber", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Bank</label>
+                      <input type="text" value={p.bankName} onChange={(e) => updatePay(idx, "bankName", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Check Date</label>
+                      <input type="date" value={p.transactionDate} onChange={(e) => updatePay(idx, "transactionDate", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                  </>)}
+                  {p.paymentMethod === "BANK_TRANSFER" && (<>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Reference Number</label>
+                      <input type="text" value={p.referenceNumber} onChange={(e) => updatePay(idx, "referenceNumber", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Bank</label>
+                      <input type="text" value={p.bankName} onChange={(e) => updatePay(idx, "bankName", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Transfer Date</label>
+                      <input type="date" value={p.transactionDate} onChange={(e) => updatePay(idx, "transactionDate", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                  </>)}
+                  {p.paymentMethod === "ONLINE" && (<>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Transaction ID</label>
+                      <input type="text" value={p.referenceNumber} onChange={(e) => updatePay(idx, "referenceNumber", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Platform</label>
+                      <select value={p.platform} onChange={(e) => updatePay(idx, "platform", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none">
+                        <option value="">Select...</option><option value="GCash">GCash</option><option value="Maya">Maya</option><option value="PayPal">PayPal</option><option value="Other">Other</option>
+                      </select></div>
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Date</label>
+                      <input type="date" value={p.transactionDate} onChange={(e) => updatePay(idx, "transactionDate", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                  </>)}
+                  {p.paymentMethod === "CASH" && (
+                    <div><label className="mb-0.5 block text-[10px] text-muted-foreground">Received By</label>
+                      <input type="text" value={p.receivedBy} onChange={(e) => updatePay(idx, "receivedBy", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          {netAmount > 0 && (
+            <div className={`mt-1 text-right text-[11px] tabular-nums ${payMismatch ? "text-red-500 font-semibold" : "text-emerald-600"}`}>
+              Payment total: {fmtPeso(payTotal)}{payMismatch && ` (must equal net: ${fmtPeso(netAmount)})`}
+            </div>
+          )}
+        </div>
+
+        {/* Remarks */}
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">Remarks (optional)</label>
+          <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)} rows={2}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={() => router.back()} className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancel</button>
+          <button onClick={handleSaveDraft} disabled={saving || payMismatch || netAmount <= 0}
+            className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">{saving ? "Saving…" : "Save Draft"}</button>
+          <button onClick={handleSaveAndPrint} disabled={saving || payMismatch || netAmount <= 0}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{saving ? "Saving…" : "Save & Print"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}

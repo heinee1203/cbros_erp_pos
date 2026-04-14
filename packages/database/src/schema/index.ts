@@ -55,3 +55,4 @@ export * from "./soa-records";
 export * from "./ar-payment-allocations";
 export * from "./daily-sales-summary";
 export * from "./supplier-soa-records";
+export * from "./disbursement-vouchers";

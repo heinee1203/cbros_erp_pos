@@ -8,6 +8,7 @@ import {
   createInvoice,
   updateInvoice,
   voidInvoice,
+  bulkMarkInvoicesPaid,
   // Check Vouchers
   listCheckVouchers,
   getCheckVoucher,
@@ -25,16 +26,32 @@ import {
   getSupplierSOAOverview,
   getSummary,
   getPDCReport,
+  // Check Register
+  getCheckRegister,
+  releaseCheck,
+  clearCheck,
+  bounceCheck,
+  cancelCheck,
   // Persistent supplier SOAs
   generateSupplierSOA,
   listSupplierSOAs,
+  listAllSupplierSOAs,
   getSupplierSOAById,
   updateSupplierSOAStatus,
+  paySupplierSOA,
   // Supplier master (AP-flavored CRUD)
   listSuppliersWithAPStats,
   getSupplierAPDetail,
   createSupplierAP,
   updateSupplierAP,
+  bulkUpdateSupplierTerms,
+  // Disbursement Vouchers
+  createDisbursementVoucher,
+  listDisbursementVouchers,
+  getDisbursementVoucher,
+  printDisbursementVoucher,
+  confirmDisbursementVoucher,
+  voidDisbursementVoucher,
   // Bank Accounts
   listBankAccounts,
   createBankAccount,
@@ -155,6 +172,54 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     try {
       const result = await createInvoice(orgId, userId, body);
       return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /invoices/bulk-pay ────────────────────────
+  // Directly mark multiple invoices as fully paid (COD / cash).
+  // Bypasses the check-voucher workflow.
+  app.post("/invoices/bulk-pay", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+
+    try {
+      assertApRole(role);
+    } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+
+    const body = request.body as {
+      invoiceIds: string[];
+      useInvoiceDateAsPaymentDate: boolean;
+      paymentDate?: string;
+      paymentMethod?: string;
+      referenceNumber?: string;
+      notes?: string;
+    };
+
+    if (!Array.isArray(body.invoiceIds) || body.invoiceIds.length === 0) {
+      return reply.status(400).send({
+        error: "invoiceIds must be a non-empty array",
+      });
+    }
+
+    if (body.invoiceIds.length > 100) {
+      return reply.status(400).send({
+        error: "Maximum 100 invoices per bulk pay request",
+      });
+    }
+
+    if (!body.useInvoiceDateAsPaymentDate && !body.paymentDate) {
+      return reply.status(400).send({
+        error: "paymentDate is required when useInvoiceDateAsPaymentDate is false",
+      });
+    }
+
+    try {
+      const result = await bulkMarkInvoicesPaid(orgId, userId, body);
+      return reply.send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
     }
@@ -559,6 +624,35 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // ─── GET /supplier-soa/history ────────────────────
+  // Cross-supplier SOA search — powers the dedicated SOA History page.
+  // MUST be registered before /supplier-soa/:soaId to avoid Fastify
+  // matching "history" as a :soaId parameter.
+  app.get("/supplier-soa/history", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as {
+      search?: string;
+      status?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      limit?: string;
+    };
+    const limit = Math.min(parseInt(q.limit || "100", 10) || 100, 200);
+
+    try {
+      const result = await listAllSupplierSOAs(orgId, {
+        search: q.search,
+        status: q.status,
+        dateFrom: q.dateFrom,
+        dateTo: q.dateTo,
+        limit,
+      });
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
   // ─── GET /supplier-soa/:soaId ─────────────────────
   // Return a historical supplier SOA snapshot by id — used by the
   // "Reprint" flow in the SOA history mini-list.
@@ -601,6 +695,141 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
       if (err.message === "Supplier SOA not found") {
         return reply.status(404).send({ error: err.message });
       }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /supplier-soa/:soaId/pay ─────────────────
+  // Record a payment against a supplier SOA. Allocates to invoices (oldest first).
+  app.post("/supplier-soa/:soaId/pay", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try {
+      assertApRole(role);
+    } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+
+    const { soaId } = request.params as { soaId: string };
+    const body = request.body as {
+      amount: string;
+      paymentDate: string;
+      paymentMethod?: string;
+      referenceNumber?: string;
+      notes?: string;
+    };
+
+    if (!body.amount || !body.paymentDate) {
+      return reply.status(400).send({
+        error: "amount and paymentDate are required",
+      });
+    }
+
+    try {
+      const result = await paySupplierSOA(orgId, soaId, body);
+      return reply.send(result);
+    } catch (err: any) {
+      if (err.message === "Supplier SOA not found") {
+        return reply.status(404).send({ error: err.message });
+      }
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // DISBURSEMENT VOUCHERS
+  // ═══════════════════════════════════════════════════════════════
+
+  app.post("/disbursement-vouchers", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    try { assertApRole(role); } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+    const body = request.body as any;
+    if (!body.supplierId || (!body.grossAmount && !body.amount) || !body.paymentDate) {
+      return reply.status(400).send({ error: "supplierId, grossAmount, and paymentDate are required" });
+    }
+    // Backward compat: if grossAmount not provided, use amount
+    if (!body.grossAmount && body.amount) {
+      body.grossAmount = body.amount;
+    }
+    try {
+      const result = await createDisbursementVoucher(orgId, userId, body);
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  app.get("/disbursement-vouchers", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as any;
+    const result = await listDisbursementVouchers(orgId, {
+      search: q.search,
+      status: q.status,
+      dateFrom: q.dateFrom,
+      dateTo: q.dateTo,
+      limit: q.limit ? parseInt(q.limit) : undefined,
+    });
+    return reply.send(result);
+  });
+
+  // Static routes BEFORE parameterized /:id
+  app.get("/disbursement-vouchers/:id", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { id } = request.params as { id: string };
+    try {
+      const result = await getDisbursementVoucher(orgId, id);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(404).send({ error: err.message });
+    }
+  });
+
+  app.post("/disbursement-vouchers/:id/print", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try { assertApRole(role); } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+    const { id } = request.params as { id: string };
+    try {
+      const result = await printDisbursementVoucher(orgId, id);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  app.post("/disbursement-vouchers/:id/confirm", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try { assertApRole(role); } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+    const { id } = request.params as { id: string };
+    try {
+      const result = await confirmDisbursementVoucher(orgId, id);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  app.post("/disbursement-vouchers/:id/void", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    try { assertAdmin(role); } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+    const { id } = request.params as { id: string };
+    const { reason } = (request.body as any) ?? {};
+    if (!reason) return reply.status(400).send({ error: "Void reason is required" });
+    try {
+      const result = await voidDisbursementVoucher(orgId, id, userId, reason);
+      return reply.send(result);
+    } catch (err: any) {
       return reply.status(400).send({ error: err.message });
     }
   });
@@ -649,6 +878,43 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // ─── PATCH /ap/suppliers/bulk-terms ────────────────
+  // Bulk update payment_terms_days for multiple suppliers.
+  // MUST be registered before /suppliers/:id to avoid Fastify matching "bulk-terms" as :id.
+  app.patch("/suppliers/bulk-terms", async (request, reply) => {
+    const { role } = request.user;
+    try {
+      assertApRole(role);
+    } catch (err: any) {
+      return reply.status(err.statusCode ?? 403).send({ error: err.message });
+    }
+
+    const { orgId } = request.storeContext!;
+    const body = request.body as {
+      supplierIds: string[];
+      paymentTermsDays: number;
+    };
+
+    if (!Array.isArray(body.supplierIds) || body.supplierIds.length === 0) {
+      return reply.status(400).send({
+        error: "supplierIds must be a non-empty array",
+      });
+    }
+
+    if (typeof body.paymentTermsDays !== "number" || body.paymentTermsDays < 0) {
+      return reply.status(400).send({
+        error: "paymentTermsDays must be a non-negative integer",
+      });
+    }
+
+    try {
+      const result = await bulkUpdateSupplierTerms(orgId, body);
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
   // ─── PATCH /ap/suppliers/:id ──────────────────────
   // Partial update. Supports deactivation via { isActive: false }.
   app.patch("/suppliers/:id", async (request, reply) => {
@@ -678,11 +944,59 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(result);
   });
 
-  // ─── GET /reports/pdcs ────────────────────────────
+  // ─── GET /reports/pdcs (legacy alias) ──────────────
   app.get("/reports/pdcs", async (request, reply) => {
     const { orgId } = request.storeContext!;
-    const result = await getPDCReport(orgId);
+    const result = await getCheckRegister(orgId);
     return reply.send(result);
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // CHECK REGISTER
+  // ═══════════════════════════════════════════════════════════════
+
+  app.get("/check-register", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as Record<string, string>;
+    const result = await getCheckRegister(orgId, {
+      search: q.search, bank: q.bank, status: q.status,
+      dateFrom: q.dateFrom, dateTo: q.dateTo,
+    });
+    return reply.send(result);
+  });
+
+  app.post("/check-register/:id/release", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try { assertApRole(role); } catch (err: any) { return reply.status(403).send({ error: err.message }); }
+    try { return reply.send(await releaseCheck(orgId, (request.params as any).id)); }
+    catch (err: any) { return reply.status(400).send({ error: err.message }); }
+  });
+
+  app.post("/check-register/:id/clear", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try { assertApRole(role); } catch (err: any) { return reply.status(403).send({ error: err.message }); }
+    try { return reply.send(await clearCheck(orgId, (request.params as any).id)); }
+    catch (err: any) { return reply.status(400).send({ error: err.message }); }
+  });
+
+  app.post("/check-register/:id/bounce", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try { assertApRole(role); } catch (err: any) { return reply.status(403).send({ error: err.message }); }
+    const { reason } = (request.body as any) ?? {};
+    if (!reason) return reply.status(400).send({ error: "Bounce reason is required" });
+    try { return reply.send(await bounceCheck(orgId, (request.params as any).id, reason)); }
+    catch (err: any) { return reply.status(400).send({ error: err.message }); }
+  });
+
+  app.post("/check-register/:id/cancel", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    try { assertApRole(role); } catch (err: any) { return reply.status(403).send({ error: err.message }); }
+    try { return reply.send(await cancelCheck(orgId, (request.params as any).id)); }
+    catch (err: any) { return reply.status(400).send({ error: err.message }); }
   });
 
   // ═══════════════════════════════════════════════════════════════

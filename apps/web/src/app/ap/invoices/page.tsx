@@ -16,6 +16,9 @@ import {
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
+  CheckSquare,
+  Square,
+  MinusSquare,
 } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
@@ -198,17 +201,20 @@ function RecordInvoiceModal({
     setSaving(true);
     setError(null);
     try {
+      const termsMap: Record<string, number> = {
+        COD: 0, NET_7: 7, NET_15: 15, NET_30: 30, NET_45: 45, NET_60: 60,
+        NET_90: 90, NET_120: 120, NET_150: 150, NET_180: 180,
+      };
       await apiFetch("/ap/invoices", {
         token,
         locationId,
         method: "POST",
         body: JSON.stringify({
           supplierId: form.supplierId,
-          invoiceNo: form.invoiceNo,
+          invoiceNumber: form.invoiceNo,
           invoiceDate: form.invoiceDate,
-          amount: form.amount,
-          paymentTerms: form.paymentTerms,
-          poReference: form.poReference || undefined,
+          totalAmount: form.amount,
+          paymentTermsDays: termsMap[form.paymentTerms] ?? 30,
           notes: form.notes || undefined,
         }),
       });
@@ -398,6 +404,239 @@ function RecordInvoiceModal({
 }
 
 /* ═══════════════════════════════════════════════════ */
+/*  Bulk Pay Dialog                                    */
+/* ═══════════════════════════════════════════════════ */
+
+function BulkPayDialog({
+  open,
+  onClose,
+  onSuccess,
+  invoiceCount,
+  totalAmount,
+  invoiceIds,
+  token,
+  locationId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  invoiceCount: number;
+  totalAmount: number;
+  invoiceIds: string[];
+  token: string;
+  locationId: string;
+}) {
+  const [useInvoiceDate, setUseInvoiceDate] = useState(true);
+  const [paymentDate, setPaymentDate] = useState(
+    new Date().toISOString().split("T")[0],
+  );
+  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [referenceNumber, setReferenceNumber] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    successCount: number;
+    skippedCount: number;
+    totalAmountPaid: number;
+  } | null>(null);
+
+  // Reset on open
+  useEffect(() => {
+    if (open) {
+      setUseInvoiceDate(true);
+      setPaymentDate(new Date().toISOString().split("T")[0]);
+      setPaymentMethod("Cash");
+      setReferenceNumber("");
+      setNotes("");
+      setError(null);
+      setResult(null);
+    }
+  }, [open]);
+
+  const handleConfirm = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{
+        successCount: number;
+        skippedCount: number;
+        skippedIds: string[];
+        totalAmountPaid: number;
+      }>("/ap/invoices/bulk-pay", {
+        token,
+        locationId,
+        method: "POST",
+        body: JSON.stringify({
+          invoiceIds,
+          useInvoiceDateAsPaymentDate: useInvoiceDate,
+          paymentDate: useInvoiceDate ? undefined : paymentDate,
+          paymentMethod: paymentMethod || undefined,
+          referenceNumber: referenceNumber || undefined,
+          notes: notes || undefined,
+        }),
+      });
+      setResult(res);
+      // Auto-close after brief display
+      setTimeout(() => {
+        onSuccess();
+        onClose();
+      }, 1200);
+    } catch (err: any) {
+      setError(err.message || "Failed to mark invoices as paid");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
+        {/* Header */}
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Mark as Paid</h2>
+          <button
+            onClick={onClose}
+            className="rounded-md p-1 hover:bg-muted"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Success state */}
+        {result ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-center">
+            <p className="text-sm font-semibold text-emerald-700">
+              {result.successCount} invoice{result.successCount !== 1 ? "s" : ""} marked as paid
+            </p>
+            <p className="mt-1 text-xs text-emerald-600">
+              Total: {fmtPeso(result.totalAmountPaid)}
+              {result.skippedCount > 0 &&
+                ` · ${result.skippedCount} skipped`}
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Summary */}
+            <div className="mb-4 rounded-lg border border-primary/20 bg-primary/[0.03] p-3">
+              <p className="text-sm">
+                Mark{" "}
+                <span className="font-semibold">{invoiceCount}</span>{" "}
+                invoice{invoiceCount !== 1 ? "s" : ""} as fully paid
+              </p>
+              <p className="mt-0.5 text-lg font-bold tabular-nums">
+                {fmtPeso(totalAmount)}
+              </p>
+            </div>
+
+            {error && (
+              <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {error}
+              </div>
+            )}
+
+            {/* Form */}
+            <div className="space-y-3">
+              {/* Use invoice date toggle */}
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={useInvoiceDate}
+                  onChange={(e) => setUseInvoiceDate(e.target.checked)}
+                  className="rounded border-border"
+                />
+                <span>
+                  Use each invoice&apos;s own date as payment date
+                </span>
+              </label>
+
+              {/* Payment date — only when toggle is off */}
+              {!useInvoiceDate && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Payment Date
+                  </label>
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+                  />
+                </div>
+              )}
+
+              {/* Payment method */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Payment Method
+                </label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
+                  <option value="GCash">GCash</option>
+                  <option value="Check">Check</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              {/* Reference number */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Reference # (optional)
+                </label>
+                <input
+                  type="text"
+                  value={referenceNumber}
+                  onChange={(e) => setReferenceNumber(e.target.value)}
+                  placeholder="Receipt #, transfer ref, etc."
+                  className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+                />
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  Notes (optional)
+                </label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={2}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={onClose}
+                className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={submitting}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {submitting ? "Processing…" : "Confirm Payment"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════ */
 /*  Supplier Invoices List Page                        */
 /* ═══════════════════════════════════════════════════ */
 
@@ -427,6 +666,10 @@ export default function SupplierInvoicesPage() {
 
   // Modal
   const [showModal, setShowModal] = useState(false);
+
+  // Bulk pay selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkPayDialog, setShowBulkPayDialog] = useState(false);
 
   // Suppliers for filter
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -470,6 +713,7 @@ export default function SupplierInvoicesPage() {
           { token, locationId }
         );
         setInvoices(res.data);
+        setSelectedIds(new Set()); // Clear selection on data change
         setHasMore(!!res.nextCursor);
         setCursor(res.nextCursor);
         // Fetch summary separately
@@ -545,6 +789,43 @@ export default function SupplierInvoicesPage() {
     });
     return copy;
   }, [invoices, searchText, sortField, sortDir]);
+
+  // ── Bulk pay selection helpers ──
+  const payableInvoices = useMemo(
+    () =>
+      displayedInvoices.filter(
+        (inv) => inv.status === "OPEN" || inv.status === "PARTIALLY_PAID",
+      ),
+    [displayedInvoices],
+  );
+
+  const selectedTotal = useMemo(
+    () =>
+      displayedInvoices
+        .filter((inv) => selectedIds.has(inv.id))
+        .reduce((sum, inv) => sum + parseFloat(inv.balance), 0),
+    [displayedInvoices, selectedIds],
+  );
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (
+      selectedIds.size === payableInvoices.length &&
+      payableInvoices.length > 0
+    ) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(payableInvoices.map((inv) => inv.id)));
+    }
+  };
 
   const handleSort = (field: SortField) => {
     if (field === sortField) {
@@ -729,12 +1010,57 @@ export default function SupplierInvoicesPage() {
         </div>
       )}
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="mb-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/[0.03] px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium">
+              {selectedIds.size} invoice{selectedIds.size !== 1 ? "s" : ""}{" "}
+              selected
+            </span>
+            <span className="text-sm text-muted-foreground">
+              Total: {fmtPeso(selectedTotal)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
+            >
+              Clear
+            </button>
+            <button
+              onClick={() => setShowBulkPayDialog(true)}
+              className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+            >
+              Mark as Paid
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
+                <th className="w-10 px-2 py-2.5">
+                  {payableInvoices.length > 0 && (
+                    <button
+                      onClick={toggleSelectAll}
+                      className="flex items-center justify-center"
+                    >
+                      {selectedIds.size === 0 ? (
+                        <Square size={14} className="text-muted-foreground/40" />
+                      ) : selectedIds.size === payableInvoices.length ? (
+                        <CheckSquare size={14} className="text-primary" />
+                      ) : (
+                        <MinusSquare size={14} className="text-primary" />
+                      )}
+                    </button>
+                  )}
+                </th>
                 <th className="px-3 py-2.5 text-left">
                   <SortableHeader label="Invoice #" field="invoiceNumber" activeField={sortField} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
@@ -768,7 +1094,7 @@ export default function SupplierInvoicesPage() {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i} className="border-b border-border">
-                    <td colSpan={9} className="px-3 py-3">
+                    <td colSpan={10} className="px-3 py-3">
                       <div className="h-5 animate-pulse rounded bg-muted" />
                     </td>
                   </tr>
@@ -776,7 +1102,7 @@ export default function SupplierInvoicesPage() {
               ) : displayedInvoices.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     className="px-3 py-12 text-center text-sm text-muted-foreground"
                   >
                     {invoices.length === 0
@@ -792,6 +1118,32 @@ export default function SupplierInvoicesPage() {
                       i % 2 === 0 ? "bg-background" : "bg-muted/20"
                     }`}
                   >
+                    <td className="w-10 px-2 py-2.5">
+                      {inv.status === "OPEN" ||
+                      inv.status === "PARTIALLY_PAID" ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelect(inv.id);
+                          }}
+                          className="flex items-center justify-center"
+                        >
+                          {selectedIds.has(inv.id) ? (
+                            <CheckSquare
+                              size={14}
+                              className="text-primary"
+                            />
+                          ) : (
+                            <Square
+                              size={14}
+                              className="text-muted-foreground/40"
+                            />
+                          )}
+                        </button>
+                      ) : (
+                        <span className="inline-block w-[14px]" />
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 font-mono text-[13px] font-semibold text-primary">
                       {inv.invoiceNumber}
                     </td>
@@ -883,6 +1235,21 @@ export default function SupplierInvoicesPage() {
         open={showModal}
         onClose={() => setShowModal(false)}
         onCreated={() => fetchInvoices()}
+        token={token!}
+        locationId={locationId!}
+      />
+
+      {/* Bulk Pay Dialog */}
+      <BulkPayDialog
+        open={showBulkPayDialog}
+        onClose={() => setShowBulkPayDialog(false)}
+        onSuccess={() => {
+          fetchInvoices();
+          setSelectedIds(new Set());
+        }}
+        invoiceCount={selectedIds.size}
+        totalAmount={selectedTotal}
+        invoiceIds={Array.from(selectedIds)}
         token={token!}
         locationId={locationId!}
       />

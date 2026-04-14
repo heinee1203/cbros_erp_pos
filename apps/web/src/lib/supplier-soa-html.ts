@@ -32,10 +32,8 @@ function fmtDate(d: string): string {
 }
 
 export function buildSupplierSOAHtml(d: SupplierSOAData): string {
-  const sorted = [...d.invoices].sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
+  const sorted = [...(d.invoices || [])].sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
   const totalAmount = sorted.reduce((s, i) => s + i.totalAmount, 0);
-  const totalPaid = sorted.reduce((s, i) => s + i.paidAmount, 0);
-  const totalBalance = sorted.reduce((s, i) => s + i.balance, 0);
 
   const dateRange = sorted.length > 0
     ? `${fmtDate(sorted[0].invoiceDate)} \u2013 ${fmtDate(sorted[sorted.length - 1].invoiceDate)}`
@@ -44,15 +42,10 @@ export function buildSupplierSOAHtml(d: SupplierSOAData): string {
   const now = new Date();
 
   const rows = sorted.map((inv) => {
-    const isOverdue = new Date(inv.dueDate) < now && inv.balance > 0;
-    const dueDateStyle = isOverdue ? 'style="color:#dc2626;font-weight:600"' : '';
     return `<tr>
-<td style="font-family:monospace;font-weight:600">${esc(inv.invoiceNumber)}</td>
 <td>${fmtDate(inv.invoiceDate)}</td>
-<td ${dueDateStyle}>${fmtDate(inv.dueDate)}</td>
+<td style="font-family:monospace;font-weight:600">${esc(inv.invoiceNumber)}</td>
 <td style="text-align:right">${fmt(inv.totalAmount)}</td>
-<td style="text-align:right">${fmt(inv.paidAmount)}</td>
-<td style="text-align:right;font-weight:600">${fmt(inv.balance)}</td>
 </tr>`;
   }).join("\n");
 
@@ -79,7 +72,7 @@ td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; }
 
 <div class="info">
 <div><b>Supplier:</b> ${esc(d.supplierName)}</div>
-${d.soaNumber ? `<div><b>SOA #:</b> <span style="font-family:monospace;font-weight:700">${esc(d.soaNumber)}</span></div>` : ""}
+${d.soaNumber ? `<div><b>SOA #:</b> <span style="font-family:monospace;font-weight:700">${esc(d.soaNumber.replace(/^SUPP-SOA-/, ""))}</span></div>` : ""}
 <div><b>Period:</b> ${dateRange}</div>
 <div><b>Date:</b> ${fmtDate(now.toISOString())}</div>
 </div>
@@ -87,21 +80,16 @@ ${d.soaNumber ? `<div><b>SOA #:</b> <span style="font-family:monospace;font-weig
 <table>
 <thead>
 <tr>
-<th>Invoice #</th>
-<th>Date</th>
-<th>Due Date</th>
-<th class="right">Amount</th>
-<th class="right">Paid</th>
-<th class="right">Balance</th>
+<th style="width:30%">Date</th>
+<th style="width:35%">Invoice #</th>
+<th class="right" style="width:35%">Amount</th>
 </tr>
 </thead>
 <tbody>
 ${rows}
 <tr class="total-row">
-<td colspan="3" style="text-align:right">TOTAL</td>
+<td colspan="2" style="text-align:right">TOTAL</td>
 <td style="text-align:right">${fmt(totalAmount)}</td>
-<td style="text-align:right">${fmt(totalPaid)}</td>
-<td style="text-align:right">${fmt(totalBalance)}</td>
 </tr>
 </tbody>
 </table>

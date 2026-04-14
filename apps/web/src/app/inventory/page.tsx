@@ -357,106 +357,103 @@ export default function InventoryPage() {
     return value;
   }, []);
 
-  // Export settings (default unchecked — cost is sensitive, stock adds many columns)
-  const [exportIncludeCost, setExportIncludeCost] = useState(false);
-  const [exportIncludeStock, setExportIncludeStock] = useState(false);
+  /** Generate a URL-friendly handle from a product name (export-time fallback) */
+  const generateHandle = useCallback((name: string): string =>
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .substring(0, 100),
+  []);
 
-  const buildCSV = useCallback((
-    items: ExportProduct[],
-    locs: Array<{ id: string; name: string }>,
-    includeCost: boolean,
-    includeStock: boolean,
-  ): string => {
-    // ── Build dynamic header ──
-    const headers: string[] = [
-      "Handle", "SKU", "Barcode", "Name", "Category", "Sub-category", "Brand", "Family",
-      "Description", "Unit", "Active", "Supplier", "Price",
-    ];
-    if (includeCost) {
-      headers.push("Cost", "Markup %");
-    }
-    headers.push(
-      "Track Serial", "Track DOT", "Special Order",
-      "Option 1", "Option 1 value", "Option 2", "Option 2 value", "Option 3", "Option 3 value",
-      "OEM Number", "Created at", "Updated at",
-    );
-    if (includeStock) {
-      for (const loc of locs) {
-        headers.push(`In stock [${loc.name}]`, `Reorder [${loc.name}]`, `Optimal [${loc.name}]`);
-      }
-    }
-
-    const lines = [headers.map(escapeCSVCell).join(",")];
-
-    // ── Build rows ──
-    for (const item of items) {
-      // THE CORE FIX: Name = parent name for variants, own name for standalone
-      const displayName = item.parentProductId
-        ? sanitizeText(item.parentName ?? item.name)
-        : sanitizeText(item.name);
-
-      // Option columns from optionEntries (per-parent option type + variant value)
-      const opt1Name  = item.optionEntries?.[0]?.typeName ?? "";
-      const opt1Value = item.optionEntries?.[0]?.value ?? (item.parentProductId ? item.name : "");
-      const opt2Name  = item.optionEntries?.[1]?.typeName ?? "";
-      const opt2Value = item.optionEntries?.[1]?.value ?? "";
-      const opt3Name  = item.optionEntries?.[2]?.typeName ?? "";
-      const opt3Value = item.optionEntries?.[2]?.value ?? "";
-
-      // Active = Y only when active AND not discontinued
-      const active = (item.isActive && !item.discontinued) ? "Y" : "N";
-
-      const row: string[] = [
-        sanitizeText(item.handle),
-        item.sku ?? "",
-        item.barcode ?? "",
-        displayName,
-        sanitizeText(item.categoryName ?? ""),
-        sanitizeText(item.subcategoryName ?? ""),
-        sanitizeText(item.brandName ?? ""),
-        sanitizeText(item.familyName ?? ""),
-        sanitizeText(item.description ?? ""),
-        sanitizeText(item.sellingUnit ?? ""),
-        active,
-        sanitizeText(item.supplierName ?? ""),
-        item.unitPrice ?? "0.00",
+  /**
+   * Build full export CSV — 22 static columns + 5 per location.
+   * Restores the complete column set from before the Loyverse refactor,
+   * plus 6 Option columns and the parent-name / handle-fallback fixes.
+   */
+  const buildCSV = useCallback(
+    (items: ExportProduct[], locs: Array<{ id: string; name: string }>): string => {
+      const staticHeaders = [
+        "Handle", "Name", "SKU", "Barcode", "OEM Number",
+        "Family", "Category", "Sub-category", "Brand",
+        "Default Price", "Cost", "Variable Price", "Track Stock", "Description",
+        "Units per Case", "Packaging Unit",
+        "Option 1 name", "Option 1 value",
+        "Option 2 name", "Option 2 value",
+        "Option 3 name", "Option 3 value",
       ];
+      const locationHeaders = locs.flatMap((loc) => [
+        `Available for sale [${loc.name}]`,
+        `Price [${loc.name}]`,
+        `In stock [${loc.name}]`,
+        `Low stock [${loc.name}]`,
+        `Optimal stock [${loc.name}]`,
+      ]);
+      const headers = [...staticHeaders, ...locationHeaders];
+      const lines = [headers.map(escapeCSVCell).join(",")];
 
-      if (includeCost) {
-        const cost = item.costPrice ? parseFloat(item.costPrice) : 0;
-        const price = item.unitPrice ? parseFloat(item.unitPrice) : 0;
-        const markup = cost > 0 ? (((price - cost) / cost) * 100).toFixed(2) : "";
-        row.push(cost > 0 ? cost.toFixed(2) : "0.00", markup);
+      for (const item of items) {
+        // Name = parent name for variants, own name for standalone
+        const displayName = item.parentProductId
+          ? sanitizeText(item.parentName ?? item.name)
+          : sanitizeText(item.name);
+
+        // Handle — generate from name if DB field is empty
+        const handle = sanitizeText(item.handle) || generateHandle(displayName);
+
+        // Option columns from optionEntries
+        const opt1Name  = item.optionEntries?.[0]?.typeName ?? "";
+        const opt1Value = item.optionEntries?.[0]?.value ?? (item.parentProductId ? item.name : "");
+        const opt2Name  = item.optionEntries?.[1]?.typeName ?? "";
+        const opt2Value = item.optionEntries?.[1]?.value ?? "";
+        const opt3Name  = item.optionEntries?.[2]?.typeName ?? "";
+        const opt3Value = item.optionEntries?.[2]?.value ?? "";
+
+        const staticCells = [
+          handle,                                                  // Handle
+          displayName,                                             // Name (parent for variants)
+          item.sku ?? "",                                          // SKU
+          item.barcode ?? "",                                      // Barcode
+          item.oemNumber ?? "",                                    // OEM Number
+          item.familyName ?? "",                                   // Family
+          sanitizeText(item.categoryName ?? ""),                   // Category
+          item.subcategoryName ?? "",                              // Sub-category
+          item.brandName ?? "",                                    // Brand
+          item.unitPrice ?? "0.00",                                // Default Price
+          item.costPrice ?? "0.00",                                // Cost
+          item.isVariablePrice ? "Y" : "N",                       // Variable Price
+          "Y",                                                     // Track Stock
+          sanitizeText(item.description ?? ""),                    // Description
+          String(item.unitsPerCase ?? 1),                          // Units per Case
+          item.packagingUnit ?? "",                                // Packaging Unit
+          opt1Name,                                                // Option 1 name
+          opt1Value,                                               // Option 1 value
+          opt2Name,                                                // Option 2 name
+          opt2Value,                                               // Option 2 value
+          opt3Name,                                                // Option 3 name
+          opt3Value,                                               // Option 3 value
+        ];
+
+        const locationCells = locs.flatMap((loc) => {
+          const inv = (item.locations ?? []).find((l) => l.locationId === loc.id);
+          return [
+            inv?.availableForSale ? "Y" : "N",                    // Available for sale
+            "",                                                    // Price (per-location)
+            String(inv?.stockLevel ?? 0),                          // In stock
+            String(inv?.reorderPoint ?? 0),                        // Low stock
+            String(inv?.optimalStock ?? 0),                        // Optimal stock
+          ];
+        });
+
+        lines.push([...staticCells, ...locationCells].map(escapeCSVCell).join(","));
       }
 
-      row.push(
-        item.isSerialized ? "Y" : "N",
-        item.isTire ? "Y" : "N",
-        item.specialOrder ? "Y" : "N",
-        opt1Name, opt1Value,
-        opt2Name, opt2Value,
-        opt3Name, opt3Value,
-        sanitizeText(item.oemNumber ?? ""),
-        item.createdAt ?? "",
-        item.updatedAt ?? "",
-      );
-
-      if (includeStock) {
-        for (const loc of locs) {
-          const inv = item.locations?.find((l) => l.locationId === loc.id);
-          row.push(
-            String(inv?.stockLevel ?? 0),
-            String(inv?.reorderPoint ?? 0),
-            String(inv?.optimalStock ?? 0),
-          );
-        }
-      }
-
-      lines.push(row.map(escapeCSVCell).join(","));
-    }
-
-    return "\uFEFF" + lines.join("\n");
-  }, [escapeCSVCell, sanitizeText]);
+      return "\uFEFF" + lines.join("\n");
+    },
+    [escapeCSVCell, sanitizeText, generateHandle],
+  );
 
   const downloadCSV = useCallback((csv: string, filename: string) => {
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -475,13 +472,13 @@ export default function InventoryPage() {
       const params = new URLSearchParams();
       params.set("sortBy", sortBy);
       params.set("sortDir", sortDir);
+      params.set("includeStock", "true");
+      params.set("includeCost", "true");
       if (debouncedSearch && debouncedSearch.length >= 2) params.set("search", debouncedSearch);
       if (familyFilter) params.set("familyId", familyFilter);
       if (categoryFilter) params.set("subCategoryId", categoryFilter);
       if (subCategoryFilter) params.set("subcategoryId", subCategoryFilter);
       if (brandFilter) params.set("brandId", brandFilter);
-      if (exportIncludeCost) params.set("includeCost", "true");
-      if (exportIncludeStock) params.set("includeStock", "true");
 
       const resp = await apiFetch<ExportResponse>(
         `/products/export?${params.toString()}`,
@@ -489,60 +486,55 @@ export default function InventoryPage() {
       );
 
       const date = new Date().toISOString().slice(0, 10);
-      const parts = ["items-export", date];
-      if (exportIncludeCost) parts.push("with-cost");
-      if (exportIncludeStock) parts.push("with-stock");
-      const filename = parts.join("-") + ".csv";
-
-      downloadCSV(buildCSV(resp.data, resp.locations, exportIncludeCost, exportIncludeStock), filename);
+      downloadCSV(buildCSV(resp.data, resp.locations), `items-export-${date}.csv`);
     } catch {
       // Silent fail — user can retry
     }
-  }, [sortBy, sortDir, debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, brandFilter, exportIncludeCost, exportIncludeStock, token, apiLocationId, buildCSV, downloadCSV]);
+  }, [sortBy, sortDir, debouncedSearch, familyFilter, categoryFilter, subCategoryFilter, brandFilter, token, apiLocationId, buildCSV, downloadCSV]);
 
   const handleExportSelected = useCallback(async () => {
     if (selectedIds.size === 0) return;
     try {
       const params = new URLSearchParams();
-      if (exportIncludeCost) params.set("includeCost", "true");
-      if (exportIncludeStock) params.set("includeStock", "true");
+      params.set("includeStock", "true");
+      params.set("includeCost", "true");
       const resp = await apiFetch<ExportResponse>(
         `/products/export?${params.toString()}`,
         { token, locationId: apiLocationId },
       );
       const selected = resp.data.filter((p) => selectedIds.has(p.id));
       const date = new Date().toISOString().slice(0, 10);
-      downloadCSV(buildCSV(selected, resp.locations, exportIncludeCost, exportIncludeStock), `items-export-${date}-selected.csv`);
+      downloadCSV(buildCSV(selected, resp.locations), `items-export-${date}-selected.csv`);
     } catch {}
-  }, [selectedIds, exportIncludeCost, exportIncludeStock, token, apiLocationId, buildCSV, downloadCSV]);
+  }, [selectedIds, token, apiLocationId, buildCSV, downloadCSV]);
 
   /* ── CSV Import helpers ── */
   const handleDownloadTemplate = useCallback(() => {
-    const locs = orgLocations;
-    const staticHeaders = [
-      "Handle", "Name", "SKU", "Barcode", "OEM Number",
-      "Family", "Category", "Sub-category", "Brand",
-      "Default Price", "Cost", "Variable Price", "Track Stock", "Description",
-      "Units per Case", "Packaging Unit",
+    // Exact Loyverse column order — 15 columns
+    const headers = [
+      "Handle", "SKU", "Name", "Category", "Description", "Sold by weight",
+      "Option 1 name", "Option 1 value", "Option 2 name", "Option 2 value",
+      "Option 3 name", "Option 3 value", "Default price", "Cost", "Barcode",
     ];
-    const locationHeaders = locs.flatMap((loc: LocationRow) => [
-      `Available for sale [${loc.name}]`,
-      `Price [${loc.name}]`,
-      `In stock [${loc.name}]`,
-      `Low stock [${loc.name}]`,
-      `Optimal stock [${loc.name}]`,
-    ]);
-    const headers = [...staticHeaders, ...locationHeaders];
 
-    const staticSample = [
-      "sample-handle", "Sample Brake Pad", "SAMPLE-001", "1234567890123", "MB-000001",
-      "Brakes", "Brake Pad", "", "AKEBONO",
-      "2500.00", "1630.00", "N", "Y", "Sample item - delete this row",
-      "1", "",
+    // Example row showing the Loyverse-style variant pattern
+    const sampleRow = [
+      "l-wrench",           // Handle — groups variants of the same parent
+      "10032",              // SKU
+      "GTX L WRENCH",       // Name — PARENT name (not variant name)
+      "Tools",              // Category
+      "Sample item - delete this row", // Description
+      "N",                  // Sold by weight (N=each, Y=weight)
+      "SIZE",               // Option 1 name — option type per parent
+      "# 17",              // Option 1 value — variant value goes here
+      "",                   // Option 2 name
+      "",                   // Option 2 value
+      "",                   // Option 3 name
+      "",                   // Option 3 value
+      "85.00",              // Default price
+      "",                   // Cost
+      "2001570881301",      // Barcode (last column)
     ];
-    const locationSample = locs.flatMap(() => ["Y", "", "0", "10", "25"]);
-    const sampleRow = [...staticSample, ...locationSample];
-
     const csv = "\uFEFF" + headers.map(escapeCSVCell).join(",") + "\n" + sampleRow.map(escapeCSVCell).join(",") + "\n";
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -978,14 +970,6 @@ export default function InventoryPage() {
                 <Download size={13} />
                 Import
               </button>
-              <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
-                <input type="checkbox" checked={exportIncludeCost} onChange={(e) => setExportIncludeCost(e.target.checked)} className="accent-primary w-3 h-3" />
-                Cost
-              </label>
-              <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
-                <input type="checkbox" checked={exportIncludeStock} onChange={(e) => setExportIncludeStock(e.target.checked)} className="accent-primary w-3 h-3" />
-                Stock
-              </label>
               <button onClick={handleExport} className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-colors hover:bg-muted">
                 <Upload size={13} />
                 Export

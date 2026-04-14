@@ -67,6 +67,9 @@ const PAYMENT_TERMS = [
   { value: 45, label: "Net 45" },
   { value: 60, label: "Net 60" },
   { value: 90, label: "Net 90" },
+  { value: 120, label: "Net 120" },
+  { value: 150, label: "Net 150" },
+  { value: 180, label: "Net 180" },
 ];
 
 const EMPTY_FORM: Omit<SupplierDetail, "id" | "avgLeadTimeDays" | "createdAt" | "updatedAt"> = {
