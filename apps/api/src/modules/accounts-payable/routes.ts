@@ -83,6 +83,7 @@ const invoiceQuerySchema = z.object({
   overdue: z.enum(["true", "false"]).optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
+  search: z.string().optional(),
   cursor: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
@@ -121,6 +122,7 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
         overdue: q.overdue === "true",
         dateFrom: q.dateFrom,
         dateTo: q.dateTo,
+        search: q.search,
       },
       q.cursor,
       q.limit,

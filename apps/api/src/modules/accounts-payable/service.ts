@@ -8,7 +8,7 @@ import {
   suppliers,
   supplierReturns,
 } from "@apex/database/schema";
-import { eq, and, sql, desc, asc, lt, inArray, or, gte, lte, type SQL } from "drizzle-orm";
+import { eq, and, sql, desc, asc, lt, inArray, or, gte, lte, ilike, type SQL } from "drizzle-orm";
 
 // ════════════════════════════════════════════════════════════════════
 // NUMBER TO WORDS (Philippine Peso)
@@ -71,6 +71,7 @@ export interface InvoiceFilters {
   overdue?: boolean;
   dateFrom?: string;
   dateTo?: string;
+  search?: string;
 }
 
 export async function listInvoices(
@@ -106,6 +107,17 @@ export async function listInvoices(
   }
   if (filters.dateTo) {
     conditions.push(lte(supplierInvoices.invoiceDate, filters.dateTo));
+  }
+
+  if (filters.search && filters.search.trim()) {
+    const pattern = `%${filters.search.trim()}%`;
+    conditions.push(
+      or(
+        ilike(supplierInvoices.invoiceNumber, pattern),
+        ilike(suppliers.name, pattern),
+        ilike(supplierInvoices.notes, pattern),
+      )!,
+    );
   }
 
   if (cursor) {
@@ -2422,6 +2434,7 @@ export async function getSummary(orgId: string) {
       SELECT
         COALESCE(SUM(balance::numeric), 0) AS total_payables,
         COALESCE(SUM(CASE WHEN due_date < CURRENT_DATE AND status IN ('OPEN', 'PARTIALLY_PAID') THEN balance::numeric ELSE 0 END), 0) AS total_overdue,
+        COALESCE(SUM(CASE WHEN due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days' THEN balance::numeric ELSE 0 END), 0) AS due_this_week,
         COUNT(DISTINCT supplier_id) AS supplier_count,
         COUNT(*) AS invoice_count
       FROM supplier_invoices
