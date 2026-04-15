@@ -353,7 +353,7 @@ export function QuickAddDrawer({
             </div>
 
             {/* Track Inventory */}
-            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-1.5">
               <div>
                 <p className="text-[13px] font-medium text-foreground">Track Inventory</p>
                 <p className="text-[11px] text-muted-foreground">Monitor stock levels for this item</p>

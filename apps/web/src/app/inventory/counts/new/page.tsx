@@ -289,7 +289,7 @@ export default function NewCountPage() {
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Reason, frequency, or special instructions..."
               rows={3}
-              className="w-full resize-none rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary/20"
+              className="w-full resize-none rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary focus:ring-1 focus:ring-primary/20"
             />
           </div>
 
@@ -304,14 +304,14 @@ export default function NewCountPage() {
           <div className="flex items-center gap-3 pt-2">
             <Link
               href="/inventory/counts"
-              className="flex-1 rounded-md border border-border px-4 py-2.5 text-center text-sm font-medium text-foreground transition-colors hover:bg-accent"
+              className="flex-1 rounded-md border border-border px-4 py-1.5 text-center text-sm font-medium text-foreground transition-colors hover:bg-accent"
             >
               Cancel
             </Link>
             <button
               type="submit"
               disabled={!label || createMutation.isPending}
-              className="flex flex-1 items-center justify-center gap-2 rounded-md bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:opacity-50"
+              className="flex flex-1 items-center justify-center gap-2 rounded-md bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:opacity-50"
             >
               {createMutation.isPending ? (
                 <Loader2 size={14} className="animate-spin" />

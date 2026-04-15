@@ -314,7 +314,7 @@ export default function APAgingReportPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="px-3 py-2.5 text-left">
+                <th className="px-3 py-1.5 text-left">
                   <SortableHeader
                     label="Supplier"
                     field="supplier"
@@ -324,7 +324,7 @@ export default function APAgingReportPage() {
                     align="left"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="Current"
                     field="current"
@@ -334,7 +334,7 @@ export default function APAgingReportPage() {
                     align="right"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="1-30"
                     field="days1to30"
@@ -344,7 +344,7 @@ export default function APAgingReportPage() {
                     align="right"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="31-60"
                     field="days31to60"
@@ -354,7 +354,7 @@ export default function APAgingReportPage() {
                     align="right"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="61-90"
                     field="days61to90"
@@ -364,7 +364,7 @@ export default function APAgingReportPage() {
                     align="right"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="91-120"
                     field="days91to120"
@@ -374,7 +374,7 @@ export default function APAgingReportPage() {
                     align="right"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="121-180"
                     field="days121to180"
@@ -384,7 +384,7 @@ export default function APAgingReportPage() {
                     align="right"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="180+"
                     field="over180"
@@ -394,7 +394,7 @@ export default function APAgingReportPage() {
                     align="right"
                   />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader
                     label="Total"
                     field="total"
@@ -428,31 +428,31 @@ export default function APAgingReportPage() {
                       i % 2 === 0 ? "bg-background" : "bg-muted/10"
                     }`}
                   >
-                    <td className="px-3 py-2.5 text-[13px] font-medium">
+                    <td className="px-3 py-1.5 text-[13px] font-medium">
                       {r.supplierName}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                       {fmtPeso(r.current)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                       {fmtPeso(r.days1to30)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                       {fmtPeso(r.days31to60)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                       {fmtPeso(r.days61to90)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                       {fmtPeso(r.days91to120)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                       {fmtPeso(r.days121to180)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                       {fmtPeso(r.over180)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[13px] font-semibold tabular-nums">
+                    <td className="px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums">
                       {fmtPeso(r.total)}
                     </td>
                   </tr>
@@ -462,29 +462,29 @@ export default function APAgingReportPage() {
             {rows.length > 0 && (
               <tfoot>
                 <tr className="bg-muted/40">
-                  <td className="px-3 py-2.5 text-[13px] font-bold">Total</td>
-                  <td className="px-3 py-2.5 text-right text-[12px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-[13px] font-bold">Total</td>
+                  <td className="px-3 py-1.5 text-right text-[12px] font-bold tabular-nums">
                     {fmtPeso(totals.current)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[12px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-right text-[12px] font-bold tabular-nums">
                     {fmtPeso(totals.days1to30)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[12px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-right text-[12px] font-bold tabular-nums">
                     {fmtPeso(totals.days31to60)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[12px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-right text-[12px] font-bold tabular-nums">
                     {fmtPeso(totals.days61to90)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[12px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-right text-[12px] font-bold tabular-nums">
                     {fmtPeso(totals.days91to120)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[12px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-right text-[12px] font-bold tabular-nums">
                     {fmtPeso(totals.days121to180)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[12px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-right text-[12px] font-bold tabular-nums">
                     {fmtPeso(totals.over180)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[13px] font-bold tabular-nums">
+                  <td className="px-3 py-1.5 text-right text-[13px] font-bold tabular-nums">
                     {fmtPeso(totals.total)}
                   </td>
                 </tr>

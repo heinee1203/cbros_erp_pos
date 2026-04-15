@@ -277,7 +277,7 @@ export default function SuggestedOrdersPage() {
     <div className="flex h-full flex-col">
       {/* ── Success Banner ── */}
       {successMsg && (
-        <div className="flex items-center gap-2 border-b border-green-200 bg-green-50 px-6 py-2.5 text-sm text-green-800">
+        <div className="flex items-center gap-2 border-b border-green-200 bg-green-50 px-6 py-1.5 text-sm text-green-800">
           <Check size={14} />
           {successMsg}
           <button onClick={() => setSuccessMsg(null)} className="ml-auto">
@@ -417,7 +417,7 @@ export default function SuggestedOrdersPage() {
 
       {/* ── Bulk Action Bar ── */}
       {selected.size > 0 && (
-        <div className="flex items-center gap-3 border-b border-border bg-blue-50 px-6 py-2.5">
+        <div className="flex items-center gap-3 border-b border-border bg-blue-50 px-6 py-1.5">
           <span className="text-xs font-medium text-blue-800">
             {selected.size} selected
           </span>
@@ -471,7 +471,7 @@ export default function SuggestedOrdersPage() {
             <table className="w-full text-left text-sm">
               <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
                 <tr>
-                  <th scope="col" className="w-10 px-4 py-2.5">
+                  <th scope="col" className="w-10 px-4 py-1.5">
                     <input
                       type="checkbox"
                       checked={rows.length > 0 && selected.size === rows.length}
@@ -480,16 +480,16 @@ export default function SuggestedOrdersPage() {
                     />
                   </th>
                   <SortHeader label="Priority" field="priority" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">ABC</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider">ABC</th>
                   <SortHeader label="Product" field="productName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
                   <SortHeader label="Supplier" field="supplierName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
                   <SortHeader label="Current Stock" field="currentStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Pending In</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-right">Pending In</th>
                   <SortHeader label="Demand/Day" field="avgDailyDemand" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">ROP</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-right">ROP</th>
                   <SortHeader label="Suggested Qty" field="suggestedQty" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Est. Cost</th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-center">Actions</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-right">Est. Cost</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -521,7 +521,7 @@ export default function SuggestedOrdersPage() {
       </div>
 
       {/* ── Footer ── */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {rows.length} item{rows.length !== 1 ? "s" : ""} loaded
@@ -637,7 +637,7 @@ function SuggestionRow({
   return (
     <tr className="group transition-colors hover:bg-muted/30">
       {/* Checkbox */}
-      <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+      <td className="px-4 py-1.5" onClick={(e) => e.stopPropagation()}>
         <input
           type="checkbox"
           checked={isSelected}
@@ -647,21 +647,21 @@ function SuggestionRow({
       </td>
 
       {/* Priority */}
-      <td className="whitespace-nowrap px-4 py-2.5 cursor-pointer" onClick={onClick}>
+      <td className="whitespace-nowrap px-4 py-1.5 cursor-pointer" onClick={onClick}>
         <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", priorityCfg.badge)}>
           {priorityCfg.label}
         </span>
       </td>
 
       {/* ABC */}
-      <td className="whitespace-nowrap px-4 py-2.5 cursor-pointer" onClick={onClick}>
+      <td className="whitespace-nowrap px-4 py-1.5 cursor-pointer" onClick={onClick}>
         <span className={cn("inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold", abcCfg.badge)}>
           {row.abcClass}
         </span>
       </td>
 
       {/* Product */}
-      <td className="max-w-[260px] px-4 py-2.5 cursor-pointer" onClick={onClick}>
+      <td className="max-w-[260px] px-4 py-1.5 cursor-pointer" onClick={onClick}>
         <div className="truncate text-sm font-medium text-foreground" title={row.productName}>
           {row.productName}
         </div>
@@ -669,34 +669,34 @@ function SuggestionRow({
       </td>
 
       {/* Supplier */}
-      <td className="max-w-[140px] whitespace-nowrap px-4 py-2.5 text-sm text-foreground cursor-pointer" onClick={onClick}>
+      <td className="max-w-[140px] whitespace-nowrap px-4 py-1.5 text-sm text-foreground cursor-pointer" onClick={onClick}>
         <span className="truncate block" title={row.supplierName ?? undefined}>
           {row.supplierName ?? "—"}
         </span>
       </td>
 
       {/* Current Stock */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground cursor-pointer" onClick={onClick}>
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-foreground cursor-pointer" onClick={onClick}>
         {row.currentStock.toLocaleString()}
       </td>
 
       {/* Pending In */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
         {row.pendingInbound.toLocaleString()}
       </td>
 
       {/* Demand/Day */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
         {avgDemand.toFixed(1)}
       </td>
 
       {/* ROP */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
         {rop.toFixed(1)}
       </td>
 
       {/* Suggested Qty (editable) */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+      <td className="whitespace-nowrap px-4 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
         <input
           type="number"
           min={1}
@@ -709,12 +709,12 @@ function SuggestionRow({
       </td>
 
       {/* Est. Cost */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
         —
       </td>
 
       {/* Actions */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+      <td className="whitespace-nowrap px-4 py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-center gap-1">
           <button
             onClick={() => {
@@ -807,7 +807,7 @@ function SortHeader({
     <th
       scope="col"
       className={cn(
-        "cursor-pointer select-none whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
+        "cursor-pointer select-none whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
         align === "right" && "text-right",
         isActive && "text-foreground",
       )}

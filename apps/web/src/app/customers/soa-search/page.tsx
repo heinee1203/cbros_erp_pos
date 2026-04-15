@@ -87,8 +87,8 @@ export default function SOASearchPage() {
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.06]"><FileText size={16} className="text-primary" /></div>
           <div>
-            <h1 className="text-[18px] font-semibold tracking-tight text-foreground">SOA Search</h1>
-            <p className="text-[13px] text-muted-foreground">Search and manage all Statements of Account</p>
+            <h1 className="text-[18px] font-semibold tracking-tight text-foreground">SOA History</h1>
+            <p className="text-[13px] text-muted-foreground">Search and reprint all Statements of Account</p>
           </div>
         </div>
       </div>
@@ -142,7 +142,7 @@ export default function SOASearchPage() {
         ) : (
           <div className="divide-y divide-border">
             {records.map((r) => (
-              <div key={r.id} className="flex items-center px-4 py-2.5 text-[13px] hover:bg-accent/30">
+              <div key={r.id} className="flex items-center px-4 py-1.5 text-[13px] hover:bg-accent/30">
                 <div className="w-32 font-mono text-[12px] font-semibold text-primary">{r.soaNumber}</div>
                 <div className="flex-1 min-w-0">
                   <button onClick={() => router.push(`/customers/${r.customerId}`)} className="text-[13px] font-medium text-foreground hover:text-primary hover:underline truncate block text-left">

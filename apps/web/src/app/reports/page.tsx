@@ -550,28 +550,28 @@ export default function ReportsOverviewPage() {
           <table className="w-full text-[12px]">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th scope="col" className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Date
                 </th>
-                <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Gross Sales
                 </th>
-                <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Refunds
                 </th>
-                <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Discounts
                 </th>
-                <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Net Sales
                 </th>
-                <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Cost of Goods
                 </th>
-                <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Gross Profit
                 </th>
-                <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   Margin
                 </th>
               </tr>
@@ -581,7 +581,7 @@ export default function ReportsOverviewPage() {
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="border-b border-border last:border-0">
                     {Array.from({ length: 8 }).map((__, j) => (
-                      <td key={j} className="px-4 py-2.5">
+                      <td key={j} className="px-4 py-1.5">
                         <div className="h-4 animate-pulse rounded bg-muted/40" />
                       </td>
                     ))}
@@ -626,32 +626,32 @@ export default function ReportsOverviewPage() {
                         key={day.date}
                         className="border-b border-border transition-colors last:border-0 hover:bg-muted/20"
                       >
-                        <td className="px-5 py-2.5 text-[12px] font-medium text-foreground">
+                        <td className="px-5 py-1.5 text-[12px] font-medium text-foreground">
                           {new Date(day.date).toLocaleDateString("en-PH", {
                             weekday: "short",
                             day: "numeric",
                             month: "short",
                           })}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[12px] text-foreground">
+                        <td className="px-4 py-1.5 text-right font-mono text-[12px] text-foreground">
                           {fmtPeso(day.grossSales)}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[12px] text-red-500">
+                        <td className="px-4 py-1.5 text-right font-mono text-[12px] text-red-500">
                           {parseFloat(day.refunds) > 0 ? `(${fmtPeso(day.refunds)})` : fmtPeso(day.refunds)}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[12px] text-muted-foreground">
+                        <td className="px-4 py-1.5 text-right font-mono text-[12px] text-muted-foreground">
                           {fmtPeso(day.discounts)}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[12px] font-medium text-foreground">
+                        <td className="px-4 py-1.5 text-right font-mono text-[12px] font-medium text-foreground">
                           {fmtPeso(day.netSales)}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[12px] text-muted-foreground">
+                        <td className="px-4 py-1.5 text-right font-mono text-[12px] text-muted-foreground">
                           {fmtPeso(day.costOfGoods)}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[12px] font-medium text-foreground">
+                        <td className="px-4 py-1.5 text-right font-mono text-[12px] font-medium text-foreground">
                           {fmtPeso(day.grossProfit)}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[12px]">
+                        <td className="px-4 py-1.5 text-right font-mono text-[12px]">
                           <span
                             className={cn(
                               "font-medium",
@@ -671,28 +671,28 @@ export default function ReportsOverviewPage() {
 
                   {/* Footer totals row */}
                   <tr className="border-t-2 border-border bg-muted/30">
-                    <td className="px-5 py-2.5 text-[12px] font-semibold text-foreground">
+                    <td className="px-5 py-1.5 text-[12px] font-semibold text-foreground">
                       Total
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-foreground">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] font-semibold text-foreground">
                       {fmtPeso(totals.grossSales)}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-red-500">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] font-semibold text-red-500">
                       {totals.refunds > 0 ? `(${fmtPeso(totals.refunds)})` : fmtPeso(totals.refunds)}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-muted-foreground">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] font-semibold text-muted-foreground">
                       {fmtPeso(totals.discounts)}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-foreground">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] font-semibold text-foreground">
                       {fmtPeso(totals.netSales)}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-muted-foreground">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] font-semibold text-muted-foreground">
                       {fmtPeso(totals.costOfGoods)}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] font-semibold text-foreground">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] font-semibold text-foreground">
                       {fmtPeso(totals.grossProfit)}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px]">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px]">
                       <span
                         className={cn(
                           "font-semibold",
@@ -763,19 +763,19 @@ function TopItemsTable({
         <table className="w-full text-[12px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              <th scope="col" className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground w-8">
+              <th scope="col" className="px-5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground w-8">
                 #
               </th>
-              <th scope="col" className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Item
               </th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Units
               </th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Revenue
               </th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Margin
               </th>
             </tr>
@@ -785,7 +785,7 @@ function TopItemsTable({
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={i} className="border-b border-border last:border-0">
                   {Array.from({ length: 5 }).map((__, j) => (
-                    <td key={j} className="px-4 py-2.5">
+                    <td key={j} className="px-4 py-1.5">
                       <div className="h-4 animate-pulse rounded bg-muted/40" />
                     </td>
                   ))}
@@ -805,20 +805,20 @@ function TopItemsTable({
                     key={item.productId}
                     className="border-b border-border transition-colors last:border-0 hover:bg-muted/20"
                   >
-                    <td className="px-5 py-2.5 text-[12px] font-medium text-muted-foreground">
+                    <td className="px-5 py-1.5 text-[12px] font-medium text-muted-foreground">
                       {i + 1}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-1.5">
                       <div className="text-[12px] font-medium text-foreground">{item.productName}</div>
                       <div className="mt-px font-mono text-[10px] text-muted-foreground">{item.sku}</div>
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] tabular-nums text-foreground">
                       {item.unitsSold.toLocaleString("en-PH")}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] tabular-nums text-foreground">
                       {fmtPeso(item.totalRevenue)}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums">
+                    <td className="px-4 py-1.5 text-right font-mono text-[12px] tabular-nums">
                       <span
                         className={cn(
                           "font-medium",
@@ -869,19 +869,19 @@ function TopEmployeesTable({
         <table className="w-full text-[12px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              <th scope="col" className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground w-8">
+              <th scope="col" className="px-5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground w-8">
                 #
               </th>
-              <th scope="col" className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Employee
               </th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Sales
               </th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Revenue
               </th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+              <th scope="col" className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Avg Ticket
               </th>
             </tr>
@@ -891,7 +891,7 @@ function TopEmployeesTable({
               Array.from({ length: 3 }).map((_, i) => (
                 <tr key={i} className="border-b border-border last:border-0">
                   {Array.from({ length: 5 }).map((__, j) => (
-                    <td key={j} className="px-4 py-2.5">
+                    <td key={j} className="px-4 py-1.5">
                       <div className="h-4 animate-pulse rounded bg-muted/40" />
                     </td>
                   ))}
@@ -909,20 +909,20 @@ function TopEmployeesTable({
                   key={emp.employeeId || emp.employeeName || i}
                   className="border-b border-border transition-colors last:border-0 hover:bg-muted/20"
                 >
-                  <td className="px-5 py-2.5 text-[12px] font-medium text-muted-foreground">
+                  <td className="px-5 py-1.5 text-[12px] font-medium text-muted-foreground">
                     {i + 1}
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-1.5">
                     <div className="text-[12px] font-medium text-foreground">{emp.employeeName}</div>
                     <div className="mt-px text-[10px] text-muted-foreground">{emp.employeeRole}</div>
                   </td>
-                  <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                  <td className="px-4 py-1.5 text-right font-mono text-[12px] tabular-nums text-foreground">
                     {emp.totalSales.toLocaleString("en-PH")}
                   </td>
-                  <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                  <td className="px-4 py-1.5 text-right font-mono text-[12px] tabular-nums text-foreground">
                     {fmtPeso(emp.totalRevenue)}
                   </td>
-                  <td className="px-4 py-2.5 text-right font-mono text-[12px] tabular-nums text-foreground">
+                  <td className="px-4 py-1.5 text-right font-mono text-[12px] tabular-nums text-foreground">
                     {fmtPeso(emp.avgSaleValue)}
                   </td>
                 </tr>

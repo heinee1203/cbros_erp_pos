@@ -530,7 +530,7 @@ function AveragesCard({
     mom: DeltaResult,
     yoy: DeltaResult,
   ) => (
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-5 py-2.5">
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-5 py-1.5">
       <div className="flex items-baseline gap-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-600">
           {label}
@@ -1244,7 +1244,7 @@ export function MonthlySalesView() {
       </div>
 
       {/* ── Toolbar ── */}
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-2.5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-1.5">
         <div className="flex items-center gap-2">
           <button
             type="button"

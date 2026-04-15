@@ -190,10 +190,10 @@ export default function SupplierMetricsPage() {
                   <SortHeader label="Supplier" field="supplierName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
                   <SortHeader label="PO Count (6m)" field="poCount6m" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                   <SortHeader label="Avg Lead Time" field="avgLeadTimeDays" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Min</th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Max</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-right">Min</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-right">Max</th>
                   <SortHeader label="Reliability" field="reliabilityPct" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">Last PO</th>
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider">Last PO</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -208,7 +208,7 @@ export default function SupplierMetricsPage() {
       </div>
 
       {/* ── Footer ── */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {rows.length} supplier{rows.length !== 1 ? "s" : ""} loaded
@@ -250,39 +250,39 @@ function SupplierRow({ row }: { row: SupplierMetricsRow }) {
   return (
     <tr className="group transition-colors hover:bg-muted/30">
       {/* Supplier Name */}
-      <td className="max-w-[280px] px-4 py-2.5">
+      <td className="max-w-[280px] px-4 py-1.5">
         <div className="truncate text-sm font-medium text-foreground" title={row.supplierName}>
           {row.supplierName}
         </div>
       </td>
 
       {/* PO Count (6m) */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-foreground">
         {row.poCount6m}
       </td>
 
       {/* Avg Lead Time */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm font-medium text-foreground">
         {avgLead != null ? `${avgLead.toFixed(1)}d` : "—"}
       </td>
 
       {/* Min Lead Time */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.minLeadTimeDays != null ? `${row.minLeadTimeDays}d` : "—"}
       </td>
 
       {/* Max Lead Time */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.maxLeadTimeDays != null ? `${row.maxLeadTimeDays}d` : "—"}
       </td>
 
       {/* Reliability % */}
-      <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium", reliabilityColor)}>
+      <td className={cn("whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm font-medium", reliabilityColor)}>
         {reliability != null ? `${reliability.toFixed(1)}%` : "—"}
       </td>
 
       {/* Last PO Date */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-sm text-muted-foreground">
         {row.lastPoDate ? new Date(row.lastPoDate).toLocaleDateString() : "—"}
       </td>
     </tr>
@@ -313,7 +313,7 @@ function SortHeader({
     <th
       scope="col"
       className={cn(
-        "cursor-pointer select-none whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
+        "cursor-pointer select-none whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
         align === "right" && "text-right",
         isActive && "text-foreground",
       )}

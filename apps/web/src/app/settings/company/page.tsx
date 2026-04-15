@@ -251,7 +251,7 @@ export default function CompanyProfilePage() {
         {/* ── Status message ── */}
         {status && (
           <div
-            className={`rounded-lg px-4 py-2.5 text-sm ${
+            className={`rounded-lg px-4 py-1.5 text-sm ${
               status.type === "success"
                 ? "bg-emerald-500/10 text-emerald-600"
                 : "bg-red-500/10 text-red-600"

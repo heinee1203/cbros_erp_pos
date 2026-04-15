@@ -263,15 +263,15 @@ export default function InventoryCountsListPage() {
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Count #</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Title</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Location</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Type</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Items</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Progress</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Variance</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Status</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Date</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Count #</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Title</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Location</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Type</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Items</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Progress</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Variance</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Status</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Date</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -288,7 +288,7 @@ export default function InventoryCountsListPage() {
       </div>
 
       {/* Footer */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {sessions.length} count{sessions.length !== 1 ? "s" : ""}
@@ -342,16 +342,16 @@ function CountRow({
       className="cursor-pointer transition-colors hover:bg-muted/30"
       onClick={onClick}
     >
-      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 font-mono text-xs text-muted-foreground">
         {s.id.slice(0, 8)}
       </td>
-      <td className="max-w-[240px] truncate px-4 py-2.5 text-sm font-medium text-foreground" title={s.label}>
+      <td className="max-w-[240px] truncate px-4 py-1.5 text-sm font-medium text-foreground" title={s.label}>
         {s.label}
       </td>
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-sm text-foreground">
         {s.locationName}
       </td>
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold ${
           type === "Full"
             ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400"
@@ -360,28 +360,28 @@ function CountRow({
           {type}
         </span>
       </td>
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-foreground">
         {s.totalLines.toLocaleString()}
       </td>
-      <td className="whitespace-nowrap px-4 py-2.5 text-right">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right">
         <span className="text-sm tabular-nums text-foreground">
           {s.countedLines}/{s.totalLines}
         </span>
         <span className="ml-1 text-[10px] text-muted-foreground">({progress}%)</span>
       </td>
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm">
         <span className={s.varianceLines > 0 ? "font-semibold text-amber-600" : "text-muted-foreground"}>
           {s.varianceLines}
         </span>
       </td>
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <span
           className={`inline-block rounded px-2 py-0.5 text-[10px] font-semibold ${STATUS_COLORS[s.status] ?? ""}`}
         >
           {STATUS_LABELS[s.status] ?? s.status}
         </span>
       </td>
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <div className="text-sm text-foreground">{date}</div>
         <div className="text-[10px] text-muted-foreground">{time}</div>
       </td>

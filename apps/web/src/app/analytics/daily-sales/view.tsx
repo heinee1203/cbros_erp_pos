@@ -1703,7 +1703,7 @@ function DailyReportCard({
     <div className="mb-4 print:shadow-none">
       {/* Date navigator + actions — kept OUTSIDE the capture target so the
           screenshot is just the report card, not the navigation chrome. */}
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-2.5 print:hidden">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-1.5 print:hidden">
         <div className="flex items-center gap-2">
           <button
             onClick={() => onStepDate(-1)}

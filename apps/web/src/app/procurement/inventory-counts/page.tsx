@@ -156,7 +156,7 @@ function CountListView({
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border bg-background px-5 py-2.5">
+      <div className="flex items-center justify-between border-b border-border bg-background px-5 py-1.5">
         <div className="flex items-center gap-2.5">
           <h1 className="text-sm font-semibold text-foreground">Inventory Counts</h1>
           <span className="text-[10px] text-muted-foreground">
@@ -491,7 +491,7 @@ function CountDetailView({
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border bg-background px-5 py-2.5">
+      <div className="flex items-center justify-between border-b border-border bg-background px-5 py-1.5">
         <div className="flex items-center gap-2.5">
           <button
             onClick={onBack}

@@ -1,0 +1,124 @@
+{
+  "meta": {
+    "source": "Visual extraction from Base44 app preview",
+    "url": "https://app.base44.com/apps/69da591ea6fab66aabe0364e/editor/preview",
+    "extracted": "2026-04-12",
+    "notes": "Base44 uses Tailwind CSS dark slate palette. Accent color in Base44 was blue (#3B82F6) but CBROS branding retains orange (#F97316). Only backgrounds and text tones adopted."
+  },
+  "colors": {
+    "bg": {
+      "base": "#0F172A",
+      "surface": "#1E293B",
+      "elevated": "#334155",
+      "overlay": "#334155",
+      "input": "#1E293B"
+    },
+    "border": {
+      "default": "rgba(148,163,184,0.15)",
+      "subtle": "rgba(148,163,184,0.08)",
+      "light": "rgba(148,163,184,0.20)",
+      "medium": "rgba(148,163,184,0.25)"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "muted": "#64748B",
+      "inverse": "#0F172A"
+    },
+    "accent": {
+      "primary_base44": "#3B82F6",
+      "primary_cbros": "#F97316",
+      "note": "Base44 generated with blue; CBROS retains orange"
+    },
+    "status": {
+      "success": "#22C55E",
+      "warning": "#F59E0B",
+      "danger": "#EF4444",
+      "info": "#3B82F6"
+    },
+    "payment": {
+      "cashGreen": "#16A34A",
+      "chargeOutline": "#22C55E"
+    },
+    "customerTier": {
+      "wholesale": "#22C55E",
+      "fleet": "#8B5CF6",
+      "vip": "#F97316",
+      "regular": "#6B7280"
+    },
+    "velocity": {
+      "fast": "#F97316",
+      "normal": "#6B7280",
+      "dead": "#EF4444"
+    },
+    "arStatus": {
+      "overdue": "#EF4444",
+      "current": "#F97316",
+      "paidUp": "#22C55E"
+    },
+    "tab": {
+      "active_base44": "#3B82F6",
+      "active_cbros": "#F97316",
+      "inactive": "#64748B",
+      "bg": "#0F172A",
+      "border": "#1E293B"
+    }
+  },
+  "typography": {
+    "fontFamily": "system-ui, -apple-system, sans-serif",
+    "note": "Base44 uses browser default sans-serif. CBROS RN app keeps Outfit/DM Sans/JetBrains Mono.",
+    "scales": {
+      "h1": { "size": 24, "weight": "700", "lineHeight": 32 },
+      "title": { "size": 20, "weight": "600", "lineHeight": 28 },
+      "subtitle": { "size": 16, "weight": "600", "lineHeight": 24 },
+      "body": { "size": 15, "weight": "400", "lineHeight": 22 },
+      "bodySmall": { "size": 13, "weight": "400", "lineHeight": 18 },
+      "caption": { "size": 11, "weight": "500", "lineHeight": 16 },
+      "mono": { "size": 14, "weight": "500", "lineHeight": 20 }
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 20,
+    "xxl": 24,
+    "xxxl": 32,
+    "jumbo": 48
+  },
+  "borderRadius": {
+    "sm": 4,
+    "md": 8,
+    "lg": 12,
+    "xl": 16,
+    "pill": 9999
+  },
+  "components": {
+    "buttonHeight": { "sm": 36, "md": 44, "lg": 52 },
+    "inputHeight": 48,
+    "listItemHeight": 64,
+    "bottomNavHeight": 60,
+    "topBarHeight": 48,
+    "iconSize": { "sm": 20, "md": 24, "lg": 28 },
+    "avatarSize": 40,
+    "badgeSize": 20,
+    "filterChipHeight": 32,
+    "statusPill": {
+      "height": 24,
+      "paddingH": 10,
+      "borderRadius": 12,
+      "fontSize": 11
+    },
+    "stockDot": {
+      "size": 8,
+      "colors": { "ok": "#22C55E", "low": "#F59E0B", "out": "#EF4444" }
+    },
+    "moreMenuCard": {
+      "iconSize": 28,
+      "gap": 12,
+      "padding": 16,
+      "borderRadius": 8
+    }
+  }
+}

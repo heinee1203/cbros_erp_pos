@@ -286,7 +286,7 @@ export default function SalesByItemPage() {
             {paginated.map((item, i) => {
               const profit = parseFloat(item.grossProfit);
               return (
-                <div key={item.productId + i} className="flex items-center px-4 py-2.5 transition-colors hover:bg-accent/40">
+                <div key={item.productId + i} className="flex items-center px-4 py-1.5 transition-colors hover:bg-accent/40">
                   <div className="w-8 text-[11px] tabular-nums text-muted-foreground">{(page - 1) * perPage + i + 1}</div>
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium text-foreground truncate">{item.productName}</div>

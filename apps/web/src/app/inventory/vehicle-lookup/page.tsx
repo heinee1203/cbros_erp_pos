@@ -96,7 +96,7 @@ function SubCategorySection({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2.5 pl-8 pr-4 py-2.5 text-left hover:bg-accent/30 transition-colors"
+        className="flex w-full items-center gap-2.5 pl-8 pr-4 py-1.5 text-left hover:bg-accent/30 transition-colors"
       >
         {open ? (
           <ChevronDown size={14} className="text-muted-foreground shrink-0" />
@@ -148,17 +148,17 @@ function ItemsTable({
               className="hover:bg-accent/50 cursor-pointer transition-colors"
               onClick={() => onRowClick(item.id)}
             >
-              <td className="py-2.5 pr-3 font-medium text-foreground min-w-[200px]" style={{ paddingLeft }}>{item.name}</td>
-              <td className="px-3 py-2.5 text-muted-foreground w-[100px]">
+              <td className="py-1.5 pr-3 font-medium text-foreground min-w-[200px]" style={{ paddingLeft }}>{item.name}</td>
+              <td className="px-3 py-1.5 text-muted-foreground w-[100px]">
                 {item.brandName || "\u2014"}
               </td>
-              <td className="px-3 py-2.5 text-right w-[70px]">
+              <td className="px-3 py-1.5 text-right w-[70px]">
                 <StockPill stockLevel={item.stockLevel} reorderPoint={item.reorderPoint} />
               </td>
-              <td className="px-3 py-2.5 text-right font-medium tabular-nums w-[85px]">
+              <td className="px-3 py-1.5 text-right font-medium tabular-nums w-[85px]">
                 {parseFloat(item.unitPrice) > 0 ? `\u20B1${formatPrice(parseFloat(item.unitPrice))}` : "\u2014"}
               </td>
-              <td className="px-3 py-2.5 text-right tabular-nums text-muted-foreground w-[75px]">
+              <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground w-[75px]">
                 {parseFloat(item.costPrice) > 0 ? `\u20B1${formatPrice(parseFloat(item.costPrice))}` : "\u2014"}
               </td>
             </tr>

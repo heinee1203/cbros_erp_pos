@@ -286,7 +286,7 @@ export default function DashboardPage() {
                 <Link
                   key={item.description}
                   href={item.href}
-                  className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/40"
+                  className="group flex items-center gap-3 px-4 py-1.5 transition-colors hover:bg-muted/40"
                 >
                   <div
                     className={cn(
@@ -419,7 +419,7 @@ export default function DashboardPage() {
 
       {/* Success toast */}
       {successMsg && (
-        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[13px] font-medium text-emerald-800 shadow-lg animate-in slide-in-from-bottom-2">
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-1.5 text-[13px] font-medium text-emerald-800 shadow-lg animate-in slide-in-from-bottom-2">
           <CheckCircle2 size={15} />
           {successMsg}
         </div>

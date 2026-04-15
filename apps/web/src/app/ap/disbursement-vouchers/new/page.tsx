@@ -56,16 +56,25 @@ export default function NewDisbursementVoucherPage() {
   const router = useRouter();
   const params = useSearchParams();
   const soaIdParam = params.get("soaId");
+  const soaIdsParam = params.get("soaIds"); // comma-separated, from multi-SOA selection
   const supplierIdParam = params.get("supplierId");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const [soaData, setSoaData] = useState<{
     id: string; soaNumber: string; supplierName: string; supplierId: string;
     dateFrom: string; dateTo: string; totalBalance: number;
   } | null>(null);
+
+  // Multi-SOA data (when soaIds param present)
+  const [multiSoaData, setMultiSoaData] = useState<Array<{
+    id: string; soaNumber: string; supplierName: string; supplierId: string;
+    totalAmount: number; totalBalance: number;
+  }>>([]);
+  const isMultiSOA = multiSoaData.length > 1;
 
   const [supplierId, setSupplierId] = useState(supplierIdParam ?? "");
   const [grossAmount, setGrossAmount] = useState("");
@@ -89,41 +98,75 @@ export default function NewDisbursementVoucherPage() {
   const payTotal = useMemo(() => payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0), [payments]);
   const payMismatch = payments.length > 0 && netAmount > 0 && Math.abs(payTotal - netAmount) > 0.01;
 
-  // Fetch SOA
+  // Fetch SOA(s) — handles both single soaId and multi soaIds
   const fetchSOA = useCallback(async () => {
-    if (!token || !locationId || !soaIdParam) { setLoading(false); return; }
+    if (!token || !locationId) { setLoading(false); return; }
+
+    // Multi-SOA mode: fetch all SOAs from comma-separated IDs
+    const soaIdList = soaIdsParam ? soaIdsParam.split(",").filter(Boolean) : soaIdParam ? [soaIdParam] : [];
+    if (soaIdList.length === 0) { setLoading(false); return; }
+
     try {
-      const snap = await apiFetch<any>(`/ap/supplier-soa/${soaIdParam}`, { token, locationId });
-      const histRes = await apiFetch<any>(`/ap/supplier-soa/history?search=${encodeURIComponent(snap.soaNumber)}&limit=1`, { token, locationId });
-      const bal = histRes.data?.[0]?.totalBalance ?? 0;
-      setSoaData({
-        id: soaIdParam, soaNumber: snap.soaNumber, supplierName: snap.supplier?.name ?? "",
-        supplierId: snap.supplierId ?? supplierIdParam ?? "", dateFrom: snap.dateFrom, dateTo: snap.dateTo,
-        totalBalance: bal,
-      });
-      const sid = snap.supplierId ?? supplierIdParam ?? "";
-      setSupplierId(sid);
-      setGrossAmount(String(bal));
-      setPayments([{ ...EMPTY_PAYMENT, amount: String(bal) }]);
+      if (soaIdList.length > 1) {
+        // Multi-SOA: fetch each SOA's history entry for balance data
+        const histRes = await apiFetch<{ data: any[] }>(`/ap/supplier-soa/history?limit=200`, { token, locationId });
+        const allHist = histRes.data || [];
+        const matched = soaIdList.map((id) => allHist.find((h: any) => h.id === id)).filter(Boolean);
+        if (matched.length === 0) { setError("Selected SOAs not found"); setLoading(false); return; }
+
+        const soaItems = matched.map((h: any) => ({
+          id: h.id, soaNumber: h.soaNumber, supplierName: h.supplierName,
+          supplierId: h.supplierId, totalAmount: h.totalAmount, totalBalance: h.totalBalance,
+        }));
+        setMultiSoaData(soaItems);
+
+        const sid = soaItems[0].supplierId;
+        setSupplierId(sid);
+        const totalBal = soaItems.reduce((s: number, x: any) => s + x.totalBalance, 0);
+        setGrossAmount(String(totalBal.toFixed(2)));
+        setPayments([{ ...EMPTY_PAYMENT, amount: String(totalBal.toFixed(2)) }]);
+
+        // Set soaData to the first SOA for header display
+        const firstSnap = await apiFetch<any>(`/ap/supplier-soa/${soaIdList[0]}`, { token, locationId });
+        setSoaData({
+          id: soaIdList[0], soaNumber: `${soaItems.length} SOAs`, supplierName: soaItems[0].supplierName,
+          supplierId: sid, dateFrom: firstSnap.dateFrom, dateTo: firstSnap.dateTo, totalBalance: totalBal,
+        });
+      } else {
+        // Single SOA mode (existing behavior)
+        const snap = await apiFetch<any>(`/ap/supplier-soa/${soaIdList[0]}`, { token, locationId });
+        const histRes = await apiFetch<any>(`/ap/supplier-soa/history?search=${encodeURIComponent(snap.soaNumber)}&limit=1`, { token, locationId });
+        const bal = histRes.data?.[0]?.totalBalance ?? 0;
+        setSoaData({
+          id: soaIdList[0], soaNumber: snap.soaNumber, supplierName: snap.supplier?.name ?? "",
+          supplierId: snap.supplierId ?? supplierIdParam ?? "", dateFrom: snap.dateFrom, dateTo: snap.dateTo,
+          totalBalance: bal,
+        });
+        const sid = snap.supplierId ?? supplierIdParam ?? "";
+        setSupplierId(sid);
+        setGrossAmount(String(bal));
+        setPayments([{ ...EMPTY_PAYMENT, amount: String(bal) }]);
+      }
 
       // Fetch available credit memos for this supplier
-      try {
-        const cmRes = await apiFetch<{ data: any[] }>(
-          `/ap/invoices?supplierId=${sid}&status=PAID&limit=100`,
-          { token, locationId },
-        );
-        const cms = (cmRes.data || [])
-          .filter((inv: any) => inv.invoiceNumber?.startsWith("CM-") && parseFloat(inv.totalAmount) < 0 && !inv.billed)
-          .map((inv: any) => ({
-            id: inv.id,
-            invoiceNumber: inv.invoiceNumber,
-            invoiceDate: inv.invoiceDate,
-            totalAmount: parseFloat(inv.totalAmount),
-          }));
-        setAvailableCMs(cms);
-      } catch {} // Silent — CMs are optional
+      const sid = supplierIdParam || soaData?.supplierId || "";
+      if (sid) {
+        try {
+          const cmRes = await apiFetch<{ data: any[] }>(
+            `/ap/invoices?supplierId=${sid}&status=PAID&limit=100`,
+            { token, locationId },
+          );
+          const cms = (cmRes.data || [])
+            .filter((inv: any) => inv.invoiceNumber?.startsWith("CM-") && parseFloat(inv.totalAmount) < 0 && !inv.billed)
+            .map((inv: any) => ({
+              id: inv.id, invoiceNumber: inv.invoiceNumber, invoiceDate: inv.invoiceDate,
+              totalAmount: parseFloat(inv.totalAmount),
+            }));
+          setAvailableCMs(cms);
+        } catch {} // Silent — CMs are optional
+      }
     } catch { setError("Failed to load SOA data"); } finally { setLoading(false); }
-  }, [token, locationId, soaIdParam, supplierIdParam]);
+  }, [token, locationId, soaIdParam, soaIdsParam, supplierIdParam]);
 
   useEffect(() => { if (!authLoading) fetchSOA(); }, [authLoading, fetchSOA]);
 
@@ -144,45 +187,77 @@ export default function NewDisbursementVoucherPage() {
   const addPay = () => setPayments((p) => [...p, { ...EMPTY_PAYMENT }]);
   const rmPay = (i: number) => { if (payments.length > 1) setPayments((p) => p.filter((_, j) => j !== i)); };
 
-  const buildBody = () => {
-    // Combine manual deductions + selected CMs
+  const buildPaymentLines = () => payments.map((p) => ({
+    paymentMethod: p.paymentMethod, amount: p.amount,
+    referenceNumber: p.referenceNumber || undefined, bankName: p.bankName || undefined,
+    transactionDate: p.transactionDate || undefined, platform: p.platform || undefined,
+    receivedBy: p.receivedBy || undefined,
+  }));
+
+  const buildDeductions = () => {
     const manualDeds = deductions.filter((d) => parseFloat(d.amount) > 0).map((d) => ({
       deductionType: d.deductionType, description: d.description,
       referenceNumber: d.referenceNumber || undefined, amount: d.amount,
     }));
     const cmDeds = availableCMs.filter((cm) => selectedCMIds.has(cm.id)).map((cm) => ({
-      deductionType: "CREDIT_MEMO",
-      description: cm.invoiceNumber,
-      referenceNumber: cm.id, // CM invoice ID for backend tracking
-      amount: String(Math.abs(cm.totalAmount).toFixed(2)),
+      deductionType: "CREDIT_MEMO", description: cm.invoiceNumber,
+      referenceNumber: cm.id, amount: String(Math.abs(cm.totalAmount).toFixed(2)),
     }));
-    return {
-      supplierId, soaId: soaIdParam || undefined, grossAmount,
-      paymentDate, remarks: remarks || undefined,
-      deductions: [...manualDeds, ...cmDeds],
-      payments: payments.map((p) => ({
-        paymentMethod: p.paymentMethod, amount: p.amount,
-        referenceNumber: p.referenceNumber || undefined, bankName: p.bankName || undefined,
-        transactionDate: p.transactionDate || undefined, platform: p.platform || undefined,
-        receivedBy: p.receivedBy || undefined,
-      })),
-    };
+    return [...manualDeds, ...cmDeds];
+  };
+
+  const buildBody = (soaId?: string, soaGross?: string) => ({
+    supplierId, soaId: soaId || soaIdParam || undefined,
+    grossAmount: soaGross || grossAmount,
+    paymentDate, remarks: remarks || undefined,
+    deductions: buildDeductions(),
+    payments: buildPaymentLines(),
+  });
+
+  // For multi-SOA: create ONE DV linked to all selected SOAs via junction table
+  const handleMultiSave = async (andPrint: boolean) => {
+    setSaving(true); setError(null);
+    try {
+      const body = {
+        supplierId,
+        soaIds: multiSoaData.map((s) => s.id),
+        grossAmount,
+        paymentDate,
+        remarks: remarks || undefined,
+        deductions: buildDeductions(),
+        payments: buildPaymentLines(),
+      };
+
+      const res = await apiFetch<{ id: string; dvNumber: string }>("/ap/disbursement-vouchers", {
+        token, locationId, method: "POST", body: JSON.stringify(body),
+      });
+
+      if (andPrint) {
+        await apiFetch(`/ap/disbursement-vouchers/${res.id}/print`, { token, locationId, method: "POST" });
+      }
+      router.push("/ap/disbursement-vouchers");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save";
+      setError(msg);
+      setSaving(false);
+    }
   };
 
   const handleSaveDraft = async () => {
+    if (isMultiSOA) { await handleMultiSave(false); return; }
     setSaving(true); setError(null);
     try {
       await apiFetch("/ap/disbursement-vouchers", { token, locationId, method: "POST", body: JSON.stringify(buildBody()) });
       router.push("/ap/disbursement-vouchers");
-    } catch (err: any) { setError(err.message || "Failed to save"); setSaving(false); }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : "Failed to save"); setSaving(false); }
   };
 
   const handleSaveAndPrint = async () => {
+    if (isMultiSOA) { await handleMultiSave(true); return; }
     setSaving(true); setError(null);
     try {
       const res = await apiFetch<{ id: string; dvNumber: string }>("/ap/disbursement-vouchers", { token, locationId, method: "POST", body: JSON.stringify(buildBody()) });
       await apiFetch(`/ap/disbursement-vouchers/${res.id}/print`, { token, locationId, method: "POST" });
-      // Combine manual deductions + selected CMs for print
       const allDedsPrint = [
         ...deductions.filter((d) => parseFloat(d.amount) > 0).map((d) => ({
           description: d.description, amount: parseFloat(d.amount),
@@ -206,7 +281,7 @@ export default function NewDisbursementVoucherPage() {
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
       router.push("/ap/disbursement-vouchers");
-    } catch (err: any) { setError(err.message || "Failed to save"); setSaving(false); }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : "Failed to save"); setSaving(false); }
   };
 
   if (authLoading || loading) return <div className="flex items-center justify-center py-20"><div className="text-sm text-muted-foreground">Loading...</div></div>;
@@ -229,12 +304,55 @@ export default function NewDisbursementVoucherPage() {
 
       <div className="space-y-4 rounded-xl border border-border bg-background p-5 shadow-sm">
         {/* SOA info */}
-        {soaData && (
+        {soaData && !isMultiSOA && (
           <div className="rounded-lg border border-primary/20 bg-primary/[0.03] p-4 space-y-1 text-sm">
             <div><span className="text-muted-foreground">Supplier:</span> <span className="font-medium">{soaData.supplierName}</span></div>
             <div><span className="text-muted-foreground">SOA:</span> <span className="font-mono font-semibold">{soaData.soaNumber}</span></div>
             <div><span className="text-muted-foreground">Period:</span> {fmtDate(soaData.dateFrom)} – {fmtDate(soaData.dateTo)}</div>
             <div className="text-lg font-bold tabular-nums">SOA Amount: {fmtPeso(soaData.totalBalance)}</div>
+          </div>
+        )}
+
+        {/* Multi-SOA breakdown */}
+        {isMultiSOA && (
+          <div className="rounded-lg border border-primary/20 bg-primary/[0.03] p-4 space-y-3">
+            <div className="text-sm">
+              <span className="text-muted-foreground">Supplier:</span>{" "}
+              <span className="font-medium">{multiSoaData[0]?.supplierName}</span>
+            </div>
+            <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+              {multiSoaData.length} SOAs — one DV will be created per SOA
+            </div>
+            <div className="rounded-lg border border-border overflow-hidden">
+              <table className="w-full text-[12px]">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">SOA #</th>
+                    <th className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Amount</th>
+                    <th className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {multiSoaData.map((s) => (
+                    <tr key={s.id} className="border-t border-border/40">
+                      <td className="px-3 py-1.5 font-mono font-semibold">{s.soaNumber}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{fmtPeso(s.totalAmount)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtPeso(s.totalBalance)}</td>
+                    </tr>
+                  ))}
+                  <tr className="bg-muted/20 font-semibold">
+                    <td className="px-3 py-1.5">Total</td>
+                    <td className="px-3 py-1.5" />
+                    <td className="px-3 py-1.5 text-right tabular-nums text-lg">{fmtPeso(multiSoaData.reduce((s, x) => s + x.totalBalance, 0))}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {saving && saveProgress > 0 && (
+              <div className="text-[11px] text-muted-foreground">
+                Creating DV {saveProgress} of {multiSoaData.length}...
+              </div>
+            )}
           </div>
         )}
 

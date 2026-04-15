@@ -1112,6 +1112,78 @@ export async function chargeCustomerAccount(
   return transaction;
 }
 
+/**
+ * Record a manual charge against a customer's AR balance.
+ * Used for off-POS invoices, service charges, and manual entries.
+ */
+export async function recordManualCharge(
+  orgId: string,
+  customerId: string,
+  data: {
+    amount: number;
+    referenceNumber: string;
+    description?: string;
+    chargeDate?: string;
+    notes?: string;
+  },
+  userId: string,
+) {
+  return db.transaction(async (tx) => {
+    // Lock customer row
+    const rows = await tx.execute(
+      sql`SELECT * FROM customers WHERE id = ${customerId} AND org_id = ${orgId} FOR UPDATE`,
+    );
+    if (rows.length === 0) throw new Error("Customer not found");
+
+    const row = rows[0] as any;
+    if (!row.is_active) throw new Error("Customer account is inactive");
+
+    const currentBalance = parseFloat(row.current_balance);
+    const creditLimit = parseFloat(row.credit_limit);
+
+    // Credit limit check (0 means unlimited)
+    if (creditLimit > 0) {
+      const newBalanceCheck = currentBalance + data.amount;
+      if (newBalanceCheck > creditLimit) {
+        throw Object.assign(
+          new Error(
+            `Credit limit exceeded. Limit: ₱${creditLimit.toFixed(2)}, Current: ₱${currentBalance.toFixed(2)}, Charge: ₱${data.amount.toFixed(2)}`,
+          ),
+          { statusCode: 422 },
+        );
+      }
+    }
+
+    const newBalance = currentBalance + data.amount;
+
+    // Update customer balance
+    await tx
+      .update(customers)
+      .set({ currentBalance: newBalance.toFixed(2) })
+      .where(eq(customers.id, customerId));
+
+    // Insert CHARGE transaction
+    const [transaction] = await tx
+      .insert(customerTransactions)
+      .values({
+        orgId,
+        customerId,
+        type: "CHARGE",
+        amount: data.amount.toFixed(2),
+        balanceAfter: newBalance.toFixed(2),
+        referenceType: "manual_charge",
+        referenceNumber: data.referenceNumber || null,
+        notes:
+          [data.description, data.notes].filter(Boolean).join(" — ") || null,
+        recordedBy: userId,
+        recordedAt: data.chargeDate ? new Date(data.chargeDate) : new Date(),
+      })
+      .returning();
+
+    return transaction;
+  });
+}
+
 // ── AR Report Functions ──
 
 /**
@@ -1669,5 +1741,91 @@ export async function getARSummary(orgId: string) {
     overdueAmount,
     currentCount: customerCount - overdueCount,
     currentAmount: totalReceivables - overdueAmount,
+  };
+}
+
+/**
+ * List all customer payments for the Payment Register.
+ */
+export async function listPayments(
+  orgId: string,
+  opts: {
+    search?: string;
+    paymentMethod?: string;
+    customerId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    limit?: number;
+  } = {},
+) {
+  const limit = Math.min(opts.limit ?? 200, 5000);
+  const conditions: SQL[] = [
+    sql`ct.org_id = ${orgId}`,
+    sql`ct.type = 'PAYMENT'`,
+  ];
+  if (opts.customerId) conditions.push(sql`ct.customer_id = ${opts.customerId}`);
+  if (opts.paymentMethod) conditions.push(sql`ct.payment_method = ${opts.paymentMethod}`);
+  if (opts.dateFrom) conditions.push(sql`ct.recorded_at >= ${opts.dateFrom}::timestamptz`);
+  if (opts.dateTo) conditions.push(sql`ct.recorded_at <= ${opts.dateTo}::timestamptz`);
+  if (opts.search && opts.search.trim()) {
+    const pattern = `%${opts.search.trim()}%`;
+    conditions.push(sql`(ct.payment_number ILIKE ${pattern} OR c.name ILIKE ${pattern} OR ct.reference_number ILIKE ${pattern})`);
+  }
+
+  const where = sql.join(conditions, sql` AND `);
+
+  const rows = (await db.execute(sql`
+    SELECT ct.id, ct.payment_number, ct.recorded_at, ct.amount::text,
+      ct.payment_method, ct.reference_number, ct.notes,
+      ct.batch_number, ct.trace_number, ct.card_type,
+      ct.payment_lines,
+      ct.customer_id, c.name AS customer_name, c.phone AS customer_code,
+      u.full_name AS recorded_by_name
+    FROM customer_transactions ct
+    JOIN customers c ON c.id = ct.customer_id
+    LEFT JOIN users u ON u.id = ct.recorded_by
+    WHERE ${where}
+    ORDER BY ct.recorded_at DESC
+    LIMIT ${limit}
+  `)) as any[];
+
+  // Summary: totals for today, this week, this month
+  const [summaryRow] = (await db.execute(sql`
+    SELECT
+      COALESCE(SUM(ct.amount::numeric), 0)::text AS total,
+      COALESCE(SUM(CASE WHEN ct.recorded_at >= CURRENT_DATE THEN ct.amount::numeric ELSE 0 END), 0)::text AS today,
+      COALESCE(SUM(CASE WHEN ct.recorded_at >= date_trunc('week', CURRENT_DATE) THEN ct.amount::numeric ELSE 0 END), 0)::text AS this_week,
+      COALESCE(SUM(CASE WHEN ct.recorded_at >= date_trunc('month', CURRENT_DATE) THEN ct.amount::numeric ELSE 0 END), 0)::text AS this_month,
+      COUNT(*)::int AS count
+    FROM customer_transactions ct
+    JOIN customers c ON c.id = ct.customer_id
+    WHERE ${where}
+  `)) as any[];
+
+  return {
+    data: rows.map((r: any) => ({
+      id: r.id,
+      paymentNumber: r.payment_number,
+      recordedAt: r.recorded_at,
+      amount: r.amount,
+      paymentMethod: r.payment_method,
+      referenceNumber: r.reference_number,
+      notes: r.notes,
+      batchNumber: r.batch_number,
+      traceNumber: r.trace_number,
+      cardType: r.card_type,
+      paymentLines: r.payment_lines,
+      customerId: r.customer_id,
+      customerName: r.customer_name,
+      customerCode: r.customer_code,
+      recordedByName: r.recorded_by_name,
+    })),
+    summary: {
+      total: parseFloat(summaryRow.total),
+      today: parseFloat(summaryRow.today),
+      thisWeek: parseFloat(summaryRow.this_week),
+      thisMonth: parseFloat(summaryRow.this_month),
+      count: summaryRow.count,
+    },
   };
 }

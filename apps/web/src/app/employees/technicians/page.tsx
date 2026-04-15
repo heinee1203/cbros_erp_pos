@@ -491,7 +491,7 @@ export default function TechniciansPage() {
 
       {/* Action result banner */}
       {actionResult && (
-        <div className={cn("mb-3 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-[12px]",
+        <div className={cn("mb-3 flex items-center gap-2 rounded-lg border px-4 py-1.5 text-[12px]",
           actionResult.type === "success"
             ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800"
             : "border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800"
@@ -519,7 +519,7 @@ export default function TechniciansPage() {
 
       {/* Batch action bar */}
       {selectedIds.size > 0 && (
-        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-primary/20 bg-primary/[0.03] px-4 py-2.5">
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-primary/20 bg-primary/[0.03] px-4 py-1.5">
           <span className="text-[12px] font-semibold text-foreground">{selectedIds.size} selected</span>
           <div className="w-px h-5 bg-border" />
           <div className="flex items-center gap-1.5">
@@ -688,7 +688,7 @@ export default function TechniciansPage() {
             </div>
             <div className="divide-y divide-border">
               {commRates.map((r) => (
-                <div key={r.id} className="grid grid-cols-[1fr_120px_80px] gap-1 px-4 py-2.5 items-center hover:bg-accent/30 transition-colors">
+                <div key={r.id} className="grid grid-cols-[1fr_120px_80px] gap-1 px-4 py-1.5 items-center hover:bg-accent/30 transition-colors">
                   <div className="min-w-0">
                     <span className="text-[13px] font-medium text-foreground">
                       {r.is_variant ? `${r.parent_name} \u2014 ${r.name}` : r.name}

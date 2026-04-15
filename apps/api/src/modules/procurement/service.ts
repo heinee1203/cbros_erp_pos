@@ -1384,6 +1384,8 @@ export async function listSuppliers(orgId: string) {
       contactPhone: suppliers.contactPhone,
       address: suppliers.address,
       mnemonicCode: suppliers.mnemonicCode,
+      isActive: suppliers.isActive,
+      paymentTermsDays: suppliers.paymentTermsDays,
     })
     .from(suppliers)
     .where(eq(suppliers.orgId, orgId))

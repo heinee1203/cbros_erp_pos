@@ -137,31 +137,31 @@ export default function SerialLookupPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/30">
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Serial Number
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Product
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Status
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     DOT
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Location
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Received
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Sold
                   </th>
-                  <th className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Customer
                   </th>
-                  <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Actions
                   </th>
                 </tr>
@@ -169,10 +169,10 @@ export default function SerialLookupPage() {
               <tbody className="divide-y divide-border">
                 {results.map((r) => (
                   <tr key={r.id} className="transition-colors hover:bg-muted/20">
-                    <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs font-medium">
+                    <td className="whitespace-nowrap px-4 py-1.5 font-mono text-xs font-medium">
                       {r.serialNumber}
                     </td>
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-1.5">
                       <Link
                         href={`/inventory/${r.productId}/edit`}
                         className="text-sm font-medium text-primary hover:underline"
@@ -185,10 +185,10 @@ export default function SerialLookupPage() {
                         </span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5">
+                    <td className="whitespace-nowrap px-4 py-1.5">
                       <StatusBadge status={r.status} />
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs">
                       {(r as any).dotCode ? (
                         <span className="font-mono font-medium">
                           {(r as any).dotCode}
@@ -202,10 +202,10 @@ export default function SerialLookupPage() {
                         <span className="text-muted-foreground">—</span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs text-muted-foreground">
                       {r.locationName ?? "—"}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs text-muted-foreground">
                       {r.receivedAt
                         ? new Date(r.receivedAt).toLocaleDateString()
                         : "—"}
@@ -213,7 +213,7 @@ export default function SerialLookupPage() {
                         <span className="ml-1 text-[10px]">({r.receivedSource})</span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs text-muted-foreground">
                       {r.saleId && r.saleNumber ? (
                         <Link
                           href={`/sales/receipts/${r.saleId}`}
@@ -227,10 +227,10 @@ export default function SerialLookupPage() {
                         "—"
                       )}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs text-muted-foreground">
                       {r.customerName ?? "—"}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-right">
                       {r.status === "IN_STOCK" && (
                         <button
                           onClick={() => openReturnModal(r)}

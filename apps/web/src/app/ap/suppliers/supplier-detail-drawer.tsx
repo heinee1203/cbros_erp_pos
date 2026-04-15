@@ -5,13 +5,14 @@
  *
  * Opens as a right-side drawer over the Supplier List. Supports two modes:
  *   - Edit mode (supplierId !== null): loads GET /ap/suppliers/:id and shows
- *     an editable form + read-only tabs for Invoices, SOAs, CVs.
+ *     an editable form + read-only tabs for Invoices, POs, Returns, SOAs, DVs.
  *   - New mode (supplierId === null): shows an empty form. Submitting POSTs
  *     to /ap/suppliers and fires onSaved with the new row's id.
  *
  * Editing is gated on `canEdit`. Viewers see a read-only form.
  */
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import {
   X,
   Save,
@@ -22,6 +23,8 @@ import {
   Ban,
   Circle,
   RotateCw,
+  Package,
+  Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
@@ -57,7 +60,7 @@ interface DrawerProps {
   onSaved: () => void;
 }
 
-type Tab = "edit" | "invoices" | "soas" | "cvs";
+type Tab = "edit" | "invoices" | "pos" | "returns" | "soas" | "dvs";
 
 const PAYMENT_TERMS = [
   { value: 0, label: "COD" },
@@ -72,7 +75,25 @@ const PAYMENT_TERMS = [
   { value: 180, label: "Net 180" },
 ];
 
-const EMPTY_FORM: Omit<SupplierDetail, "id" | "avgLeadTimeDays" | "createdAt" | "updatedAt"> = {
+interface FormState {
+  name: string;
+  contactPerson: string | null;
+  contactPhone: string | null;
+  contactEmail: string | null;
+  address: string | null;
+  tin: string | null;
+  mnemonicCode: string | null;
+  paymentTermsDays: number;
+  creditLimit: number;
+  avgLeadTimeDays: number;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankAccountName: string | null;
+  notes: string | null;
+  isActive: boolean;
+}
+
+const EMPTY_FORM: FormState = {
   name: "",
   contactPerson: null,
   contactPhone: null,
@@ -82,6 +103,7 @@ const EMPTY_FORM: Omit<SupplierDetail, "id" | "avgLeadTimeDays" | "createdAt" | 
   mnemonicCode: null,
   paymentTermsDays: 30,
   creditLimit: 0,
+  avgLeadTimeDays: 0,
   bankName: null,
   bankAccountNumber: null,
   bankAccountName: null,
@@ -115,13 +137,32 @@ interface SupplierSOAHistoryRow {
   status: string;
 }
 
-interface CheckVoucherLite {
+interface DVLite {
   id: string;
-  cvNumber: string;
-  checkDate: string;
+  dvNumber: string;
+  paymentDate: string;
+  amount: number;
+  paymentMethod: string;
   checkNumber: string | null;
-  bankName: string | null;
-  netAmount: string;
+  status: string;
+}
+
+interface POLite {
+  id: string;
+  poNumber: string;
+  orderDate: string;
+  itemCount: number;
+  totalCost: string;
+  status: string;
+}
+
+interface ReturnLite {
+  id: string;
+  rtvNumber: string;
+  createdAt: string;
+  itemCount: number;
+  totalCost: string;
+  creditAmount: string;
   status: string;
 }
 
@@ -142,13 +183,15 @@ export function SupplierDetailDrawer({
   const [saving, setSaving] = useState(false);
 
   // Form state
-  const [form, setForm] = useState<typeof EMPTY_FORM>(EMPTY_FORM);
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isActive, setIsActive] = useState(true);
 
   // Per-tab data
   const [invoices, setInvoices] = useState<InvoiceLite[]>([]);
   const [soas, setSoas] = useState<SupplierSOAHistoryRow[]>([]);
-  const [cvs, setCvs] = useState<CheckVoucherLite[]>([]);
+  const [dvs, setDvs] = useState<DVLite[]>([]);
+  const [pos, setPos] = useState<POLite[]>([]);
+  const [returns, setReturns] = useState<ReturnLite[]>([]);
 
   // ── Load supplier on open ──
   const loadSupplier = useCallback(async () => {
@@ -170,6 +213,7 @@ export function SupplierDetailDrawer({
         mnemonicCode: detail.mnemonicCode,
         paymentTermsDays: detail.paymentTermsDays,
         creditLimit: detail.creditLimit,
+        avgLeadTimeDays: detail.avgLeadTimeDays ?? 0,
         bankName: detail.bankName,
         bankAccountNumber: detail.bankAccountNumber,
         bankAccountName: detail.bankAccountName,
@@ -177,8 +221,8 @@ export function SupplierDetailDrawer({
         isActive: detail.isActive,
       });
       setIsActive(detail.isActive);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load supplier");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load supplier");
     } finally {
       setLoading(false);
     }
@@ -205,15 +249,29 @@ export function SupplierDetailDrawer({
       )
         .then((res) => setSoas(res.data || []))
         .catch(() => {});
-    } else if (tab === "cvs" && cvs.length === 0) {
-      apiFetch<{ data: CheckVoucherLite[] }>(
-        `/ap/check-vouchers?supplierId=${supplierId}&limit=100`,
+    } else if (tab === "dvs" && dvs.length === 0) {
+      apiFetch<{ data: DVLite[] }>(
+        `/ap/disbursement-vouchers?supplierId=${supplierId}&limit=100`,
         { token, locationId },
       )
-        .then((res) => setCvs(res.data || []))
+        .then((res) => setDvs(res.data || []))
+        .catch(() => {});
+    } else if (tab === "pos" && pos.length === 0) {
+      apiFetch<{ data: POLite[] }>(
+        `/procurement/purchase-orders?supplierId=${supplierId}&limit=100`,
+        { token, locationId },
+      )
+        .then((res) => setPos(res.data || []))
+        .catch(() => {});
+    } else if (tab === "returns" && returns.length === 0) {
+      apiFetch<{ data: ReturnLite[] }>(
+        `/supplier-returns?supplierId=${supplierId}&limit=100`,
+        { token, locationId },
+      )
+        .then((res) => setReturns(res.data || []))
         .catch(() => {});
     }
-  }, [tab, supplierId, isNew, token, locationId, invoices.length, soas.length, cvs.length]);
+  }, [tab, supplierId, isNew, token, locationId, invoices.length, soas.length, dvs.length, pos.length, returns.length]);
 
   // ── ESC to close ──
   useEffect(() => {
@@ -225,7 +283,7 @@ export function SupplierDetailDrawer({
   }, [onClose, saving]);
 
   // ── Handlers ──
-  const setField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+  const setField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
   };
 
@@ -247,6 +305,7 @@ export function SupplierDetailDrawer({
         mnemonicCode: form.mnemonicCode?.trim() || null,
         paymentTermsDays: form.paymentTermsDays,
         creditLimit: String(form.creditLimit || 0),
+        avgLeadTimeDays: form.avgLeadTimeDays || 0,
         bankName: form.bankName?.trim() || null,
         bankAccountNumber: form.bankAccountNumber?.trim() || null,
         bankAccountName: form.bankAccountName?.trim() || null,
@@ -270,8 +329,8 @@ export function SupplierDetailDrawer({
       }
       onSaved();
       onClose();
-    } catch (err: any) {
-      setError(err?.message || "Failed to save supplier");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save supplier");
     } finally {
       setSaving(false);
     }
@@ -299,8 +358,8 @@ export function SupplierDetailDrawer({
       });
       setIsActive(next);
       onSaved();
-    } catch (err: any) {
-      setError(err?.message || "Failed to update status");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to update status");
     } finally {
       setSaving(false);
     }
@@ -362,18 +421,20 @@ export function SupplierDetailDrawer({
 
         {/* Tabs */}
         {!isNew && (
-          <div className="flex items-center gap-1 border-b border-border px-3 py-1">
-            {[
+          <div className="flex items-center gap-1 border-b border-border px-3 py-1 overflow-x-auto">
+            {([
               { key: "edit" as Tab, label: "Details", icon: FileText },
               { key: "invoices" as Tab, label: "Invoices", icon: FileText },
-              { key: "soas" as Tab, label: "SOA History", icon: History },
-              { key: "cvs" as Tab, label: "Check Vouchers", icon: CreditCard },
-            ].map((t) => (
+              { key: "pos" as Tab, label: "POs", icon: Package },
+              { key: "returns" as Tab, label: "Returns", icon: Undo2 },
+              { key: "soas" as Tab, label: "SOAs", icon: History },
+              { key: "dvs" as Tab, label: "DVs", icon: CreditCard },
+            ]).map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors",
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors whitespace-nowrap",
                   tab === t.key
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -390,7 +451,7 @@ export function SupplierDetailDrawer({
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {loading ? (
             <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
-              <Loader2 size={16} className="mr-2 animate-spin" /> Loading supplier…
+              <Loader2 size={16} className="mr-2 animate-spin" /> Loading supplier...
             </div>
           ) : error && tab === "edit" ? (
             <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
@@ -399,25 +460,13 @@ export function SupplierDetailDrawer({
           ) : null}
 
           {!loading && tab === "edit" && (
-            <EditForm
-              form={form}
-              setField={setField}
-              canEdit={canEdit}
-              error={error}
-            />
+            <EditForm form={form} setField={setField} canEdit={canEdit} error={error} />
           )}
-
-          {!loading && tab === "invoices" && (
-            <InvoicesTab invoices={invoices} />
-          )}
-
-          {!loading && tab === "soas" && (
-            <SOAsTab soas={soas} />
-          )}
-
-          {!loading && tab === "cvs" && (
-            <CheckVouchersTab cvs={cvs} />
-          )}
+          {!loading && tab === "invoices" && <InvoicesTab invoices={invoices} />}
+          {!loading && tab === "pos" && <POsTab pos={pos} />}
+          {!loading && tab === "returns" && <ReturnsTab returns={returns} />}
+          {!loading && tab === "soas" && <SOAsTab soas={soas} />}
+          {!loading && tab === "dvs" && <DVsTab dvs={dvs} />}
         </div>
 
         {/* Footer */}
@@ -436,13 +485,9 @@ export function SupplierDetailDrawer({
                   )}
                 >
                   {isActive ? (
-                    <>
-                      <Ban size={12} /> Deactivate
-                    </>
+                    <><Ban size={12} /> Deactivate</>
                   ) : (
-                    <>
-                      <RotateCw size={12} /> Reactivate
-                    </>
+                    <><RotateCw size={12} /> Reactivate</>
                   )}
                 </button>
               )}
@@ -479,18 +524,15 @@ function EditForm({
   canEdit,
   error,
 }: {
-  form: Omit<SupplierDetail, "id" | "avgLeadTimeDays" | "createdAt" | "updatedAt">;
-  setField: <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => void;
+  form: FormState;
+  setField: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   canEdit: boolean;
   error: string | null;
 }) {
   const common =
     "w-full rounded-md border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20 disabled:bg-muted/40 disabled:cursor-not-allowed";
   return (
-    <form
-      onSubmit={(e) => e.preventDefault()}
-      className="space-y-4"
-    >
+    <form onSubmit={(e) => e.preventDefault()} className="space-y-4">
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           {error}
@@ -499,166 +541,76 @@ function EditForm({
 
       <Section title="Basic Info">
         <Field label="Supplier Name" required>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => setField("name", e.target.value)}
-            disabled={!canEdit}
-            className={common}
-          />
+          <input type="text" value={form.name} onChange={(e) => setField("name", e.target.value)} disabled={!canEdit} className={common} />
         </Field>
         <Grid2>
           <Field label="Contact Person">
-            <input
-              type="text"
-              value={form.contactPerson ?? ""}
-              onChange={(e) => setField("contactPerson", e.target.value || null)}
-              disabled={!canEdit}
-              className={common}
-            />
+            <input type="text" value={form.contactPerson ?? ""} onChange={(e) => setField("contactPerson", e.target.value || null)} disabled={!canEdit} className={common} />
           </Field>
           <Field label="Mnemonic Code" hint="2-letter (e.g. WE)">
-            <input
-              type="text"
-              maxLength={2}
-              value={form.mnemonicCode ?? ""}
-              onChange={(e) => setField("mnemonicCode", e.target.value.toUpperCase() || null)}
-              disabled={!canEdit}
-              className={cn(common, "font-mono")}
-            />
+            <input type="text" maxLength={2} value={form.mnemonicCode ?? ""} onChange={(e) => setField("mnemonicCode", e.target.value.toUpperCase() || null)} disabled={!canEdit} className={cn(common, "font-mono")} />
           </Field>
         </Grid2>
         <Grid2>
           <Field label="Phone">
-            <input
-              type="tel"
-              value={form.contactPhone ?? ""}
-              onChange={(e) => setField("contactPhone", e.target.value || null)}
-              disabled={!canEdit}
-              className={common}
-            />
+            <input type="tel" value={form.contactPhone ?? ""} onChange={(e) => setField("contactPhone", e.target.value || null)} disabled={!canEdit} className={common} />
           </Field>
           <Field label="Email">
-            <input
-              type="email"
-              value={form.contactEmail ?? ""}
-              onChange={(e) => setField("contactEmail", e.target.value || null)}
-              disabled={!canEdit}
-              className={common}
-            />
+            <input type="email" value={form.contactEmail ?? ""} onChange={(e) => setField("contactEmail", e.target.value || null)} disabled={!canEdit} className={common} />
           </Field>
         </Grid2>
         <Field label="Address">
-          <textarea
-            rows={2}
-            value={form.address ?? ""}
-            onChange={(e) => setField("address", e.target.value || null)}
-            disabled={!canEdit}
-            className={common}
-          />
+          <textarea rows={2} value={form.address ?? ""} onChange={(e) => setField("address", e.target.value || null)} disabled={!canEdit} className={common} />
         </Field>
         <Field label="TIN">
-          <input
-            type="text"
-            value={form.tin ?? ""}
-            onChange={(e) => setField("tin", e.target.value || null)}
-            disabled={!canEdit}
-            className={common}
-          />
+          <input type="text" value={form.tin ?? ""} onChange={(e) => setField("tin", e.target.value || null)} disabled={!canEdit} className={common} />
         </Field>
       </Section>
 
       <Section title="Credit Terms">
         <Grid2>
           <Field label="Payment Terms">
-            <select
-              value={form.paymentTermsDays}
-              onChange={(e) => setField("paymentTermsDays", parseInt(e.target.value, 10))}
-              disabled={!canEdit}
-              className={common}
-            >
+            <select value={form.paymentTermsDays} onChange={(e) => setField("paymentTermsDays", parseInt(e.target.value, 10))} disabled={!canEdit} className={common}>
               {PAYMENT_TERMS.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
+                <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
           </Field>
           <Field label="Credit Limit" hint="0 = unlimited">
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={form.creditLimit}
-              onChange={(e) => setField("creditLimit", parseFloat(e.target.value) || 0)}
-              disabled={!canEdit}
-              className={common}
-            />
+            <input type="number" min={0} step="0.01" value={form.creditLimit} onChange={(e) => setField("creditLimit", parseFloat(e.target.value) || 0)} disabled={!canEdit} className={common} />
           </Field>
         </Grid2>
+        <Field label="Avg Lead Time (days)" hint="Typical delivery time from order to receipt">
+          <input type="number" min={0} value={form.avgLeadTimeDays} onChange={(e) => setField("avgLeadTimeDays", parseInt(e.target.value, 10) || 0)} disabled={!canEdit} className={common} />
+        </Field>
       </Section>
 
-      <Section title="Bank Details" hint="Used to auto-fill check vouchers">
+      <Section title="Bank Details" hint="Used to auto-fill disbursement vouchers">
         <Field label="Bank Name">
-          <input
-            type="text"
-            value={form.bankName ?? ""}
-            onChange={(e) => setField("bankName", e.target.value || null)}
-            disabled={!canEdit}
-            className={common}
-          />
+          <input type="text" value={form.bankName ?? ""} onChange={(e) => setField("bankName", e.target.value || null)} disabled={!canEdit} className={common} />
         </Field>
         <Grid2>
           <Field label="Account Number">
-            <input
-              type="text"
-              value={form.bankAccountNumber ?? ""}
-              onChange={(e) => setField("bankAccountNumber", e.target.value || null)}
-              disabled={!canEdit}
-              className={cn(common, "font-mono")}
-            />
+            <input type="text" value={form.bankAccountNumber ?? ""} onChange={(e) => setField("bankAccountNumber", e.target.value || null)} disabled={!canEdit} className={cn(common, "font-mono")} />
           </Field>
           <Field label="Account Name">
-            <input
-              type="text"
-              value={form.bankAccountName ?? ""}
-              onChange={(e) => setField("bankAccountName", e.target.value || null)}
-              disabled={!canEdit}
-              className={common}
-            />
+            <input type="text" value={form.bankAccountName ?? ""} onChange={(e) => setField("bankAccountName", e.target.value || null)} disabled={!canEdit} className={common} />
           </Field>
         </Grid2>
       </Section>
 
       <Section title="Notes">
-        <textarea
-          rows={3}
-          value={form.notes ?? ""}
-          onChange={(e) => setField("notes", e.target.value || null)}
-          disabled={!canEdit}
-          className={common}
-          placeholder="Internal notes about this supplier…"
-        />
+        <textarea rows={3} value={form.notes ?? ""} onChange={(e) => setField("notes", e.target.value || null)} disabled={!canEdit} className={common} placeholder="Internal notes about this supplier..." />
       </Section>
     </form>
   );
 }
 
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
+function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="rounded-lg border border-border bg-background p-4">
       <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {title}
-        </h3>
+        <h3 className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
         {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
       </div>
       <div className="space-y-3">{children}</div>
@@ -666,24 +618,11 @@ function Section({
   );
 }
 
-function Field({
-  label,
-  hint,
-  required,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
+function Field({ label, hint, required, children }: { label: string; hint?: string; required?: boolean; children: React.ReactNode }) {
   return (
     <div>
       <label className="mb-1 flex items-baseline justify-between text-[11px] font-medium text-muted-foreground">
-        <span>
-          {label}
-          {required && <span className="ml-0.5 text-red-500">*</span>}
-        </span>
+        <span>{label}{required && <span className="ml-0.5 text-red-500">*</span>}</span>
         {hint && <span className="text-[9px] text-muted-foreground/70">{hint}</span>}
       </label>
       {children}
@@ -706,68 +645,127 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   VOIDED: "bg-muted text-muted-foreground",
 };
 
+function fmtAmount(v: string): { text: string; isNeg: boolean } {
+  const n = parseFloat(v);
+  if (isNaN(n)) return { text: "—", isNeg: false };
+  if (n < 0) return { text: `(${fmtPeso(String(Math.abs(n)))})`, isNeg: true };
+  return { text: fmtPeso(v), isNeg: false };
+}
+
 function InvoicesTab({ invoices }: { invoices: InvoiceLite[] }) {
   if (invoices.length === 0) {
-    return (
-      <div className="py-10 text-center text-[12px] italic text-muted-foreground">
-        No invoices recorded for this supplier.
-      </div>
-    );
+    return <EmptyTab message="No invoices recorded for this supplier." />;
+  }
+  // Sort newest first (Date DESC)
+  const sorted = [...invoices].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate));
+
+  return (
+    <TabTable
+      headers={["Invoice #", "Date", "Due", "Amount", "Balance", "Status"]}
+      aligns={["left", "left", "left", "right", "right", "center"]}
+    >
+      {sorted.map((inv) => {
+        const isCM = parseFloat(inv.totalAmount) < 0;
+        const amt = fmtAmount(inv.totalAmount);
+        const bal = fmtAmount(inv.balance);
+        return (
+          <tr key={inv.id} className={`border-t border-border/40 ${isCM ? "bg-blue-50/30" : ""}`}>
+            <td className="px-3 py-1.5 font-mono font-semibold text-foreground">
+              {inv.invoiceNumber}
+              {isCM && <span className="ml-1.5 inline-flex rounded bg-purple-100 px-1.5 py-px text-[9px] font-bold text-purple-700">CM</span>}
+            </td>
+            <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(inv.invoiceDate)}</td>
+            <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(inv.dueDate)}</td>
+            <td className={`px-3 py-1.5 text-right tabular-nums ${amt.isNeg ? "text-red-600 font-medium" : ""}`}>{amt.text}</td>
+            <td className={`px-3 py-1.5 text-right tabular-nums font-semibold ${bal.isNeg ? "text-red-600" : ""}`}>{bal.text}</td>
+            <td className="px-3 py-1.5 text-center">
+              <StatusBadge status={inv.status} colors={INVOICE_STATUS_COLORS} />
+            </td>
+          </tr>
+        );
+      })}
+    </TabTable>
+  );
+}
+
+/* ═════════════════════════════════════════════════════
+ *   Tab: POs (Purchase Orders)
+ * ═════════════════════════════════════════════════════ */
+
+const PO_STATUS_COLORS: Record<string, string> = {
+  DRAFT: "bg-slate-100 text-slate-700",
+  SUBMITTED: "bg-blue-50 text-blue-600",
+  PARTIALLY_RECEIVED: "bg-amber-50 text-amber-700",
+  RECEIVED: "bg-emerald-50 text-emerald-600",
+  CANCELLED: "bg-red-50 text-red-600",
+};
+
+function POsTab({ pos }: { pos: POLite[] }) {
+  if (pos.length === 0) {
+    return <EmptyTab message="No purchase orders for this supplier." />;
   }
   return (
-    <div className="rounded-lg border border-border overflow-hidden">
-      <table className="w-full text-[12px]">
-        <thead className="bg-muted/40">
-          <tr>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Invoice #
-            </th>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Date
-            </th>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Due
-            </th>
-            <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Amount
-            </th>
-            <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Balance
-            </th>
-            <th className="px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Status
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {invoices.map((inv) => (
-            <tr key={inv.id} className="border-t border-border/40">
-              <td className="px-3 py-1.5 font-mono font-semibold text-foreground">
-                {inv.invoiceNumber}
-              </td>
-              <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(inv.invoiceDate)}</td>
-              <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(inv.dueDate)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums">
-                {fmtPeso(inv.totalAmount)}
-              </td>
-              <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
-                {fmtPeso(inv.balance)}
-              </td>
-              <td className="px-3 py-1.5 text-center">
-                <span
-                  className={cn(
-                    "inline-block rounded-md px-1.5 py-0.5 text-[9px] font-semibold",
-                    INVOICE_STATUS_COLORS[inv.status] ?? "bg-muted text-muted-foreground",
-                  )}
-                >
-                  {inv.status.replace(/_/g, " ")}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <TabTable
+      headers={["PO #", "Date", "Items", "Total", "Status"]}
+      aligns={["left", "left", "right", "right", "center"]}
+    >
+      {pos.map((po) => (
+        <tr key={po.id} className="border-t border-border/40">
+          <td className="px-3 py-1.5">
+            <Link href={`/procurement/purchase-orders/${po.poNumber}`} className="font-mono font-semibold text-primary hover:underline">
+              {po.poNumber}
+            </Link>
+          </td>
+          <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(po.orderDate)}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{po.itemCount}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtPeso(po.totalCost)}</td>
+          <td className="px-3 py-1.5 text-center">
+            <StatusBadge status={po.status} colors={PO_STATUS_COLORS} />
+          </td>
+        </tr>
+      ))}
+    </TabTable>
+  );
+}
+
+/* ═════════════════════════════════════════════════════
+ *   Tab: Returns (RTVs)
+ * ═════════════════════════════════════════════════════ */
+
+const RTV_STATUS_COLORS: Record<string, string> = {
+  DRAFT: "bg-slate-100 text-slate-700",
+  SUBMITTED: "bg-blue-50 text-blue-600",
+  APPROVED: "bg-emerald-50 text-emerald-600",
+  CREDITED: "bg-green-100 text-green-800",
+  CANCELLED: "bg-red-50 text-red-600",
+};
+
+function ReturnsTab({ returns }: { returns: ReturnLite[] }) {
+  if (returns.length === 0) {
+    return <EmptyTab message="No returns (RTVs) for this supplier." />;
+  }
+  return (
+    <TabTable
+      headers={["RTV #", "Date", "Items", "Cost", "Credit", "Status"]}
+      aligns={["left", "left", "right", "right", "right", "center"]}
+    >
+      {returns.map((r) => (
+        <tr key={r.id} className="border-t border-border/40">
+          <td className="px-3 py-1.5">
+            <Link href={`/procurement/supplier-returns/${r.id}`} className="font-mono font-semibold text-primary hover:underline">
+              {r.rtvNumber}
+            </Link>
+          </td>
+          <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(r.createdAt)}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{r.itemCount}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums">{fmtPeso(r.totalCost)}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtPeso(r.creditAmount)}</td>
+          <td className="px-3 py-1.5 text-center">
+            <StatusBadge status={r.status} colors={RTV_STATUS_COLORS} />
+          </td>
+        </tr>
+      ))}
+    </TabTable>
   );
 }
 
@@ -783,143 +781,98 @@ const SOA_STATUS_COLORS: Record<string, string> = {
 
 function SOAsTab({ soas }: { soas: SupplierSOAHistoryRow[] }) {
   if (soas.length === 0) {
-    return (
-      <div className="py-10 text-center text-[12px] italic text-muted-foreground">
-        No SOAs generated for this supplier yet.
-      </div>
-    );
+    return <EmptyTab message="No SOAs generated for this supplier yet." />;
   }
+  return (
+    <TabTable
+      headers={["SOA #", "Period", "Invoices", "Amount", "Balance", "Status"]}
+      aligns={["left", "left", "right", "right", "right", "center"]}
+    >
+      {soas.map((s) => (
+        <tr key={s.id} className={cn("border-t border-border/40", s.status === "VOID" && "opacity-50")}>
+          <td className="px-3 py-1.5 font-mono font-semibold text-foreground">{s.soaNumber}</td>
+          <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(s.dateFrom)} – {fmtDate(s.dateTo)}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">{s.invoiceCount}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums">{fmtPeso(s.totalAmount)}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtPeso(s.totalBalance)}</td>
+          <td className="px-3 py-1.5 text-center">
+            <StatusBadge status={s.status} colors={SOA_STATUS_COLORS} />
+          </td>
+        </tr>
+      ))}
+    </TabTable>
+  );
+}
+
+/* ═════════════════════════════════════════════════════
+ *   Tab: Disbursement Vouchers
+ * ═════════════════════════════════════════════════════ */
+
+const DV_STATUS_COLORS: Record<string, string> = {
+  DRAFT: "bg-slate-100 text-slate-700",
+  APPROVED: "bg-blue-50 text-blue-600",
+  RELEASED: "bg-emerald-50 text-emerald-600",
+  VOIDED: "bg-red-50 text-red-600",
+};
+
+function DVsTab({ dvs }: { dvs: DVLite[] }) {
+  if (dvs.length === 0) {
+    return <EmptyTab message="No disbursement vouchers for this supplier yet." />;
+  }
+  return (
+    <TabTable
+      headers={["DV #", "Payment Date", "Method", "Check #", "Amount", "Status"]}
+      aligns={["left", "left", "left", "left", "right", "center"]}
+    >
+      {dvs.map((dv) => (
+        <tr key={dv.id} className="border-t border-border/40">
+          <td className="px-3 py-1.5 font-mono font-semibold text-primary">{dv.dvNumber}</td>
+          <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(dv.paymentDate)}</td>
+          <td className="px-3 py-1.5 text-muted-foreground">{dv.paymentMethod?.replace(/_/g, " ") ?? "\u2014"}</td>
+          <td className="px-3 py-1.5 font-mono text-muted-foreground">{dv.checkNumber ?? "\u2014"}</td>
+          <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtPeso(dv.amount)}</td>
+          <td className="px-3 py-1.5 text-center">
+            <StatusBadge status={dv.status} colors={DV_STATUS_COLORS} />
+          </td>
+        </tr>
+      ))}
+    </TabTable>
+  );
+}
+
+/* ─── Shared tab components ─── */
+
+function EmptyTab({ message }: { message: string }) {
+  return (
+    <div className="py-10 text-center text-[12px] italic text-muted-foreground">
+      {message}
+    </div>
+  );
+}
+
+function TabTable({ headers, aligns, children }: { headers: string[]; aligns: ("left" | "right" | "center")[]; children: React.ReactNode }) {
   return (
     <div className="rounded-lg border border-border overflow-hidden">
       <table className="w-full text-[12px]">
         <thead className="bg-muted/40">
           <tr>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              SOA #
-            </th>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Period
-            </th>
-            <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Invoices
-            </th>
-            <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Amount
-            </th>
-            <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Balance
-            </th>
-            <th className="px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Status
-            </th>
+            {headers.map((h, i) => (
+              <th key={h} className={cn("px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground", `text-${aligns[i]}`)}>
+                {h}
+              </th>
+            ))}
           </tr>
         </thead>
-        <tbody>
-          {soas.map((s) => (
-            <tr
-              key={s.id}
-              className={cn("border-t border-border/40", s.status === "VOID" && "opacity-50")}
-            >
-              <td className="px-3 py-1.5 font-mono font-semibold text-foreground">{s.soaNumber}</td>
-              <td className="px-3 py-1.5 text-muted-foreground">
-                {fmtDate(s.dateFrom)} – {fmtDate(s.dateTo)}
-              </td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
-                {s.invoiceCount}
-              </td>
-              <td className="px-3 py-1.5 text-right tabular-nums">{fmtPeso(s.totalAmount)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
-                {fmtPeso(s.totalBalance)}
-              </td>
-              <td className="px-3 py-1.5 text-center">
-                <span
-                  className={cn(
-                    "inline-block rounded-md px-1.5 py-0.5 text-[9px] font-semibold",
-                    SOA_STATUS_COLORS[s.status] ?? "bg-muted text-muted-foreground",
-                  )}
-                >
-                  {s.status}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
+        <tbody>{children}</tbody>
       </table>
     </div>
   );
 }
 
-/* ═════════════════════════════════════════════════════
- *   Tab: Check Vouchers
- * ═════════════════════════════════════════════════════ */
-
-const CV_STATUS_COLORS: Record<string, string> = {
-  DRAFT: "bg-slate-100 text-slate-700",
-  APPROVED: "bg-blue-50 text-blue-600",
-  PRINTED: "bg-indigo-50 text-indigo-600",
-  RELEASED: "bg-emerald-50 text-emerald-600",
-  CLEARED: "bg-green-100 text-green-800",
-  VOIDED: "bg-red-50 text-red-600",
-  STALE: "bg-amber-50 text-amber-700",
-};
-
-function CheckVouchersTab({ cvs }: { cvs: CheckVoucherLite[] }) {
-  if (cvs.length === 0) {
-    return (
-      <div className="py-10 text-center text-[12px] italic text-muted-foreground">
-        No check vouchers issued to this supplier yet.
-      </div>
-    );
-  }
+function StatusBadge({ status, colors }: { status: string; colors: Record<string, string> }) {
   return (
-    <div className="rounded-lg border border-border overflow-hidden">
-      <table className="w-full text-[12px]">
-        <thead className="bg-muted/40">
-          <tr>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              CV #
-            </th>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Check Date
-            </th>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Check #
-            </th>
-            <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Bank
-            </th>
-            <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Amount
-            </th>
-            <th className="px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Status
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {cvs.map((cv) => (
-            <tr key={cv.id} className="border-t border-border/40">
-              <td className="px-3 py-1.5 font-mono font-semibold text-primary">{cv.cvNumber}</td>
-              <td className="px-3 py-1.5 text-muted-foreground">{fmtDate(cv.checkDate)}</td>
-              <td className="px-3 py-1.5 font-mono text-muted-foreground">{cv.checkNumber ?? "—"}</td>
-              <td className="px-3 py-1.5 text-muted-foreground">{cv.bankName ?? "—"}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
-                {fmtPeso(cv.netAmount)}
-              </td>
-              <td className="px-3 py-1.5 text-center">
-                <span
-                  className={cn(
-                    "inline-block rounded-md px-1.5 py-0.5 text-[9px] font-semibold",
-                    CV_STATUS_COLORS[cv.status] ?? "bg-muted text-muted-foreground",
-                  )}
-                >
-                  {cv.status}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <span className={cn("inline-block rounded-md px-1.5 py-0.5 text-[9px] font-semibold", colors[status] ?? "bg-muted text-muted-foreground")}>
+      {status.replace(/_/g, " ")}
+    </span>
   );
 }

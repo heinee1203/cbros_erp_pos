@@ -360,7 +360,7 @@ export default function TagManagementPage() {
           <div className="divide-y divide-border">
             {tags.map((tag) => (
               <div key={tag.id}>
-                <div className="flex items-center px-4 py-2.5 transition-colors hover:bg-accent/40">
+                <div className="flex items-center px-4 py-1.5 transition-colors hover:bg-accent/40">
                   <div className="w-8">
                     <button
                       onClick={() => setExpandedId(expandedId === tag.id ? null : tag.id)}

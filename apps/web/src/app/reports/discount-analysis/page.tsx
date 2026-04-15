@@ -144,17 +144,17 @@ export default function DiscountAnalysisPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/30 text-xs font-medium text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-2.5 text-left">Employee</th>
-                    <th className="px-4 py-2.5 text-right">Transactions</th>
-                    <th className="px-4 py-2.5 text-right">Total Discount</th>
+                    <th className="px-4 py-1.5 text-left">Employee</th>
+                    <th className="px-4 py-1.5 text-right">Transactions</th>
+                    <th className="px-4 py-1.5 text-right">Total Discount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {data!.byEmployee.map((row) => (
                     <tr key={row.userId} className="hover:bg-muted/20">
-                      <td className="px-4 py-2.5 font-medium text-foreground">{row.employeeName}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums font-medium text-destructive">{"\u20B1"}{fmt(row.totalDiscount)}</td>
+                      <td className="px-4 py-1.5 font-medium text-foreground">{row.employeeName}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums font-medium text-destructive">{"\u20B1"}{fmt(row.totalDiscount)}</td>
                     </tr>
                   ))}
                   {data!.byEmployee.length === 0 && (
@@ -170,21 +170,21 @@ export default function DiscountAnalysisPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/30 text-xs font-medium text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-2.5 text-left">Product</th>
-                    <th className="px-4 py-2.5 text-left">SKU</th>
-                    <th className="px-4 py-2.5 text-right">Qty</th>
-                    <th className="px-4 py-2.5 text-right">Transactions</th>
-                    <th className="px-4 py-2.5 text-right">Total Discount</th>
+                    <th className="px-4 py-1.5 text-left">Product</th>
+                    <th className="px-4 py-1.5 text-left">SKU</th>
+                    <th className="px-4 py-1.5 text-right">Qty</th>
+                    <th className="px-4 py-1.5 text-right">Transactions</th>
+                    <th className="px-4 py-1.5 text-right">Total Discount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {data!.byProduct.map((row) => (
                     <tr key={row.productId} className="hover:bg-muted/20">
-                      <td className="px-4 py-2.5 font-medium text-foreground max-w-[200px] truncate">{row.productName}</td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground font-mono">{row.sku}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{row.totalQty.toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums font-medium text-destructive">{"\u20B1"}{fmt(row.totalDiscount)}</td>
+                      <td className="px-4 py-1.5 font-medium text-foreground max-w-[200px] truncate">{row.productName}</td>
+                      <td className="px-4 py-1.5 text-xs text-muted-foreground font-mono">{row.sku}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{row.totalQty.toLocaleString()}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums font-medium text-destructive">{"\u20B1"}{fmt(row.totalDiscount)}</td>
                     </tr>
                   ))}
                   {data!.byProduct.length === 0 && (
@@ -200,19 +200,19 @@ export default function DiscountAnalysisPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/30 text-xs font-medium text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-2.5 text-left">Category</th>
-                    <th className="px-4 py-2.5 text-right">Qty</th>
-                    <th className="px-4 py-2.5 text-right">Transactions</th>
-                    <th className="px-4 py-2.5 text-right">Total Discount</th>
+                    <th className="px-4 py-1.5 text-left">Category</th>
+                    <th className="px-4 py-1.5 text-right">Qty</th>
+                    <th className="px-4 py-1.5 text-right">Transactions</th>
+                    <th className="px-4 py-1.5 text-right">Total Discount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {data!.byCategory.map((row) => (
                     <tr key={row.categoryName} className="hover:bg-muted/20">
-                      <td className="px-4 py-2.5 font-medium text-foreground">{row.categoryName}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{row.totalQty.toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums font-medium text-destructive">{"\u20B1"}{fmt(row.totalDiscount)}</td>
+                      <td className="px-4 py-1.5 font-medium text-foreground">{row.categoryName}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{row.totalQty.toLocaleString()}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums font-medium text-destructive">{"\u20B1"}{fmt(row.totalDiscount)}</td>
                     </tr>
                   ))}
                   {data!.byCategory.length === 0 && (

@@ -78,7 +78,7 @@ export default function LoginPage() {
           className="rounded-xl border border-border bg-background p-6 shadow-sm"
         >
           {error && (
-            <div className="mb-4 rounded-lg bg-destructive/10 px-3 py-2.5 text-sm font-medium text-destructive">
+            <div className="mb-4 rounded-lg bg-destructive/10 px-3 py-1.5 text-sm font-medium text-destructive">
               {error}
             </div>
           )}
@@ -113,7 +113,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={submitting}
-            className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
           >
             {submitting && <Loader2 size={16} className="animate-spin" />}
             {submitting ? "Signing in\u2026" : "Sign In"}

@@ -190,7 +190,7 @@ export default function PriceManagementPage() {
             key={tab.id}
             onClick={() => handleTabChange(tab.id)}
             className={cn(
-              "px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+              "px-4 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors",
               activeTab === tab.id
                 ? "border-primary text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground",
@@ -639,7 +639,7 @@ function MarginAlertsTab() {
     const active = sortBy === field;
     return (
       <th onClick={() => handleSort(field)}
-        className={cn("whitespace-nowrap px-4 py-2.5 font-medium cursor-pointer select-none transition-colors hover:text-foreground", align === "right" ? "text-right" : "text-left", active && "text-foreground")}>
+        className={cn("whitespace-nowrap px-4 py-1.5 font-medium cursor-pointer select-none transition-colors hover:text-foreground", align === "right" ? "text-right" : "text-left", active && "text-foreground")}>
         {label} {active && (sortDir === "asc" ? "\u25B2" : "\u25BC")}
       </th>
     );
@@ -706,14 +706,14 @@ function MarginAlertsTab() {
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th className="px-4 py-2.5 font-medium">Product</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Brand</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Category</th>
+                <th className="px-4 py-1.5 font-medium">Product</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium">Brand</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium">Category</th>
                 <SortTh label="Stock" field="stock" />
                 <SortTh label="Cost" field="costPrice" />
                 <SortTh label="Sell Price" field="sellPrice" />
                 <SortTh label="Margin" field="marginPct" />
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Suggested</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Suggested</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -725,15 +725,15 @@ function MarginAlertsTab() {
                 const isEditing = editingId === (r.id ?? idx);
                 return (
                   <tr key={r.id ?? idx} className="hover:bg-muted/30">
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-1.5">
                       <div className="text-sm font-medium text-foreground">{r.productName}</div>
                       <div className="text-[10px] font-mono text-muted-foreground">SKU: {r.sku}</div>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-foreground">{r.brandName ?? "\u2014"}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">{r.categoryName ?? "\u2014"}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs text-foreground">{(Number(r.stock) || 0).toLocaleString()}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">{"\u20B1"}{fmtCurrency(cost)}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs text-foreground">{r.brandName ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs text-muted-foreground">{r.categoryName ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-xs text-foreground">{(Number(r.stock) || 0).toLocaleString()}</td>
+                    <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm">{"\u20B1"}{fmtCurrency(cost)}</td>
+                    <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm">
                       {isEditing ? (
                         <input type="number" value={editPrice} autoFocus
                           onChange={e => setEditPrice(e.target.value)}
@@ -750,7 +750,7 @@ function MarginAlertsTab() {
                     <td className={cn("whitespace-nowrap px-4 py-2 text-right tabular-nums text-xs rounded-md", marginCellClass(margin))}>
                       {fmtPct(margin)}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs text-muted-foreground">
+                    <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-xs text-muted-foreground">
                       {suggested > 0 ? (
                         <button onClick={() => { setEditingId(r.id ?? String(idx)); setEditPrice(String(suggested)); }}
                           className="hover:text-emerald-600 hover:underline cursor-pointer transition-colors">
@@ -767,7 +767,7 @@ function MarginAlertsTab() {
       </div>
 
       {/* Footer */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {rows.length} item{rows.length !== 1 ? "s" : ""} below {threshold}% margin
@@ -900,7 +900,7 @@ function DeadStockTab() {
       </div>
 
       {/* Filters + bulk bar */}
-      <div className="border-b border-border bg-background/50 px-6 py-2.5 space-y-2">
+      <div className="border-b border-border bg-background/50 px-6 py-1.5 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[150px]">
             <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -945,17 +945,17 @@ function DeadStockTab() {
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th className="px-3 py-2.5"><input type="checkbox" checked={selected.size === enrichedRows.length && enrichedRows.length > 0} onChange={toggleAll} className="accent-primary" /></th>
-                <th className="px-3 py-2.5 font-medium">Product</th>
-                <th className="px-3 py-2.5 font-medium">Brand</th>
-                <th className="px-3 py-2.5 font-medium">Category</th>
-                <th className="px-3 py-2.5 font-medium text-right">Stock</th>
-                <th className="px-3 py-2.5 font-medium text-right">Cost</th>
-                <th className="px-3 py-2.5 font-medium text-right">Sell Price</th>
-                <th className="px-3 py-2.5 font-medium text-right">Last Sold</th>
-                <th className="px-3 py-2.5 font-medium text-right">Clearance</th>
-                <th className="px-3 py-2.5 font-medium text-right">Recovery</th>
-                <th className="px-3 py-2.5 font-medium" />
+                <th className="px-3 py-1.5"><input type="checkbox" checked={selected.size === enrichedRows.length && enrichedRows.length > 0} onChange={toggleAll} className="accent-primary" /></th>
+                <th className="px-3 py-1.5 font-medium">Product</th>
+                <th className="px-3 py-1.5 font-medium">Brand</th>
+                <th className="px-3 py-1.5 font-medium">Category</th>
+                <th className="px-3 py-1.5 font-medium text-right">Stock</th>
+                <th className="px-3 py-1.5 font-medium text-right">Cost</th>
+                <th className="px-3 py-1.5 font-medium text-right">Sell Price</th>
+                <th className="px-3 py-1.5 font-medium text-right">Last Sold</th>
+                <th className="px-3 py-1.5 font-medium text-right">Clearance</th>
+                <th className="px-3 py-1.5 font-medium text-right">Recovery</th>
+                <th className="px-3 py-1.5 font-medium" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -1002,7 +1002,7 @@ function DeadStockTab() {
         )}
       </div>
 
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{enrichedRows.length} dead stock items</span>
           {hasNextPage && (
@@ -1167,14 +1167,14 @@ function PriceHistoryTab() {
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Date</th>
-                <th className="px-4 py-2.5 font-medium">Product</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Type</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Old</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">New</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Change</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">Source</th>
-                <th className="whitespace-nowrap px-4 py-2.5 font-medium">By</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium">Date</th>
+                <th className="px-4 py-1.5 font-medium">Product</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium">Type</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Old</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium text-right">New</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Change</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium">Source</th>
+                <th className="whitespace-nowrap px-4 py-1.5 font-medium">By</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -1194,7 +1194,7 @@ function PriceHistoryTab() {
                 };
                 return (
                   <tr key={r.id ?? idx} className="hover:bg-muted/30">
-                    <td className="whitespace-nowrap px-4 py-2.5">
+                    <td className="whitespace-nowrap px-4 py-1.5">
                       <div className="text-xs text-foreground">{dateStr}</div>
                       <div className="text-[10px] text-muted-foreground">{timeStr}</div>
                     </td>
@@ -1202,22 +1202,22 @@ function PriceHistoryTab() {
                       <div className="text-sm font-medium text-foreground">{r.productName}</div>
                       <div className="text-[10px] font-mono text-muted-foreground">SKU: {r.productSku}</div>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5">
+                    <td className="whitespace-nowrap px-4 py-1.5">
                       <span className={cn("inline-block rounded px-2 py-0.5 text-[10px] font-semibold", isSell ? "bg-emerald-500/10 text-emerald-600" : "bg-blue-500/10 text-blue-600")}>
                         {isSell ? "Sell" : "Cost"}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs text-muted-foreground">{"\u20B1"}{fmtCurrency(r.oldValue)}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs font-medium">{"\u20B1"}{fmtCurrency(r.newValue)}</td>
-                    <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-xs font-semibold", pct > 0 ? "text-emerald-600" : pct < 0 ? "text-red-500" : "text-muted-foreground")}>
+                    <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-xs text-muted-foreground">{"\u20B1"}{fmtCurrency(r.oldValue)}</td>
+                    <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-xs font-medium">{"\u20B1"}{fmtCurrency(r.newValue)}</td>
+                    <td className={cn("whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-xs font-semibold", pct > 0 ? "text-emerald-600" : pct < 0 ? "text-red-500" : "text-muted-foreground")}>
                       {pct > 0 ? "\u2191+" : pct < 0 ? "\u2193" : ""}{fmtPct(pct)}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5">
+                    <td className="whitespace-nowrap px-4 py-1.5">
                       <span className={cn("inline-block rounded-full px-2 py-0.5 text-[9px] font-semibold", SOURCE_STYLES[r.source] ?? "bg-muted text-muted-foreground")}>
                         {r.source?.replace(/_/g, " ") ?? "manual"}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">{r.changedByName ?? "System"}</td>
+                    <td className="whitespace-nowrap px-4 py-1.5 text-xs text-muted-foreground">{r.changedByName ?? "System"}</td>
                   </tr>
                 );
               })}
@@ -1227,7 +1227,7 @@ function PriceHistoryTab() {
       </div>
 
       {/* Footer */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {rows.length} entr{rows.length !== 1 ? "ies" : "y"}

@@ -568,7 +568,7 @@ export default function BackordersPage() {
     <div className="flex h-full flex-col">
       {/* ── Success Banner ── */}
       {successMsg && (
-        <div className="flex items-center gap-2 border-b border-green-200 bg-green-50 px-6 py-2.5 text-sm text-green-800">
+        <div className="flex items-center gap-2 border-b border-green-200 bg-green-50 px-6 py-1.5 text-sm text-green-800">
           <Check size={14} />
           {successMsg}
           <button onClick={() => setSuccessMsg(null)} className="ml-auto">
@@ -579,7 +579,7 @@ export default function BackordersPage() {
 
       {/* ── Error Banner ── */}
       {error && (
-        <div className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-6 py-2.5 text-sm text-red-800">
+        <div className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-6 py-1.5 text-sm text-red-800">
           <AlertTriangle size={14} />
           {error}
           <button onClick={() => setError(null)} className="ml-auto">
@@ -732,34 +732,34 @@ export default function BackordersPage() {
             <table className="w-full text-left text-sm">
               <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
                 <tr>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider">
                     Product
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider">
                     Supplier
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-wider">
                     Qty
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider">
                     Source PO
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-right text-[11px] font-semibold uppercase tracking-wider">
                     Days Pending
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider">
                     Reason
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wider">
                     Priority
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wider">
                     Status
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider">
                     Needed By
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wider">
+                  <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
@@ -788,7 +788,7 @@ export default function BackordersPage() {
       </div>
 
       {/* ── Footer ── */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {isGroupedView
@@ -1327,7 +1327,7 @@ function BackorderRow({
   return (
     <tr className={cn("group transition-colors hover:bg-muted/30", overdueFlag && isPending && "bg-red-50/50 dark:bg-red-900/10")}>
       {/* Product Name + SKU */}
-      <td className="max-w-[240px] px-4 py-2.5">
+      <td className="max-w-[240px] px-4 py-1.5">
         <div className="truncate text-sm font-medium text-foreground" title={item.productName}>
           {item.productName}
         </div>
@@ -1336,7 +1336,7 @@ function BackorderRow({
 
       {/* Supplier (shown in flat view) */}
       {!hideSupplier && (
-        <td className="max-w-[140px] whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+        <td className="max-w-[140px] whitespace-nowrap px-4 py-1.5 text-sm text-foreground">
           <span className="truncate block" title={item.supplierName}>
             {item.supplierName}
           </span>
@@ -1344,17 +1344,17 @@ function BackorderRow({
       )}
 
       {/* Qty */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm font-medium text-foreground">
         {(item.quantityOutstanding ?? item.qtyNeeded).toLocaleString()}
       </td>
 
       {/* Unit Cost */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {item.unitCost ? `₱${parseFloat(item.unitCost).toLocaleString()}` : "--"}
       </td>
 
       {/* Source PO */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-sm text-muted-foreground">
         {item.sourcePONumber ? (
           <span className="font-mono text-xs">{item.sourcePONumber}</span>
         ) : (
@@ -1363,7 +1363,7 @@ function BackorderRow({
       </td>
 
       {/* Wait Until / Target PO */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm">
+      <td className="whitespace-nowrap px-4 py-1.5 text-sm">
         {item.status === "INCLUDED_IN_PO" && item.targetPoNumber ? (
           <span className="font-mono text-xs text-blue-600">{item.targetPoNumber}</span>
         ) : (
@@ -1383,7 +1383,7 @@ function BackorderRow({
       </td>
 
       {/* Days */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm">
         <span
           className={cn(
             item.daysPending > 14
@@ -1398,7 +1398,7 @@ function BackorderRow({
       </td>
 
       {/* Priority */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-center">
+      <td className="whitespace-nowrap px-4 py-1.5 text-center">
         <span
           className={cn(
             "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold",
@@ -1411,7 +1411,7 @@ function BackorderRow({
 
       {/* Status (shown in flat view) */}
       {!hideSupplier && (
-        <td className="whitespace-nowrap px-4 py-2.5 text-center">
+        <td className="whitespace-nowrap px-4 py-1.5 text-center">
           <span
             className={cn(
               "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold",
@@ -1424,7 +1424,7 @@ function BackorderRow({
       )}
 
       {/* Actions */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-center">
+      <td className="whitespace-nowrap px-4 py-1.5 text-center">
         <div className="flex items-center justify-center gap-1">
           {isPending && (
             <>

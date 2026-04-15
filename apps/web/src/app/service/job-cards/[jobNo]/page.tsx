@@ -168,7 +168,7 @@ export default function JobCardDetailPage() {
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                className={`border-b-2 px-4 py-1.5 text-sm font-medium transition-colors ${
                   activeTab === tab
                     ? "border-foreground text-foreground"
                     : "border-transparent text-muted-foreground hover:text-foreground"
@@ -430,7 +430,7 @@ function TransitionButton({ jc, action }: { jc: JobCardDetail; action: string })
   return (
     <button
       onClick={() => setConfirming(true)}
-      className="w-full rounded-md bg-foreground px-3 py-2.5 text-xs font-medium text-background transition-opacity hover:opacity-90"
+      className="w-full rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90"
     >
       {ACTION_LABELS[action] ?? action}
     </button>
@@ -504,7 +504,7 @@ function ApproveButton({ jc }: { jc: JobCardDetail }) {
   return (
     <button
       onClick={() => setShowSummary(true)}
-      className="w-full rounded-md bg-indigo-600 px-3 py-2.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+      className="w-full rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
     >
       Approve & Reserve Parts
     </button>
@@ -874,7 +874,7 @@ function AddLaborModal({
                       description: "",
                     })
                   }
-                  className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-muted/50"
+                  className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-muted/50"
                 >
                   <div>
                     <span className="font-mono text-xs font-medium">{op.code}</span>
@@ -1101,29 +1101,29 @@ function PartsUsageTab({ jc }: { jc: JobCardDetail }) {
               const netUsed = p.issuedQty - p.returnedQty;
               return (
                 <tr key={p.id} className="hover:bg-muted/30">
-                  <td className="px-3 py-2.5">{p.productName}</td>
-                  <td className="px-3 py-2.5 text-right font-mono">
+                  <td className="px-3 py-1.5">{p.productName}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">
                     <span className="text-muted-foreground">{p.reservedQty}</span>
                     <span className="text-[10px] text-muted-foreground"> for job</span>
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono">
+                  <td className="px-3 py-1.5 text-right font-mono">
                     {p.issuedQty > 0 ? (
                       <span className="font-semibold">{p.issuedQty}</span>
                     ) : (
                       <span className="text-muted-foreground">0</span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono">
+                  <td className="px-3 py-1.5 text-right font-mono">
                     {p.returnedQty > 0 ? (
                       <span className="text-warning">{p.returnedQty}</span>
                     ) : (
                       <span className="text-muted-foreground">0</span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono font-bold">
+                  <td className="px-3 py-1.5 text-right font-mono font-bold">
                     {netUsed}
                   </td>
-                  <td className="px-3 py-2.5 text-center">
+                  <td className="px-3 py-1.5 text-center">
                     <div className="flex items-center justify-center gap-1">
                       {canIssue && (
                         <button
@@ -1245,7 +1245,7 @@ function IssuePartModal({
             min="1"
             value={qty}
             onChange={(e) => setQty(e.target.value)}
-            className="w-full rounded-md border border-border px-3 py-2.5 text-lg font-mono text-center outline-none focus:ring-2 focus:ring-foreground/20"
+            className="w-full rounded-md border border-border px-3 py-1.5 text-lg font-mono text-center outline-none focus:ring-2 focus:ring-foreground/20"
             autoFocus
           />
         </label>
@@ -1321,7 +1321,7 @@ function ReturnPartModal({
             max={maxReturnable}
             value={qty}
             onChange={(e) => setQty(e.target.value)}
-            className="w-full rounded-md border border-border px-3 py-2.5 text-lg font-mono text-center outline-none focus:ring-2 focus:ring-foreground/20"
+            className="w-full rounded-md border border-border px-3 py-1.5 text-lg font-mono text-center outline-none focus:ring-2 focus:ring-foreground/20"
             autoFocus
           />
           {parsedQty > maxReturnable && (
@@ -1468,7 +1468,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
     <div className="space-y-5">
       {/* Labor breakdown */}
       <div className="rounded-lg border border-border">
-        <div className="border-b border-border px-4 py-2.5 bg-muted/30">
+        <div className="border-b border-border px-4 py-1.5 bg-muted/30">
           <h4 className="text-xs font-semibold">Labor Charges</h4>
         </div>
         <div className="divide-y divide-border">
@@ -1476,7 +1476,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
             <div className="px-4 py-3 text-xs text-muted-foreground">No labor lines</div>
           ) : (
             jc.laborLines.map((l) => (
-              <div key={l.id} className="flex items-center justify-between px-4 py-2.5 text-xs">
+              <div key={l.id} className="flex items-center justify-between px-4 py-1.5 text-xs">
                 <div>
                   <span className="font-mono">{l.opCode}</span>
                   <span className="ml-1.5 text-muted-foreground">{l.opName}</span>
@@ -1488,7 +1488,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
               </div>
             ))
           )}
-          <div className="flex items-center justify-between px-4 py-2.5 bg-muted/30 text-xs font-semibold">
+          <div className="flex items-center justify-between px-4 py-1.5 bg-muted/30 text-xs font-semibold">
             <span>Labor Subtotal</span>
             <span className="font-mono">${laborTotal.toFixed(2)}</span>
           </div>
@@ -1497,7 +1497,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
 
       {/* Parts breakdown */}
       <div className="rounded-lg border border-border">
-        <div className="border-b border-border px-4 py-2.5 bg-muted/30">
+        <div className="border-b border-border px-4 py-1.5 bg-muted/30">
           <h4 className="text-xs font-semibold">Parts Charges (Net Used)</h4>
         </div>
         <div className="divide-y divide-border">
@@ -1511,7 +1511,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
                 return (
                   <div
                     key={p.id}
-                    className="flex items-center justify-between px-4 py-2.5 text-xs"
+                    className="flex items-center justify-between px-4 py-1.5 text-xs"
                   >
                     <div>
                       <span className="text-foreground">{p.productName}</span>
@@ -1526,7 +1526,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
                 );
               })
           )}
-          <div className="flex items-center justify-between px-4 py-2.5 bg-muted/30 text-xs font-semibold">
+          <div className="flex items-center justify-between px-4 py-1.5 bg-muted/30 text-xs font-semibold">
             <span>Parts Subtotal</span>
             <span className="font-mono">${partsTotal.toFixed(2)}</span>
           </div>
@@ -1544,7 +1544,7 @@ function BillingTab({ jc }: { jc: JobCardDetail }) {
       {/* Print Invoice */}
       <button
         onClick={() => window.open(`/print/invoice/${jc.jobNo}`, "_blank")}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-1.5 text-sm font-medium text-foreground hover:bg-muted transition-colors"
       >
         <Printer size={15} />
         Print Invoice

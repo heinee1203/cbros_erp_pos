@@ -599,21 +599,21 @@ export default function CheckVoucherDetailPage() {
                   i % 2 === 0 ? "bg-background" : "bg-muted/10"
                 }`}
               >
-                <td className="px-3 py-2.5 font-mono text-[13px] font-medium">
+                <td className="px-3 py-1.5 font-mono text-[13px] font-medium">
                   {line.invoiceNo}
                 </td>
-                <td className="px-3 py-2.5 text-xs text-muted-foreground">
+                <td className="px-3 py-1.5 text-xs text-muted-foreground">
                   {fmtDate(line.invoiceDate)}
                 </td>
-                <td className="px-3 py-2.5 text-right text-[13px] tabular-nums">
+                <td className="px-3 py-1.5 text-right text-[13px] tabular-nums">
                   {fmtPeso(line.amount)}
                 </td>
-                <td className="px-3 py-2.5 text-right text-[13px] tabular-nums text-red-600">
+                <td className="px-3 py-1.5 text-right text-[13px] tabular-nums text-red-600">
                   {parseFloat(line.deduction) > 0
                     ? `(${fmtPeso(line.deduction)})`
                     : "\u2014"}
                 </td>
-                <td className="px-3 py-2.5 text-right text-[13px] font-semibold tabular-nums">
+                <td className="px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums">
                   {fmtPeso(line.netAmount)}
                 </td>
               </tr>
@@ -623,19 +623,19 @@ export default function CheckVoucherDetailPage() {
             <tr className="bg-muted/40">
               <td
                 colSpan={2}
-                className="px-3 py-2.5 text-[13px] font-bold"
+                className="px-3 py-1.5 text-[13px] font-bold"
               >
                 Total
               </td>
-              <td className="px-3 py-2.5 text-right text-[13px] font-bold tabular-nums">
+              <td className="px-3 py-1.5 text-right text-[13px] font-bold tabular-nums">
                 {fmtPeso(cv.grossAmount)}
               </td>
-              <td className="px-3 py-2.5 text-right text-[13px] font-bold tabular-nums text-red-600">
+              <td className="px-3 py-1.5 text-right text-[13px] font-bold tabular-nums text-red-600">
                 {parseFloat(cv.deductions) > 0
                   ? `(${fmtPeso(cv.deductions)})`
                   : "\u2014"}
               </td>
-              <td className="px-3 py-2.5 text-right text-[13px] font-bold tabular-nums">
+              <td className="px-3 py-1.5 text-right text-[13px] font-bold tabular-nums">
                 {fmtPeso(cv.netAmount)}
               </td>
             </tr>

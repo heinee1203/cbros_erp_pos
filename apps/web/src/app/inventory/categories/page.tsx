@@ -821,7 +821,7 @@ function FamilyGroup({
               {hasMoreCats && (
                 <button
                   onClick={onToggleShowAllCats}
-                  className="w-full py-2.5 text-center text-[12px] font-medium text-primary hover:bg-accent/40 transition-colors"
+                  className="w-full py-1.5 text-center text-[12px] font-medium text-primary hover:bg-accent/40 transition-colors"
                 >
                   Show all {categories.length} categories
                 </button>
@@ -873,7 +873,7 @@ function CategoryGroup({
   return (
     <div>
       {/* Category row */}
-      <div className="group flex items-center gap-3 py-2.5 pl-8 pr-4 transition-colors hover:bg-accent/40">
+      <div className="group flex items-center gap-3 py-1.5 pl-8 pr-4 transition-colors hover:bg-accent/40">
         {/* Expand chevron */}
         <button
           onClick={onToggleExpand}

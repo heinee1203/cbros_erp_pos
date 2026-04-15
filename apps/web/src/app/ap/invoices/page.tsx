@@ -12,12 +12,15 @@ import { InvoiceTable, type Invoice, type SortField, type SortDir } from "./comp
 import { RecordInvoiceModal } from "./components/record-invoice-modal";
 import { EditInvoiceModal, type EditableInvoice } from "./components/edit-invoice-modal";
 import { BulkPayDialog } from "./components/bulk-pay-dialog";
+import { SupplierDetailDrawer } from "@/app/ap/suppliers/supplier-detail-drawer";
 
 /* ─── Types ─── */
 
 interface Supplier {
   id: string;
   name: string;
+  isActive: boolean;
+  paymentTermsDays: number | null;
 }
 
 interface InvoiceListResponse {
@@ -31,15 +34,12 @@ interface InvoiceListResponse {
 /* ═══════════════════════════════════════════════════ */
 
 export default function SupplierInvoicesPage() {
-  const { token, locationId, loading: authLoading } = useAuth();
+  const { token, locationId, loading: authLoading, user } = useAuth();
 
   // ── Data state ──
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [prevCursors, setPrevCursors] = useState<string[]>([]);
 
   // ── Filters ──
   const [supplierFilter, setSupplierFilter] = useState("");
@@ -53,11 +53,12 @@ export default function SupplierInvoicesPage() {
   const [sortField, setSortField] = useState<SortField>("invoiceDate");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  // ── Modals ──
+  // ── Modals & drawers ──
   const [showRecordModal, setShowRecordModal] = useState(false);
   const [editInvoice, setEditInvoice] = useState<EditableInvoice | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [voidTarget, setVoidTarget] = useState<Invoice | null>(null);
+  const [viewSupplierId, setViewSupplierId] = useState<string | null>(null);
 
   // ── Bulk pay ──
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -98,14 +99,13 @@ export default function SupplierInvoicesPage() {
 
   // ── Fetch invoices + summary ──
   const fetchInvoices = useCallback(
-    async (newCursor?: string) => {
+    async () => {
       if (!token || !locationId) return;
       setLoading(true);
       setError(null);
       try {
         const params = new URLSearchParams();
-        if (newCursor) params.set("cursor", newCursor);
-        params.set("limit", "50");
+        params.set("limit", "5000");
         if (supplierFilter) params.set("supplierId", supplierFilter);
         if (statusFilter) params.set("status", statusFilter);
         if (overdueOnly) params.set("overdue", "true");
@@ -119,8 +119,6 @@ export default function SupplierInvoicesPage() {
         );
         setInvoices(res.data);
         setSelectedIds(new Set());
-        setHasMore(!!res.nextCursor);
-        setCursor(res.nextCursor);
 
         // Fetch summary
         try {
@@ -196,21 +194,6 @@ export default function SupplierInvoicesPage() {
     }
   };
 
-  // ── Pagination ──
-  const handleNextPage = () => {
-    if (cursor) {
-      setPrevCursors((p) => [...p, ""]);
-      fetchInvoices(cursor);
-    }
-  };
-
-  const handlePrevPage = () => {
-    const prev = [...prevCursors];
-    prev.pop();
-    setPrevCursors(prev);
-    fetchInvoices(prev[prev.length - 1] || undefined);
-  };
-
   // ── Edit handler ──
   const handleEdit = (inv: Invoice) => {
     setEditInvoice({
@@ -261,7 +244,7 @@ export default function SupplierInvoicesPage() {
       {/* Notification toast */}
       {notification && (
         <div
-          className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-[13px] font-medium shadow-lg animate-in slide-in-from-bottom-2 ${
+          className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border px-4 py-1.5 text-[13px] font-medium shadow-lg animate-in slide-in-from-bottom-2 ${
             notification.type === "success"
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
               : "border-destructive/30 bg-destructive/5 text-destructive"
@@ -326,7 +309,7 @@ export default function SupplierInvoicesPage() {
 
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
-        <div className="mb-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/[0.03] px-4 py-2.5">
+        <div className="mb-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/[0.03] px-4 py-1.5">
           <div className="flex items-center gap-3">
             <span className="text-sm font-medium">
               {selectedIds.size} invoice{selectedIds.size !== 1 ? "s" : ""} selected
@@ -361,12 +344,9 @@ export default function SupplierInvoicesPage() {
         selectedIds={selectedIds}
         onToggleSelect={toggleSelect}
         onToggleSelectAll={toggleSelectAll}
-        hasMore={hasMore}
-        hasPrev={prevCursors.length > 0}
-        onNextPage={handleNextPage}
-        onPrevPage={handlePrevPage}
         onEdit={handleEdit}
         onVoid={handleVoidRequest}
+        onViewSupplier={setViewSupplierId}
       />
 
       {/* Void Confirmation Dialog */}
@@ -415,6 +395,18 @@ export default function SupplierInvoicesPage() {
         token={token!}
         locationId={locationId!}
       />
+
+      {/* Supplier Detail Drawer */}
+      {viewSupplierId && (
+        <SupplierDetailDrawer
+          supplierId={viewSupplierId}
+          token={token!}
+          locationId={locationId!}
+          canEdit={user?.role === "ADMIN" || user?.role === "MANAGER"}
+          onClose={() => setViewSupplierId(null)}
+          onSaved={() => {}}
+        />
+      )}
 
       {/* Bulk Pay Dialog */}
       <BulkPayDialog

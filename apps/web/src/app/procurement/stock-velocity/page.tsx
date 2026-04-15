@@ -285,7 +285,10 @@ export default function StockVelocityPage() {
                 viewMode === tab ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {tab === "classification" ? "Classification" : tab === "velocity" ? "Velocity Analysis" : "Reorder"}
+              <span>{tab === "classification" ? "Classification" : tab === "velocity" ? "Velocity Analysis" : "Reorder"}</span>
+              <span className="block text-[8px] font-normal text-muted-foreground mt-0.5">
+                {tab === "classification" ? "Stock levels & demand rates" : tab === "velocity" ? "Multi-window trend heatmap" : "Restock suggestions"}
+              </span>
             </button>
           ))}
         </div>
@@ -303,11 +306,11 @@ export default function StockVelocityPage() {
         </label>
         <button onClick={() => { setHideDC(!hideDC); localStorage.setItem("stockVelocity.hideDC", String(!hideDC)); }}
           className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${hideDC ? "bg-gray-200 text-gray-700" : "bg-background border border-border text-muted-foreground hover:bg-muted"}`}>
-          {hideDC ? "DC Hidden" : "Show DC"}
+          {hideDC ? "Discontinued Hidden" : "Show Discontinued"}
         </button>
         <button onClick={() => { setHideSO(!hideSO); localStorage.setItem("stockVelocity.hideSO", String(!hideSO)); }}
           className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${hideSO ? "bg-blue-100 text-blue-700" : "bg-background border border-border text-muted-foreground hover:bg-muted"}`}>
-          {hideSO ? "SO Hidden" : "Show SO"}
+          {hideSO ? "Special Order Hidden" : "Show Special Order"}
         </button>
         {/* Urgency filter — only for Classification view (Velocity Analysis uses per-window filters in the table header) */}
         {viewMode === "classification" && (
@@ -359,10 +362,10 @@ export default function StockVelocityPage() {
                 <SortTh label="PRODUCT" field="productName" current={sortBy} dir={sortDir} onSort={handleSort} />
                 <SortTh label="STOCK" field="totalStock" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
                 <SortTh label="AVG PRICE" align="right" />
-                <SortTh label="SUGG. PRICE" align="right" />
-                <SortTh label="AVG/DAY" field="avgDailySales30d" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
+                <th className="whitespace-nowrap px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground" title="Suggested retail price based on cost + inflation + velocity markup. Red = selling below suggested. Green = healthy margin.">SUGG. PRICE</th>
+                <SortTh label="DEMAND" field="avgDailySales30d" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
                 <SortTh label="DOS" field="daysOfStock" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
-                <SortTh label="SALE DAYS" field="saleDaysCount" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
+                <SortTh label="ACTIVE" field="saleDaysCount" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
                 <SortTh label="TOTAL SOLD" field="totalQtySold" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
                 <SortTh label="LAST SALE" field="daysSinceLastSale" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
               </tr>
@@ -370,7 +373,7 @@ export default function StockVelocityPage() {
             <tbody>
               {allRows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-muted-foreground">
+                  <td colSpan={10} className="py-12 text-center text-muted-foreground">
                     {velocityFilter !== "all" ? "No items in this class" : "No velocity data — click Recompute"}
                   </td>
                 </tr>
@@ -473,18 +476,33 @@ function VelocityRow({ row }: { row: StockMonitorRow }) {
       >
         {row.suggestedSellPrice ? `₱${parseFloat(row.suggestedSellPrice).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
-        {avgSales.toFixed(1)}
+      {/* P3: Demand /month instead of avg/day */}
+      <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums" title={`${avgSales.toFixed(2)} avg/day (30d basis)`}>
+        {avgSales > 0 ? `${(avgSales * 30).toFixed(1)} /mo` : "—"}
       </td>
+      {/* P4: DOS with OUT badge when stock = 0 */}
       <td className={cn("whitespace-nowrap px-3 py-2 text-right tabular-nums font-medium",
-        dos !== null && dos <= 60 ? "text-green-600" :
-        dos !== null && dos <= 180 ? "text-blue-600" :
-        dos !== null && dos > 180 ? "text-red-600" : "text-muted-foreground"
+        row.totalStock === 0 ? "" :
+        dos !== null && dos <= 15 ? "text-red-600" :
+        dos !== null && dos <= 60 ? "text-amber-600" :
+        dos !== null && dos <= 180 ? "text-green-600" :
+        dos !== null && dos > 180 ? "text-blue-600" : "text-muted-foreground"
       )}>
-        {dos !== null ? Math.round(dos).toLocaleString() : "∞"}
+        {row.totalStock === 0
+          ? <span className="inline-flex rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700">OUT</span>
+          : dos !== null ? Math.round(dos).toLocaleString() : "∞"}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-muted-foreground">
-        {row.saleDaysCount} / 180
+      {/* P5: Active days with consistency badge */}
+      <td className="whitespace-nowrap px-3 py-2 text-right" title={`${row.saleDaysCount} days with sales out of 180-day window`}>
+        <span className="tabular-nums text-muted-foreground">{row.saleDaysCount}</span>
+        <span className={cn("ml-1 inline-flex rounded px-1 py-px text-[8px] font-semibold",
+          row.saleDaysCount >= 120 ? "bg-green-100 text-green-700" :
+          row.saleDaysCount >= 60 ? "bg-blue-100 text-blue-700" :
+          row.saleDaysCount >= 10 ? "bg-amber-100 text-amber-700" :
+          "bg-gray-100 text-gray-500"
+        )}>
+          {row.saleDaysCount >= 120 ? "Consistent" : row.saleDaysCount >= 60 ? "Steady" : row.saleDaysCount >= 10 ? "Regular" : "Sporadic"}
+        </span>
       </td>
       <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
         {row.totalQtySold.toLocaleString()}

@@ -132,33 +132,33 @@ export default function AuditLogPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted/30 text-xs font-medium text-muted-foreground">
               <tr>
-                <th className="px-4 py-2.5 text-left w-40">Time</th>
-                <th className="px-4 py-2.5 text-left">User</th>
-                <th className="px-4 py-2.5 text-left">Action</th>
-                <th className="px-4 py-2.5 text-left">Entity</th>
-                <th className="px-4 py-2.5 text-left">IP</th>
-                <th className="px-4 py-2.5 text-center w-10"></th>
+                <th className="px-4 py-1.5 text-left w-40">Time</th>
+                <th className="px-4 py-1.5 text-left">User</th>
+                <th className="px-4 py-1.5 text-left">Action</th>
+                <th className="px-4 py-1.5 text-left">Entity</th>
+                <th className="px-4 py-1.5 text-left">IP</th>
+                <th className="px-4 py-1.5 text-center w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {allRows.map((row) => (
                 <>
                   <tr key={row.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setExpandedId(expandedId === row.id ? null : row.id)}>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap" title={new Date(row.createdAt).toLocaleString()}>
+                    <td className="px-4 py-1.5 text-xs text-muted-foreground whitespace-nowrap" title={new Date(row.createdAt).toLocaleString()}>
                       {timeAgo(row.createdAt)}
                     </td>
-                    <td className="px-4 py-2.5 font-medium text-foreground">{row.userName || "System"}</td>
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-1.5 font-medium text-foreground">{row.userName || "System"}</td>
+                    <td className="px-4 py-1.5">
                       <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold", ACTION_COLORS[row.action] || "bg-muted text-muted-foreground")}>
                         {ACTION_LABELS[row.action] || row.action}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                    <td className="px-4 py-1.5 text-xs text-muted-foreground">
                       {row.entityType && <span>{row.entityType}</span>}
                       {row.entityId && <span className="ml-1 font-mono text-[10px]">{row.entityId.slice(0, 8)}</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground font-mono">{row.ipAddress || "-"}</td>
-                    <td className="px-4 py-2.5 text-center">
+                    <td className="px-4 py-1.5 text-xs text-muted-foreground font-mono">{row.ipAddress || "-"}</td>
+                    <td className="px-4 py-1.5 text-center">
                       {row.details && <ChevronDown size={12} className={cn("text-muted-foreground transition-transform", expandedId === row.id && "rotate-180")} />}
                     </td>
                   </tr>

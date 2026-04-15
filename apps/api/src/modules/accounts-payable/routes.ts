@@ -6,6 +6,7 @@ import {
   listInvoices,
   getInvoice,
   createInvoice,
+  bulkCreateInvoices,
   updateInvoice,
   voidInvoice,
   bulkMarkInvoicesPaid,
@@ -85,7 +86,7 @@ const invoiceQuerySchema = z.object({
   dateTo: z.string().optional(),
   search: z.string().optional(),
   cursor: z.string().uuid().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(5000).default(50),
 });
 
 const cvQuerySchema = z.object({
@@ -173,6 +174,31 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const result = await createInvoice(orgId, userId, body);
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /invoices/bulk-create ────────────────────
+  // Create multiple invoices for one supplier in a single transaction.
+  app.post("/invoices/bulk-create", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    try { assertApRole(role); } catch (err: any) {
+      return reply.status(403).send({ error: err.message });
+    }
+    const body = request.body as {
+      supplierId: string;
+      sourcePoId?: string;
+      notes?: string;
+      invoices: Array<{ invoiceNumber: string; invoiceDate: string; amount: string }>;
+    };
+    if (!body.supplierId || !Array.isArray(body.invoices) || body.invoices.length === 0) {
+      return reply.status(400).send({ error: "supplierId and invoices[] are required" });
+    }
+    try {
+      const result = await bulkCreateInvoices(orgId, userId, body);
       return reply.status(201).send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
@@ -770,6 +796,7 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     const result = await listDisbursementVouchers(orgId, {
       search: q.search,
       status: q.status,
+      supplierId: q.supplierId,
       dateFrom: q.dateFrom,
       dateTo: q.dateTo,
       limit: q.limit ? parseInt(q.limit) : undefined,

@@ -98,7 +98,7 @@ export default function EmployeesPage() {
 
       {/* Action result banner */}
       {actionResult && (
-        <div className={cn("mb-3 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-[12px]",
+        <div className={cn("mb-3 flex items-center gap-2 rounded-lg border px-4 py-1.5 text-[12px]",
           actionResult.type === "success"
             ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800"
             : "border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800"

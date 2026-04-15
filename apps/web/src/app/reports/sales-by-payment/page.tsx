@@ -168,24 +168,24 @@ export default function SalesByPaymentPage() {
             <table className="w-full text-sm">
               <thead className="bg-muted/30 text-xs font-medium text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2.5 text-left">Payment Method</th>
-                  <th className="px-4 py-2.5 text-right">Transactions</th>
-                  <th className="px-4 py-2.5 text-right">Total Amount</th>
-                  <th className="px-4 py-2.5 text-right">% of Total</th>
+                  <th className="px-4 py-1.5 text-left">Payment Method</th>
+                  <th className="px-4 py-1.5 text-right">Transactions</th>
+                  <th className="px-4 py-1.5 text-right">Total Amount</th>
+                  <th className="px-4 py-1.5 text-right">% of Total</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {rows.map((row) => (
                   <tr key={row.method} className="hover:bg-muted/20">
-                    <td className="px-4 py-2.5 font-medium text-foreground">
+                    <td className="px-4 py-1.5 font-medium text-foreground">
                       <div className="flex items-center gap-2">
                         <div className={cn("h-2.5 w-2.5 rounded-full", METHOD_COLORS[row.method] || "bg-gray-400")} />
                         {METHOD_LABELS[row.method] || row.method}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-medium">{"\u20B1"}{fmt(row.totalAmount)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{row.percentage.toFixed(1)}%</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{row.transactionCount.toLocaleString()}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums font-medium">{"\u20B1"}{fmt(row.totalAmount)}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{row.percentage.toFixed(1)}%</td>
                   </tr>
                 ))}
               </tbody>

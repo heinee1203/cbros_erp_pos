@@ -164,3 +164,24 @@ export const dvNumberSequence = pgTable(
     uniqueIndex("idx_dv_seq_org_year").on(table.orgId, table.year),
   ],
 );
+
+// ── DV ↔ SOA Junction Table (many-to-many) ──
+
+export const supplierDvSoas = pgTable(
+  "supplier_dv_soas",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    dvId: uuid("dv_id")
+      .notNull()
+      .references(() => supplierDisbursementVouchers.id, { onDelete: "cascade" }),
+    soaId: uuid("soa_id")
+      .notNull()
+      .references(() => supplierSoaRecords.id),
+    allocatedAmount: numeric("allocated_amount", { precision: 12, scale: 2 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_dv_soa_unique").on(table.dvId, table.soaId),
+    index("idx_dv_soa_dv").on(table.dvId),
+  ],
+);

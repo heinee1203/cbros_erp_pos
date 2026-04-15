@@ -1508,7 +1508,7 @@ function CopyFitmentModal({
               key={product.id}
               onClick={() => setSelectedProduct(product)}
               className={cn(
-                "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left hover:bg-accent",
+                "flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left hover:bg-accent",
                 selectedProduct?.id === product.id && "bg-accent ring-1 ring-primary",
               )}
             >

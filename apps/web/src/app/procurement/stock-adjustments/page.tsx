@@ -256,17 +256,17 @@ export default function StockAdjustmentsPage() {
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <tr>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Date / Time</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Item</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">SKU</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Location</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Direction</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Qty</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Reason</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Notes</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Actor</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Reference</th>
-                <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Balance After</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Date / Time</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Item</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">SKU</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Location</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Direction</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Qty</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Reason</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Notes</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Actor</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Reference</th>
+                <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Balance After</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -280,7 +280,7 @@ export default function StockAdjustmentsPage() {
       </div>
 
       {/* ── Footer ── */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {totalCount} adjustment{totalCount !== 1 ? "s" : ""} loaded
@@ -345,28 +345,28 @@ function AdjustmentRow({ entry }: { entry: JournalEntry }) {
   return (
     <tr className="group transition-colors hover:bg-muted/30">
       {/* Date / Time */}
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <div className="text-sm text-foreground">{dateStr}</div>
         <div className="text-[11px] text-muted-foreground">{timeStr}</div>
       </td>
 
       {/* Product */}
-      <td className="max-w-[200px] truncate px-4 py-2.5 text-sm text-foreground" title={entry.productName}>
+      <td className="max-w-[200px] truncate px-4 py-1.5 text-sm text-foreground" title={entry.productName}>
         {entry.productName}
       </td>
 
       {/* SKU */}
-      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 font-mono text-xs text-muted-foreground">
         {entry.productSku}
       </td>
 
       {/* Location */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-sm text-foreground">
         {entry.locationName}
       </td>
 
       {/* Direction Badge */}
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <span
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
             isDeduction
@@ -384,7 +384,7 @@ function AdjustmentRow({ entry }: { entry: JournalEntry }) {
       </td>
 
       {/* Quantity */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums">
         <span
           className={`text-sm font-medium ${
             isDeduction ? "text-destructive" : "text-success"
@@ -396,7 +396,7 @@ function AdjustmentRow({ entry }: { entry: JournalEntry }) {
       </td>
 
       {/* Reason Badge */}
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <span className="inline-flex rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
           {entry.reasonCode
             ? (REASON_CODE_LABELS[entry.reasonCode] ?? entry.reasonCode)
@@ -405,17 +405,17 @@ function AdjustmentRow({ entry }: { entry: JournalEntry }) {
       </td>
 
       {/* Notes */}
-      <td className="max-w-[180px] truncate px-4 py-2.5 text-xs text-muted-foreground" title={entry.notes ?? ""}>
+      <td className="max-w-[180px] truncate px-4 py-1.5 text-xs text-muted-foreground" title={entry.notes ?? ""}>
         {entry.notes ?? "—"}
       </td>
 
       {/* Actor */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-sm text-foreground">
         {entry.actorName ?? entry.actorType}
       </td>
 
       {/* Reference */}
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <span
           className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground"
           title={entry.referenceId}
@@ -426,7 +426,7 @@ function AdjustmentRow({ entry }: { entry: JournalEntry }) {
       </td>
 
       {/* Balance After */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-foreground">
         {entry.balanceAfter}
       </td>
     </tr>
@@ -896,7 +896,7 @@ function NewAdjustmentDrawer({
               <button
                 type="submit"
                 disabled={!isValid || isSubmitting}
-                className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+                className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-1.5 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                   direction === "OUT"
                     ? "bg-destructive text-white hover:bg-destructive/90"
                     : "bg-foreground text-background hover:bg-foreground/90"
@@ -917,7 +917,7 @@ function NewAdjustmentDrawer({
                 type="button"
                 onClick={onClose}
                 disabled={isSubmitting}
-                className="flex-1 rounded-md border border-border px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex-1 rounded-md border border-border px-4 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Cancel
               </button>

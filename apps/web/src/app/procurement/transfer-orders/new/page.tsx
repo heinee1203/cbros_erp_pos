@@ -813,7 +813,7 @@ function ImportFromPOModal({
                 <button
                   key={po.id}
                   onClick={() => setSelectedPoId(po.id === selectedPoId ? null : po.id)}
-                  className={`flex w-full items-center justify-between border-b border-border px-3 py-2.5 text-left text-sm transition-colors last:border-b-0 ${
+                  className={`flex w-full items-center justify-between border-b border-border px-3 py-1.5 text-left text-sm transition-colors last:border-b-0 ${
                     po.id === selectedPoId
                       ? "bg-primary/5 border-l-2 border-l-primary"
                       : "hover:bg-accent"

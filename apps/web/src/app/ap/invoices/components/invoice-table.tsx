@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useRef, useEffect } from "react";
-import Link from "next/link";
 import {
   ChevronLeft,
   ChevronRight,
@@ -55,7 +54,7 @@ const STATUS_COLORS: Record<string, string> = {
   OPEN: "bg-blue-100 text-blue-700",
   PARTIALLY_PAID: "bg-amber-100 text-amber-700",
   PAID: "bg-emerald-100 text-emerald-700",
-  VOID: "bg-gray-100 text-gray-500",
+  VOIDED: "bg-gray-100 text-gray-500",
   OVERDUE: "bg-red-100 text-red-700",
 };
 
@@ -63,14 +62,16 @@ const STATUS_LABELS: Record<string, string> = {
   OPEN: "Open",
   PARTIALLY_PAID: "Partially Paid",
   PAID: "Paid",
-  VOID: "Void",
+  VOIDED: "Void",
   OVERDUE: "Overdue",
 };
+
+const PAGE_SIZES = [25, 50, 100] as const;
 
 /* ─── Helpers ─── */
 
 function dueDateClass(dueDate: string, status: string): string {
-  if (status === "PAID" || status === "VOID") return "text-muted-foreground";
+  if (status === "PAID" || status === "VOIDED") return "text-muted-foreground";
   const now = new Date();
   const due = new Date(dueDate);
   const diffDays = Math.ceil(
@@ -79,6 +80,20 @@ function dueDateClass(dueDate: string, status: string): string {
   if (diffDays < 0) return "text-red-600 font-semibold";
   if (diffDays <= 7) return "text-amber-600 font-medium";
   return "text-emerald-600";
+}
+
+/** Build an array of page numbers with ellipsis gaps. */
+function buildPageNumbers(current: number, total: number): (number | "...")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages: (number | "...")[] = [];
+  pages.push(1);
+  if (current > 3) pages.push("...");
+  for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) {
+    pages.push(i);
+  }
+  if (current < total - 2) pages.push("...");
+  pages.push(total);
+  return pages;
 }
 
 /* ─── Sortable header ─── */
@@ -128,10 +143,12 @@ function RowActions({
   invoice,
   onEdit,
   onVoid,
+  onViewSupplier,
 }: {
   invoice: Invoice;
   onEdit: (inv: Invoice) => void;
   onVoid: (inv: Invoice) => void;
+  onViewSupplier: (supplierId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -174,13 +191,12 @@ function RowActions({
               <Ban size={13} /> Void
             </button>
           )}
-          <Link
-            href={`/ap/suppliers`}
-            onClick={() => setOpen(false)}
+          <button
+            onClick={() => { onViewSupplier(invoice.supplierId); setOpen(false); }}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted"
           >
             <ExternalLink size={13} /> View Supplier
-          </Link>
+          </button>
         </div>
       )}
     </div>
@@ -198,12 +214,9 @@ interface InvoiceTableProps {
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
   onToggleSelectAll: () => void;
-  hasMore: boolean;
-  hasPrev: boolean;
-  onNextPage: () => void;
-  onPrevPage: () => void;
   onEdit: (inv: Invoice) => void;
   onVoid: (inv: Invoice) => void;
+  onViewSupplier: (supplierId: string) => void;
 }
 
 export function InvoiceTable({
@@ -215,14 +228,14 @@ export function InvoiceTable({
   selectedIds,
   onToggleSelect,
   onToggleSelectAll,
-  hasMore,
-  hasPrev,
-  onNextPage,
-  onPrevPage,
   onEdit,
   onVoid,
+  onViewSupplier,
 }: InvoiceTableProps) {
-  // Client-side sort (server returns createdAt desc)
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(25);
+
+  // Client-side sort
   const sorted = useMemo(() => {
     const copy = [...invoices];
     copy.sort((a, b) => {
@@ -257,6 +270,17 @@ export function InvoiceTable({
     return copy;
   }, [invoices, sortField, sortDir]);
 
+  // Reset to page 1 when data or sort changes
+  useEffect(() => { setPage(1); }, [invoices, sortField, sortDir]);
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const startIdx = (safePage - 1) * pageSize;
+  const endIdx = Math.min(startIdx + pageSize, sorted.length);
+  const pageData = sorted.slice(startIdx, endIdx);
+  const pageNumbers = buildPageNumbers(safePage, totalPages);
+
   const payableInvoices = useMemo(
     () => sorted.filter((inv) => inv.status === "OPEN" || inv.status === "PARTIALLY_PAID"),
     [sorted],
@@ -265,11 +289,11 @@ export function InvoiceTable({
   const handleExportCSV = () => {
     downloadCSV(
       "supplier-invoices",
-      ["Invoice #", "Date", "Supplier", "Due Date", "Amount", "Paid", "Balance", "Status"],
+      ["Date", "Supplier", "Invoice #", "Due Date", "Amount", "Paid", "Balance", "Status"],
       sorted.map((inv) => [
-        inv.invoiceNumber,
         inv.invoiceDate,
         inv.supplierName,
+        inv.invoiceNumber,
         inv.dueDate,
         inv.totalAmount,
         inv.paidAmount,
@@ -295,7 +319,8 @@ export function InvoiceTable({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              <th className="w-10 px-2 py-2.5">
+              {/* Checkbox */}
+              <th className="w-10 px-2 py-1.5">
                 {payableInvoices.length > 0 && (
                   <button
                     onClick={onToggleSelectAll}
@@ -311,25 +336,32 @@ export function InvoiceTable({
                   </button>
                 )}
               </th>
-              <th className="px-3 py-2.5 text-left">
-                <SortableHeader label="Invoice #" field="invoiceNumber" activeField={sortField} activeDir={sortDir} onSort={onSort} />
-              </th>
-              <th className="px-3 py-2.5 text-left">
-                <SortableHeader label="Supplier" field="supplier" activeField={sortField} activeDir={sortDir} onSort={onSort} />
-              </th>
-              <th className="px-3 py-2.5 text-left">
+              {/* Date */}
+              <th className="w-[120px] px-3 py-1.5 text-left">
                 <SortableHeader label="Date" field="invoiceDate" activeField={sortField} activeDir={sortDir} onSort={onSort} />
               </th>
-              <th className="px-3 py-2.5 text-left">
+              {/* Supplier */}
+              <th className="px-3 py-1.5 text-left">
+                <SortableHeader label="Supplier" field="supplier" activeField={sortField} activeDir={sortDir} onSort={onSort} />
+              </th>
+              {/* Invoice # */}
+              <th className="w-[140px] px-3 py-1.5 text-left">
+                <SortableHeader label="Invoice #" field="invoiceNumber" activeField={sortField} activeDir={sortDir} onSort={onSort} />
+              </th>
+              {/* Balance */}
+              <th className="w-[140px] px-3 py-1.5 text-right">
+                <SortableHeader label="Amount" field="totalAmount" activeField={sortField} activeDir={sortDir} onSort={onSort} align="right" />
+              </th>
+              {/* Due Date */}
+              <th className="w-[120px] px-3 py-1.5 text-left">
                 <SortableHeader label="Due Date" field="dueDate" activeField={sortField} activeDir={sortDir} onSort={onSort} />
               </th>
-              <th className="px-3 py-2.5 text-right">
-                <SortableHeader label="Balance" field="balance" activeField={sortField} activeDir={sortDir} onSort={onSort} align="right" />
-              </th>
-              <th className="px-3 py-2.5 text-left">
+              {/* Status */}
+              <th className="w-[100px] px-3 py-1.5 text-left">
                 <SortableHeader label="Status" field="status" activeField={sortField} activeDir={sortDir} onSort={onSort} />
               </th>
-              <th className="w-12 px-2 py-2.5" />
+              {/* Actions */}
+              <th className="w-12 px-2 py-1.5" />
             </tr>
           </thead>
           <tbody>
@@ -341,7 +373,7 @@ export function InvoiceTable({
                   </td>
                 </tr>
               ))
-            ) : sorted.length === 0 ? (
+            ) : pageData.length === 0 ? (
               <tr>
                 <td
                   colSpan={8}
@@ -351,12 +383,11 @@ export function InvoiceTable({
                 </td>
               </tr>
             ) : (
-              sorted.map((inv, i) => {
+              pageData.map((inv, i) => {
                 const isOverdue =
                   (inv.status === "OPEN" || inv.status === "PARTIALLY_PAID") &&
                   new Date(inv.dueDate) < new Date();
                 const displayStatus = isOverdue ? "OVERDUE" : inv.status;
-                const isPartiallyPaid = parseFloat(inv.paidAmount) > 0 && inv.status !== "PAID";
 
                 return (
                   <tr
@@ -366,7 +397,7 @@ export function InvoiceTable({
                     }`}
                   >
                     {/* Checkbox */}
-                    <td className="w-10 px-2 py-2.5">
+                    <td className="w-10 px-2 py-1.5">
                       {inv.status === "OPEN" || inv.status === "PARTIALLY_PAID" ? (
                         <button
                           onClick={(e) => { e.stopPropagation(); onToggleSelect(inv.id); }}
@@ -382,40 +413,33 @@ export function InvoiceTable({
                         <span className="inline-block w-[14px]" />
                       )}
                     </td>
-                    {/* Invoice # */}
-                    <td className="px-3 py-2.5 font-mono text-[13px] font-semibold text-primary">
-                      {inv.invoiceNumber}
-                    </td>
-                    {/* Supplier */}
-                    <td className="px-3 py-2.5 text-[13px]">
-                      <Link
-                        href="/ap/suppliers"
-                        className="hover:text-primary hover:underline"
-                      >
-                        {inv.supplierName}
-                      </Link>
-                    </td>
                     {/* Date */}
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground">
+                    <td className="w-[120px] px-3 py-1.5 text-xs text-muted-foreground">
                       {fmtDate(inv.invoiceDate)}
                     </td>
+                    {/* Supplier */}
+                    <td className="px-3 py-1.5 text-[13px]">
+                      <button
+                        onClick={() => onViewSupplier(inv.supplierId)}
+                        className="text-left hover:text-primary hover:underline"
+                      >
+                        {inv.supplierName}
+                      </button>
+                    </td>
+                    {/* Invoice # */}
+                    <td className="w-[140px] px-3 py-1.5 font-mono text-[13px] font-semibold text-primary">
+                      {inv.invoiceNumber}
+                    </td>
+                    {/* Amount */}
+                    <td className="w-[140px] px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums">
+                      {fmtPeso(inv.totalAmount)}
+                    </td>
                     {/* Due Date */}
-                    <td className={`px-3 py-2.5 text-xs ${dueDateClass(inv.dueDate, inv.status)}`}>
+                    <td className={`w-[120px] px-3 py-1.5 text-xs ${dueDateClass(inv.dueDate, inv.status)}`}>
                       {fmtDate(inv.dueDate)}
                     </td>
-                    {/* Balance */}
-                    <td className="px-3 py-2.5 text-right">
-                      <span className="text-[13px] font-semibold tabular-nums">
-                        {fmtPeso(inv.balance)}
-                      </span>
-                      {isPartiallyPaid && (
-                        <span className="ml-1 text-[10px] text-muted-foreground">
-                          of {fmtPeso(inv.totalAmount)}
-                        </span>
-                      )}
-                    </td>
                     {/* Status */}
-                    <td className="px-3 py-2.5">
+                    <td className="w-[100px] px-3 py-1.5">
                       <span
                         className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                           STATUS_COLORS[displayStatus] ?? "bg-muted text-muted-foreground"
@@ -425,8 +449,8 @@ export function InvoiceTable({
                       </span>
                     </td>
                     {/* Actions */}
-                    <td className="w-12 px-2 py-2.5 text-right">
-                      <RowActions invoice={inv} onEdit={onEdit} onVoid={onVoid} />
+                    <td className="w-12 px-2 py-1.5 text-right">
+                      <RowActions invoice={inv} onEdit={onEdit} onVoid={onVoid} onViewSupplier={onViewSupplier} />
                     </td>
                   </tr>
                 );
@@ -436,29 +460,60 @@ export function InvoiceTable({
         </table>
       </div>
 
-      {/* Pagination */}
+      {/* Pagination footer */}
       <div className="flex items-center justify-between border-t border-border bg-muted/30 px-3 py-2">
-        <span className="text-[10px] text-muted-foreground">
-          Showing {sorted.length} invoice{sorted.length !== 1 ? "s" : ""}
+        <span className="text-[11px] text-muted-foreground">
+          {sorted.length > 0
+            ? `Showing ${startIdx + 1}\u2013${endIdx} of ${sorted.length} invoice${sorted.length !== 1 ? "s" : ""}`
+            : "No invoices"}
         </span>
-        <div className="flex items-center gap-2">
-          {hasPrev && (
+
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
             <button
-              onClick={onPrevPage}
-              className="flex items-center gap-1 text-[10px] font-medium text-primary hover:underline"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
             >
-              <ChevronLeft size={12} /> Previous
+              <ChevronLeft size={14} />
             </button>
-          )}
-          {hasMore && (
+            {pageNumbers.map((pn, idx) =>
+              pn === "..." ? (
+                <span key={`e${idx}`} className="px-1 text-[11px] text-muted-foreground">&hellip;</span>
+              ) : (
+                <button
+                  key={pn}
+                  onClick={() => setPage(pn)}
+                  className={cn(
+                    "min-w-[28px] rounded px-1.5 py-0.5 text-[11px] font-medium",
+                    pn === safePage
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  {pn}
+                </button>
+              ),
+            )}
             <button
-              onClick={onNextPage}
-              className="flex items-center gap-1 text-[10px] font-medium text-primary hover:underline"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
             >
-              Next <ChevronRight size={12} />
+              <ChevronRight size={14} />
             </button>
-          )}
-        </div>
+          </div>
+        )}
+
+        <select
+          value={pageSize}
+          onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+          className="rounded border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground outline-none"
+        >
+          {PAGE_SIZES.map((s) => (
+            <option key={s} value={s}>{s} / page</option>
+          ))}
+        </select>
       </div>
     </div>
   );

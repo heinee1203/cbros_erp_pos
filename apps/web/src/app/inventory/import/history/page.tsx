@@ -543,7 +543,7 @@ export default function ImportHistoryPage() {
           </div>
 
           {file && step !== "parsing" && (
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-4 py-2.5 text-sm">
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-4 py-1.5 text-sm">
               <FileText size={14} className="text-muted-foreground" />
               <span className="text-foreground">{file.name}</span>
               <span className="text-muted-foreground">({(file.size / 1024).toFixed(1)} KB)</span>
@@ -859,7 +859,7 @@ export default function ImportHistoryPage() {
               {results.errorLog && results.errorLog.length > 0 && (
                 <button
                   onClick={handleDownloadErrors}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-1.5 text-sm font-medium text-red-700 transition hover:bg-red-100"
                 >
                   <Download size={14} />
                   Download Error Log ({results.errorLog.length}{" "}
@@ -871,7 +871,7 @@ export default function ImportHistoryPage() {
               <div className="flex flex-col gap-3">
                 <button
                   onClick={handleRefreshStockMonitor}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted"
                 >
                   <RefreshCw size={14} />
                   Refresh Stock Monitor
@@ -879,13 +879,13 @@ export default function ImportHistoryPage() {
                 <div className="flex gap-3">
                   <Link
                     href="/inventory/stock-monitor"
-                    className="flex flex-1 items-center justify-center rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground transition hover:bg-muted"
+                    className="flex flex-1 items-center justify-center rounded-lg border border-border px-4 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted"
                   >
                     Go to Stock Monitor
                   </Link>
                   <button
                     onClick={handleReset}
-                    className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-500"
+                    className="flex-1 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-blue-500"
                   >
                     Import More
                   </button>

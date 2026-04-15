@@ -11,6 +11,7 @@ import {
   FileText,
   X,
   Loader2,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -228,6 +229,10 @@ export default function CustomerDetailPage() {
   const newPayLine = (): PayLine => ({ id: Math.random().toString(36).slice(2), method: "CASH", amount: "", reference: "", bank: "", checkNumber: "", checkDate: "", cardType: "", batchNo: "", traceNo: "" });
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showChargeModal, setShowChargeModal] = useState(false);
+  const [chargeForm, setChargeForm] = useState({ referenceNumber: "", description: "", amount: "", chargeDate: new Date().toISOString().slice(0, 10), notes: "" });
+  const [chargeSaving, setChargeSaving] = useState(false);
+  const [chargeError, setChargeError] = useState("");
   const [payStep, setPayStep] = useState<PayStep>("form");
   const [payLines, setPayLines] = useState<PayLine[]>([]);
   const [payNotes, setPayNotes] = useState("");
@@ -631,6 +636,15 @@ export default function CustomerDetailPage() {
             Record Payment
           </button>
         )}
+        {isManager && (
+          <button
+            onClick={() => { setChargeForm({ referenceNumber: "", description: "", amount: "", chargeDate: new Date().toISOString().slice(0, 10), notes: "" }); setChargeError(""); setShowChargeModal(true); }}
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+          >
+            <Plus size={14} />
+            Record Charge
+          </button>
+        )}
         <button
           onClick={() => {
             if (customer) {
@@ -715,7 +729,7 @@ export default function CustomerDetailPage() {
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={cn(
-              "px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px",
+              "px-4 py-1.5 text-sm font-medium transition-colors border-b-2 -mb-px",
               activeTab === tab.key
                 ? "border-primary text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground",
@@ -792,7 +806,7 @@ export default function CustomerDetailPage() {
             ) : (
               <div className="divide-y divide-border">
                 {transactionsQuery.data.data.map((tx) => (
-                  <div key={tx.id} data-ref={tx.referenceNumber || tx.paymentNumber || undefined} className="flex items-center px-4 py-2.5 text-[13px] transition-all duration-500">
+                  <div key={tx.id} data-ref={tx.referenceNumber || tx.paymentNumber || undefined} className="flex items-center px-4 py-1.5 text-[13px] transition-all duration-500">
                     <div className="w-28 text-muted-foreground">{formatDate(tx.recordedAt)}</div>
                     <div className="w-28">
                       <span
@@ -1157,7 +1171,7 @@ export default function CustomerDetailPage() {
                 })}
 
                 {/* Closing Balance */}
-                <div className="flex items-center px-4 py-2.5 text-[13px] bg-muted/20">
+                <div className="flex items-center px-4 py-1.5 text-[13px] bg-muted/20">
                   <div className="w-8" />
                   <div className="w-28 text-muted-foreground">{formatDate(soaTo)}</div>
                   <div className="flex-1 font-bold text-foreground">Closing Balance</div>
@@ -1852,6 +1866,74 @@ export default function CustomerDetailPage() {
           }
         }
       `}</style>
+
+      {/* ── Record Charge Modal ── */}
+      {showChargeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Record Charge</h3>
+              <button onClick={() => setShowChargeModal(false)} className="rounded-lg p-1 hover:bg-muted">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mb-4 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              {customer?.name}
+            </div>
+            {chargeError && (
+              <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {chargeError}
+              </div>
+            )}
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Date</label>
+                  <input type="date" value={chargeForm.chargeDate} onChange={(e) => setChargeForm((f) => ({ ...f, chargeDate: e.target.value }))} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Amount *</label>
+                  <input type="number" step="0.01" min="0" value={chargeForm.amount} onChange={(e) => setChargeForm((f) => ({ ...f, amount: e.target.value }))} placeholder="0.00" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" required />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Invoice / Reference # *</label>
+                <input type="text" value={chargeForm.referenceNumber} onChange={(e) => setChargeForm((f) => ({ ...f, referenceNumber: e.target.value }))} placeholder="e.g. INV-2026-001" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" required />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
+                <input type="text" value={chargeForm.description} onChange={(e) => setChargeForm((f) => ({ ...f, description: e.target.value }))} placeholder="e.g. Service charge, brake pads" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Notes</label>
+                <textarea value={chargeForm.notes} onChange={(e) => setChargeForm((f) => ({ ...f, notes: e.target.value }))} rows={2} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setShowChargeModal(false)} className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancel</button>
+              <button
+                disabled={chargeSaving || !chargeForm.amount || !chargeForm.referenceNumber.trim()}
+                onClick={async () => {
+                  setChargeSaving(true);
+                  setChargeError("");
+                  try {
+                    await apiFetch(`/customers/${id}/charges`, { token: token!, locationId: locationId!, method: "POST", body: JSON.stringify({ amount: chargeForm.amount, referenceNumber: chargeForm.referenceNumber.trim(), description: chargeForm.description || undefined, chargeDate: chargeForm.chargeDate || undefined, notes: chargeForm.notes || undefined }) });
+                    setShowChargeModal(false);
+                    queryClient.invalidateQueries({ queryKey: ["customers", id] });
+                    queryClient.invalidateQueries({ queryKey: ["customers", id, "transactions"] });
+                  } catch (err: unknown) {
+                    const message = err instanceof Error ? err.message : "Failed to record charge";
+                    setChargeError(message);
+                  } finally { setChargeSaving(false); }
+                }}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {chargeSaving ? "Recording..." : "Record Charge"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1962,7 +2044,7 @@ function CreditMemosTab({ customerId, token, locationId }: { customerId: string;
               // Extract invoice ref from notes like "Credit Memo against invoice Q3081"
               const invoiceMatch = (t.notes || "").match(/(?:against invoice |Against invoice )?(Q\d+)/i);
               return (
-                <div key={t.id} className="flex items-center px-4 py-2.5 text-[13px] hover:bg-accent/20">
+                <div key={t.id} className="flex items-center px-4 py-1.5 text-[13px] hover:bg-accent/20">
                   <div className="w-24 text-[12px] text-muted-foreground">{formatDate(t.recordedAt)}</div>
                   <div className="w-28 font-mono text-[12px] font-semibold text-amber-700">{t.referenceNumber || "\u2014"}</div>
                   <div className="flex-1 text-[12px] text-foreground">{invoiceMatch ? invoiceMatch[1] : "\u2014"}</div>
@@ -2035,7 +2117,7 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
         ) : (
           <div className="divide-y divide-border">
             {txns.map((t) => (
-              <div key={t.id} className="flex items-center px-4 py-2.5 text-[13px] hover:bg-accent/20">
+              <div key={t.id} className="flex items-center px-4 py-1.5 text-[13px] hover:bg-accent/20">
                 <div className="w-24 text-[12px] text-muted-foreground">{formatDate(t.recordedAt)}</div>
                 <div className="w-28 font-mono text-[11px] text-primary">{t.paymentNumber || "\u2014"}</div>
                 <div className="w-20">
@@ -2349,7 +2431,7 @@ function SOAHistoryTab({ customerId, token, locationId }: { customerId: string; 
       </div>
       <div className="divide-y divide-border">
         {records.map((r, rIdx) => (
-          <div key={r.id} className="flex items-center px-4 py-2.5 text-[13px] hover:bg-accent/30">
+          <div key={r.id} className="flex items-center px-4 py-1.5 text-[13px] hover:bg-accent/30">
             <div className="w-32 font-mono text-[12px] font-semibold text-primary truncate">{r.soaNumber}</div>
             <div className="w-44 text-[12px] text-muted-foreground truncate">
               {new Date(r.dateFrom).toLocaleDateString("en-PH", { month: "short", day: "numeric" })} &ndash;{" "}

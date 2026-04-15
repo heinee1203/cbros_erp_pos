@@ -15,6 +15,7 @@
  *   PATCH /ap/suppliers/:id             — update / deactivate
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Users,
   Plus,
@@ -322,11 +323,15 @@ export default function SupplierListPage() {
 
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
+  const [hasOverdue, setHasOverdue] = useState(false);
   const [sortCol, setSortCol] = useState<SortCol>("totalPayable");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  // Drawer state
-  const [drawerSupplierId, setDrawerSupplierId] = useState<string | null>(null);
+  // Drawer state — auto-open from ?open= query param
+  const searchParams = useSearchParams();
+  const [drawerSupplierId, setDrawerSupplierId] = useState<string | null>(
+    searchParams.get("open"),
+  );
   const [showNewModal, setShowNewModal] = useState(false);
 
   // Bulk set terms
@@ -378,6 +383,7 @@ export default function SupplierListPage() {
   const filteredAndSorted = useMemo(() => {
     let rows = suppliers;
     if (!showInactive) rows = rows.filter((r) => r.isActive);
+    if (hasOverdue) rows = rows.filter((r) => r.overdueCount > 0);
     if (search.trim().length >= 1) {
       const q = search.toLowerCase();
       rows = rows.filter(
@@ -426,7 +432,7 @@ export default function SupplierListPage() {
       return sortDir === "desc" ? -cmp : cmp;
     });
     return copy;
-  }, [suppliers, search, showInactive, sortCol, sortDir]);
+  }, [suppliers, search, showInactive, hasOverdue, sortCol, sortDir]);
 
   const toggleSelectAll = () => {
     if (
@@ -591,6 +597,15 @@ export default function SupplierListPage() {
           <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
             <input
               type="checkbox"
+              checked={hasOverdue}
+              onChange={(e) => setHasOverdue(e.target.checked)}
+              className="rounded border-border"
+            />
+            Has overdue
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
               checked={showInactive}
               onChange={(e) => setShowInactive(e.target.checked)}
               className="rounded border-border"
@@ -611,7 +626,7 @@ export default function SupplierListPage() {
 
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
-        <div className="mb-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/[0.03] px-4 py-2.5">
+        <div className="mb-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/[0.03] px-4 py-1.5">
           <span className="text-sm font-medium">
             {selectedIds.size} supplier{selectedIds.size !== 1 ? "s" : ""} selected
           </span>
@@ -638,7 +653,7 @@ export default function SupplierListPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="w-10 px-2 py-2.5">
+                <th className="w-10 px-2 py-1.5">
                   {filteredAndSorted.length > 0 && (
                     <button
                       onClick={toggleSelectAll}
@@ -654,31 +669,31 @@ export default function SupplierListPage() {
                     </button>
                   )}
                 </th>
-                <th className="px-3 py-2.5 text-left">
+                <th className="px-3 py-1.5 text-left">
                   <SortableHeader label="Supplier" field="name" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
-                <th className="px-3 py-2.5 text-left">
+                <th className="px-3 py-1.5 text-left">
                   <SortableHeader label="Contact Person" field="contactPerson" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Phone
                 </th>
-                <th className="px-3 py-2.5 text-left">
+                <th className="px-3 py-1.5 text-left">
                   <SortableHeader label="Terms" field="paymentTermsDays" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader label="Credit Limit" field="creditLimit" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader label="Open Inv" field="openCount" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader label="Total Payable" field="totalPayable" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
-                <th className="px-3 py-2.5 text-right">
+                <th className="px-3 py-1.5 text-right">
                   <SortableHeader label="Oldest Overdue" field="oldestOverdueDate" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
-                <th className="px-3 py-2.5 text-center">
+                <th className="px-3 py-1.5 text-center">
                   <SortableHeader label="Status" field="status" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
               </tr>
@@ -687,7 +702,7 @@ export default function SupplierListPage() {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i} className="border-b border-border">
-                    <td colSpan={10} className="px-3 py-3">
+                    <td colSpan={10} className="px-3 py-1.5">
                       <div className="h-5 animate-pulse rounded bg-muted" />
                     </td>
                   </tr>
@@ -714,7 +729,7 @@ export default function SupplierListPage() {
                       )}
                     >
                       <td
-                        className="w-10 px-2 py-2.5"
+                        className="w-10 px-2 py-1.5"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <button
@@ -728,44 +743,37 @@ export default function SupplierListPage() {
                           )}
                         </button>
                       </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex flex-col">
-                          <span className="text-[13px] font-medium text-foreground">{s.name}</span>
-                          {s.mnemonicCode && (
-                            <span className="text-[10px] font-mono text-muted-foreground">
-                              {s.mnemonicCode}
-                            </span>
-                          )}
-                        </div>
+                      <td className="px-3 py-1.5 text-[13px] font-medium text-foreground">
+                        {s.name}
                       </td>
-                      <td className="px-3 py-2.5 text-[12px] text-muted-foreground">
+                      <td className="px-3 py-1.5 text-[12px] text-muted-foreground">
                         {s.contactPerson ?? "—"}
                       </td>
-                      <td className="px-3 py-2.5 text-[12px] text-muted-foreground">
+                      <td className="px-3 py-1.5 text-[12px] text-muted-foreground">
                         {s.contactPhone ?? "—"}
                       </td>
-                      <td className="px-3 py-2.5 text-[12px] text-muted-foreground">
+                      <td className="px-3 py-1.5 text-[12px] text-muted-foreground">
                         {termsLabel(s.paymentTermsDays)}
                       </td>
-                      <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-muted-foreground">
+                      <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                         {s.creditLimit > 0 ? fmtPeso(s.creditLimit) : "Unlimited"}
                       </td>
-                      <td className="px-3 py-2.5 text-right text-[12px] tabular-nums text-foreground">
+                      <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-foreground">
                         {s.openCount}
                       </td>
                       <td className={cn(
-                        "px-3 py-2.5 text-right text-[13px] tabular-nums font-semibold",
+                        "px-3 py-1.5 text-right text-[13px] tabular-nums font-semibold",
                         s.totalPayable > 0 ? "text-foreground" : "text-muted-foreground",
                       )}>
                         {s.totalPayable > 0 ? fmtPeso(s.totalPayable) : "—"}
                       </td>
                       <td className={cn(
-                        "px-3 py-2.5 text-right text-[11px] tabular-nums",
+                        "px-3 py-1.5 text-right text-[11px] tabular-nums",
                         overdue ? "text-red-600 font-medium" : "text-muted-foreground",
                       )}>
                         {s.oldestOverdueDate ? daysAgoFromDate(s.oldestOverdueDate) : "—"}
                       </td>
-                      <td className="px-3 py-2.5 text-center">
+                      <td className="px-3 py-1.5 text-center">
                         <span
                           className={cn(
                             "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[9px] font-semibold",

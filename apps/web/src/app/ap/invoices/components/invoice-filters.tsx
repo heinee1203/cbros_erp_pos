@@ -7,6 +7,7 @@ import { DateRangePicker } from "@/components/ui/date-range-picker";
 interface Supplier {
   id: string;
   name: string;
+  isActive: boolean;
 }
 
 interface InvoiceFiltersProps {
@@ -76,7 +77,7 @@ export function InvoiceFilters({
         <option value="">All Suppliers</option>
         {suppliers.map((s) => (
           <option key={s.id} value={s.id}>
-            {s.name}
+            {s.name}{!s.isActive ? " (inactive)" : ""}
           </option>
         ))}
       </select>
@@ -90,7 +91,7 @@ export function InvoiceFilters({
         <option value="OPEN">Open</option>
         <option value="PARTIALLY_PAID">Partially Paid</option>
         <option value="PAID">Paid</option>
-        <option value="VOID">Void</option>
+        <option value="VOIDED">Void</option>
       </select>
 
       <label className="flex items-center gap-1.5 text-sm">

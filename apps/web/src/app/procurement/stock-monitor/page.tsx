@@ -494,15 +494,15 @@ export default function StockMonitorPage() {
                   {isCol("product") && <SortHeader label="Product" field="productName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
                   {isCol("brand") && <SortHeader label="Brand" field="brandName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
                   {isCol("category") && <SortHeader label="Category" field="categoryName" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
-                  {isCol("subcategory") && <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Sub-category</th>}
+                  {isCol("subcategory") && <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Sub-category</th>}
                   {isCol("totalStock") && <SortHeader label="Total Stock" field="totalStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
                   {isCol("avgSales") && <SortHeader label="Avg Sales/Day" field="avgDailySales30d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
                   {isCol("daysOfStock") && <SortHeader label="Days of Stock" field="daysOfStock" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
                   {isCol("lastSold") && <SortHeader label="Last Sold" field="lastSaleDate" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
                   {isCol("stockoutDays") && <SortHeader label="Stockout Days" field="stockoutDays90d" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />}
                   {isCol("lastPo") && <SortHeader label="Last PO" field="lastPoDate" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />}
-                  {isCol("leadTime") && <th scope="col" className="whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-right">Lead Time</th>}
-                  {isCol("ai") && <th scope="col" className="w-10 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-center">AI</th>}
+                  {isCol("leadTime") && <th scope="col" className="whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-right">Lead Time</th>}
+                  {isCol("ai") && <th scope="col" className="w-10 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-center">AI</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -530,7 +530,7 @@ export default function StockMonitorPage() {
       </div>
 
       {/* ── Footer ── */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {rows.length}
@@ -634,14 +634,14 @@ function StockMonitorRow({ row, visibleCols, velocity, onClick, onAskAi }: { row
       className="group cursor-pointer transition-colors hover:bg-muted/30"
     >
       {/* Status */}
-      {isCol("status") && <td className="whitespace-nowrap px-4 py-2.5">
+      {isCol("status") && <td className="whitespace-nowrap px-4 py-1.5">
         <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", cfg.badge)}>
           {cfg.label}
         </span>
       </td>}
 
       {/* Product */}
-      {isCol("product") && <td className="max-w-[260px] px-4 py-2.5">
+      {isCol("product") && <td className="max-w-[260px] px-4 py-1.5">
         <div className="truncate text-sm font-medium text-foreground" title={row.productName}>
           {row.productName}
         </div>
@@ -649,27 +649,27 @@ function StockMonitorRow({ row, visibleCols, velocity, onClick, onAskAi }: { row
       </td>}
 
       {/* Brand */}
-      {isCol("brand") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      {isCol("brand") && <td className="whitespace-nowrap px-4 py-1.5 text-sm text-foreground">
         {row.brandName ?? "—"}
       </td>}
 
       {/* Category */}
-      {isCol("category") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      {isCol("category") && <td className="whitespace-nowrap px-4 py-1.5 text-sm text-foreground">
         {row.categoryName ?? "—"}
       </td>}
 
       {/* Sub-category */}
-      {isCol("subcategory") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
+      {isCol("subcategory") && <td className="whitespace-nowrap px-4 py-1.5 text-sm text-muted-foreground">
         {row.subcategoryName ?? "—"}
       </td>}
 
       {/* Total Stock */}
-      {isCol("totalStock") && <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-foreground">
+      {isCol("totalStock") && <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-foreground">
         {row.totalStock.toLocaleString()}{row.sellingUnit && row.sellingUnit !== "piece" ? ` ${row.sellingUnit}` : ""}
       </td>}
 
       {/* Avg Daily Sales */}
-      {isCol("avgSales") && <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      {isCol("avgSales") && <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {avgSales.toFixed(1)}
         <span className={cn("ml-1 text-[10px]", trendColor)} title={trendTooltip}>
           {trendIcon}
@@ -677,25 +677,25 @@ function StockMonitorRow({ row, visibleCols, velocity, onClick, onAskAi }: { row
       </td>}
 
       {/* Days of Stock */}
-      {isCol("daysOfStock") && <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium", cfg.text)}>
+      {isCol("daysOfStock") && <td className={cn("whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm font-medium", cfg.text)}>
         {daysOfStock != null ? Math.round(daysOfStock).toLocaleString() : "—"}
       </td>}
 
       {/* Last Sold */}
-      {isCol("lastSold") && <td className="whitespace-nowrap px-4 py-2.5 text-sm text-muted-foreground">
+      {isCol("lastSold") && <td className="whitespace-nowrap px-4 py-1.5 text-sm text-muted-foreground">
         {row.lastSaleDate ? formatRelativeDate(row.lastSaleDate) : "—"}
       </td>}
 
       {/* Stockout Days (90d) */}
       {isCol("stockoutDays") && <td className={cn(
-        "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm",
+        "whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm",
         row.stockoutDays90d > 0 ? "font-medium text-red-600" : "text-muted-foreground",
       )}>
         {row.stockoutDays90d}
       </td>}
 
       {/* Last PO */}
-      {isCol("lastPo") && <td className="max-w-[140px] px-4 py-2.5">
+      {isCol("lastPo") && <td className="max-w-[140px] px-4 py-1.5">
         {row.lastPoDate ? (
           <div>
             <div className="text-xs text-foreground">
@@ -713,12 +713,12 @@ function StockMonitorRow({ row, visibleCols, velocity, onClick, onAskAi }: { row
       </td>}
 
       {/* Lead Time */}
-      {isCol("leadTime") && <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      {isCol("leadTime") && <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.lastLeadTimeDays != null ? `${row.lastLeadTimeDays}d` : "—"}
       </td>}
 
       {/* AI */}
-      {isCol("ai") && <td className="whitespace-nowrap px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+      {isCol("ai") && <td className="whitespace-nowrap px-4 py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={onAskAi}
           className="rounded p-1 text-amber-500 hover:bg-amber-50"
@@ -789,7 +789,7 @@ function SortHeader({
     <th
       scope="col"
       className={cn(
-        "cursor-pointer select-none whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
+        "cursor-pointer select-none whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
         align === "right" && "text-right",
         isActive && "text-foreground",
       )}

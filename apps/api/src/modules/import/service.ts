@@ -6,6 +6,10 @@ import {
   categories,
   brands,
   historicalSales,
+  productOptionTypes,
+  productOptionValues,
+  productVariantOptions,
+  suppliers,
 } from "@apex/database/schema";
 import { eq, and, ilike, sql } from "drizzle-orm";
 import { generateEan13 } from "@apex/types";
@@ -53,7 +57,9 @@ export interface ParsedRow {
   handle: string;
   option1Name: string;
   option1Value: string;
+  option2Name: string;
   option2Value: string;
+  option3Name: string;
   option3Value: string;
   /** Resolved display name for variants: "Parent Name (Variant)" */
   resolvedName: string;
@@ -61,11 +67,34 @@ export interface ParsedRow {
   isVariant: boolean;
   /** The parent product name for variant groups */
   parentName: string;
+  // New fields from export refactor
+  active: boolean | null;
+  sellingUnit: string;
+  trackSerial: boolean | null;
+  trackDot: boolean | null;
+  specialOrder: boolean | null;
+  oemNumber: string;
+  supplierName: string;
   locations: ParsedRowLocation[];
   action: "CREATE" | "UPDATE";
   existingProductId: string | null;
   changes: string[];
   errors: string[];
+}
+
+/** Parse Y/N/Yes/No/true/false to boolean, null if empty or unrecognized */
+function parseYN(value: string | undefined | null): boolean | null {
+  if (!value?.trim()) return null;
+  const v = value.trim().toUpperCase();
+  if (v === "Y" || v === "YES" || v === "TRUE" || v === "1") return true;
+  if (v === "N" || v === "NO" || v === "FALSE" || v === "0") return false;
+  return null;
+}
+
+/** Strip zero-width Unicode artifacts (BOM, LTR/RTL marks, soft hyphens) */
+function sanitizeText(s: string | undefined | null): string {
+  if (!s) return "";
+  return s.replace(/[\u200B-\u200F\u202A-\u202E\uFEFF\u00AD]/g, "").trim();
 }
 
 export interface PreviewResult {
@@ -149,16 +178,29 @@ const HEADER_ALIASES: Record<string, string[]> = {
   cost: ["Cost", "Purchase cost", "cost", "purchase cost"],
   barcode: ["Barcode", "barcode"],
   category: ["Category", "category"],
+  subcategory: ["Sub-category", "sub-category", "Subcategory", "subcategory"],
+  brand: ["Brand", "brand", "BRAND"],
+  family: ["Family", "family", "FAMILY"],
   handle: ["Handle", "handle"],
   description: ["Description", "description"],
   trackStock: ["Track stock", "track stock"],
   supplier: ["Supplier", "supplier"],
-  option1Name: ["Option 1 name", "option 1 name"],
+  active: ["Active", "active", "ACTIVE"],
+  unit: ["Unit", "unit", "Sold by", "sold by"],
+  trackSerial: ["Track Serial", "track serial"],
+  trackDot: ["Track DOT", "track dot", "Track Dot"],
+  specialOrder: ["Special Order", "special order"],
+  oemNumber: ["OEM Number", "oem number", "OEM", "oem"],
+  option1Name: ["Option 1 name", "option 1 name", "Option 1", "option 1"],
   option1Value: ["Option 1 value", "option 1 value"],
-  option2Name: ["Option 2 name", "option 2 name"],
+  option2Name: ["Option 2 name", "option 2 name", "Option 2", "option 2"],
   option2Value: ["Option 2 value", "option 2 value"],
-  option3Name: ["Option 3 name", "option 3 name"],
+  option3Name: ["Option 3 name", "option 3 name", "Option 3", "option 3"],
   option3Value: ["Option 3 value", "option 3 value"],
+  // Parsed but IGNORED — calculated or system-managed fields:
+  markup: ["Markup %", "markup %"],
+  createdAt: ["Created at", "created at"],
+  updatedAt: ["Updated at", "updated at"],
 };
 
 function findColumn(headers: string[], field: string): number {
@@ -278,11 +320,23 @@ export async function parseLoyverseCSV(
     cost: findColumn(headers, "cost"),
     barcode: findColumn(headers, "barcode"),
     category: findColumn(headers, "category"),
+    subcategory: findColumn(headers, "subcategory"),
+    brand: findColumn(headers, "brand"),
+    family: findColumn(headers, "family"),
     description: findColumn(headers, "description"),
     handle: findColumn(headers, "handle"),
+    supplier: findColumn(headers, "supplier"),
+    active: findColumn(headers, "active"),
+    unit: findColumn(headers, "unit"),
+    trackSerial: findColumn(headers, "trackSerial"),
+    trackDot: findColumn(headers, "trackDot"),
+    specialOrder: findColumn(headers, "specialOrder"),
+    oemNumber: findColumn(headers, "oemNumber"),
     option1Name: findColumn(headers, "option1Name"),
     option1Value: findColumn(headers, "option1Value"),
+    option2Name: findColumn(headers, "option2Name"),
     option2Value: findColumn(headers, "option2Value"),
+    option3Name: findColumn(headers, "option3Name"),
     option3Value: findColumn(headers, "option3Value"),
   };
 
@@ -406,8 +460,19 @@ export async function parseLoyverseCSV(
     const handle = getByIdx(row, colIdx.handle);
     const option1Name = getByIdx(row, colIdx.option1Name);
     const option1Value = getByIdx(row, colIdx.option1Value);
+    const option2Name = getByIdx(row, colIdx.option2Name);
     const option2Value = getByIdx(row, colIdx.option2Value);
+    const option3Name = getByIdx(row, colIdx.option3Name);
     const option3Value = getByIdx(row, colIdx.option3Value);
+
+    // New fields from export refactor
+    const active = parseYN(getByIdx(row, colIdx.active));
+    const sellingUnit = sanitizeText(getByIdx(row, colIdx.unit));
+    const trackSerial = parseYN(getByIdx(row, colIdx.trackSerial));
+    const trackDot = parseYN(getByIdx(row, colIdx.trackDot));
+    const specialOrder = parseYN(getByIdx(row, colIdx.specialOrder));
+    const oemNumber = sanitizeText(getByIdx(row, colIdx.oemNumber));
+    const supplierName = sanitizeText(getByIdx(row, colIdx.supplier));
 
     const rowErrors: string[] = [];
 
@@ -516,11 +581,20 @@ export async function parseLoyverseCSV(
       handle,
       option1Name,
       option1Value,
+      option2Name,
       option2Value,
+      option3Name,
       option3Value,
       resolvedName: name, // Will be updated below for variants
       isVariant: false,   // Will be updated below
       parentName: "",     // Will be updated below
+      active,
+      sellingUnit,
+      trackSerial,
+      trackDot,
+      specialOrder,
+      oemNumber,
+      supplierName,
       locations: rowLocations,
       action,
       existingProductId: existing?.id ?? null,
@@ -698,6 +772,94 @@ export async function parseLoyverseCSV(
       isVariant: r.isVariant,
     })),
   };
+}
+
+// ── Option type/value population for variants ──────────────────────
+// Populates product_option_types, product_option_values, and
+// product_variant_options so the export can reconstruct Option 1/2/3
+// columns. Each parent has its OWN option types (SIZE, LEAF, etc.).
+
+async function upsertOptionLinks(
+  tx: any,
+  orgId: string,
+  parentProductId: string,
+  variantProductId: string,
+  row: ParsedRow,
+) {
+  const optionPairs: Array<{ name: string; value: string; sort: number }> = [];
+  if (row.option1Name && row.option1Value)
+    optionPairs.push({ name: row.option1Name, value: row.option1Value, sort: 0 });
+  if (row.option2Name && row.option2Value)
+    optionPairs.push({ name: row.option2Name, value: row.option2Value, sort: 1 });
+  if (row.option3Name && row.option3Value)
+    optionPairs.push({ name: row.option3Name, value: row.option3Value, sort: 2 });
+
+  for (const { name, value, sort } of optionPairs) {
+    // Find or create option type scoped to this parent
+    const [existingType] = await tx
+      .select({ id: productOptionTypes.id })
+      .from(productOptionTypes)
+      .where(
+        and(
+          eq(productOptionTypes.orgId, orgId),
+          eq(productOptionTypes.productId, parentProductId),
+          eq(productOptionTypes.name, name),
+        ),
+      )
+      .limit(1);
+
+    let optTypeId: string;
+    if (existingType) {
+      optTypeId = existingType.id;
+    } else {
+      const [newType] = await tx
+        .insert(productOptionTypes)
+        .values({
+          orgId,
+          productId: parentProductId,
+          name,
+          sortOrder: sort,
+        })
+        .returning({ id: productOptionTypes.id });
+      optTypeId = newType.id;
+    }
+
+    // Find or create option value
+    const [existingVal] = await tx
+      .select({ id: productOptionValues.id })
+      .from(productOptionValues)
+      .where(
+        and(
+          eq(productOptionValues.optionTypeId, optTypeId),
+          eq(productOptionValues.value, value),
+        ),
+      )
+      .limit(1);
+
+    let optValId: string;
+    if (existingVal) {
+      optValId = existingVal.id;
+    } else {
+      const [newVal] = await tx
+        .insert(productOptionValues)
+        .values({
+          optionTypeId: optTypeId,
+          value,
+          sortOrder: 0,
+        })
+        .returning({ id: productOptionValues.id });
+      optValId = newVal.id;
+    }
+
+    // Link variant → option value (idempotent)
+    await tx
+      .insert(productVariantOptions)
+      .values({
+        productId: variantProductId,
+        optionValueId: optValId,
+      })
+      .onConflictDoNothing();
+  }
 }
 
 // ── executeImport ────────────────────────────────────────────────────
@@ -1107,7 +1269,7 @@ export async function executeImport(
                 .insert(products)
                 .values({
                   orgId,
-                  name: row.name, // Short variant name (e.g., "FORD RANGER") — display combines with parent
+                  name: row.name,
                   sku: row.sku,
                   mnemonicSku,
                   unitPrice: row.unitPrice,
@@ -1121,6 +1283,13 @@ export async function executeImport(
                   description: row.description || null,
                   parentProductId,
                   isParent: false,
+                  // New fields from export refactor
+                  ...(row.sellingUnit ? { sellingUnit: row.sellingUnit } : {}),
+                  ...(row.trackSerial != null ? { isSerialized: row.trackSerial } : {}),
+                  ...(row.trackDot != null ? { isTire: row.trackDot } : {}),
+                  ...(row.specialOrder != null ? { specialOrder: row.specialOrder } : {}),
+                  ...(row.active != null ? { isActive: row.active, discontinued: !row.active } : {}),
+                  ...(row.oemNumber ? { oemNumber: row.oemNumber } : {}),
                 })
                 .returning({ id: products.id });
 
@@ -1138,6 +1307,11 @@ export async function executeImport(
                 });
               }
 
+              // Populate option type/value/link tables for variants (Gap 1)
+              if (row.isVariant && parentProductId) {
+                await upsertOptionLinks(tx, orgId, parentProductId, product.id, row);
+              }
+
               created++;
             } else if (row.action === "UPDATE" && row.existingProductId) {
               // Update product fields — inventory_sync mode: stock + availability only (no name/price)
@@ -1149,16 +1323,23 @@ export async function executeImport(
                 if (row.isVariablePrice) updateFields.isVariablePrice = true;
                 // Hard block: do NOT include categoryId, subcategoryId, brandId, name, barcode, description
               } else {
-                // Smart Sync / Update Only: update all fields
-                if (row.name) updateFields.name = row.name;
+                // Smart Sync / Update Only: update safe fields ONLY.
+                // NEVER update brand, category, or subcategory on existing products —
+                // the April 14 2026 import proved that CSV brand columns create 200+
+                // junk brand entries and reassign thousands of products. Brand/category
+                // assignments must be managed manually, not via bulk import.
                 if (row.unitPrice !== "0.00") updateFields.unitPrice = row.unitPrice;
                 if (row.costPrice !== "0.00") updateFields.costPrice = row.costPrice;
                 if (row.isVariablePrice) updateFields.isVariablePrice = true;
                 if (row.barcode) updateFields.barcode = row.barcode;
-                if (row.description) updateFields.description = row.description;
-                if (categoryId) updateFields.categoryId = categoryId;
-                if (subcategoryId) updateFields.subcategoryId = subcategoryId;
-                if (brandId) updateFields.brandId = brandId;
+                if (row.oemNumber) updateFields.oemNumber = row.oemNumber;
+                if (row.sellingUnit) updateFields.sellingUnit = row.sellingUnit;
+                if (row.trackSerial != null) updateFields.isSerialized = row.trackSerial;
+                if (row.trackDot != null) updateFields.isTire = row.trackDot;
+                if (row.specialOrder != null) updateFields.specialOrder = row.specialOrder;
+                if (row.active != null) { updateFields.isActive = row.active; updateFields.discontinued = !row.active; }
+                // BLOCKED on UPDATE: name, description, categoryId, subcategoryId, brandId
+                // These are identity fields that should not change via import.
               }
 
               if (Object.keys(updateFields).length > 0) {
@@ -1203,6 +1384,14 @@ export async function executeImport(
                     reorderPoint: loc.reorderPoint ?? 0,
                     optimalStock: loc.optimalStock ?? 0,
                   });
+                }
+              }
+
+              // Populate option links for existing variants on UPDATE (Gap 1)
+              if (row.isVariant && row.handle) {
+                const parentId = parentProductMap.get(row.handle);
+                if (parentId && row.existingProductId) {
+                  await upsertOptionLinks(tx, orgId, parentId, row.existingProductId, row);
                 }
               }
 
@@ -1460,7 +1649,7 @@ export async function parseReceiptsCSV(csvText: string, orgId: string): Promise<
         csvName: store,
         apexLocationId: savedId,
         apexLocationName: loc?.name || store,
-        autoMatched: false,
+        autoMatched: true,
         saved: true,
       };
     }

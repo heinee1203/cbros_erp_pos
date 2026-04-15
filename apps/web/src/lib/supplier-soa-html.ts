@@ -97,7 +97,6 @@ ${rows}
 <div class="sig-section">
 <table style="width:100%;border:none">
 <tr><td style="border:none;width:50%">Prepared by: ______________________________________</td><td style="border:none">Approved by: ______________________________________</td></tr>
-<tr><td style="border:none">Date: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;______________________________________</td><td style="border:none">Date: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;______________________________________</td></tr>
 </table>
 </div>
 

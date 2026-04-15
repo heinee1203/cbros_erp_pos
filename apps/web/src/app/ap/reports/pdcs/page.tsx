@@ -204,7 +204,7 @@ export default function CheckRegisterPage() {
         ) : (
           <div className="divide-y divide-border">
             {checks.map((c) => (
-              <div key={c.id} className={cn("flex items-center px-4 py-2.5 text-[13px] hover:bg-accent/30", c.status === "CANCELLED" && "opacity-40")}>
+              <div key={c.id} className={cn("flex items-center px-4 py-1.5 text-[13px] hover:bg-accent/30", c.status === "CANCELLED" && "opacity-40")}>
                 <div className="w-36 font-mono text-[12px] font-semibold text-primary">{c.dvNumber.replace(/^DV-/, "")}</div>
                 <div className="flex-1 min-w-0 truncate">{c.supplierName}</div>
                 <div className="w-28 font-mono text-[12px]">{c.checkNumber || "\u2014"}</div>

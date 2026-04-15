@@ -883,7 +883,7 @@ export default function EditItemPage() {
             {/* "This item has variants" toggle */}
             <div className="col-span-2 mt-1">
               <label className={cn(
-                "flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer select-none transition-colors",
+                "flex items-center gap-3 rounded-lg border px-3 py-1.5 cursor-pointer select-none transition-colors",
                 isParent ? "border-primary/30 bg-primary/5" : "border-border hover:bg-muted/30",
                 convertToRegularMut.isPending && "opacity-50 pointer-events-none",
               )}>
@@ -919,7 +919,7 @@ export default function EditItemPage() {
             {/* Special Order + Discontinued toggles */}
             <div className="col-span-2 grid grid-cols-2 gap-3">
               <label className={cn(
-                "flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer select-none transition-colors",
+                "flex items-center gap-3 rounded-lg border px-3 py-1.5 cursor-pointer select-none transition-colors",
                 specialOrder ? "border-blue-300 bg-blue-50" : "border-border hover:bg-muted/30",
               )}>
                 <input
@@ -936,7 +936,7 @@ export default function EditItemPage() {
                 </div>
               </label>
               <label className={cn(
-                "flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer select-none transition-colors",
+                "flex items-center gap-3 rounded-lg border px-3 py-1.5 cursor-pointer select-none transition-colors",
                 discontinued ? "border-gray-400 bg-gray-100" : "border-border hover:bg-muted/30",
               )}>
                 <input
@@ -1093,7 +1093,7 @@ export default function EditItemPage() {
 
               {/* ── GENERATE VARIANTS ── */}
               {optionTypes.length > 0 && (
-                <div className="flex items-center gap-3 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-2.5">
+                <div className="flex items-center gap-3 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-1.5">
                   <div className="flex-1">
                     <span className="text-[12px] font-medium text-foreground">Generate Variants</span>
                     <p className="text-[10px] text-muted-foreground">
@@ -2047,7 +2047,7 @@ function CopyFitmentModal({
               key={product.id}
               onClick={() => setSelectedProduct(product)}
               className={cn(
-                "flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left hover:bg-accent",
+                "flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left hover:bg-accent",
                 selectedProduct?.id === product.id && "bg-accent ring-1 ring-primary",
               )}
             >

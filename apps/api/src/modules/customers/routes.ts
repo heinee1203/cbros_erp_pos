@@ -19,6 +19,7 @@ import {
   recordPayment,
   recordMultiCustomerPayment,
   recordAdjustment,
+  recordManualCharge,
   reassignTransaction,
   editTransactionAmount,
   deleteTransaction,
@@ -34,6 +35,7 @@ import {
   listSOARecords,
   updateSOAStatus,
   recomputeSOAStatus,
+  listPayments,
 } from "./service";
 
 function assertArRole(role: string) {
@@ -269,6 +271,25 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // ─── GET /customers/payments ──────────────────────
+  // Payment Register — all customer payments across all customers
+  app.get("/payments", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const q = request.query as {
+      search?: string; paymentMethod?: string; customerId?: string;
+      dateFrom?: string; dateTo?: string; limit?: string;
+    };
+    const result = await listPayments(orgId, {
+      search: q.search,
+      paymentMethod: q.paymentMethod,
+      customerId: q.customerId,
+      dateFrom: q.dateFrom,
+      dateTo: q.dateTo,
+      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+    });
+    return reply.send(result);
+  });
+
   // ─── GET /customers/:id ──────────────────────────
   // Customer detail with recent transactions
   app.get("/:id", async (request, reply) => {
@@ -388,6 +409,50 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(201).send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // ─── POST /customers/:id/charges ──────────────────
+  // Record a manual charge against customer AR balance
+  app.post("/:id/charges", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertArRole(role);
+
+    const body = request.body as {
+      amount: string;
+      referenceNumber?: string;
+      description?: string;
+      chargeDate?: string;
+      notes?: string;
+    };
+
+    const amount = parseFloat(body.amount);
+    if (!amount || amount <= 0) {
+      return reply.status(400).send({ error: "Amount must be greater than 0" });
+    }
+    if (!body.referenceNumber?.trim()) {
+      return reply.status(400).send({ error: "Reference number is required" });
+    }
+
+    try {
+      const txn = await recordManualCharge(
+        orgId,
+        id,
+        {
+          amount,
+          referenceNumber: body.referenceNumber!.trim(),
+          description: body.description,
+          chargeDate: body.chargeDate,
+          notes: body.notes,
+        },
+        userId,
+      );
+      return reply.status(201).send(txn);
+    } catch (err: any) {
+      const status = err.statusCode || 400;
+      return reply.status(status).send({ error: err.message });
     }
   });
 

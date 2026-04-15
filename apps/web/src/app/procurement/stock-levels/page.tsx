@@ -333,7 +333,7 @@ function StockLevelsInner() {
                 { label: "Total Sell Value", value: `₱${productSummary.totalSellValue.toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-primary" },
                 { label: "Potential Margin", value: `₱${(productSummary.totalSellValue - productSummary.totalCostValue).toLocaleString("en-PH", { maximumFractionDigits: 0 })}`, color: "text-success" },
               ]).map((card) => (
-                <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-2.5">
+                <div key={card.label} className="border-r border-border last:border-r-0 px-4 py-1.5">
                   <div className={`text-base font-bold tabular-nums ${card.color || "text-foreground"}`}>
                     {card.value}
                   </div>
@@ -480,16 +480,16 @@ function StockLevelsInner() {
             <table className="w-full text-left text-sm">
               <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">Item</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">SKU</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">Category</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Stock</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Reorder Pt</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Sell Rate</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Days Left</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider">Last Sold</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">Status</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider"></th>
+                  <th className="px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wider">Item</th>
+                  <th className="px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wider">SKU</th>
+                  <th className="px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wider">Category</th>
+                  <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider">Stock</th>
+                  <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider">Reorder Pt</th>
+                  <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider">Sell Rate</th>
+                  <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider">Days Left</th>
+                  <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider">Last Sold</th>
+                  <th className="px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -500,7 +500,7 @@ function StockLevelsInner() {
                   const daysLeft = row.daysOfStock != null ? Math.round(row.daysOfStock) : null;
                   return (
                     <tr key={`${row.productId}-${row.productSku}-${i}`} className="group transition-colors hover:bg-muted/30">
-                      <td className="min-w-[200px] px-4 py-2.5">
+                      <td className="min-w-[200px] px-4 py-1.5">
                         <div className="flex items-center gap-1.5">
                           <Link href={`/inventory?search=${encodeURIComponent(row.productSku)}`} className="whitespace-normal break-words text-sm font-medium text-foreground hover:underline">
                             {row.productName}
@@ -510,19 +510,19 @@ function StockLevelsInner() {
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{row.productSku}</td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{row.category}</td>
-                      <td className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm ${isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"}`}>
+                      <td className="px-4 py-1.5 font-mono text-xs text-muted-foreground">{row.productSku}</td>
+                      <td className="px-4 py-1.5 text-xs text-muted-foreground">{row.category}</td>
+                      <td className={`whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm ${isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"}`}>
                         {row.totalStock.toLocaleString()}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+                      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
                         {row.reorderPoint.toLocaleString()}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+                      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
                         {row.sold1m > 0 ? `${row.sold1m} /mo` : "\u2014"}
                       </td>
                       <td className={cn(
-                        "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium",
+                        "whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm font-medium",
                         daysLeft === null ? "text-muted-foreground/50" :
                         daysLeft <= 7 ? "text-destructive" :
                         daysLeft <= 14 ? "text-orange-500" :
@@ -531,17 +531,17 @@ function StockLevelsInner() {
                       )}>
                         {daysLeft === null ? "\u221E" : `${daysLeft}d`}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-muted-foreground">
+                      <td className="whitespace-nowrap px-4 py-1.5 text-right text-xs text-muted-foreground">
                         {row.lastSoldAt ? timeAgo(row.lastSoldAt) : "\u2014"}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5">
+                      <td className="whitespace-nowrap px-4 py-1.5">
                         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${statusStyle}`}>
                           {isOut && <PackageX size={11} />}
                           {isLow && <AlertTriangle size={11} />}
                           {STATUS_LABELS[row.status] ?? row.status}
                         </span>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-2.5 text-right">
+                      <td className="whitespace-nowrap px-4 py-1.5 text-right">
                         {(isLow || isOut) && (
                           <button
                             onClick={() => handleReorder(row.productId, row.productName)}
@@ -575,11 +575,11 @@ function StockLevelsInner() {
                 <SortHeader label="Reserved" field="reservedLevel" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Available" field="available" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Reorder Pt" field="reorderPoint" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
-                <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Sell Rate</th>
-                <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Days Left</th>
+                <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Sell Rate</th>
+                <th className="px-4 py-1.5 text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Days Left</th>
                 <SortHeader label="Last Sold" field="lastSoldAt" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} align="right" />
                 <SortHeader label="Status" field="status" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
-                <th className="px-4 py-2.5" />
+                <th className="px-4 py-1.5" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -593,7 +593,7 @@ function StockLevelsInner() {
       </div>
 
       {/* ── Footer ── */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {viewMode === "product"
@@ -628,7 +628,7 @@ function StockLevelsInner() {
 
     {/* Success toast */}
     {successMsg && (
-      <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[13px] font-medium text-emerald-800 shadow-lg animate-in slide-in-from-bottom-2">
+      <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-1.5 text-[13px] font-medium text-emerald-800 shadow-lg animate-in slide-in-from-bottom-2">
         {successMsg}
       </div>
     )}
@@ -862,7 +862,7 @@ function StockRow({ row, onReorder, reorderLoading }: { row: StockLevelRow; onRe
   return (
     <tr className="group transition-colors hover:bg-muted/30">
       {/* Product */}
-      <td className="min-w-[200px] px-4 py-2.5">
+      <td className="min-w-[200px] px-4 py-1.5">
         <div className="flex items-center gap-1.5">
           <Link href={`/inventory?search=${encodeURIComponent(row.productSku)}`} className="whitespace-normal break-words text-sm font-medium text-foreground hover:underline">
             {row.productName}
@@ -877,50 +877,50 @@ function StockRow({ row, onReorder, reorderLoading }: { row: StockLevelRow; onRe
       </td>
 
       {/* SKU */}
-      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 font-mono text-xs text-muted-foreground">
         {row.productSku}
       </td>
 
       {/* Category Badge */}
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <span className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-medium ${catStyle}`}>
           {catLabel}
         </span>
       </td>
 
       {/* Location */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-sm text-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-sm text-foreground">
         {row.locationName}
       </td>
 
       {/* On Hand */}
-      <td className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm ${isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"}`}>
+      <td className={`whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm ${isOut ? "font-semibold text-destructive" : isLow ? "font-medium text-warning" : "text-foreground"}`}>
         {row.stockLevel.toLocaleString()}{unitSuffix}
       </td>
 
       {/* Reserved */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.reservedLevel > 0 ? `${row.reservedLevel.toLocaleString()}${unitSuffix}` : "\u2014"}
       </td>
 
       {/* Available */}
-      <td className={`whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium ${isOut ? "text-destructive" : isLow ? "text-warning" : "text-foreground"}`}>
+      <td className={`whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm font-medium ${isOut ? "text-destructive" : isLow ? "text-warning" : "text-foreground"}`}>
         {row.available.toLocaleString()}{unitSuffix}
       </td>
 
       {/* Reorder Point */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.reorderPoint.toLocaleString()}{unitSuffix}
       </td>
 
       {/* Sell Rate */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground">
         {row.sold1m > 0 ? `${row.sold1m} /mo` : "\u2014"}
       </td>
 
       {/* Days Left */}
       <td className={cn(
-        "whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-sm font-medium",
+        "whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm font-medium",
         daysLeft === null ? "text-muted-foreground/50" :
         daysLeft <= 7 ? "text-destructive" :
         daysLeft <= 14 ? "text-orange-500" :
@@ -931,12 +931,12 @@ function StockRow({ row, onReorder, reorderLoading }: { row: StockLevelRow; onRe
       </td>
 
       {/* Last Sold */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-muted-foreground">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right text-xs text-muted-foreground">
         {row.lastSoldAt ? timeAgo(row.lastSoldAt) : "\u2014"}
       </td>
 
       {/* Status Badge */}
-      <td className="whitespace-nowrap px-4 py-2.5">
+      <td className="whitespace-nowrap px-4 py-1.5">
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${statusStyle}`}>
           {isOut && <PackageX size={11} />}
           {isLow && <AlertTriangle size={11} />}
@@ -945,7 +945,7 @@ function StockRow({ row, onReorder, reorderLoading }: { row: StockLevelRow; onRe
       </td>
 
       {/* Reorder */}
-      <td className="whitespace-nowrap px-4 py-2.5 text-right">
+      <td className="whitespace-nowrap px-4 py-1.5 text-right">
         {(isLow || isOut) && (
           <button
             onClick={() => onReorder(row.productId, row.productName)}
@@ -1019,7 +1019,7 @@ function SortHeader({
     <th
       scope="col"
       className={cn(
-        "cursor-pointer select-none whitespace-nowrap px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
+        "cursor-pointer select-none whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
         align === "right" && "text-right",
         isActive && "text-foreground",
       )}

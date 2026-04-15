@@ -17,6 +17,13 @@ export interface DVDeductionLine {
   amount: number;
 }
 
+export interface DVSoaRef {
+  soaNumber: string;
+  allocatedAmount: number;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+}
+
 export interface DVData {
   dvNumber: string;
   supplierName: string;
@@ -27,11 +34,15 @@ export interface DVData {
   soaNumber?: string;
   soaDateFrom?: string;
   soaDateTo?: string;
+  /** Multi-SOA references from junction table */
+  soaRefs?: DVSoaRef[];
   remarks?: string | null;
   paymentMethod?: string;
   payments?: DVPaymentLine[];
   deductions?: DVDeductionLine[];
   invoices?: any[];
+  /** Credit memos from the SOA (negative line items) — shown in print breakdown */
+  soaCreditMemos?: Array<{ invoiceNumber: string; amount: number }>;
   isVoided?: boolean;
   voidReason?: string | null;
 }
@@ -61,8 +72,9 @@ function buildRef(p: DVPaymentLine): string {
 
 export function buildDisbursementVoucherHtml(d: DVData): string {
   const gross = d.grossAmount ?? d.amount;
+  const totalCMs = (d.soaCreditMemos ?? []).reduce((s, cm) => s + cm.amount, 0);
   const totalDed = d.totalDeductions ?? 0;
-  const net = gross - totalDed;
+  const net = gross - totalCMs - totalDed;
   const hasDeductions = totalDed > 0 && d.deductions && d.deductions.length > 0;
 
   const paymentLines = d.payments && d.payments.length > 0
@@ -81,28 +93,51 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
     </tr>`;
   }).join("\n");
 
-  // Deduction rows (right-aligned section)
-  const dedRows = hasDeductions
-    ? (d.deductions ?? []).map((dd) =>
-        `<div class="recon-row"><span>${esc(dd.description)} -)</span><span>(${fmt(dd.amount)})</span></div>`
-      ).join("\n")
-    : "";
+  // Build all deduction lines: SOA credit memos + DV deductions (EWT, etc.)
+  const soaCMs = (d.soaCreditMemos ?? []).map((cm) =>
+    `<div class="recon-row"><span>${esc(cm.invoiceNumber)} -)</span><span>(${fmt(cm.amount)})</span></div>`
+  ).join("\n");
+  const otherDeds = (d.deductions ?? []).map((dd) =>
+    `<div class="recon-row"><span>${esc(dd.description)} -)</span><span>(${fmt(dd.amount)})</span></div>`
+  ).join("\n");
 
-  // SOA sub-lines under PAY TO
-  const soaLine = d.soaNumber
-    ? `<div><b>SOA#:</b> <span style="font-weight:700">${esc(d.soaNumber.replace(/^SUPP-SOA-/, ""))}</span></div>`
-    : "";
-  const periodLine = d.soaDateFrom && d.soaDateTo
-    ? `<div class="payto-sub">${fmtDate(d.soaDateFrom)} \u2013 ${fmtDate(d.soaDateTo)}</div>`
-    : "";
+  const hasCMs = (d.soaCreditMemos ?? []).length > 0;
+  const hasAnyBreakdown = hasDeductions || hasCMs;
 
-  // Reconciliation section (only when deductions exist)
-  const reconSection = hasDeductions ? `
+  // SOA refs for the breakdown table (header SOA# line removed — table is authoritative)
+  const soaRefs = d.soaRefs && d.soaRefs.length > 0 ? d.soaRefs : d.soaNumber ? [{ soaNumber: d.soaNumber, allocatedAmount: gross, dateFrom: d.soaDateFrom, dateTo: d.soaDateTo }] : [];
+
+  // SOA breakdown table (only when multiple SOAs)
+  const soaBreakdownSection = soaRefs.length > 1 ? `
+<div style="margin-bottom:12px">
+  <div style="font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;border-bottom:1px solid #000;padding-bottom:2px">SOA Details</div>
+  <table style="width:100%;border-collapse:collapse;font-size:9pt">
+    <thead><tr>
+      <th style="text-align:left;padding:3px 0;font-weight:700">SOA #</th>
+      <th style="text-align:left;padding:3px 0;font-weight:700">Period</th>
+      <th style="text-align:right;padding:3px 0;font-weight:700">Amount</th>
+    </tr></thead>
+    <tbody>
+      ${soaRefs.map((r) => `<tr>
+        <td style="padding:2px 0;font-family:monospace;font-weight:600">${esc(r.soaNumber.replace(/^SUPP-SOA-/, ""))}</td>
+        <td style="padding:2px 0;color:#333">${r.dateFrom && r.dateTo ? `${fmtDate(r.dateFrom)} – ${fmtDate(r.dateTo)}` : "—"}</td>
+        <td style="padding:2px 0;text-align:right;font-variant-numeric:tabular-nums">${fmt(r.allocatedAmount)}</td>
+      </tr>`).join("\n")}
+      <tr style="border-top:1px solid #000;font-weight:900">
+        <td style="padding:3px 0" colspan="2">TOTAL</td>
+        <td style="padding:3px 0;text-align:right;font-variant-numeric:tabular-nums">${fmt(soaRefs.reduce((s, r) => s + r.allocatedAmount, 0))}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>` : "";
+
+  // Reconciliation section (when there are CMs or deductions)
+  const reconSection = hasAnyBreakdown ? `
 <div class="recon">
   <div class="recon-line"></div>
-  <div class="recon-row"><span>SOA Amount</span><span>${fmt(gross)}</span></div>
-  <div style="height:6px"></div>
-  ${dedRows}
+  <div class="recon-row"><span>Gross Amount</span><span>${fmt(gross)}</span></div>
+  ${soaCMs}
+  ${otherDeds}
   <div class="recon-line"></div>
   <div class="recon-row recon-total"><span>NET PAYMENT</span><span>${fmt(net)}</span></div>
   <div class="recon-dline"></div>
@@ -124,7 +159,7 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; 
 /* Top info: PAY TO left, DATE/DV# right */
 .top-info { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
 .payto-label { font-size: 12pt; font-weight: 700; margin-bottom: 2px; }
-.payto-name { font-size: 16pt; font-weight: 900; text-transform: uppercase; letter-spacing: 0.3px; }
+.payto-name { font-size: 13pt; font-weight: 900; text-transform: uppercase; letter-spacing: 0.3px; }
 .payto-sub { font-size: 10pt; color: #333; margin-top: 1px; }
 .payto-sub:first-of-type { font-family: monospace; font-weight: 700; font-size: 10.5pt; color: #000; }
 .top-right { text-align: right; font-size: 11pt; line-height: 1.6; white-space: nowrap; }
@@ -139,11 +174,11 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; 
 .pay-table tbody tr:last-child .pay-cell { border-bottom: 2px solid #000; }
 
 /* Reconciliation (right-aligned) */
-.recon { width: 55%; margin-left: auto; margin-top: 16px; font-size: 10.5pt; line-height: 1.7; }
+.recon { width: 45%; margin-left: auto; margin-top: 10px; font-size: 9pt; line-height: 1.4; }
 .recon-row { display: flex; justify-content: space-between; padding: 0 2px; }
-.recon-line { border-top: 1px solid #000; margin: 2px 0; }
-.recon-dline { border-top: 3px double #000; margin: 2px 0; }
-.recon-total { font-weight: 900; font-size: 12pt; padding-top: 2px; }
+.recon-line { border-top: 1px solid #000; margin: 1px 0; }
+.recon-dline { border-top: 3px double #000; margin: 1px 0; }
+.recon-total { font-weight: 900; font-size: 10pt; padding-top: 1px; }
 
 /* Spacer pushes sig+footer to bottom of half page */
 .spacer { flex: 1; }
@@ -173,9 +208,10 @@ ${d.isVoided ? '<div class="voided-watermark">VOIDED</div>' : ""}
   <div class="top-right">
     <div><b>DATE:</b> <span>${fmtDate(d.paymentDate)}</span></div>
     <div><b>DV #:</b> <span style="font-family:monospace">${esc(d.dvNumber)}</span></div>
-    ${soaLine}
   </div>
 </div>
+
+${soaBreakdownSection}
 
 <table class="pay-table">
   <thead><tr>

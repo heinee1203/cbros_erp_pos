@@ -287,6 +287,80 @@ export async function createInvoice(
   return invoice;
 }
 
+/**
+ * Bulk-create multiple invoices for one supplier in a single transaction.
+ */
+export async function bulkCreateInvoices(
+  orgId: string,
+  userId: string,
+  data: {
+    supplierId: string;
+    sourcePoId?: string;
+    notes?: string;
+    invoices: Array<{ invoiceNumber: string; invoiceDate: string; amount: string }>;
+  },
+) {
+  if (!data.invoices.length) throw new Error("No invoices provided");
+
+  return await db.transaction(async (tx) => {
+    // Validate supplier + get payment terms
+    const [supplier] = await tx
+      .select({ id: suppliers.id, paymentTermsDays: suppliers.paymentTermsDays })
+      .from(suppliers)
+      .where(and(eq(suppliers.id, data.supplierId), eq(suppliers.orgId, orgId)))
+      .limit(1);
+    if (!supplier) throw new Error("Supplier not found");
+
+    const termsDays = supplier.paymentTermsDays ?? 30;
+    let created = 0;
+    const errors: Array<{ index: number; invoiceNumber: string; message: string }> = [];
+    let total = 0;
+
+    for (let i = 0; i < data.invoices.length; i++) {
+      const inv = data.invoices[i];
+      try {
+        // Check duplicate
+        const [dup] = await tx
+          .select({ id: supplierInvoices.id })
+          .from(supplierInvoices)
+          .where(
+            and(
+              eq(supplierInvoices.orgId, orgId),
+              eq(supplierInvoices.supplierId, data.supplierId),
+              eq(supplierInvoices.invoiceNumber, inv.invoiceNumber),
+            ),
+          )
+          .limit(1);
+        if (dup) { errors.push({ index: i, invoiceNumber: inv.invoiceNumber, message: "Duplicate invoice number" }); continue; }
+
+        const invoiceDateObj = new Date(inv.invoiceDate);
+        const dueDateObj = new Date(invoiceDateObj);
+        dueDateObj.setDate(dueDateObj.getDate() + termsDays);
+
+        await tx.insert(supplierInvoices).values({
+          orgId,
+          supplierId: data.supplierId,
+          invoiceNumber: inv.invoiceNumber,
+          invoiceDate: inv.invoiceDate,
+          dueDate: dueDateObj.toISOString().split("T")[0],
+          totalAmount: inv.amount,
+          balance: inv.amount,
+          paymentTermsDays: termsDays,
+          sourcePoId: data.sourcePoId ?? null,
+          notes: data.notes ?? null,
+          recordedBy: userId,
+        });
+        created++;
+        total += parseFloat(inv.amount);
+      } catch (err: any) {
+        errors.push({ index: i, invoiceNumber: inv.invoiceNumber, message: err.message });
+      }
+    }
+
+    return { created, total: parseFloat(total.toFixed(2)), errors };
+  });
+}
+
 export async function updateInvoice(
   orgId: string,
   id: string,
@@ -1994,6 +2068,8 @@ export async function createDisbursementVoucher(
   data: {
     supplierId: string;
     soaId?: string;
+    soaIds?: string[];
+    soaAllocations?: Array<{ soaId: string; allocatedAmount: string }>;
     grossAmount: string;
     paymentDate: string;
     remarks?: string;
@@ -2029,34 +2105,101 @@ export async function createDisbursementVoucher(
     throw new Error(`Payment lines total (${paymentSum.toFixed(2)}) must equal net amount (${netAmount.toFixed(2)})`);
   }
 
+  // Normalize: backward compat — if soaId (singular) provided but not soaIds, treat as single-element array
+  const resolvedSoaIds: string[] = data.soaIds && data.soaIds.length > 0
+    ? data.soaIds
+    : data.soaId
+      ? [data.soaId]
+      : [];
+
   return await db.transaction(async (tx) => {
-    // Validate SOA if provided
-    if (data.soaId) {
-      const soaRows = (await tx.execute(
-        sql`SELECT id, supplier_id, total_balance::text, status
-            FROM supplier_soa_records
-            WHERE id = ${data.soaId} AND org_id = ${orgId}`,
-      )) as any[];
-      if (soaRows.length === 0) throw new Error("SOA not found");
-      if (soaRows[0].status === "VOID") throw new Error("Cannot create DV for a voided SOA");
-      if (soaRows[0].supplier_id !== data.supplierId) throw new Error("Supplier does not match SOA");
+    // Validate ALL SOAs if provided
+    let soaBalances: Record<string, number> = {};
+    if (resolvedSoaIds.length > 0) {
+      for (const sid of resolvedSoaIds) {
+        const soaRows = (await tx.execute(
+          sql`SELECT id, supplier_id, total_balance::text, status
+              FROM supplier_soa_records
+              WHERE id = ${sid} AND org_id = ${orgId}`,
+        )) as any[];
+        if (soaRows.length === 0) throw new Error(`SOA ${sid} not found`);
+        if (soaRows[0].status === "VOID") throw new Error("Cannot create DV for a voided SOA");
+        if (soaRows[0].supplier_id !== data.supplierId) throw new Error("Supplier does not match SOA");
+        soaBalances[sid] = parseFloat(soaRows[0].total_balance);
+      }
     }
 
     const dvNumber = await generateDvNumber(tx, orgId);
     const primaryMethod = data.payments[0].paymentMethod;
+
+    // Backward compat: store first SOA in the legacy soa_id column
+    const legacySoaId = resolvedSoaIds.length > 0 ? resolvedSoaIds[0] : null;
 
     const [row] = (await tx.execute(
       sql`INSERT INTO supplier_disbursement_vouchers
           (org_id, dv_number, supplier_id, soa_id,
            amount, gross_amount, total_deductions, net_amount,
            payment_method, payment_date, remarks, status, created_by)
-          VALUES (${orgId}, ${dvNumber}, ${data.supplierId}, ${data.soaId ?? null},
+          VALUES (${orgId}, ${dvNumber}, ${data.supplierId}, ${legacySoaId},
                   ${String(netAmount.toFixed(2))}, ${data.grossAmount},
                   ${String(totalDeductions.toFixed(2))}, ${String(netAmount.toFixed(2))},
                   ${primaryMethod}, ${data.paymentDate},
                   ${data.remarks ?? null}, 'DRAFT', ${userId})
           RETURNING id, dv_number, status`,
     )) as any[];
+
+    // Insert junction rows into supplier_dv_soas
+    if (resolvedSoaIds.length > 0) {
+      // Build allocation map
+      const allocationMap: Record<string, number> = {};
+      if (data.soaAllocations && data.soaAllocations.length > 0) {
+        // Explicit allocations provided
+        for (const a of data.soaAllocations) {
+          allocationMap[a.soaId] = parseFloat(a.allocatedAmount);
+        }
+      } else if (resolvedSoaIds.length === 1) {
+        // Single SOA: allocate full gross amount
+        allocationMap[resolvedSoaIds[0]] = grossAmount;
+      } else {
+        // Proportional allocation based on each SOA's balance vs total balance
+        const totalBalance = Object.values(soaBalances).reduce((s, b) => s + b, 0);
+        if (totalBalance > 0) {
+          let allocated = 0;
+          for (let i = 0; i < resolvedSoaIds.length; i++) {
+            const sid = resolvedSoaIds[i];
+            if (i === resolvedSoaIds.length - 1) {
+              // Last one gets the remainder to avoid rounding drift
+              allocationMap[sid] = parseFloat((grossAmount - allocated).toFixed(2));
+            } else {
+              const proportion = soaBalances[sid] / totalBalance;
+              const amount = parseFloat((grossAmount * proportion).toFixed(2));
+              allocationMap[sid] = amount;
+              allocated += amount;
+            }
+          }
+        } else {
+          // All balances zero — split evenly
+          const each = parseFloat((grossAmount / resolvedSoaIds.length).toFixed(2));
+          let allocated = 0;
+          for (let i = 0; i < resolvedSoaIds.length; i++) {
+            if (i === resolvedSoaIds.length - 1) {
+              allocationMap[resolvedSoaIds[i]] = parseFloat((grossAmount - allocated).toFixed(2));
+            } else {
+              allocationMap[resolvedSoaIds[i]] = each;
+              allocated += each;
+            }
+          }
+        }
+      }
+
+      for (const sid of resolvedSoaIds) {
+        const allocAmt = allocationMap[sid] ?? 0;
+        await tx.execute(
+          sql`INSERT INTO supplier_dv_soas (dv_id, soa_id, allocated_amount)
+              VALUES (${row.id}, ${sid}, ${String(allocAmt.toFixed(2))})`,
+        );
+      }
+    }
 
     // Insert deduction lines
     for (let i = 0; i < (data.deductions ?? []).length; i++) {
@@ -2092,6 +2235,7 @@ export async function listDisbursementVouchers(
   opts: {
     search?: string;
     status?: string;
+    supplierId?: string;
     dateFrom?: string;
     dateTo?: string;
     limit?: number;
@@ -2099,6 +2243,7 @@ export async function listDisbursementVouchers(
 ) {
   const limit = Math.min(opts.limit ?? 100, 200);
   const conditions = [sql`dv.org_id = ${orgId}`];
+  if (opts.supplierId) conditions.push(sql`dv.supplier_id = ${opts.supplierId}`);
   if (opts.search && opts.search.trim()) {
     const p = `%${opts.search.trim()}%`;
     conditions.push(sql`(dv.dv_number ILIKE ${p} OR s.name ILIKE ${p})`);
@@ -2110,13 +2255,21 @@ export async function listDisbursementVouchers(
 
   const rows = (await db.execute(sql`
     SELECT dv.id, dv.dv_number, dv.supplier_id, s.name AS supplier_name,
-           dv.soa_id, COALESCE(sr.soa_number, '') AS soa_number,
+           dv.soa_id,
+           COALESCE(
+             (SELECT array_agg(DISTINCT sr2.soa_number ORDER BY sr2.soa_number)
+              FROM supplier_dv_soas ds2
+              JOIN supplier_soa_records sr2 ON sr2.id = ds2.soa_id
+              WHERE ds2.dv_id = dv.id),
+             CASE WHEN dv.soa_id IS NOT NULL
+               THEN ARRAY[(SELECT sr3.soa_number FROM supplier_soa_records sr3 WHERE sr3.id = dv.soa_id)]
+               ELSE ARRAY[]::text[] END
+           ) AS soa_numbers,
            dv.amount::text, dv.payment_method, dv.check_number,
            dv.payment_date::text, dv.status, dv.created_at,
            dv.voided_at, dv.void_reason
     FROM supplier_disbursement_vouchers dv
     JOIN suppliers s ON s.id = dv.supplier_id
-    LEFT JOIN supplier_soa_records sr ON sr.id = dv.soa_id
     WHERE ${where}
     ORDER BY dv.created_at DESC
     LIMIT ${limit}
@@ -2130,22 +2283,26 @@ export async function listDisbursementVouchers(
   `)) as any[];
 
   return {
-    data: rows.map((r: any) => ({
-      id: r.id,
-      dvNumber: r.dv_number,
-      supplierId: r.supplier_id,
-      supplierName: r.supplier_name,
-      soaId: r.soa_id,
-      soaNumber: r.soa_number,
-      amount: parseFloat(r.amount),
-      paymentMethod: r.payment_method,
-      checkNumber: r.check_number,
-      paymentDate: r.payment_date,
-      status: r.status,
-      createdAt: r.created_at,
-      voidedAt: r.voided_at,
-      voidReason: r.void_reason,
-    })),
+    data: rows.map((r: any) => {
+      const soaNums: string[] = (r.soa_numbers ?? []).filter(Boolean);
+      return {
+        id: r.id,
+        dvNumber: r.dv_number,
+        supplierId: r.supplier_id,
+        supplierName: r.supplier_name,
+        soaId: r.soa_id,
+        soaNumber: soaNums[0] ?? "",
+        soaNumbers: soaNums,
+        amount: parseFloat(r.amount),
+        paymentMethod: r.payment_method,
+        checkNumber: r.check_number,
+        paymentDate: r.payment_date,
+        status: r.status,
+        createdAt: r.created_at,
+        voidedAt: r.voided_at,
+        voidReason: r.void_reason,
+      };
+    }),
     total: countRows[0]?.total ?? 0,
   };
 }
@@ -2180,18 +2337,68 @@ export async function getDisbursementVoucher(orgId: string, dvId: string) {
     ORDER BY sort_order ASC
   `)) as any[];
 
+  // Fetch all linked SOAs from the junction table
+  const soaRefRows = (await db.execute(sql`
+    SELECT ds.soa_id, ds.allocated_amount::text,
+           sr.soa_number, sr.date_from::text AS date_from, sr.date_to::text AS date_to
+    FROM supplier_dv_soas ds
+    JOIN supplier_soa_records sr ON sr.id = ds.soa_id
+    WHERE ds.dv_id = ${dvId}
+    ORDER BY sr.date_from ASC
+  `)) as any[];
+
+  // Build soaRefs array
+  const soaRefs = soaRefRows.map((r: any) => ({
+    soaId: r.soa_id,
+    soaNumber: r.soa_number,
+    allocatedAmount: parseFloat(r.allocated_amount),
+    dateFrom: r.date_from,
+    dateTo: r.date_to,
+  }));
+
+  // Determine which SOA IDs to use for line items (junction table first, fallback to legacy)
+  const linkedSoaIds: string[] = soaRefRows.length > 0
+    ? soaRefRows.map((r: any) => r.soa_id)
+    : dv.soa_id ? [dv.soa_id] : [];
+
+  // Fetch SOA line items (invoices + credit memos) from ALL linked SOAs
+  let soaLineItems: any[] = [];
+  if (linkedSoaIds.length > 0) {
+    // Build a VALUES list for the SOA IDs
+    const soaIdValues = sql.join(linkedSoaIds.map((id: string) => sql`${id}::uuid`), sql`, `);
+    soaLineItems = (await db.execute(sql`
+      SELECT DISTINCT ON (si.id) si.invoice_number, si.invoice_date::text, si.total_amount::text
+      FROM supplier_soa_line_items sli
+      JOIN supplier_invoices si ON si.id = sli.invoice_id
+      WHERE sli.soa_id IN (${soaIdValues})
+      ORDER BY si.id, si.invoice_date ASC, si.invoice_number ASC
+    `)) as any[];
+  }
+
+  // Compute gross (positive invoices only) for print breakdown
+  const positiveItems = soaLineItems.filter((i: any) => parseFloat(i.total_amount) > 0);
+  const negativeItems = soaLineItems.filter((i: any) => parseFloat(i.total_amount) < 0);
+  const computedGross = positiveItems.reduce((s: number, i: any) => s + parseFloat(i.total_amount), 0);
+
   return {
     id: dv.id,
     dvNumber: dv.dv_number,
     supplierId: dv.supplier_id,
     supplierName: dv.supplier_name,
-    soaId: dv.soa_id,
-    soaNumber: dv.soa_number,
-    soaDateFrom: dv.soa_date_from,
-    soaDateTo: dv.soa_date_to,
-    grossAmount: dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount),
+    // Backward compat: soaId / soaNumber from first linked SOA (or legacy column)
+    soaId: soaRefs.length > 0 ? soaRefs[0].soaId : dv.soa_id,
+    soaNumber: soaRefs.length > 0 ? soaRefs[0].soaNumber : dv.soa_number,
+    soaDateFrom: soaRefs.length > 0 ? soaRefs[0].dateFrom : dv.soa_date_from,
+    soaDateTo: soaRefs.length > 0 ? soaRefs[0].dateTo : dv.soa_date_to,
+    // New multi-SOA refs
+    soaRefs,
+    grossAmount: computedGross > 0 ? computedGross : (dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount)),
     totalDeductions: dv.total_deductions ? parseFloat(dv.total_deductions) : 0,
     netAmount: dv.net_amount ? parseFloat(dv.net_amount) : parseFloat(dv.amount),
+    soaCreditMemos: negativeItems.map((i: any) => ({
+      invoiceNumber: i.invoice_number,
+      amount: Math.abs(parseFloat(i.total_amount)),
+    })),
     amount: parseFloat(dv.amount),
     paymentMethod: dv.payment_method,
     paymentDate: dv.payment_date,
@@ -2246,25 +2453,45 @@ export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
     if (dv.status !== "PRINTED") throw new Error("Can only confirm PRINTED vouchers");
 
     // Apply payment to SOA + invoices
-    // SOA is settled for the GROSS amount (full SOA), not net (deductions account for the difference)
-    if (dv.soa_id) {
+    // Query junction table for all linked SOAs; fallback to legacy soa_id
+    const dvSoaRows = (await tx.execute(
+      sql`SELECT soa_id, allocated_amount::text
+          FROM supplier_dv_soas WHERE dv_id = ${dvId}
+          ORDER BY created_at ASC`,
+    )) as any[];
+
+    // Build SOA allocation list: prefer junction table, fallback to legacy column
+    const soaAllocations: Array<{ soaId: string; allocatedAmount: number }> =
+      dvSoaRows.length > 0
+        ? dvSoaRows.map((r: any) => ({
+            soaId: r.soa_id,
+            allocatedAmount: parseFloat(r.allocated_amount),
+          }))
+        : dv.soa_id
+          ? [{
+              soaId: dv.soa_id,
+              allocatedAmount: dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount),
+            }]
+          : [];
+
+    // Process each linked SOA
+    for (const soaAlloc of soaAllocations) {
       const soaRows = (await tx.execute(
         sql`SELECT id, total_paid::text, total_amount::text, total_balance::text, status
-            FROM supplier_soa_records WHERE id = ${dv.soa_id} FOR UPDATE`,
+            FROM supplier_soa_records WHERE id = ${soaAlloc.soaId} FOR UPDATE`,
       )) as any[];
-      if (soaRows.length === 0) throw new Error("SOA not found");
+      if (soaRows.length === 0) throw new Error(`SOA ${soaAlloc.soaId} not found`);
       const soa = soaRows[0] as any;
 
-      // Use gross_amount to settle the SOA fully (deductions explain the gap)
-      const payAmount = dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount);
+      const payAmount = soaAlloc.allocatedAmount;
 
-      // Fetch and pay invoices (oldest first)
+      // Fetch and pay invoices for this SOA (oldest first / FIFO)
       const invoiceRows = (await tx.execute(
         sql`SELECT si.id, si.paid_amount::text, si.balance::text,
                    si.total_amount::text, si.rtv_credit_amount::text, si.notes
             FROM supplier_soa_line_items sli
             JOIN supplier_invoices si ON si.id = sli.invoice_id
-            WHERE sli.soa_id = ${dv.soa_id}
+            WHERE sli.soa_id = ${soaAlloc.soaId}
               AND si.status IN ('OPEN', 'PARTIALLY_PAID') AND si.balance::numeric > 0
             ORDER BY si.invoice_date ASC FOR UPDATE OF si`,
       )) as any[];
@@ -2277,7 +2504,7 @@ export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
         const newPaid = parseFloat(inv.paid_amount) + alloc;
         const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
         const newStatus = newBal <= 0.005 ? "PAID" : "PARTIALLY_PAID";
-        const auditNote = `[DV Payment: ${dv.amount}, DV#${dvRows[0].id}]`;
+        const auditNote = `[DV Payment: ${payAmount.toFixed(2)}, DV#${dvRows[0].id}]`;
         const notes = inv.notes ? `${inv.notes}\n${auditNote}` : auditNote;
         await tx.execute(
           sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
@@ -2294,7 +2521,7 @@ export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
         sql`UPDATE supplier_soa_records
             SET total_paid = ${String(newSoaPaid.toFixed(2))},
                 total_balance = ${String(Math.max(0, newSoaBal).toFixed(2))}
-            WHERE id = ${dv.soa_id}`,
+            WHERE id = ${soaAlloc.soaId}`,
       );
     }
 
@@ -2347,50 +2574,72 @@ export async function voidDisbursementVoucher(
     const dv = dvRows[0] as any;
     if (dv.status === "VOIDED") throw new Error("DV is already voided");
 
-    // If was CONFIRMED, reverse the payment (reverse gross_amount from SOA)
-    if (dv.status === "CONFIRMED" && dv.soa_id) {
-      const payAmount = dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount);
-
-      // Reset invoices that were paid by this DV
-      const invoiceRows = (await tx.execute(
-        sql`SELECT si.id, si.paid_amount::text, si.total_amount::text,
-                   si.rtv_credit_amount::text
-            FROM supplier_soa_line_items sli
-            JOIN supplier_invoices si ON si.id = sli.invoice_id
-            WHERE sli.soa_id = ${dv.soa_id} AND si.status = 'PAID'
-            ORDER BY si.invoice_date DESC FOR UPDATE OF si`,
+    // If was CONFIRMED, reverse payment on ALL linked SOAs
+    if (dv.status === "CONFIRMED") {
+      // Query junction table for all linked SOAs; fallback to legacy soa_id
+      const dvSoaRows = (await tx.execute(
+        sql`SELECT soa_id, allocated_amount::text
+            FROM supplier_dv_soas WHERE dv_id = ${dvId}
+            ORDER BY created_at ASC`,
       )) as any[];
 
-      let remaining = payAmount;
-      for (const inv of invoiceRows) {
-        if (remaining <= 0) break;
-        const paid = parseFloat(inv.paid_amount);
-        const reversal = Math.min(remaining, paid);
-        const newPaid = paid - reversal;
-        const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
-        const newStatus = newPaid <= 0.005 ? "OPEN" : "PARTIALLY_PAID";
-        await tx.execute(
-          sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
-              balance = ${String(Math.max(0, newBal).toFixed(2))}, status = ${newStatus}
-              WHERE id = ${inv.id}`,
-        );
-        remaining -= reversal;
-      }
+      const soaAllocations: Array<{ soaId: string; allocatedAmount: number }> =
+        dvSoaRows.length > 0
+          ? dvSoaRows.map((r: any) => ({
+              soaId: r.soa_id,
+              allocatedAmount: parseFloat(r.allocated_amount),
+            }))
+          : dv.soa_id
+            ? [{
+                soaId: dv.soa_id,
+                allocatedAmount: dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount),
+              }]
+            : [];
 
-      // Reverse SOA header
-      const soaRows = (await tx.execute(
-        sql`SELECT total_paid::text, total_amount::text FROM supplier_soa_records
-            WHERE id = ${dv.soa_id} FOR UPDATE`,
-      )) as any[];
-      if (soaRows.length > 0) {
-        const newPaid = Math.max(0, parseFloat(soaRows[0].total_paid) - payAmount);
-        const newBal = parseFloat(soaRows[0].total_amount) - newPaid;
-        await tx.execute(
-          sql`UPDATE supplier_soa_records
-              SET total_paid = ${String(newPaid.toFixed(2))},
-                  total_balance = ${String(Math.max(0, newBal).toFixed(2))}
-              WHERE id = ${dv.soa_id}`,
-        );
+      for (const soaAlloc of soaAllocations) {
+        const payAmount = soaAlloc.allocatedAmount;
+
+        // Reset invoices that were paid by this DV for this SOA
+        const invoiceRows = (await tx.execute(
+          sql`SELECT si.id, si.paid_amount::text, si.total_amount::text,
+                     si.rtv_credit_amount::text
+              FROM supplier_soa_line_items sli
+              JOIN supplier_invoices si ON si.id = sli.invoice_id
+              WHERE sli.soa_id = ${soaAlloc.soaId} AND si.status = 'PAID'
+              ORDER BY si.invoice_date DESC FOR UPDATE OF si`,
+        )) as any[];
+
+        let remaining = payAmount;
+        for (const inv of invoiceRows) {
+          if (remaining <= 0) break;
+          const paid = parseFloat(inv.paid_amount);
+          const reversal = Math.min(remaining, paid);
+          const newPaid = paid - reversal;
+          const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
+          const newStatus = newPaid <= 0.005 ? "OPEN" : "PARTIALLY_PAID";
+          await tx.execute(
+            sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
+                balance = ${String(Math.max(0, newBal).toFixed(2))}, status = ${newStatus}
+                WHERE id = ${inv.id}`,
+          );
+          remaining -= reversal;
+        }
+
+        // Reverse SOA header
+        const soaRows = (await tx.execute(
+          sql`SELECT total_paid::text, total_amount::text FROM supplier_soa_records
+              WHERE id = ${soaAlloc.soaId} FOR UPDATE`,
+        )) as any[];
+        if (soaRows.length > 0) {
+          const newPaid = Math.max(0, parseFloat(soaRows[0].total_paid) - payAmount);
+          const newBal = parseFloat(soaRows[0].total_amount) - newPaid;
+          await tx.execute(
+            sql`UPDATE supplier_soa_records
+                SET total_paid = ${String(newPaid.toFixed(2))},
+                    total_balance = ${String(Math.max(0, newBal).toFixed(2))}
+                WHERE id = ${soaAlloc.soaId}`,
+          );
+        }
       }
     }
 

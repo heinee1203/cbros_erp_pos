@@ -80,17 +80,25 @@ interface SupplierSOAHistoryRow {
   notes: string | null;
 }
 
-function daysAgo(dateStr: string | null): string {
-  if (!dateStr) return "—";
-  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
-  if (days < 0) return `in ${-days}d`;
-  if (days === 0) return "Today";
-  return `${days}d ago`;
+function overdueDays(dateStr: string | null): number {
+  if (!dateStr) return 0;
+  return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+}
+
+function overdueColor(days: number): string {
+  if (days <= 0) return "text-emerald-600";
+  if (days <= 30) return "text-amber-600";
+  if (days <= 60) return "text-orange-600";
+  if (days <= 90) return "text-red-600";
+  return "text-red-700 font-bold";
 }
 
 function dueStatus(row: SupplierRow): { label: string; color: string } {
-  if (row.overdueCount > 0) return { label: "Overdue", color: "text-red-600 bg-red-50" };
-  return { label: "Current", color: "text-emerald-600 bg-emerald-50" };
+  if (row.overdueCount === 0) return { label: "Current", color: "text-emerald-600 bg-emerald-50" };
+  const days = overdueDays(row.earliestDueDate);
+  if (days <= 30) return { label: "Overdue", color: "text-amber-700 bg-amber-50" };
+  if (days <= 90) return { label: "Seriously Overdue", color: "text-red-600 bg-red-50" };
+  return { label: "Critical", color: "text-red-700 bg-red-100 font-bold" };
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -136,7 +144,11 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           { token, locationId },
         ),
       ]);
-      setInvoices(Array.isArray(invRes.data) ? invRes.data : []);
+      // Sort invoices newest first (by invoiceDate descending, then id)
+      const sorted = Array.isArray(invRes.data)
+        ? [...invRes.data].sort((a, b) => new Date(b.invoiceDate).getTime() - new Date(a.invoiceDate).getTime())
+        : [];
+      setInvoices(sorted);
       setSoaHistory(Array.isArray(histRes.data) ? histRes.data : []);
       // Drop any selections that are no longer eligible (e.g. after a refresh)
       setSelected((prev) => {
@@ -340,8 +352,10 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       )}
 
       {invoices.map((inv) => {
-        const isOverdue = new Date(inv.dueDate) < new Date();
-        const age = daysAgo(inv.dueDate);
+        const isCreditMemo = parseFloat(inv.totalAmount) < 0 || inv.invoiceNumber.startsWith("CM");
+        const isOverdue = !isCreditMemo && new Date(inv.dueDate) < new Date();
+        const ageDays = overdueDays(inv.dueDate);
+        const age = isCreditMemo ? "\u2014" : ageDays <= 0 ? "Not due" : `${ageDays}d overdue`;
         const isSelected = selected.has(inv.id);
         const isBilled = inv.billed === true;
         return (
@@ -363,23 +377,32 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
                 <Square size={14} className="text-muted-foreground/40" />
               )}
             </div>
-            <span className="font-mono font-semibold text-foreground truncate">
+            <span className="font-mono font-semibold text-foreground truncate flex items-center gap-1.5">
               {inv.invoiceNumber || `INV-${inv.id.slice(0, 8)}`}
+              {isCreditMemo && (
+                <span className="inline-flex rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600">CM</span>
+              )}
             </span>
             <span className="text-right text-muted-foreground">{fmtDate(inv.invoiceDate)}</span>
             <span className={cn("text-right", isOverdue ? "text-red-600 font-medium" : "text-muted-foreground")}>
               {fmtDate(inv.dueDate)}
             </span>
-            <span className="text-right tabular-nums text-foreground">{fmtPeso(inv.totalAmount)}</span>
-            <span className="text-right tabular-nums text-muted-foreground">{fmtPeso(inv.paidAmount || "0")}</span>
-            <span className="text-right tabular-nums font-medium text-foreground">
-              {fmtPeso(inv.balance || inv.totalAmount)}
+            <span className={cn("text-right tabular-nums", isCreditMemo ? "text-emerald-600" : "text-foreground")}>
+              {isCreditMemo ? `(${fmtPeso(Math.abs(parseFloat(inv.totalAmount)))})` : fmtPeso(inv.totalAmount)}
             </span>
-            <span className={cn("text-right tabular-nums", isOverdue ? "text-red-600" : "text-muted-foreground")}>
+            <span className="text-right tabular-nums text-muted-foreground">{fmtPeso(inv.paidAmount || "0")}</span>
+            <span className={cn("text-right tabular-nums font-medium", isCreditMemo ? "text-emerald-600" : "text-foreground")}>
+              {isCreditMemo ? `(${fmtPeso(Math.abs(parseFloat(inv.balance || inv.totalAmount)))})` : fmtPeso(inv.balance || inv.totalAmount)}
+            </span>
+            <span className={cn("text-right tabular-nums", isCreditMemo ? "text-muted-foreground" : isOverdue ? "text-red-600" : "text-muted-foreground")}>
               {age}
             </span>
             <span>
-              {isOverdue ? (
+              {isCreditMemo ? (
+                <span className="inline-flex rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600">
+                  Credit
+                </span>
+              ) : isOverdue ? (
                 <span className="inline-flex rounded-md bg-red-50 px-1.5 py-0.5 text-[9px] font-semibold text-red-600">
                   Overdue
                 </span>
@@ -570,6 +593,7 @@ export default function SupplierSOAPage() {
     }
     if (statusFilter === "overdue") result = result.filter((s) => s.overdueCount > 0);
     if (statusFilter === "current") result = result.filter((s) => s.overdueCount === 0);
+    if (statusFilter === "critical") result = result.filter((s) => s.overdueCount > 0 && overdueDays(s.earliestDueDate) > 90);
     return result;
   }, [suppliers, search, statusFilter]);
 
@@ -608,8 +632,9 @@ export default function SupplierSOAPage() {
         {summary && (
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
             <KPICard icon={<DollarSign size={12} />} label="Total Payable" value={fmtPeso(summary.totalPayable)} accent />
-            <KPICard icon={<Users size={12} />} label="Suppliers" value={`${summary.supplierCount} w/ balance`} />
-            <KPICard icon={<AlertTriangle size={12} />} label="Overdue" value={fmtPeso(summary.totalOverdue)}
+            <KPICard icon={<Users size={12} />} label="Suppliers" value={`${summary.supplierCount} supplier${summary.supplierCount !== 1 ? "s" : ""} w/ balance`} />
+            <KPICard icon={<AlertTriangle size={12} />} label="Overdue"
+              value={`${fmtPeso(summary.totalOverdue)}${summary.totalPayable > 0 ? ` (${((summary.totalOverdue / summary.totalPayable) * 100).toFixed(1)}%)` : ""}`}
               className={summary.totalOverdue > 0 ? "text-red-500" : undefined} />
             <KPICard icon={<Calendar size={12} />} label="Due This Week" value={fmtPeso(summary.dueThisWeek)} />
           </div>
@@ -629,8 +654,9 @@ export default function SupplierSOAPage() {
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
             className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] text-foreground outline-none focus:border-primary/40">
             <option value="">All Status</option>
-            <option value="overdue">Overdue</option>
             <option value="current">Current</option>
+            <option value="overdue">Overdue (any)</option>
+            <option value="critical">Critical (90+ days)</option>
           </select>
 
           {filtered.length > 0 && (
@@ -656,7 +682,7 @@ export default function SupplierSOAPage() {
           <div className="flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Supplier</div>
           <div className="w-20 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Invoices</div>
           <div className="w-32 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Total Payable</div>
-          <div className="w-24 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Oldest</div>
+          <div className="w-24 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Oldest Due</div>
           <div className="w-24 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground text-center">Status</div>
         </div>
 
@@ -682,7 +708,12 @@ export default function SupplierSOAPage() {
                     </div>
                     <div className="w-20 text-right text-[12px] tabular-nums text-foreground">{s.invoiceCount}</div>
                     <div className="w-32 text-right text-[13px] tabular-nums font-semibold text-foreground">{fmtPeso(s.totalBalance)}</div>
-                    <div className="w-24 text-right text-[11px] tabular-nums text-muted-foreground">{daysAgo(s.oldestInvoiceDate)}</div>
+                    <div className={cn("w-24 text-right text-[11px] tabular-nums", overdueColor(overdueDays(s.earliestDueDate)))}>
+                      {s.earliestDueDate ? fmtDate(s.earliestDueDate) : "—"}
+                      {s.overdueCount > 0 && s.earliestDueDate && (
+                        <div className="text-[9px] opacity-70">{overdueDays(s.earliestDueDate)}d overdue</div>
+                      )}
+                    </div>
                     <div className="w-24 text-center">
                       <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[9px] font-semibold", status.color)}>{status.label}</span>
                     </div>
@@ -704,8 +735,13 @@ export default function SupplierSOAPage() {
         )}
 
         <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-2">
-          <span className="text-[11px] text-muted-foreground">{filtered.length} suppliers</span>
-          {summary && <span className="text-[11px] text-muted-foreground">Total: {fmtPeso(summary.totalPayable)}</span>}
+          <span className="text-[11px] text-muted-foreground">
+            {filtered.length} supplier{filtered.length !== 1 ? "s" : ""}
+            {data && filtered.length < data.suppliers.length ? ` (of ${data.suppliers.length})` : ""}
+          </span>
+          <span className="text-[11px] font-semibold tabular-nums text-foreground">
+            Total: {fmtPeso(filtered.reduce((s, r) => s + r.totalBalance, 0))}
+          </span>
         </div>
       </div>
     </div>

@@ -99,7 +99,7 @@ export default function InvoicePrintPage() {
       {/* ─── Print Button ─── */}
       <button
         onClick={() => window.print()}
-        className="no-print fixed top-6 right-6 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 shadow-lg"
+        className="no-print fixed top-6 right-6 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 shadow-lg"
       >
         <Printer size={16} />
         Print Invoice
@@ -174,16 +174,16 @@ export default function InvoicePrintPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-muted/50 text-xs font-semibold text-muted-foreground">
-                <th className="px-4 py-2.5 text-left">Description</th>
-                <th className="px-4 py-2.5 text-right">Qty (hrs)</th>
-                <th className="px-4 py-2.5 text-right">Rate</th>
-                <th className="px-4 py-2.5 text-right">Amount</th>
+                <th className="px-4 py-1.5 text-left">Description</th>
+                <th className="px-4 py-1.5 text-right">Qty (hrs)</th>
+                <th className="px-4 py-1.5 text-right">Rate</th>
+                <th className="px-4 py-1.5 text-right">Amount</th>
               </tr>
             </thead>
             <tbody>
               {job.laborLines.map((line) => (
                 <tr key={line.id}>
-                  <td className="px-4 py-2.5 border-b border-border">
+                  <td className="px-4 py-1.5 border-b border-border">
                     {line.opCode} &mdash; {line.opName}
                     {line.description && (
                       <span className="block text-xs text-muted-foreground">
@@ -191,22 +191,22 @@ export default function InvoicePrintPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 border-b border-border text-right">
+                  <td className="px-4 py-1.5 border-b border-border text-right">
                     {Number(line.qtyHours).toFixed(2)}
                   </td>
-                  <td className="px-4 py-2.5 border-b border-border text-right">
+                  <td className="px-4 py-1.5 border-b border-border text-right">
                     {formatPHP(Number(line.unitPrice))}
                   </td>
-                  <td className="px-4 py-2.5 border-b border-border text-right">
+                  <td className="px-4 py-1.5 border-b border-border text-right">
                     {formatPHP(Number(line.lineTotal))}
                   </td>
                 </tr>
               ))}
               <tr>
-                <td colSpan={3} className="px-4 py-2.5 text-right font-medium">
+                <td colSpan={3} className="px-4 py-1.5 text-right font-medium">
                   Subtotal
                 </td>
-                <td className="px-4 py-2.5 text-right font-medium">
+                <td className="px-4 py-1.5 text-right font-medium">
                   {formatPHP(laborTotal)}
                 </td>
               </tr>
@@ -221,10 +221,10 @@ export default function InvoicePrintPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-muted/50 text-xs font-semibold text-muted-foreground">
-                <th className="px-4 py-2.5 text-left">Item</th>
-                <th className="px-4 py-2.5 text-right">Qty</th>
-                <th className="px-4 py-2.5 text-right">Unit Price</th>
-                <th className="px-4 py-2.5 text-right">Amount</th>
+                <th className="px-4 py-1.5 text-left">Item</th>
+                <th className="px-4 py-1.5 text-right">Qty</th>
+                <th className="px-4 py-1.5 text-right">Unit Price</th>
+                <th className="px-4 py-1.5 text-right">Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -233,29 +233,29 @@ export default function InvoicePrintPage() {
                 const lineAmount = net * Number(line.unitPrice);
                 return (
                   <tr key={line.id}>
-                    <td className="px-4 py-2.5 border-b border-border">
+                    <td className="px-4 py-1.5 border-b border-border">
                       {line.productName}{" "}
                       <span className="text-xs text-muted-foreground">
                         ({line.sku})
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 border-b border-border text-right">
+                    <td className="px-4 py-1.5 border-b border-border text-right">
                       {net}
                     </td>
-                    <td className="px-4 py-2.5 border-b border-border text-right">
+                    <td className="px-4 py-1.5 border-b border-border text-right">
                       {formatPHP(Number(line.unitPrice))}
                     </td>
-                    <td className="px-4 py-2.5 border-b border-border text-right">
+                    <td className="px-4 py-1.5 border-b border-border text-right">
                       {formatPHP(lineAmount)}
                     </td>
                   </tr>
                 );
               })}
               <tr>
-                <td colSpan={3} className="px-4 py-2.5 text-right font-medium">
+                <td colSpan={3} className="px-4 py-1.5 text-right font-medium">
                   Subtotal
                 </td>
-                <td className="px-4 py-2.5 text-right font-medium">
+                <td className="px-4 py-1.5 text-right font-medium">
                   {formatPHP(partsTotal)}
                 </td>
               </tr>

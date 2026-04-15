@@ -263,7 +263,7 @@ export default function InventoryValuationPage() {
 
       {/* Warning banner */}
       {totals && !dismissWarning && (totals.zeroCostCount > 0 || totals.zeroSellCount > 0) && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-4 py-2.5 text-[12px]">
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-4 py-1.5 text-[12px]">
           <AlertTriangle size={14} className="text-amber-600 flex-shrink-0" />
           <span className="text-amber-800 dark:text-amber-200">
             {totals.zeroCostCount > 0 && <>{fmtNumber(totals.zeroCostCount)} items have {"\u20B1"}0 cost</>}

@@ -229,31 +229,31 @@ export default function CheckVouchersPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   CV #
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Date
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Supplier
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Check #
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Bank
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Amount
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Deductions
                 </th>
-                <th className="px-3 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Net
                 </th>
-                <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Status
                 </th>
               </tr>
@@ -286,31 +286,31 @@ export default function CheckVouchersPage() {
                       i % 2 === 0 ? "bg-background" : "bg-muted/20"
                     }`}
                   >
-                    <td className="px-3 py-2.5 font-mono text-[13px] font-semibold text-primary">
+                    <td className="px-3 py-1.5 font-mono text-[13px] font-semibold text-primary">
                       {cv.cvNo}
                     </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground">
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">
                       {fmtDate(cv.cvDate)}
                     </td>
-                    <td className="px-3 py-2.5 text-[13px]">
+                    <td className="px-3 py-1.5 text-[13px]">
                       {cv.supplierName}
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
+                    <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">
                       {cv.checkNo || "\u2014"}
                     </td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground">
+                    <td className="px-3 py-1.5 text-xs text-muted-foreground">
                       {cv.bankName || "\u2014"}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[13px] tabular-nums">
+                    <td className="px-3 py-1.5 text-right text-[13px] tabular-nums">
                       {fmtPeso(cv.grossAmount)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[13px] tabular-nums text-muted-foreground">
+                    <td className="px-3 py-1.5 text-right text-[13px] tabular-nums text-muted-foreground">
                       {fmtPeso(cv.deductions)}
                     </td>
-                    <td className="px-3 py-2.5 text-right text-[13px] font-semibold tabular-nums">
+                    <td className="px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums">
                       {fmtPeso(cv.netAmount)}
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-1.5">
                       <span
                         className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                           STATUS_COLORS[cv.status] ??

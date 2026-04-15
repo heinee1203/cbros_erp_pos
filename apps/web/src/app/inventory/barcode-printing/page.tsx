@@ -214,7 +214,7 @@ function BarcodePrintingContent() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input type="text" placeholder="Search by name, SKU, or barcode\u2026" value={searchQuery} onChange={(e) => handleSearchChange(e.target.value)} onFocus={() => searchResults.length > 0 && setShowResults(true)}
-              className="w-full rounded-lg border border-border bg-background py-2.5 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" />
+              className="w-full rounded-lg border border-border bg-background py-1.5 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary" />
             {isSearching && <div className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />}
           </div>
           {showResults && searchResults.length > 0 && (
@@ -222,7 +222,7 @@ function BarcodePrintingContent() {
               {searchResults.map((product) => {
                 const inQueue = queue.some((q) => q.product.id === product.id);
                 return (
-                  <button key={product.id} onClick={() => addToQueue(product)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0">
+                  <button key={product.id} onClick={() => addToQueue(product)} className="flex w-full items-center gap-3 px-3 py-1.5 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{getProductDisplayName(product)}</p>
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -240,7 +240,7 @@ function BarcodePrintingContent() {
         </div>
 
         {/* Row 3: Label Size + Supplier */}
-        <div className="flex items-center gap-4 rounded-lg border border-border bg-muted/30 px-4 py-2.5">
+        <div className="flex items-center gap-4 rounded-lg border border-border bg-muted/30 px-4 py-1.5">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Label Size</span>
           <div className="flex items-center gap-1.5">
             {LABEL_SIZES.map((size) => (

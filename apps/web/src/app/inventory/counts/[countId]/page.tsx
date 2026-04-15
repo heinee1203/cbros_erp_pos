@@ -449,17 +449,17 @@ export default function CountDetailPage() {
         <table className="w-full text-left text-sm">
           <thead className="sticky top-0 z-10 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
             <tr>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium w-8">#</th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Product</th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">SKU</th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Brand</th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">System Qty</th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right" style={{ minWidth: 110 }}>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium w-8">#</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Product</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">SKU</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Brand</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right">System Qty</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right" style={{ minWidth: 110 }}>
                 Counted Qty
               </th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium text-right">Variance</th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Status</th>
-              <th scope="col" className="whitespace-nowrap px-4 py-2.5 font-medium">Notes</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium text-right">Variance</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Status</th>
+              <th scope="col" className="whitespace-nowrap px-4 py-1.5 font-medium">Notes</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -485,7 +485,7 @@ export default function CountDetailPage() {
       </div>
 
       {/* Footer */}
-      <div className="border-t border-border bg-background px-6 py-2.5">
+      <div className="border-t border-border bg-background px-6 py-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             {lines.length} line{lines.length !== 1 ? "s" : ""} shown

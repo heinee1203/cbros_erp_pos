@@ -354,7 +354,7 @@ export default function MultiPaymentPage() {
               <div className="w-32 text-right">Amount</div>
             </div>
             {allocs.map((a) => (
-              <div key={a.id} className="flex items-center px-4 py-2.5 text-[13px] border-t border-border">
+              <div key={a.id} className="flex items-center px-4 py-1.5 text-[13px] border-t border-border">
                 <div className="flex-1 font-medium">{a.customerName}</div>
                 <div className="w-36 text-[11px] text-muted-foreground font-mono">
                   {a.selectedSoas.size > 0
@@ -364,7 +364,7 @@ export default function MultiPaymentPage() {
                 <div className="w-32 text-right tabular-nums font-semibold">{fmtPeso(a.amount)}</div>
               </div>
             ))}
-            <div className="flex items-center px-4 py-2.5 text-[13px] border-t-2 border-border bg-muted/20">
+            <div className="flex items-center px-4 py-1.5 text-[13px] border-t-2 border-border bg-muted/20">
               <div className="flex-1 font-bold">Total</div>
               <div className="w-36" />
               <div className="w-32 text-right tabular-nums font-bold text-lg text-emerald-600">{fmtPeso(paymentTotal)}</div>

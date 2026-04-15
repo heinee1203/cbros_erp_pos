@@ -239,7 +239,7 @@ export default function ShiftsPage() {
                   key={shift.id}
                   onClick={() => router.push(`/sales/shifts/${shift.id}`)}
                   className={cn(
-                    "flex cursor-pointer items-center px-4 py-2.5 transition-colors hover:bg-accent/40",
+                    "flex cursor-pointer items-center px-4 py-1.5 transition-colors hover:bg-accent/40",
                     isOpen && "bg-amber-500/[0.03]",
                   )}
                 >

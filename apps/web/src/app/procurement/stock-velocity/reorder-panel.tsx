@@ -530,7 +530,7 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-between border-t border-border bg-muted/40 px-4 py-2.5">
+            <div className="flex items-center justify-between border-t border-border bg-muted/40 px-4 py-1.5">
               <div className="text-xs text-muted-foreground">
                 Selected: <span className="font-semibold text-foreground">{totalSelectedCount}</span> items
                 {panelSearch && ` (showing ${items.length} of ${allItems.length})`}

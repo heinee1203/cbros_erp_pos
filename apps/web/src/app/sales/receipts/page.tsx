@@ -279,7 +279,7 @@ export default function SalesReceiptsPage() {
             <div>
               {historyData.map((row: HistoricalReceiptItem, idx: number) => (
                 <div key={`${row.receiptNumber}-${idx}`} onClick={() => setDrawerReceipt(row.receiptNumber)}
-                  className="flex items-center border-b border-border/50 px-4 py-2.5 text-[13px] transition-colors hover:bg-muted/30 cursor-pointer">
+                  className="flex items-center border-b border-border/50 px-4 py-1.5 text-[13px] transition-colors hover:bg-muted/30 cursor-pointer">
                   <div className="w-28 font-mono text-[12px] font-medium text-primary">{row.receiptNumber}</div>
                   <div className="w-40 text-[12px] text-muted-foreground">
                     {new Date(row.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}

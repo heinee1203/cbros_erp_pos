@@ -2031,7 +2031,7 @@ function ReceivingGrid({
           type="button"
           onClick={handlePostReceipt}
           disabled={!hasValidLines || hasAnyErrors || !supplierDrNo.trim() || receiveMut.isSubmitting}
-          className="rounded-md bg-success px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-success/90 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+          className="rounded-md bg-success px-6 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-success/90 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
         >
           {receiveMut.isSubmitting ? (
             <span className="flex items-center gap-2"><Spinner /> Posting Receipt...</span>
@@ -2046,7 +2046,7 @@ function ReceivingGrid({
           <button
             type="button"
             onClick={handleClosePO}
-            className="rounded-md border border-warning px-5 py-2.5 text-sm font-medium text-warning hover:bg-warning/10 transition-colors"
+            className="rounded-md border border-warning px-5 py-1.5 text-sm font-medium text-warning hover:bg-warning/10 transition-colors"
           >
             Close PO
           </button>
@@ -2659,7 +2659,7 @@ function ReceiptHistory({ po, receipts = [] }: { po: PODetail; receipts?: any[] 
                 role="button"
                 tabIndex={0}
                 onClick={() => toggleReceipt(receipt.id)}
-                className="flex w-full cursor-pointer items-center justify-between bg-muted/40 px-4 py-2.5 text-left transition-colors hover:bg-muted/60"
+                className="flex w-full cursor-pointer items-center justify-between bg-muted/40 px-4 py-1.5 text-left transition-colors hover:bg-muted/60"
               >
                 <div>
                   <span className="text-sm font-bold text-foreground">{receipt.supplierDrNo}</span>
