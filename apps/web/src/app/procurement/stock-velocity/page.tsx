@@ -363,7 +363,7 @@ export default function StockVelocityPage() {
                 <SortTh label="STOCK" field="totalStock" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
                 <SortTh label="AVG PRICE" align="right" />
                 <th className="whitespace-nowrap px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground" title="Suggested retail price based on cost + inflation + velocity markup. Red = selling below suggested. Green = healthy margin.">SUGG. PRICE</th>
-                <SortTh label="DEMAND" field="avgDailySales30d" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
+                <SortTh label="DEMAND" field="avgDailySales30d" current={sortBy} dir={sortDir} onSort={handleSort} align="right" tooltip={DEMAND_TOOLTIP} />
                 <SortTh label="DOS" field="daysOfStock" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
                 <SortTh label="ACTIVE" field="saleDaysCount" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
                 <SortTh label="TOTAL SOLD" field="totalQtySold" current={sortBy} dir={sortDir} onSort={handleSort} align="right" />
@@ -522,13 +522,14 @@ function VelocityRow({ row }: { row: StockMonitorRow }) {
 
 // ── Sortable Table Header ──
 
-function SortTh({ label, field, current, dir, onSort, align }: {
+function SortTh({ label, field, current, dir, onSort, align, tooltip }: {
   label: string;
   field?: SortField;
   current?: SortField;
   dir?: SortDir;
   onSort?: (f: SortField) => void;
   align?: "right";
+  tooltip?: string;
 }) {
   const isSorted = field && current === field;
   return (
@@ -539,12 +540,16 @@ function SortTh({ label, field, current, dir, onSort, align }: {
         align === "right" && "text-right",
       )}
       onClick={field && onSort ? () => onSort(field) : undefined}
+      title={tooltip}
     >
       {label}
       {isSorted && <span className="ml-0.5">{dir === "asc" ? "↑" : "↓"}</span>}
     </th>
   );
 }
+
+// Shared tooltip text for the DEMAND column (used in 3 places)
+const DEMAND_TOOLTIP = "Average units sold per month over the selected window (30/90/180/365d). Computed from stock_metrics.avg_daily_sales_Xd × 30.";
 
 // ── Velocity Analysis Table (Heatmap) ──
 
@@ -678,7 +683,7 @@ function VelocityAnalysisTable({ rows, sortBy, sortDir, onSort, leftFilters, onL
             <th className="whitespace-nowrap px-2 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-blue-600" title="Units sold in last 6 months">6M</th>
             <th className="whitespace-nowrap px-2 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-blue-600" title="Units sold in last 3 months">3M</th>
             <th className="whitespace-nowrap px-2 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-blue-600" title="Units sold in last 1 month">1M</th>
-            <th className="whitespace-nowrap px-2 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground" title="Monthly average (12-month rate)">Avg/Mo</th>
+            <th className="whitespace-nowrap px-2 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground" title="Average units sold per month over the selected window (30/90/180/365d). Computed from stock_metrics.avg_daily_sales_Xd × 30.">DEMAND</th>
             <th className="whitespace-nowrap px-2 py-1 text-right text-[10px] font-semibold uppercase tracking-wider text-amber-600" title="Months of stock left at all-time rate">
               <div>Left ALL</div>
               <UrgencySelect value={filterAll} onChange={setFilterAll} label="Left ALL" />
@@ -768,7 +773,7 @@ function VelocityAnalysisTable({ rows, sortBy, sortDir, onSort, leftFilters, onL
                 <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: s6.bg, color: s6.fg }}>{row.sold6m || 0}</td>
                 <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: s3.bg, color: s3.fg }}>{row.sold3m || 0}</td>
                 <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: s1.bg, color: s1.fg }}>{row.sold1m || 0}</td>
-                {/* Avg/Mo */}
+                {/* DEMAND (per-month) */}
                 <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-muted-foreground">{parseFloat(row.avgMonth12m || "0").toFixed(1)}</td>
                 {/* Months left heatmap — LEFT ALL + 12M/6M/3M/1M */}
                 <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: cAll.bg, color: cAll.fg }}>{mlAll !== null ? mlAll.toFixed(1) : "∞"}</td>

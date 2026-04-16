@@ -460,7 +460,7 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
                       <th className="w-8 px-2 py-1.5"><input type="checkbox" checked={items.length > 0 && items.every(i => selected.has(i.productId))} onChange={toggleAll} className="h-3 w-3" /></th>
                       <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase text-muted-foreground">Product</th>
                       <th className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase text-muted-foreground">Stock</th>
-                      <th className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase text-muted-foreground">Avg/Mo</th>
+                      <th className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase text-muted-foreground" title="Average units sold per month over the selected window (30/90/180/365d). Computed from stock_metrics.avg_daily_sales_Xd × 30.">DEMAND</th>
                       <th className="px-2 py-1.5 text-center text-[10px] font-semibold uppercase text-muted-foreground">Urgency</th>
                       <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase text-muted-foreground">Last Sold</th>
                       <th className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase text-muted-foreground">Suggest</th>
