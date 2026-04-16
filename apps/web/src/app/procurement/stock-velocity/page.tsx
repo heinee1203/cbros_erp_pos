@@ -498,6 +498,10 @@ export default function StockVelocityPage() {
         urgency3M={leftFilter3m !== "all" ? leftFilter3m : undefined}
         urgency1M={leftFilter1m !== "all" ? leftFilter1m : undefined}
         velocityClass={velocityFilter !== "all" ? velocityFilter : undefined}
+        brandId={brandFilter}
+        categoryId={categoryFilter}
+        brandName={brandFilter ? (brandsData?.data?.find((b: any) => b.id === brandFilter)?.name ?? null) : null}
+        categoryName={categoryFilter ? (categoriesData?.data?.find((c: any) => c.id === categoryFilter)?.name ?? null) : null}
       />
     </div>
   );

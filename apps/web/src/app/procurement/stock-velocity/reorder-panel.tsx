@@ -5,8 +5,6 @@ import { X, ShoppingCart, Loader2, Check, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
-import { useBrands } from "@/hooks/use-brands";
-import { useCategories } from "@/hooks/use-categories";
 import { useSuppliers } from "@/hooks/use-suppliers";
 import { useQuery } from "@tanstack/react-query";
 import { useLocations } from "@/hooks/use-locations";
@@ -68,7 +66,7 @@ function getUrgencyColor(val: number | null): string {
 
 // ── Panel ──
 
-export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, lastSoldBefore, urgencyAll, urgency12M, urgency6M, urgency3M, urgency1M, velocityClass }: {
+export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, lastSoldBefore, urgencyAll, urgency12M, urgency6M, urgency3M, urgency1M, velocityClass, brandId, categoryId, brandName, categoryName }: {
   open: boolean;
   onClose: () => void;
   inline?: boolean;
@@ -80,6 +78,14 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
   urgency3M?: string;
   urgency1M?: string;
   velocityClass?: string;
+  /** Page-level brand filter — panel reads this as a global, read-only input */
+  brandId?: string;
+  /** Page-level category filter — panel reads this as a global, read-only input */
+  categoryId?: string;
+  /** Display name for the brand filter, rendered in the "Global filters" label */
+  brandName?: string | null;
+  /** Display name for the category filter, rendered in the "Global filters" label */
+  categoryName?: string | null;
 }) {
   const { token, locationId, apiLocationId, locations: authLocations, user } = useAuth();
   const showCost = ["ADMIN", "MANAGER"].includes(user?.role ?? "");
@@ -103,11 +109,9 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
     }
   }, [defaultDestination, destinationLocationId]);
 
-  // Filters
+  // Filters (panel-local — Brand/Category are lifted to the page)
   const [targetMonths, setTargetMonths] = useState(3);
   const [urgency, setUrgency] = useState("");
-  const [brandFilter, setBrandFilter] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
 
   // Selection + order qty overrides
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -122,19 +126,15 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
   const [supplierAssignments, setSupplierAssignments] = useState<Record<string, string>>({});
   const [panelSearch, setPanelSearch] = useState("");
 
-  const { data: brandsData } = useBrands(token, apiLocationId);
-  const { data: categoriesData } = useCategories(token, apiLocationId);
   const { data: suppliersData } = useSuppliers(token!, apiLocationId);
-  const brands = brandsData?.data ?? [];
-  const categories = categoriesData?.data ?? [];
 
   // Fetch suggestions — pass ALL active velocity filters
   const params = new URLSearchParams();
   params.set("targetMonths", String(targetMonths));
   params.set("limit", "200");
   if (urgency) params.set("urgency", urgency);
-  if (brandFilter) params.set("brandId", brandFilter);
-  if (categoryFilter) params.set("categoryId", categoryFilter);
+  if (brandId) params.set("brandId", brandId);
+  if (categoryId) params.set("categoryId", categoryId);
   if (lastSoldAfter) params.set("lastSoldAfter", lastSoldAfter);
   if (lastSoldBefore) params.set("lastSoldBefore", lastSoldBefore);
   if (urgencyAll) params.set("urgencyAll", urgencyAll);
@@ -145,7 +145,7 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
   if (velocityClass) params.set("velocityClass", velocityClass);
 
   const { data, isLoading } = useQuery<ReorderResponse>({
-    queryKey: ["reorder-suggestions", targetMonths, urgency, brandFilter, categoryFilter, lastSoldAfter, lastSoldBefore, urgencyAll, urgency12M, urgency6M, urgency3M, urgency1M, velocityClass],
+    queryKey: ["reorder-suggestions", targetMonths, urgency, brandId, categoryId, lastSoldAfter, lastSoldBefore, urgencyAll, urgency12M, urgency6M, urgency3M, urgency1M, velocityClass],
     queryFn: () => apiFetch<ReorderResponse>(
       `/inventory/stock-monitor/reorder-suggestions?${params.toString()}`,
       { token: token!, locationId: locationId! },
@@ -363,14 +363,16 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
             <option value="warning">Warning</option>
             <option value="monitor">Monitor</option>
           </select>
-          <select value={brandFilter} onChange={(e) => { setBrandFilter(e.target.value); setInitialized(false); }} className="h-6 rounded border border-border bg-background px-1.5 text-[11px]">
-            <option value="">All Brands</option>
-            {brands.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-          <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setInitialized(false); }} className="h-6 rounded border border-border bg-background px-1.5 text-[11px]">
-            <option value="">All Categories</option>
-            {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          {(brandId || categoryId) && (
+            <span
+              className="flex items-center gap-1 rounded border border-dashed border-border bg-muted/30 px-2 py-0.5 text-[10px] text-muted-foreground"
+              title="Set at the page header — change Brand/Category above to update the panel"
+            >
+              <span className="font-medium text-muted-foreground/80">Global:</span>
+              {brandId && <span className="rounded bg-background px-1.5 py-px font-medium text-foreground">{brandName || "Brand"}</span>}
+              {categoryId && <span className="rounded bg-background px-1.5 py-px font-medium text-foreground">{categoryName || "Category"}</span>}
+            </span>
+          )}
           <div className="flex items-center gap-1">
             <label className="text-[10px] text-muted-foreground">Deliver to:</label>
             <select
