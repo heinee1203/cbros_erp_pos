@@ -594,6 +594,21 @@ function getMonthsLeftColor(val: number | null): { bg: string; fg: string } {
   return { bg: `rgba(198, 142, 23, ${intensity.toFixed(2)})`, fg: "#000000" }; // #C68E17
 }
 
+// Months-left cell render: triages stock=0 → OUT, demand=0 → NO DEMAND,
+// null → ∞. Used by all five LEFT columns in the Velocity Analysis table
+// to eliminate the misleading "0.0" display when either numerator or
+// denominator is zero.
+function renderMonthsLeft(stock: number, monthsLeft: number | null): React.ReactNode {
+  if (stock === 0) {
+    return <span className="inline-flex rounded bg-red-100 px-1 py-px text-[9px] font-bold text-red-700">OUT</span>;
+  }
+  if (monthsLeft === null) return "∞";
+  if (monthsLeft === 0) {
+    return <span className="inline-flex rounded bg-gray-100 px-1 py-px text-[9px] font-semibold text-gray-600">NO DEMAND</span>;
+  }
+  return monthsLeft.toFixed(1);
+}
+
 const TREND_CONFIG: Record<string, { icon: string; color: string; label: string }> = {
   ACCELERATING: { icon: "↑", color: "text-green-600", label: "Accel" },
   STABLE: { icon: "→", color: "text-muted-foreground", label: "Stable" },
@@ -776,11 +791,11 @@ function VelocityAnalysisTable({ rows, sortBy, sortDir, onSort, leftFilters, onL
                 {/* DEMAND (per-month) */}
                 <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-muted-foreground">{parseFloat(row.avgMonth12m || "0").toFixed(1)}</td>
                 {/* Months left heatmap — LEFT ALL + 12M/6M/3M/1M */}
-                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: cAll.bg, color: cAll.fg }}>{mlAll !== null ? mlAll.toFixed(1) : "∞"}</td>
-                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c12.bg, color: c12.fg }}>{ml12 !== null ? ml12.toFixed(1) : "∞"}</td>
-                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c6.bg, color: c6.fg }}>{ml6 !== null ? ml6.toFixed(1) : "∞"}</td>
-                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c3.bg, color: c3.fg }}>{ml3 !== null ? ml3.toFixed(1) : "∞"}</td>
-                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c1.bg, color: c1.fg }}>{ml1 !== null ? ml1.toFixed(1) : "∞"}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: cAll.bg, color: cAll.fg }}>{renderMonthsLeft(row.totalStock, mlAll)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c12.bg, color: c12.fg }}>{renderMonthsLeft(row.totalStock, ml12)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c6.bg, color: c6.fg }}>{renderMonthsLeft(row.totalStock, ml6)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c3.bg, color: c3.fg }}>{renderMonthsLeft(row.totalStock, ml3)}</td>
+                <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums" style={{ backgroundColor: c1.bg, color: c1.fg }}>{renderMonthsLeft(row.totalStock, ml1)}</td>
                 {/* Trend */}
                 <td className="whitespace-nowrap px-2 py-1.5 text-center">
                   <span className={cn("text-[11px] font-medium", trend.color)} title={`${row.velocityTrend}: ${parseFloat(row.avgMonth3m||"0").toFixed(1)}/mo (3m) vs ${parseFloat(row.avgMonth12m||"0").toFixed(1)}/mo (12m)`}>
