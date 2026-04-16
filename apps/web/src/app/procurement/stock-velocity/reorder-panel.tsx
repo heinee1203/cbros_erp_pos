@@ -529,17 +529,48 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
               )}
             </div>
 
-            {/* Footer */}
-            <div className="flex items-center justify-between border-t border-border bg-muted/40 px-4 py-1.5">
-              <div className="text-xs text-muted-foreground">
-                Selected: <span className="font-semibold text-foreground">{totalSelectedCount}</span> items
-                {panelSearch && ` (showing ${items.length} of ${allItems.length})`}
-                {showCost && estTotal > 0 && (
-                  <span className="ml-3">Est. Total: <span className="font-semibold text-foreground">{fmtPeso(estTotal)}</span>{!hasAllCosts && " (partial)"}</span>
+            {/* Footer — promoted action bar when items are selected */}
+            <div
+              className={cn(
+                "flex items-center justify-between border-t px-4 transition-all",
+                selectedCount > 0
+                  ? "border-primary/30 bg-primary/5 py-3 shadow-[0_-2px_6px_rgba(0,0,0,0.04)]"
+                  : "border-border bg-muted/40 py-1.5",
+              )}
+            >
+              <div className={cn(selectedCount > 0 ? "text-sm" : "text-xs text-muted-foreground")}>
+                {selectedCount > 0 ? (
+                  <>
+                    <span className="font-semibold text-foreground">{totalSelectedCount}</span>
+                    <span className="text-muted-foreground"> {totalSelectedCount === 1 ? "item" : "items"} selected</span>
+                    {panelSearch && <span className="text-muted-foreground/80"> (showing {items.length} of {allItems.length})</span>}
+                    {showCost && estTotal > 0 && (
+                      <span className="ml-3 text-muted-foreground">
+                        Est. Total: <span className="font-semibold text-foreground">{fmtPeso(estTotal)}</span>
+                        {!hasAllCosts && <span className="ml-1 text-[11px]">(partial)</span>}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Selected: <span className="font-semibold text-foreground">{totalSelectedCount}</span> items
+                    {panelSearch && ` (showing ${items.length} of ${allItems.length})`}
+                    {showCost && estTotal > 0 && (
+                      <span className="ml-3">Est. Total: <span className="font-semibold text-foreground">{fmtPeso(estTotal)}</span>{!hasAllCosts && " (partial)"}</span>
+                    )}
+                  </>
                 )}
               </div>
-              <div className="flex gap-2">
-                <button onClick={onClose} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted">Cancel</button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onClose}
+                  className={cn(
+                    "rounded-md border border-border hover:bg-muted",
+                    selectedCount > 0 ? "px-3 py-1.5 text-xs" : "px-3 py-1.5 text-xs",
+                  )}
+                >
+                  Cancel
+                </button>
                 <button
                   onClick={() => {
                     const noSupplierGroup = supplierGroups.find(g => !g.supplierId);
@@ -559,8 +590,14 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
                     }
                   }}
                   disabled={selectedCount === 0 || creating}
-                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-md bg-primary font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-all",
+                    selectedCount > 0
+                      ? "px-5 py-2 text-sm shadow-sm ring-1 ring-primary/20"
+                      : "px-3 py-1.5 text-xs",
+                  )}
                 >
+                  <ShoppingCart size={selectedCount > 0 ? 14 : 12} />
                   {creating ? "Creating..." : `Create Draft PO${supplierGroups.filter(g => g.supplierId).length > 1 ? `s (${supplierGroups.filter(g => g.supplierId).length})` : ""}`}
                 </button>
               </div>
