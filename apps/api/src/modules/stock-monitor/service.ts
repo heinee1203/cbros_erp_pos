@@ -483,6 +483,12 @@ export interface StockMonitorQueryParams {
   sortDir?: string;
   cursor?: string;
   limit?: number;
+  /**
+   * When true, include products with no stock_metrics row (or zero stock + zero
+   * 90d velocity) at the tail of the grid. These 'untracked' / dormant SKUs are
+   * filtered out of stock_metrics by refreshStockMetrics. Off by default.
+   */
+  includeUntracked?: boolean;
 }
 
 export interface StockMonitorRow {
@@ -557,6 +563,18 @@ export interface StockMonitorSummary {
   deadStockVelocity: number;
   newItems: number;
   deadStockValue: number;
+  /**
+   * Count of active, non-parent products filtered out of stock_metrics:
+   * zero stock AND zero 90-day velocity (no sales history, no inventory).
+   * These are 'dormant' catalog entries, surfaced via the Untracked card.
+   */
+  untrackedCount: number;
+  /**
+   * Count of all active, non-parent products for this org. Equals the sum
+   * of the 5 velocity-class counts + untrackedCount. Used for the
+   * 'X% of active SKUs' subtitle on classification/untracked cards.
+   */
+  totalActiveProducts: number;
   computedAt: string | null;
 }
 
@@ -626,6 +644,20 @@ async function queryStockMonitorSummary(orgId: string): Promise<StockMonitorSumm
     sql`SELECT COALESCE(SUM(sm.total_stock * COALESCE(sm.cost_price::numeric, 0)), 0)::numeric(14,2) AS value FROM stock_metrics sm JOIN products p ON sm.product_id = p.id WHERE sm.org_id = ${orgId} AND sm.velocity_class = 'DEAD_STOCK' AND sm.total_stock > 0 ${excludeFilter}`,
   );
 
+  // Count of products excluded from stock_metrics by refreshStockMetrics's
+  // (total_stock > 0 OR avg_90d >= 0.01) filter — the 'untracked' dormant SKUs.
+  const [untrackedRow] = await db.execute(sql`
+    SELECT COUNT(*)::integer AS cnt
+    FROM products p
+    LEFT JOIN stock_metrics sm ON sm.product_id = p.id AND sm.org_id = p.org_id
+    WHERE p.is_active = true
+      AND p.is_parent = false
+      AND p.org_id = ${orgId}
+      AND (sm.id IS NULL OR (COALESCE(sm.total_stock, 0) = 0 AND COALESCE(sm.avg_daily_sales_90d, 0) < 0.01))
+      ${excludeFilter}
+  `);
+  const untrackedCount = (untrackedRow as any)?.cnt ?? 0;
+
   const summary: StockMonitorSummary = {
     critical: 0,
     low: 0,
@@ -640,6 +672,8 @@ async function queryStockMonitorSummary(orgId: string): Promise<StockMonitorSumm
     deadStockVelocity: 0,
     newItems: 0,
     deadStockValue: parseFloat((deadValueRow as any).value ?? "0"),
+    untrackedCount,
+    totalActiveProducts: 0,
     computedAt: null as string | null,
   };
 
@@ -679,15 +713,178 @@ async function queryStockMonitorSummary(orgId: string): Promise<StockMonitorSumm
     }
   }
 
+  // Sum of five velocity classes + untracked = total active non-parent SKUs.
+  summary.totalActiveProducts =
+    summary.fastMovers +
+    summary.strategicStock +
+    summary.watchList +
+    summary.deadStockVelocity +
+    summary.newItems +
+    summary.untrackedCount;
+
   return summary;
 }
 
 // ── Paginated stock monitor query ──
 
+/**
+ * Fetch the 'untracked' / dormant products (active, non-parent, zero stock,
+ * zero 90d velocity — so no stock_metrics row OR a stock_metrics row with all
+ * zeros). Returns StockMonitorRow shapes with metric fields zeroed/nulled so
+ * the grid can render them uniformly alongside tracked rows.
+ *
+ * Paginated via keyset on products.id (ascending) when cursor is supplied.
+ */
+async function queryUntrackedStockMonitor(
+  params: StockMonitorQueryParams,
+  limit: number,
+): Promise<{ data: StockMonitorRow[]; nextCursor: string | null; hasMore: boolean }> {
+  const conditions: SQL[] = [
+    eq(products.orgId, params.orgId),
+    eq(products.isActive, true),
+    eq(products.isParent, false),
+    sql`NOT EXISTS (SELECT 1 FROM product_families pf WHERE pf.id = ${products.familyId} AND pf.slug = 'non-items')`,
+    sql`NOT EXISTS (
+      SELECT 1 FROM categories exc_cat
+      WHERE exc_cat.name IN ('Count', 'Price Add', 'Labor')
+        AND (exc_cat.id = ${products.categoryId}
+          OR exc_cat.id = (SELECT pp.category_id FROM products pp WHERE pp.id = ${products.parentProductId}))
+    )`,
+    // The key predicate — no metrics row OR a dormant metrics row
+    sql`NOT EXISTS (
+      SELECT 1 FROM stock_metrics sm
+      WHERE sm.product_id = ${products.id}
+        AND sm.org_id = ${products.orgId}
+        AND (COALESCE(sm.total_stock, 0) > 0 OR COALESCE(sm.avg_daily_sales_90d, 0) >= 0.01)
+    )`,
+  ];
+
+  if (params.search && params.search.length >= 2) {
+    conditions.push(or(
+      ilike(products.name, `%${params.search}%`),
+      ilike(products.sku, `%${params.search}%`),
+    )!);
+  }
+  if (params.brandId) conditions.push(eq(products.brandId, params.brandId));
+  if (params.categoryId) conditions.push(eq(products.categoryId, params.categoryId));
+  if (params.subcategoryId) conditions.push(eq(products.subcategoryId, params.subcategoryId));
+  if (params.familyId) conditions.push(eq(products.familyId, params.familyId));
+  if (params.hideDiscontinued) conditions.push(eq(products.discontinued, false));
+  if (params.hideSpecialOrder) conditions.push(eq(products.specialOrder, false));
+  // Cursor for untracked uses a 'u:' prefix to distinguish from tracked cursors
+  if (params.cursor && params.cursor.startsWith("u:")) {
+    conditions.push(gt(products.id, params.cursor.slice(2)));
+  }
+
+  const rows = await db
+    .select({
+      id: products.id,
+      productId: products.id,
+      productName: products.name,
+      productSku: products.sku,
+      specialOrder: products.specialOrder,
+      discontinued: products.discontinued,
+      parentProductId: products.parentProductId,
+      brandName: brands.name,
+      categoryName: categories.name,
+      subcategoryName: productSubcategories.name,
+      familyName: productFamilies.name,
+      costPrice: products.costPrice,
+      sellingUnit: products.sellingUnit,
+      purchaseUnit: products.purchaseUnit,
+      conversionFactor: products.conversionFactor,
+    })
+    .from(products)
+    .leftJoin(brands, eq(products.brandId, brands.id))
+    .leftJoin(categories, eq(products.categoryId, categories.id))
+    .leftJoin(productSubcategories, eq(products.subcategoryId, productSubcategories.id))
+    .leftJoin(productFamilies, eq(products.familyId, productFamilies.id))
+    .where(and(...conditions))
+    .orderBy(asc(products.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore ? `u:${pageRows[pageRows.length - 1]!.id}` : null;
+
+  const nowIso = new Date().toISOString();
+  const data: StockMonitorRow[] = pageRows.map((r) => ({
+    id: r.id,
+    productId: r.productId,
+    productName: r.productName,
+    productSku: r.productSku,
+    brandName: r.brandName,
+    categoryName: r.categoryName,
+    subcategoryName: r.subcategoryName,
+    familyName: r.familyName,
+    totalStock: 0,
+    specialOrder: r.specialOrder ?? false,
+    discontinued: r.discontinued ?? false,
+    avgDailySales30d: "0",
+    avgDailySales60d: "0",
+    avgDailySales90d: "0",
+    avgDailySales180d: "0",
+    avgDailySales365d: "0",
+    avgDailySalesAll: "0",
+    trend: "STALLED",
+    trendRecent: "0",
+    trendPrior: "0",
+    daysOfStock: null,
+    stockoutDays90d: 0,
+    lastPoDate: null,
+    lastPoSupplierName: null,
+    lastLeadTimeDays: null,
+    lastSaleDate: null,
+    saleDaysCount: 0,
+    totalQtySold: 0,
+    daysSinceLastSale: null,
+    velocityClass: "UNTRACKED",
+    avgSellingPrice: null,
+    stockAgeMonths: null,
+    suggestedSellPrice: null,
+    appliedMarkupPct: null,
+    inflationAdjustedCost: null,
+    costPrice: r.costPrice,
+    sold12m: 0,
+    sold6m: 0,
+    sold3m: 0,
+    sold1m: 0,
+    avgMonth12m: "0",
+    avgMonth6m: "0",
+    avgMonth3m: "0",
+    avgMonth1m: "0",
+    monthsLeft12m: null,
+    monthsLeft6m: null,
+    monthsLeft3m: null,
+    monthsLeft1m: null,
+    velocityTrend: null,
+    sellingUnit: r.sellingUnit,
+    purchaseUnit: r.purchaseUnit,
+    conversionFactor: r.conversionFactor,
+    status: "DEAD_STOCK",
+    computedAt: nowIso,
+  }));
+
+  return { data, nextCursor, hasMore };
+}
+
 export async function queryStockMonitor(
   params: StockMonitorQueryParams,
 ): Promise<StockMonitorPage> {
   const limit = params.limit ?? 50;
+
+  // Short-circuit: when the user explicitly filters by the UNTRACKED sentinel,
+  // fetch from products directly (no stock_metrics join).
+  if (params.velocityClass === "UNTRACKED") {
+    const untracked = await queryUntrackedStockMonitor(params, limit);
+    const summary = await queryStockMonitorSummary(params.orgId);
+    return {
+      data: untracked.data,
+      summary,
+      nextCursor: untracked.nextCursor,
+      hasMore: untracked.hasMore,
+    };
+  }
 
   const conditions: SQL[] = [
     eq(stockMetrics.orgId, params.orgId),
@@ -1019,6 +1216,23 @@ export async function queryStockMonitor(
 export async function exportStockMonitorCSV(
   params: Omit<StockMonitorQueryParams, "cursor" | "limit">,
 ): Promise<StockMonitorRow[]> {
+  // Short-circuit: UNTRACKED sentinel uses the products-only path.
+  if (params.velocityClass === "UNTRACKED") {
+    // Fetch all untracked rows (no pagination limit for CSV).
+    const all: StockMonitorRow[] = [];
+    let cursor: string | null = null;
+    for (let safety = 0; safety < 200; safety++) {
+      const chunk = await queryUntrackedStockMonitor(
+        { ...params, cursor: cursor ?? undefined } as StockMonitorQueryParams,
+        500,
+      );
+      all.push(...chunk.data);
+      if (!chunk.hasMore) break;
+      cursor = chunk.nextCursor;
+    }
+    return all;
+  }
+
   const conditions: SQL[] = [eq(stockMetrics.orgId, params.orgId)];
 
   if (params.search && params.search.length >= 2) {

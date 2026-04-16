@@ -76,6 +76,10 @@ export interface StockMonitorSummary {
   deadStockVelocity: number;
   newItems: number;
   deadStockValue: number;
+  /** Active, non-parent SKUs with no stock AND no 90d velocity. */
+  untrackedCount: number;
+  /** Sum of the five velocity classes + untrackedCount. */
+  totalActiveProducts: number;
   computedAt: string | null;
 }
 
@@ -127,6 +131,8 @@ export interface StockMonitorFilters {
   urgency1m?: string;
   sortBy?: string;
   sortDir?: string;
+  /** Include dormant SKUs with no stock/sales in the grid. Off by default. */
+  includeUntracked?: boolean;
 }
 
 // ── Hooks ──
@@ -164,6 +170,7 @@ export function useStockMonitor(
       if (filters.lastSoldBefore) params.set("lastSoldBefore", filters.lastSoldBefore);
       if (filters.sortBy) params.set("sortBy", filters.sortBy);
       if (filters.sortDir) params.set("sortDir", filters.sortDir);
+      if (filters.includeUntracked) params.set("includeUntracked", "true");
 
       return apiFetch<StockMonitorPage>(
         `/inventory/stock-monitor?${params.toString()}`,

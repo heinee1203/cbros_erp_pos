@@ -44,6 +44,7 @@ export const stockMonitorRoutes: FastifyPluginAsync = async (app) => {
       sortDir: q.sortDir,
       cursor: q.cursor,
       limit: q.limit ? parseInt(q.limit, 10) : undefined,
+      includeUntracked: q.includeUntracked === "true",
     });
 
     return reply.send(result);
@@ -82,6 +83,7 @@ export const stockMonitorRoutes: FastifyPluginAsync = async (app) => {
       lastSoldBefore: q.lastSoldBefore,
       sortBy: q.sortBy,
       sortDir: q.sortDir,
+      includeUntracked: q.includeUntracked === "true",
     });
 
     const headers =

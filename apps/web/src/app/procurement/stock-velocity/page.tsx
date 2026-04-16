@@ -274,7 +274,8 @@ export default function StockVelocityPage() {
         <div className="mb-4 flex flex-wrap gap-2">
           {VELOCITY_CLASSES.map((vc) => {
             const count = summary[vc.summaryKey] ?? 0;
-            const pct = summary.total > 0 ? ((count / summary.total) * 100).toFixed(1) : "0";
+            const denom = summary.totalActiveProducts || summary.total || 0;
+            const pct = denom > 0 ? ((count / denom) * 100).toFixed(1) : "0";
             const isActive = velocityFilter === vc.key;
             return (
               <button
@@ -292,6 +293,27 @@ export default function StockVelocityPage() {
               </button>
             );
           })}
+          {/* Untracked card — dormant SKUs excluded from stock_metrics */}
+          {summary.untrackedCount > 0 && (() => {
+            const denom = summary.totalActiveProducts || summary.total || 0;
+            const pct = denom > 0 ? ((summary.untrackedCount / denom) * 100).toFixed(1) : "0";
+            const isActive = velocityFilter === "UNTRACKED";
+            return (
+              <button
+                onClick={() => setVelocityFilter(isActive ? "all" : "UNTRACKED")}
+                title="Active SKUs with no stock and no sales in the last 90 days. Click to include in grid."
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs transition-colors",
+                  isActive ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-muted/40 text-muted-foreground hover:bg-muted",
+                )}
+              >
+                <Package size={14} className={cn(isActive ? "text-primary" : "text-muted-foreground/70")} />
+                <span className="font-semibold">{summary.untrackedCount.toLocaleString()}</span>
+                <span>Untracked</span>
+                <span className="text-muted-foreground/60">({pct}%)</span>
+              </button>
+            );
+          })()}
           {/* Dead Stock Value card */}
           <div className="ml-auto flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs">
             <XCircle size={14} className="text-destructive" />
@@ -510,16 +532,26 @@ export default function StockVelocityPage() {
 // ── Row Component ──
 
 function VelocityRow({ row }: { row: StockMonitorRow }) {
+  const isUntracked = row.velocityClass === "UNTRACKED";
   const vc = VELOCITY_CLASSES.find((v) => v.key === row.velocityClass) ?? VELOCITY_CLASSES[4];
   const avgSales = parseFloat(row.avgDailySales30d || "0");
   const dos = row.daysOfStock ? parseFloat(row.daysOfStock) : null;
 
   return (
-    <tr className="border-b border-border/40 transition-colors hover:bg-muted/30">
+    <tr className={cn("border-b border-border/40 transition-colors hover:bg-muted/30", isUntracked && "bg-muted/10 text-muted-foreground")}>
       <td className="whitespace-nowrap px-3 py-2">
-        <span className={cn("inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold", vc.badge)}>
-          {vc.label}
-        </span>
+        {isUntracked ? (
+          <span
+            className="inline-flex items-center rounded border border-dashed border-muted-foreground/40 bg-muted/40 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground"
+            title="Dormant SKU — no stock and no sales in the last 90 days"
+          >
+            UNTRACKED
+          </span>
+        ) : (
+          <span className={cn("inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold", vc.badge)}>
+            {vc.label}
+          </span>
+        )}
       </td>
       <td className="max-w-[280px] px-3 py-2">
         <div className="flex items-center gap-1.5">
