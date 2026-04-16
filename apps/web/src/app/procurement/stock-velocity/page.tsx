@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   XCircle,
   Package,
+  Download,
 } from "lucide-react";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,8 @@ import { ReorderSuggestionsPanel } from "./reorder-panel";
 import { useProductFamilies } from "@/hooks/use-products";
 
 // ── Constants ──
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
 const VELOCITY_CLASSES = [
   { key: "FAST_MOVER", label: "Fast Movers", badge: "bg-green-100 text-green-700", icon: TrendingUp, summaryKey: "fastMovers" as const },
@@ -157,6 +160,58 @@ export default function StockVelocityPage() {
     }
   };
 
+  // CSV export — streams the backend /inventory/stock-monitor/export endpoint
+  // with current filter state, then triggers a client-side download.
+  const [isExporting, setIsExporting] = useState(false);
+  const handleExport = useCallback(async () => {
+    if (!token) return;
+    setIsExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (velocityFilter && velocityFilter !== "all") params.set("velocityClass", velocityFilter);
+      if (brandFilter) params.set("brandId", brandFilter);
+      if (categoryFilter) params.set("categoryId", categoryFilter);
+      if (subcategoryFilter) params.set("subcategoryId", subcategoryFilter);
+      if (familyFilter) params.set("familyId", familyFilter);
+      if (lastSoldAfter) params.set("lastSoldAfter", lastSoldAfter);
+      if (lastSoldBefore) params.set("lastSoldBefore", lastSoldBefore);
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      if (urgencyFilter) params.set("urgency", urgencyFilter);
+      if (urgencyWindow) params.set("urgencyWindow", urgencyWindow);
+      if (leftFilterAll) params.set("urgencyAll", leftFilterAll);
+      if (leftFilter12m) params.set("urgency12m", leftFilter12m);
+      if (leftFilter6m) params.set("urgency6m", leftFilter6m);
+      if (leftFilter3m) params.set("urgency3m", leftFilter3m);
+      if (leftFilter1m) params.set("urgency1m", leftFilter1m);
+      if (hideNegativeStock) params.set("hideNegativeStock", "true");
+      if (hideDC) params.set("hideDiscontinued", "true");
+      if (hideSO) params.set("hideSpecialOrder", "true");
+      params.set("sortBy", sortBy);
+      params.set("sortDir", sortDir);
+
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+      if (apiLocationId && apiLocationId !== "ALL") headers["X-Location-ID"] = apiLocationId;
+
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/inventory/stock-monitor/export${qs ? `?${qs}` : ""}`, { headers });
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const date = new Date().toISOString().slice(0, 10);
+      link.download = `stock-velocity-${date}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Stock Velocity CSV export failed:", err);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [token, apiLocationId, velocityFilter, brandFilter, categoryFilter, subcategoryFilter, familyFilter, lastSoldAfter, lastSoldBefore, debouncedSearch, urgencyFilter, urgencyWindow, leftFilterAll, leftFilter12m, leftFilter6m, leftFilter3m, leftFilter1m, hideNegativeStock, hideDC, hideSO, sortBy, sortDir]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -186,21 +241,32 @@ export default function StockVelocityPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => refreshMutation.mutateAsync(undefined)}
-          disabled={refreshMutation.isPending}
-          className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
-        >
-          <RefreshCw size={13} className={cn(refreshMutation.isPending && "animate-spin")} />
-          {refreshMutation.isPending ? "Computing..." : "Recompute"}
-        </button>
-        <button
-          onClick={() => setViewMode("reorder")}
-          className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium", viewMode === "reorder" ? "bg-primary text-primary-foreground" : "bg-primary text-primary-foreground hover:bg-primary/90")}
-        >
-          <ShoppingCart size={13} />
-          Reorder Suggestions
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => refreshMutation.mutateAsync(undefined)}
+            disabled={refreshMutation.isPending}
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={cn(refreshMutation.isPending && "animate-spin")} />
+            {refreshMutation.isPending ? "Computing..." : "Recompute"}
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={isExporting}
+            title="Download current grid as CSV (respects all filters)"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            {isExporting ? "Exporting..." : "Export CSV"}
+          </button>
+          <button
+            onClick={() => setViewMode("reorder")}
+            className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium", viewMode === "reorder" ? "bg-primary text-primary-foreground" : "bg-primary text-primary-foreground hover:bg-primary/90")}
+          >
+            <ShoppingCart size={13} />
+            Reorder Suggestions
+          </button>
+        </div>
       </div>
 
       {/* Summary Cards — visible on ALL tabs for context */}
