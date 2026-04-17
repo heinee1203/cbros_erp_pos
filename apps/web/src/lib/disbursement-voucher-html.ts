@@ -126,8 +126,8 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   // SOA refs for the breakdown table (header SOA# line removed — table is authoritative)
   const soaRefs = d.soaRefs && d.soaRefs.length > 0 ? d.soaRefs : d.soaNumber ? [{ soaNumber: d.soaNumber, allocatedAmount: gross, dateFrom: d.soaDateFrom, dateTo: d.soaDateTo }] : [];
 
-  // SOA breakdown table (only when multiple SOAs)
-  const soaBreakdownSection = soaRefs.length > 1 ? `
+  // SOA breakdown table — always rendered when we have at least one SOA
+  const soaBreakdownSection = soaRefs.length >= 1 ? `
 <div style="margin-bottom:12px">
   <div style="font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;border-bottom:1px solid #000;padding-bottom:2px">SOA Details</div>
   <table style="width:100%;border-collapse:collapse;font-size:9pt">
