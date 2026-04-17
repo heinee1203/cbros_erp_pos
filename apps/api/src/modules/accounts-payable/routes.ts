@@ -768,6 +768,29 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
   // DISBURSEMENT VOUCHERS
   // ═══════════════════════════════════════════════════════════════
 
+  // Narrow Zod schema for additionalCharges only. The rest of the DV body
+  // stays on manual validation (changing that is out of scope for this
+  // feature). This prevents silent data-loss if a field is renamed.
+  const dvAdditionalChargeSchema = z.object({
+    chargeType: z.enum([
+      "FREIGHT",
+      "HANDLING",
+      "MISCELLANEOUS",
+      "ADJUSTMENT",
+      "OTHER",
+    ]),
+    description: z.string().min(1),
+    referenceNumber: z.string().optional().nullable(),
+    amount: z
+      .union([z.number(), z.string()])
+      .transform((v) => (typeof v === "string" ? v : String(v)))
+      .refine((v) => parseFloat(v) > 0, { message: "amount must be > 0" }),
+  });
+  const dvAdditionalChargesArraySchema = z
+    .array(dvAdditionalChargeSchema)
+    .optional()
+    .default([]);
+
   app.post("/disbursement-vouchers", async (request, reply) => {
     const { orgId } = request.storeContext!;
     const { userId, role } = request.user;
@@ -782,8 +805,28 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     if (!body.grossAmount && body.amount) {
       body.grossAmount = body.amount;
     }
+
+    const chargesParse = dvAdditionalChargesArraySchema.safeParse(body.additionalCharges);
+    if (!chargesParse.success) {
+      return reply.status(422).send({
+        error: "Invalid additionalCharges",
+        details: chargesParse.error.flatten(),
+      });
+    }
+    const additionalCharges = chargesParse.data;
+
+    // TEMP diagnostic (AC #2) — verifies charges survive parsing with correct
+    // length + field values. Remove in Task 9 cleanup.
+    request.log.info(
+      { count: additionalCharges.length, charges: additionalCharges },
+      "[DV] parsed additionalCharges",
+    );
+
     try {
-      const result = await createDisbursementVoucher(orgId, userId, body);
+      const result = await createDisbursementVoucher(orgId, userId, {
+        ...body,
+        additionalCharges,
+      });
       return reply.status(201).send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
