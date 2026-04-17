@@ -72,7 +72,9 @@ export interface ProductListFilters {
   familyId?: string;
   category?: string;
   stockStatus?: string;  // "low" | "out" | ""
-  subCategoryId?: string;
+  /** Category filter — canonical name after audit Bug 8
+   *  (replaced the legacy `subCategoryId` param which referred to the same column). */
+  categoryId?: string;
   subcategoryId?: string;
   brandId?: string;
   vehicleMake?: string;
@@ -101,7 +103,7 @@ export function useProducts(
     familyId,
     category,
     stockStatus,
-    subCategoryId,
+    categoryId,
     subcategoryId,
     brandId,
     vehicleMake,
@@ -124,7 +126,7 @@ export function useProducts(
       familyId,
       category,
       stockStatus,
-      subCategoryId,
+      categoryId,
       subcategoryId,
       brandId,
       vehicleMake,
@@ -149,7 +151,7 @@ export function useProducts(
       if (familyId) params.set("familyId", familyId);
       if (category) params.set("category", category);
       if (stockStatus) params.set("stockStatus", stockStatus);
-      if (subCategoryId) params.set("subCategoryId", subCategoryId);
+      if (categoryId) params.set("categoryId", categoryId);
       if (subcategoryId) params.set("subcategoryId", subcategoryId);
       if (brandId) params.set("brandId", brandId);
       if (vehicleMake) params.set("vehicleMake", vehicleMake);

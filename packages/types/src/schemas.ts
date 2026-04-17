@@ -172,11 +172,11 @@ export const listProductsQuerySchema = z.object({
   hasVehicles: boolLike.optional(),
   excludeSO: boolLike.optional(),
   excludeDC: boolLike.optional(),
-  // Taxonomy — `subCategoryId` is a legacy alias for the category filter;
-  // Bug 8 will retire it in favor of `categoryId`. Kept here so the pre-Bug-8
-  // client continues to work for one commit.
+  // Taxonomy — canonical names after Bug 8. `categoryId` replaces the
+  // legacy `subCategoryId` param (both referred to the same column —
+  // `products.category_id`). `subcategoryId` remains the granular-level
+  // filter on `products.subcategory_id`.
   familyId: z.string().optional(),
-  subCategoryId: z.string().optional(),
   categoryId: z.string().optional(),
   subcategoryId: z.string().optional(),
   brandId: z.string().optional(),

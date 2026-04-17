@@ -112,7 +112,7 @@ function ItemsTable({
 
   const { data, isLoading } = useProducts(token, locationId, {
     familyId: familyId,
-    subCategoryId: categoryId,
+    categoryId: categoryId,
     brandId: brandId,
     vehicleMake,
     stockStatus,

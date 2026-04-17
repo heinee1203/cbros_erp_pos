@@ -292,7 +292,7 @@ export default function InventoryPage() {
   const { data, isLoading, isFetching } = useProducts(token, apiLocationId, {
     search: debouncedSearch,
     familyId: familyFilter || undefined,
-    subCategoryId: categoryFilter || undefined,
+    categoryId: categoryFilter || undefined,
     subcategoryId: subCategoryFilter || undefined,
     stockStatus: stockStatusFilter,
     brandId: brandFilter || undefined,
@@ -482,7 +482,7 @@ export default function InventoryPage() {
       params.set("includeCost", "true");
       if (debouncedSearch && debouncedSearch.length >= 2) params.set("search", debouncedSearch);
       if (familyFilter) params.set("familyId", familyFilter);
-      if (categoryFilter) params.set("subCategoryId", categoryFilter);
+      if (categoryFilter) params.set("categoryId", categoryFilter);
       if (subCategoryFilter) params.set("subcategoryId", subCategoryFilter);
       if (brandFilter) params.set("brandId", brandFilter);
 

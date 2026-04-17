@@ -122,7 +122,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         q.search,
         q.category,
         q.stockStatus,
-        q.subCategoryId,
+        q.categoryId, // was q.subCategoryId — Bug 8 canonicalisation
         q.familyId,
         q.subcategoryId,
         q.brandId,
@@ -310,11 +310,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (q.subCategoryId) {
-      if (q.subCategoryId === "__none__") {
+    // Bug 8: canonical param name is `categoryId` (the legacy `subCategoryId`
+    // was dropped from the schema — callers now send categoryId).
+    if (q.categoryId) {
+      if (q.categoryId === "__none__") {
         conditions.push(sql`${products.categoryId} IS NULL`);
       } else {
-        conditions.push(eq(products.categoryId, q.subCategoryId));
+        conditions.push(eq(products.categoryId, q.categoryId));
       }
     }
 
@@ -2208,7 +2210,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   // GET /products/export — Denormalized export with per-location inventory
   //
   // Query params:
-  //   search, familyId, subCategoryId, subcategoryId, brandId, sortBy, sortDir
+  //   search, familyId, categoryId, subcategoryId, brandId, sortBy, sortDir
   //   includeCost=true   → include costPrice in response (default: stripped)
   //   includeStock=true  → include per-location inventory (default: stripped)
   //   includeNonItems=true → include Non-Items family (default: excluded)
@@ -2220,7 +2222,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
     const search = query.search || "";
     const familyId = query.familyId || "";
-    const subCategoryId = query.subCategoryId || "";
+    // Bug 8: canonical `categoryId` (legacy `subCategoryId` no longer accepted)
+    const categoryId = query.categoryId || "";
     const subcategoryId = query.subcategoryId || "";
     const brandId = query.brandId || "";
     const sortBy = query.sortBy || "name";
@@ -2247,7 +2250,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       conditions.push(ilike(products.name, `%${search}%`));
     }
     if (familyId) conditions.push(eq(products.familyId, familyId));
-    if (subCategoryId) conditions.push(eq(products.categoryId, subCategoryId));
+    if (categoryId) conditions.push(eq(products.categoryId, categoryId));
     if (subcategoryId) conditions.push(eq(products.subcategoryId, subcategoryId));
     if (brandId) conditions.push(eq(products.brandId, brandId));
 
