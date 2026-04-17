@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { db } from "@apex/database";
 import { products, inventory, productFamilies, vehicleCompatibility, categories, productSubcategories, brands, locations, purchaseOrders, poLines, suppliers, backorders, productOptionTypes, productOptionValues, productVariantOptions } from "@apex/database/schema";
 import { eq, and, ilike, sql, asc, desc, inArray, type SQL } from "drizzle-orm";
-import { createProductSchema, updateProductSchema, addVehicleSchema, updateVehicleSchema, bulkImportSchema, generateEan13, isValidBarcode, type VariantItem } from "@apex/types";
+import { createProductSchema, updateProductSchema, addVehicleSchema, updateVehicleSchema, bulkImportSchema, listProductsQuerySchema, generateEan13, isValidBarcode, type VariantItem } from "@apex/types";
 import { logAction } from "../audit/service";
 
 const MANAGE_ROLES = ["ADMIN", "MANAGER"];
@@ -82,7 +82,15 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
    *   grouped  - "true" to enable variant grouping (deduplicates family variants)
    */
   app.get("/", async (request, reply) => {
-    const q = request.query as Record<string, string | undefined>;
+    // Audit Bug 7: strict Zod validation for every query param — unknown
+    // keys (misspellings, stale callers) now 400 instead of silently
+    // returning all rows. Same-class defense as AR-allocations.
+    const parsed = listProductsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      console.error("GET /products validation:", JSON.stringify(parsed.error.flatten(), null, 2));
+      return reply.status(400).send({ error: "Invalid query params", details: parsed.error.flatten() });
+    }
+    const q = parsed.data;
     const { orgId, locationId } = request.storeContext!;
     const allLocations = q.allLocations === "true" || !locationId;
 

@@ -150,6 +150,48 @@ export const createProductSchema = z.object({
 });
 export type CreateProductInput = z.infer<typeof createProductSchema>;
 
+// ── Product: List (GET /products) querystring ──
+// Audit Bug 7: every param the main list handler reads must be enumerated
+// here. Unknown keys → 400 (strict mode). Values stay as strings to match
+// the existing `q.foo === "true"` comparison style in routes.ts.
+const boolLike = z.enum(["true", "false"]);
+export const listProductsQuerySchema = z.object({
+  // Pagination & sort
+  page: z.string().optional(),
+  limit: z.string().optional(),
+  sortBy: z.string().optional(),
+  sortDir: z.string().optional(),
+  // Search & OEM
+  search: z.string().optional(),
+  oemNumber: z.string().optional(),
+  // Scope toggles
+  allLocations: boolLike.optional(),
+  grouped: boolLike.optional(),
+  parentOnly: boolLike.optional(),
+  includeInactive: boolLike.optional(),
+  hasVehicles: boolLike.optional(),
+  excludeSO: boolLike.optional(),
+  excludeDC: boolLike.optional(),
+  // Taxonomy — `subCategoryId` is a legacy alias for the category filter;
+  // Bug 8 will retire it in favor of `categoryId`. Kept here so the pre-Bug-8
+  // client continues to work for one commit.
+  familyId: z.string().optional(),
+  subCategoryId: z.string().optional(),
+  categoryId: z.string().optional(),
+  subcategoryId: z.string().optional(),
+  brandId: z.string().optional(),
+  category: z.string().optional(),
+  stockStatus: z.enum(["low", "out", "special_order", "not_special_order"]).optional(),
+  // Relations
+  parentProductId: z.string().uuid().optional(),
+  // Vehicle fitment
+  vehicleMake: z.string().optional(),
+  vehicleModel: z.string().optional(),
+  vehicleYear: z.string().optional(),
+  vehicleEngine: z.string().optional(),
+}).strict();
+export type ListProductsQuery = z.infer<typeof listProductsQuerySchema>;
+
 // ── Product: Update ──
 export const updateProductSchema = z.object({
   name: z.string().min(1).max(500).optional(),
