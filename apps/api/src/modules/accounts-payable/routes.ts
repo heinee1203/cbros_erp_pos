@@ -815,13 +815,6 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
     }
     const additionalCharges = chargesParse.data;
 
-    // TEMP diagnostic (AC #2) — verifies charges survive parsing with correct
-    // length + field values. Remove in Task 9 cleanup.
-    request.log.info(
-      { count: additionalCharges.length, charges: additionalCharges },
-      "[DV] parsed additionalCharges",
-    );
-
     try {
       const result = await createDisbursementVoucher(orgId, userId, {
         ...body,
