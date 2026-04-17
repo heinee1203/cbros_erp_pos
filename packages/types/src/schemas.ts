@@ -193,7 +193,14 @@ export const updateProductSchema = z.object({
   ).nullable().optional(),
   // Add new variants to an existing parent product
   newVariants: z.array(variantItemSchema).optional(),
-});
+}).refine(
+  // Audit Bug 9: reject negative margin when both prices are in the same PATCH payload.
+  // NOTE: this cannot catch partial-update cases (e.g. PATCH unitPrice alone below the
+  // stored costPrice) — those need a handler-level check against the current DB row.
+  (data) => data.unitPrice === undefined || data.costPrice === undefined
+    || Number(data.unitPrice) >= Number(data.costPrice),
+  { message: "unitPrice must be greater than or equal to costPrice", path: ["unitPrice"] },
+);
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
 // ── Product: Bulk Import ──
