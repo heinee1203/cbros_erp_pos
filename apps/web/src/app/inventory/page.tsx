@@ -330,7 +330,7 @@ export default function InventoryPage() {
   );
 
   const hasActiveFilters =
-    familyFilter !== "" || categoryFilter !== "" || subCategoryFilter !== "" || stockStatusFilter !== "" || brandFilter !== "" || searchQuery.trim() !== "";
+    familyFilter !== "" || categoryFilter !== "" || subCategoryFilter !== "" || stockStatusFilter !== "" || brandFilter !== "" || searchQuery.trim() !== "" || hideSO || hideDC;
 
   const clearAllFilters = useCallback(() => {
     setFamilyFilter("");
@@ -340,6 +340,12 @@ export default function InventoryPage() {
     setBrandFilter("");
     setSearchQuery("");
     setDebouncedSearch("");
+    setHideSO(false);
+    setHideDC(false);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("item-list-hide-so", "false");
+      localStorage.setItem("item-list-hide-dc", "false");
+    }
   }, []);
 
   /* ── CSV Export helpers ── */
