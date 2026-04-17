@@ -18,6 +18,13 @@ interface DeductionLine {
   amount: string;
 }
 
+interface AdditionalChargeLine {
+  chargeType: string;
+  description: string;
+  referenceNumber: string;
+  amount: string;
+}
+
 interface PaymentLine {
   paymentMethod: string;
   amount: string;
@@ -31,6 +38,9 @@ interface PaymentLine {
 const EMPTY_DEDUCTION: DeductionLine = {
   deductionType: "EWT", description: "", referenceNumber: "", amount: "",
 };
+const EMPTY_CHARGE: AdditionalChargeLine = {
+  chargeType: "FREIGHT", description: "", referenceNumber: "", amount: "",
+};
 const EMPTY_PAYMENT: PaymentLine = {
   paymentMethod: "CHECK", amount: "", referenceNumber: "", bankName: "",
   transactionDate: "", platform: "", receivedBy: "",
@@ -40,6 +50,13 @@ const DEDUCTION_TYPES = [
   { value: "EWT", label: "EWT" },
   { value: "CREDIT_MEMO", label: "Credit Memo" },
   { value: "RETURN", label: "Return" },
+  { value: "OTHER", label: "Other" },
+];
+const CHARGE_TYPES = [
+  { value: "FREIGHT", label: "Freight" },
+  { value: "HANDLING", label: "Handling" },
+  { value: "MISCELLANEOUS", label: "Miscellaneous" },
+  { value: "ADJUSTMENT", label: "Adjustment" },
   { value: "OTHER", label: "Other" },
 ];
 const METHOD_OPTIONS = [
@@ -81,6 +98,7 @@ export default function NewDisbursementVoucherPage() {
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split("T")[0]);
   const [remarks, setRemarks] = useState("");
   const [deductions, setDeductions] = useState<DeductionLine[]>([]);
+  const [charges, setCharges] = useState<AdditionalChargeLine[]>([]);
   const [payments, setPayments] = useState<PaymentLine[]>([{ ...EMPTY_PAYMENT }]);
 
   // Credit memos available for this supplier
@@ -90,11 +108,18 @@ export default function NewDisbursementVoucherPage() {
   // Derived amounts
   const gross = parseFloat(grossAmount) || 0;
   const totalDed = useMemo(() => deductions.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0), [deductions]);
+  const totalCharges = useMemo(() => charges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0), [charges]);
   const totalCMs = useMemo(() =>
     availableCMs.filter((cm) => selectedCMIds.has(cm.id)).reduce((s, cm) => s + Math.abs(cm.totalAmount), 0),
     [availableCMs, selectedCMIds],
   );
-  const netAmount = gross - totalDed - totalCMs;
+  const netAmount = gross + totalCharges - totalDed - totalCMs;
+  const chargeTypeSummary = useMemo(() => {
+    const labels = charges
+      .filter((c) => parseFloat(c.amount) > 0)
+      .map((c) => CHARGE_TYPES.find((t) => t.value === c.chargeType)?.label ?? c.chargeType);
+    return Array.from(new Set(labels)).join(", ");
+  }, [charges]);
   const payTotal = useMemo(() => payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0), [payments]);
   const payMismatch = payments.length > 0 && netAmount > 0 && Math.abs(payTotal - netAmount) > 0.01;
 
@@ -182,6 +207,11 @@ export default function NewDisbursementVoucherPage() {
   const addDed = () => setDeductions((p) => [...p, { ...EMPTY_DEDUCTION }]);
   const rmDed = (i: number) => setDeductions((p) => p.filter((_, j) => j !== i));
 
+  // Charge helpers
+  const updateCharge = (i: number, f: keyof AdditionalChargeLine, v: string) => setCharges((p) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n; });
+  const addCharge = () => setCharges((p) => [...p, { ...EMPTY_CHARGE }]);
+  const rmCharge = (i: number) => setCharges((p) => p.filter((_, j) => j !== i));
+
   // Payment helpers
   const updatePay = (i: number, f: keyof PaymentLine, v: string) => setPayments((p) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n; });
   const addPay = () => setPayments((p) => [...p, { ...EMPTY_PAYMENT }]);
@@ -206,11 +236,22 @@ export default function NewDisbursementVoucherPage() {
     return [...manualDeds, ...cmDeds];
   };
 
+  const buildCharges = () =>
+    charges
+      .filter((c) => c.description.trim().length > 0 && parseFloat(c.amount) > 0)
+      .map((c) => ({
+        chargeType: c.chargeType,
+        description: c.description.trim(),
+        referenceNumber: c.referenceNumber.trim() || undefined,
+        amount: String(parseFloat(c.amount).toFixed(2)),
+      }));
+
   const buildBody = (soaId?: string, soaGross?: string) => ({
     supplierId, soaId: soaId || soaIdParam || undefined,
     grossAmount: soaGross || grossAmount,
     paymentDate, remarks: remarks || undefined,
     deductions: buildDeductions(),
+    additionalCharges: buildCharges(),
     payments: buildPaymentLines(),
   });
 
@@ -225,6 +266,7 @@ export default function NewDisbursementVoucherPage() {
         paymentDate,
         remarks: remarks || undefined,
         deductions: buildDeductions(),
+        additionalCharges: buildCharges(),
         payments: buildPaymentLines(),
       };
 
@@ -266,12 +308,21 @@ export default function NewDisbursementVoucherPage() {
           description: cm.invoiceNumber, amount: Math.abs(cm.totalAmount),
         })),
       ];
+      const chargesPrint = charges
+        .filter((c) => c.description.trim().length > 0 && parseFloat(c.amount) > 0)
+        .map((c) => ({
+          chargeType: c.chargeType,
+          description: c.description.trim(),
+          referenceNumber: c.referenceNumber.trim() || null,
+          amount: parseFloat(c.amount),
+        }));
       const html = buildDisbursementVoucherHtml({
         dvNumber: res.dvNumber, supplierName: soaData?.supplierName ?? "", amount: netAmount,
         grossAmount: gross, totalDeductions: totalDed + totalCMs, paymentDate,
         soaNumber: soaData?.soaNumber, soaDateFrom: soaData?.dateFrom, soaDateTo: soaData?.dateTo,
         remarks: remarks || null,
         deductions: allDedsPrint,
+        additionalCharges: chargesPrint,
         payments: payments.map((p) => ({
           paymentMethod: p.paymentMethod, amount: parseFloat(p.amount) || 0,
           referenceNumber: p.referenceNumber || null, bankName: p.bankName || null,
@@ -427,6 +478,37 @@ export default function NewDisbursementVoucherPage() {
           )}
         </div>
 
+        {/* ── Additional Charges ── */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <label className="text-xs font-medium text-muted-foreground">Additional Charges</label>
+            <button onClick={addCharge} className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10">
+              <Plus size={12} /> Add Charge
+            </button>
+          </div>
+          {charges.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground italic">No additional charges — freight, handling, and misc fees would add to the net payment</p>
+          ) : (
+            <div className="space-y-2">
+              {charges.map((c, i) => (
+                <div key={i} className="flex items-center gap-2 rounded-lg border border-border bg-muted/20 p-2">
+                  <select value={c.chargeType} onChange={(e) => updateCharge(i, "chargeType", e.target.value)}
+                    className="h-8 w-32 rounded border border-border bg-background px-2 text-[12px] outline-none">
+                    {CHARGE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                  <input type="text" value={c.description} onChange={(e) => updateCharge(i, "description", e.target.value)}
+                    placeholder="Description / Reference" className="h-8 flex-1 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" />
+                  <input type="text" value={c.referenceNumber} onChange={(e) => updateCharge(i, "referenceNumber", e.target.value)}
+                    placeholder="Ref #" className="h-8 w-24 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" />
+                  <input type="number" step="0.01" value={c.amount} onChange={(e) => updateCharge(i, "amount", e.target.value)}
+                    placeholder="Amount" className="h-8 w-28 rounded border border-border bg-background px-2 text-[12px] tabular-nums outline-none focus:border-primary" />
+                  <button onClick={() => rmCharge(i)} className="rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* ── Credit Memos ── */}
         {availableCMs.length > 0 && (
           <div>
@@ -475,6 +557,12 @@ export default function NewDisbursementVoucherPage() {
         {/* Reconciliation summary */}
         <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm tabular-nums">
           <div className="flex justify-between"><span>SOA Amount</span><span className="font-medium">{fmtPeso(gross)}</span></div>
+          {totalCharges > 0 && (
+            <div className="flex justify-between text-emerald-600">
+              <span>Add: Additional Charges{chargeTypeSummary ? ` (${chargeTypeSummary})` : ""}</span>
+              <span>{fmtPeso(totalCharges)}</span>
+            </div>
+          )}
           {totalDed > 0 && <div className="flex justify-between text-red-600"><span>Less: Deductions (EWT)</span><span>({fmtPeso(totalDed)})</span></div>}
           {totalCMs > 0 && <div className="flex justify-between text-red-600"><span>Less: Credit Memos</span><span>({fmtPeso(totalCMs)})</span></div>}
           <div className="mt-1 flex justify-between border-t border-border pt-1 text-base font-bold">
