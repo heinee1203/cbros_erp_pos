@@ -2079,6 +2079,12 @@ export async function createDisbursementVoucher(
       referenceNumber?: string;
       amount: string;
     }>;
+    additionalCharges?: Array<{
+      chargeType: string;
+      description: string;
+      referenceNumber?: string;
+      amount: string;
+    }>;
     payments: Array<{
       paymentMethod: string;
       amount: string;
@@ -2096,8 +2102,11 @@ export async function createDisbursementVoucher(
   const totalDeductions = (data.deductions ?? []).reduce(
     (s, d) => s + (parseFloat(d.amount) || 0), 0,
   );
-  const netAmount = grossAmount - totalDeductions;
-  if (netAmount <= 0) throw new Error("Net amount must be > 0 (deductions exceed gross amount)");
+  const totalCharges = (data.additionalCharges ?? []).reduce(
+    (s, c) => s + (parseFloat(c.amount) || 0), 0,
+  );
+  const netAmount = grossAmount + totalCharges - totalDeductions;
+  if (netAmount <= 0) throw new Error("Net amount must be > 0 (deductions exceed gross + charges)");
 
   if (!data.payments || data.payments.length === 0) throw new Error("At least one payment line is required");
   const paymentSum = data.payments.reduce((s, p) => s + parseFloat(p.amount || "0"), 0);
@@ -2138,11 +2147,12 @@ export async function createDisbursementVoucher(
     const [row] = (await tx.execute(
       sql`INSERT INTO supplier_disbursement_vouchers
           (org_id, dv_number, supplier_id, soa_id,
-           amount, gross_amount, total_deductions, net_amount,
+           amount, gross_amount, total_deductions, total_charges, net_amount,
            payment_method, payment_date, remarks, status, created_by)
           VALUES (${orgId}, ${dvNumber}, ${data.supplierId}, ${legacySoaId},
                   ${String(netAmount.toFixed(2))}, ${data.grossAmount},
-                  ${String(totalDeductions.toFixed(2))}, ${String(netAmount.toFixed(2))},
+                  ${String(totalDeductions.toFixed(2))}, ${String(totalCharges.toFixed(2))},
+                  ${String(netAmount.toFixed(2))},
                   ${primaryMethod}, ${data.paymentDate},
                   ${data.remarks ?? null}, 'DRAFT', ${userId})
           RETURNING id, dv_number, status`,
@@ -2209,6 +2219,17 @@ export async function createDisbursementVoucher(
             (dv_id, deduction_type, description, reference_number, amount, sort_order)
             VALUES (${row.id}, ${d.deductionType}, ${d.description},
                     ${d.referenceNumber ?? null}, ${d.amount}, ${i})`,
+      );
+    }
+
+    // Insert additional charge lines (ADD to net; mirror of deductions)
+    for (let i = 0; i < (data.additionalCharges ?? []).length; i++) {
+      const c = data.additionalCharges![i];
+      await tx.execute(
+        sql`INSERT INTO supplier_dv_additional_charges
+            (dv_id, charge_type, description, reference_number, amount, sort_order)
+            VALUES (${row.id}, ${c.chargeType}, ${c.description},
+                    ${c.referenceNumber ?? null}, ${c.amount}, ${i})`,
       );
     }
 
@@ -2337,6 +2358,14 @@ export async function getDisbursementVoucher(orgId: string, dvId: string) {
     ORDER BY sort_order ASC
   `)) as any[];
 
+  // Fetch additional charge lines
+  const additionalChargeRows = (await db.execute(sql`
+    SELECT id, charge_type, description, reference_number, amount::text, sort_order
+    FROM supplier_dv_additional_charges
+    WHERE dv_id = ${dvId}
+    ORDER BY sort_order ASC
+  `)) as any[];
+
   // Fetch all linked SOAs from the junction table
   const soaRefRows = (await db.execute(sql`
     SELECT ds.soa_id, ds.allocated_amount::text,
@@ -2394,6 +2423,7 @@ export async function getDisbursementVoucher(orgId: string, dvId: string) {
     soaRefs,
     grossAmount: computedGross > 0 ? computedGross : (dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount)),
     totalDeductions: dv.total_deductions ? parseFloat(dv.total_deductions) : 0,
+    totalCharges: dv.total_charges ? parseFloat(dv.total_charges) : 0,
     netAmount: dv.net_amount ? parseFloat(dv.net_amount) : parseFloat(dv.amount),
     soaCreditMemos: negativeItems.map((i: any) => ({
       invoiceNumber: i.invoice_number,
@@ -2425,6 +2455,13 @@ export async function getDisbursementVoucher(orgId: string, dvId: string) {
       description: d.description,
       referenceNumber: d.reference_number,
       amount: parseFloat(d.amount),
+    })),
+    additionalCharges: additionalChargeRows.map((c: any) => ({
+      id: c.id,
+      chargeType: c.charge_type,
+      description: c.description,
+      referenceNumber: c.reference_number,
+      amount: parseFloat(c.amount),
     })),
   };
 }
