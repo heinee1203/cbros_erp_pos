@@ -137,6 +137,17 @@ export function VoucherDetailModal({
             {/* Amounts */}
             <div className="rounded-lg border border-border bg-muted/30 p-3 tabular-nums">
               <div className="flex justify-between"><span>Gross Amount</span><span className="font-medium">{fmtPeso(detail.grossAmount)}</span></div>
+              {detail.additionalCharges && detail.additionalCharges.length > 0 && (
+                <>
+                  <div className="mt-1 text-muted-foreground text-[12px]">Additional Charges:</div>
+                  {detail.additionalCharges.map((c) => (
+                    <div key={c.id} className="flex justify-between text-emerald-600 text-[12px] pl-3">
+                      <span>{c.description}{c.referenceNumber ? ` (${c.referenceNumber})` : ""}</span>
+                      <span>+{fmtPeso(c.amount)}</span>
+                    </div>
+                  ))}
+                </>
+              )}
               {detail.deductions.length > 0 && (
                 <>
                   <div className="mt-1 text-muted-foreground text-[12px]">Deductions:</div>

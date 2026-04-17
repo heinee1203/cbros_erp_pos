@@ -27,6 +27,7 @@ export interface DVRecord {
 export interface DVDetail extends DVRecord {
   grossAmount: number;
   totalDeductions: number;
+  totalCharges: number;
   netAmount: number;
   remarks: string | null;
   printedAt: string | null;
@@ -36,6 +37,7 @@ export interface DVDetail extends DVRecord {
   soaRefs: SOARef[];
   payments: DVPayment[];
   deductions: DVDeduction[];
+  additionalCharges: DVAdditionalCharge[];
 }
 
 export interface DVPayment {
@@ -52,6 +54,14 @@ export interface DVPayment {
 export interface DVDeduction {
   id: string;
   deductionType: string;
+  description: string;
+  referenceNumber: string | null;
+  amount: number;
+}
+
+export interface DVAdditionalCharge {
+  id: string;
+  chargeType: string;
   description: string;
   referenceNumber: string | null;
   amount: number;
