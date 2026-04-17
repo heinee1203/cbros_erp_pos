@@ -182,6 +182,15 @@ export const updateProductSchema = z.object({
   discontinued: z.boolean().optional(),
   reorderEnabled: z.boolean().optional(),
   customReorderPoint: z.number().int().min(0).nullable().optional(),
+  // Tire-specific & warranty fields (accepted by /bulk-update; added here
+  // so the single-edit drawer has parity with bulk-update — Audit Bug 12)
+  isTire: z.boolean().optional(),
+  maxTireAgeYears: z.number().int().min(0).nullable().optional(),
+  warrantyMonths: z.number().int().min(0).nullable().optional(),
+  commissionAmount: z.string().refine(
+    (val) => /^\d+(\.\d{1,2})?$/.test(val),
+    { message: "Commission amount must be a non-negative decimal (e.g. '10.00')" },
+  ).nullable().optional(),
   // Add new variants to an existing parent product
   newVariants: z.array(variantItemSchema).optional(),
 });
