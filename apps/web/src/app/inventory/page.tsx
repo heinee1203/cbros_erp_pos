@@ -1027,9 +1027,11 @@ export default function InventoryPage() {
               <option key={f.id} value={f.id}>{f.name}</option>
             ))}
           </select>
-          <button onClick={() => setAddModal("family")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Family">
-            <Plus size={13} />
-          </button>
+          {canEdit && (
+            <button onClick={() => setAddModal("family")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Family">
+              <Plus size={13} />
+            </button>
+          )}
         </div>
 
         <div className="flex items-center">
@@ -1047,9 +1049,11 @@ export default function InventoryPage() {
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-          <button onClick={() => setAddModal("category")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Category">
-            <Plus size={13} />
-          </button>
+          {canEdit && (
+            <button onClick={() => setAddModal("category")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Category">
+              <Plus size={13} />
+            </button>
+          )}
         </div>
 
         <div className="flex items-center">
@@ -1062,9 +1066,11 @@ export default function InventoryPage() {
             ]}
             placeholder="All Sub-categories"
           />
-          <button onClick={() => setAddModal("subcategory")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Sub-category">
-            <Plus size={13} />
-          </button>
+          {canEdit && (
+            <button onClick={() => setAddModal("subcategory")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Sub-category">
+              <Plus size={13} />
+            </button>
+          )}
         </div>
 
         <select
@@ -1090,9 +1096,11 @@ export default function InventoryPage() {
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
           </select>
-          <button onClick={() => setAddModal("brand")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Brand">
-            <Plus size={13} />
-          </button>
+          {canEdit && (
+            <button onClick={() => setAddModal("brand")} className="h-8 rounded-lg rounded-l-none border border-l-0 border-border bg-background px-1.5 text-primary hover:bg-muted transition-colors" title="Add Brand">
+              <Plus size={13} />
+            </button>
+          )}
         </div>
 
         {/* SO / DC toggle buttons */}
