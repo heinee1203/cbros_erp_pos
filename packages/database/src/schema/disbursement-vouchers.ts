@@ -52,7 +52,9 @@ export const supplierDisbursementVouchers = pgTable(
     grossAmount: numeric("gross_amount", { precision: 14, scale: 2 }),
     /** Sum of all deduction lines */
     totalDeductions: numeric("total_deductions", { precision: 14, scale: 2 }).default("0"),
-    /** Actual disbursed amount = gross - deductions (same as amount) */
+    /** Sum of all additional charge lines (freight, handling, etc. — add to net) */
+    totalCharges: numeric("total_charges", { precision: 14, scale: 2 }).notNull().default("0"),
+    /** Actual disbursed amount = gross + charges - deductions (same as amount) */
     netAmount: numeric("net_amount", { precision: 14, scale: 2 }),
     /** @deprecated — primary method stored on header for backward compat; use supplier_dv_payments */
     paymentMethod: dvPaymentMethodEnum("payment_method")
@@ -149,6 +151,34 @@ export const supplierDvDeductions = pgTable(
     index("idx_dv_deductions_dv_id").on(table.dvId),
   ],
 );
+
+// ── DV Additional Charges (freight, handling, misc — ADD to net) ──
+
+export const supplierDvAdditionalCharges = pgTable(
+  "supplier_dv_additional_charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    dvId: uuid("dv_id")
+      .notNull()
+      .references(() => supplierDisbursementVouchers.id, { onDelete: "cascade" }),
+    /** FREIGHT, HANDLING, MISCELLANEOUS, ADJUSTMENT, OTHER */
+    chargeType: text("charge_type").notNull(),
+    description: text("description").notNull(),
+    referenceNumber: text("reference_number"),
+    /** Always positive — ADDED to net (opposite of deductions) */
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_dv_additional_charges_dv_id").on(table.dvId),
+  ],
+);
+
+export type SupplierDvAdditionalCharge = typeof supplierDvAdditionalCharges.$inferSelect;
+export type NewSupplierDvAdditionalCharge = typeof supplierDvAdditionalCharges.$inferInsert;
 
 // ── Number Sequence ──
 
