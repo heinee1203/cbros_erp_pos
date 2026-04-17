@@ -17,6 +17,13 @@ export interface DVDeductionLine {
   amount: number;
 }
 
+export interface DVAdditionalChargeLine {
+  chargeType: string;
+  description: string;
+  referenceNumber?: string | null;
+  amount: number;
+}
+
 export interface DVSoaRef {
   soaNumber: string;
   allocatedAmount: number;
@@ -40,6 +47,7 @@ export interface DVData {
   paymentMethod?: string;
   payments?: DVPaymentLine[];
   deductions?: DVDeductionLine[];
+  additionalCharges?: DVAdditionalChargeLine[];
   invoices?: any[];
   /** Credit memos from the SOA (negative line items) — shown in print breakdown */
   soaCreditMemos?: Array<{ invoiceNumber: string; amount: number }>;
@@ -74,8 +82,10 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   const gross = d.grossAmount ?? d.amount;
   const totalCMs = (d.soaCreditMemos ?? []).reduce((s, cm) => s + cm.amount, 0);
   const totalDed = d.totalDeductions ?? 0;
-  const net = gross - totalCMs - totalDed;
+  const totalCharges = (d.additionalCharges ?? []).reduce((s, c) => s + c.amount, 0);
+  const net = gross + totalCharges - totalCMs - totalDed;
   const hasDeductions = totalDed > 0 && d.deductions && d.deductions.length > 0;
+  const hasCharges = (d.additionalCharges ?? []).length > 0;
 
   const paymentLines = d.payments && d.payments.length > 0
     ? d.payments
@@ -102,7 +112,16 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   ).join("\n");
 
   const hasCMs = (d.soaCreditMemos ?? []).length > 0;
-  const hasAnyBreakdown = hasDeductions || hasCMs;
+  const hasAnyBreakdown = hasDeductions || hasCMs || hasCharges;
+
+  // Additional charges rendered BEFORE deductions/CMs (natural top-down math
+  // reading order: gross → + charges → − deductions → net)
+  const chargeLines = (d.additionalCharges ?? []).map((c) =>
+    `<div class="recon-row"><span>+ ${esc(c.description)}${c.referenceNumber ? ` (${esc(c.referenceNumber)})` : ""}</span><span>${fmt(c.amount)}</span></div>`
+  ).join("\n");
+  const chargeSubtotal = (d.additionalCharges ?? []).length > 1
+    ? `<div class="recon-row"><span>&nbsp;&nbsp;Subtotal</span><span>${fmt(totalCharges)}</span></div>`
+    : "";
 
   // SOA refs for the breakdown table (header SOA# line removed — table is authoritative)
   const soaRefs = d.soaRefs && d.soaRefs.length > 0 ? d.soaRefs : d.soaNumber ? [{ soaNumber: d.soaNumber, allocatedAmount: gross, dateFrom: d.soaDateFrom, dateTo: d.soaDateTo }] : [];
@@ -131,11 +150,13 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   </table>
 </div>` : "";
 
-  // Reconciliation section (when there are CMs or deductions)
+  // Reconciliation section (when there are CMs, deductions, or charges)
   const reconSection = hasAnyBreakdown ? `
 <div class="recon">
   <div class="recon-line"></div>
   <div class="recon-row"><span>Gross Amount</span><span>${fmt(gross)}</span></div>
+  ${chargeLines}
+  ${chargeSubtotal}
   ${soaCMs}
   ${otherDeds}
   <div class="recon-line"></div>
