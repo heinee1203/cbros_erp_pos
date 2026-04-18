@@ -178,6 +178,35 @@ export default function SupplierSOAHistoryPage() {
     } catch {}
   };
 
+  // DV reprint — mirrors apps/web/src/app/ap/disbursement-vouchers/page.tsx
+  // handleReprint verbatim (minus the page-local fetchData() refresh, which
+  // refreshes the SOA list here, not a DV list). Used by VoucherDetailModal.
+  const handleReprintDv = async (r: DVRecord) => {
+    try {
+      if (r.status === "DRAFT") {
+        await apiFetch(`/ap/disbursement-vouchers/${r.id}/print`, { token, locationId, method: "POST" });
+      }
+      const dv = await apiFetch<any>(`/ap/disbursement-vouchers/${r.id}`, { token, locationId });
+      const html = buildDisbursementVoucherHtml({
+        dvNumber: dv.dvNumber, supplierName: dv.supplierName,
+        amount: dv.netAmount ?? dv.amount, grossAmount: dv.grossAmount, totalDeductions: dv.totalDeductions,
+        paymentDate: dv.paymentDate, soaNumber: dv.soaNumber || undefined,
+        soaDateFrom: dv.soaDateFrom || undefined, soaDateTo: dv.soaDateTo || undefined,
+        soaRefs: (dv.soaRefs || []).map((r: any) => ({ soaNumber: r.soaNumber, allocatedAmount: r.allocatedAmount, dateFrom: r.dateFrom, dateTo: r.dateTo })),
+        remarks: dv.remarks,
+        payments: (dv.payments || []).map((p: any) => ({
+          paymentMethod: p.paymentMethod, amount: p.amount, referenceNumber: p.referenceNumber,
+          bankName: p.bankName, transactionDate: p.transactionDate, platform: p.platform,
+        })),
+        deductions: (dv.deductions || []).map((d: any) => ({ description: d.description, amount: d.amount })),
+        soaCreditMemos: (dv.soaCreditMemos || []).map((cm: any) => ({ invoiceNumber: cm.invoiceNumber, amount: cm.amount })),
+        isVoided: dv.status === "VOIDED", voidReason: dv.voidReason,
+      });
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
+    } catch {}
+  };
+
   const handleVoidSOA = async () => {
     if (!voidingSOA) return;
     try {
@@ -586,7 +615,7 @@ export default function SupplierSOAHistoryPage() {
         token={token ?? ""}
         locationId={locationId ?? ""}
         onClose={() => setViewingDvId(null)}
-        onReprint={() => {}}
+        onReprint={handleReprintDv}
         onVoid={(dv) => { setViewingDvId(null); handleVoidDv(dv.id); }}
         onConfirm={(dv) => { setViewingDvId(null); handleConfirmDv(dv.id); }}
       />
