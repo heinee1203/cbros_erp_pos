@@ -396,6 +396,9 @@ export default function CustomerDetailPage() {
           allocations: Object.keys(invoiceAllocs).length > 0
             ? Object.entries(invoiceAllocs).filter(([, amt]) => parseFloat(amt) !== 0).map(([chargeTransactionId, amount]) => ({ chargeTransactionId, amount: Math.abs(parseFloat(amount)) }))
             : undefined,
+          // Declare SOA scope so the server rejects allocations that point to
+          // charges outside the selected SOAs (PAY-2026-0025 trap).
+          soaIds: paySelectedSoas.size > 0 ? Array.from(paySelectedSoas) : undefined,
         }),
       });
       // SOA status is now recomputed server-side inside recordPayment — reading
@@ -466,7 +469,14 @@ export default function CustomerDetailPage() {
       });
       setPayStep("success");
     } catch (err: any) {
-      setPayError(err.message || "Failed to record payment"); setPayStep("error");
+      if (err?.body?.error === "ALLOCATION_SOA_MISMATCH") {
+        const offenders = (err.body.details ?? []) as Array<{ chargeRef: string | null; billedSoaId: string | null }>;
+        const refs = offenders.map((o) => o.chargeRef ?? "(unknown)").join(", ");
+        setPayError(`Payment rejected: allocation references charge(s) outside the selected SOA(s) — ${refs}. Refresh and try again.`);
+      } else {
+        setPayError(err.message || "Failed to record payment");
+      }
+      setPayStep("error");
     } finally { setPayLoading(false); }
   };
 

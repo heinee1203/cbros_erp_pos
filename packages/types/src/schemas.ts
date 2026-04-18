@@ -1009,6 +1009,10 @@ export const recordPaymentSchema = z.object({
     chargeTransactionId: z.string(),
     amount: z.number().positive(),
   })).optional(),
+  // When provided alongside `allocations`, the server asserts every charge's
+  // billed_soa_id ∈ soaIds. Prevents UI editor leaks from silently writing
+  // out-of-scope allocations (see PAY-2026-0025 incident).
+  soaIds: z.array(z.string().uuid()).optional(),
 });
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
 

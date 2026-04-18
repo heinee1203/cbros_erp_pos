@@ -722,10 +722,44 @@ export async function recordPayment(
 
     // Allocate payment to charges — explicit allocations if provided, otherwise FIFO
     let touchedCharges: string[] = [];
-    try {
-      const explicitAllocs = input.allocations;
-      if (explicitAllocs && explicitAllocs.length > 0) {
-        // Use explicit invoice-level allocations from the UI
+    const explicitAllocs = input.allocations;
+    if (explicitAllocs && explicitAllocs.length > 0) {
+      // Server-side SOA-membership guard. When the caller declares which SOAs
+      // they intend to pay (input.soaIds), every allocated charge must belong
+      // to one of those SOAs. PAY-2026-0025 hit this trap: UI sent 10 allocs
+      // for SOA-0041 charges + 1 alloc for a SOA-0040 charge; server accepted
+      // silently. Throws BEFORE writing any allocation row so the failure is
+      // atomic — no partial commits.
+      if (input.soaIds && input.soaIds.length > 0) {
+        const allowedSoaIds = new Set(input.soaIds);
+        const chargeIds = Array.from(new Set(explicitAllocs.map((a) => a.chargeTransactionId)));
+        const idList = sql.join(chargeIds.map((cid) => sql`${cid}::uuid`), sql`, `);
+        const chargeRows = (await tx.execute(sql`
+          SELECT id, reference_number, billed_soa_id
+          FROM customer_transactions
+          WHERE id IN (${idList}) AND org_id = ${orgId}
+        `)) as any[];
+        const chargeMap = new Map<string, { ref: string | null; soaId: string | null }>();
+        for (const r of chargeRows) {
+          chargeMap.set(r.id, { ref: r.reference_number, soaId: r.billed_soa_id });
+        }
+        const offenders = explicitAllocs
+          .map((a) => ({ alloc: a, info: chargeMap.get(a.chargeTransactionId) }))
+          .filter(({ info }) => !info || !info.soaId || !allowedSoaIds.has(info.soaId))
+          .map(({ alloc, info }) => ({
+            chargeTransactionId: alloc.chargeTransactionId,
+            chargeRef: info?.ref ?? null,
+            billedSoaId: info?.soaId ?? null,
+            allowedSoaIds: input.soaIds,
+          }));
+        if (offenders.length > 0) {
+          const err: any = new Error("ALLOCATION_SOA_MISMATCH");
+          err.code = "ALLOCATION_SOA_MISMATCH";
+          err.details = offenders;
+          throw err;
+        }
+      }
+      try {
         for (const alloc of explicitAllocs) {
           if (alloc.amount <= 0) continue;
           await tx.insert(arPaymentAllocations).values({
@@ -736,13 +770,17 @@ export async function recordPayment(
           });
           touchedCharges.push(alloc.chargeTransactionId);
         }
-      } else {
-        // Auto-allocate using FIFO
-        touchedCharges = await allocatePaymentFIFO(tx, orgId, customerId, transaction.id, paymentAmount);
+      } catch (allocErr) {
+        // Non-critical — payment is still recorded even if allocation insert fails
+        console.error("[ALLOC] allocation failed:", allocErr);
       }
-    } catch (allocErr) {
-      // Non-critical — payment is still recorded even if allocation fails
-      console.error("[ALLOC] allocation failed:", allocErr);
+    } else {
+      // Auto-allocate using FIFO
+      try {
+        touchedCharges = await allocatePaymentFIFO(tx, orgId, customerId, transaction.id, paymentAmount);
+      } catch (allocErr) {
+        console.error("[ALLOC] FIFO allocation failed:", allocErr);
+      }
     }
 
     // Recompute status for every SOA whose line items were touched by this payment.

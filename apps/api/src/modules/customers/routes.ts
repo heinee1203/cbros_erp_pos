@@ -391,6 +391,9 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       const result = await recordPayment(id, parsed.data, orgId, userId);
       return reply.status(201).send(result);
     } catch (err: any) {
+      if (err?.code === "ALLOCATION_SOA_MISMATCH") {
+        return reply.status(400).send({ error: "ALLOCATION_SOA_MISMATCH", details: err.details });
+      }
       return reply.status(400).send({ error: err.message });
     }
   });
