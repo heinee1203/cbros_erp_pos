@@ -1,6 +1,8 @@
 /**
- * Generates a printable Disbursement Voucher (A4 portrait).
- * Layout: header → PAY TO (with SOA ref) → payment table → reconciliation → signatures.
+ * Generates a printable Disbursement Voucher (Letter portrait).
+ * Layout: header → PAY TO + DATE/DV# → side-by-side row
+ *         (LEFT 55%: payment table | RIGHT 45%: SOA Details table + reconciliation)
+ *         → CHECKED BY / RECEIVED BY signatures (full width) → footer.
  */
 
 export interface DVPaymentLine {
@@ -126,24 +128,25 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   // SOA refs for the breakdown table (header SOA# line removed — table is authoritative)
   const soaRefs = d.soaRefs && d.soaRefs.length > 0 ? d.soaRefs : d.soaNumber ? [{ soaNumber: d.soaNumber, allocatedAmount: gross, dateFrom: d.soaDateFrom, dateTo: d.soaDateTo }] : [];
 
-  // SOA breakdown table — always rendered when we have at least one SOA
+  // SOA breakdown table — always rendered when we have at least one SOA.
+  // Two columns only: SOA # and Amount. Period column was removed when the
+  // print moved to a side-by-side layout (the right column is too narrow for
+  // a date range to read cleanly without wrapping).
   const soaBreakdownSection = soaRefs.length >= 1 ? `
 <div style="margin-bottom:12px">
   <div style="font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;border-bottom:1px solid #000;padding-bottom:2px">SOA Details</div>
   <table style="width:100%;border-collapse:collapse;font-size:9pt">
     <thead><tr>
       <th style="text-align:left;padding:3px 0;font-weight:700">SOA #</th>
-      <th style="text-align:left;padding:3px 0;font-weight:700">Period</th>
       <th style="text-align:right;padding:3px 0;font-weight:700">Amount</th>
     </tr></thead>
     <tbody>
       ${soaRefs.map((r) => `<tr>
         <td style="padding:2px 0;font-family:monospace;font-weight:600">${esc(r.soaNumber.replace(/^SUPP-SOA-/, ""))}</td>
-        <td style="padding:2px 0;color:#333">${r.dateFrom && r.dateTo ? `${fmtDate(r.dateFrom)} – ${fmtDate(r.dateTo)}` : "—"}</td>
         <td style="padding:2px 0;text-align:right;font-variant-numeric:tabular-nums">${fmt(r.allocatedAmount)}</td>
       </tr>`).join("\n")}
       <tr style="border-top:1px solid #000;font-weight:900">
-        <td style="padding:3px 0" colspan="2">TOTAL</td>
+        <td style="padding:3px 0">TOTAL</td>
         <td style="padding:3px 0;text-align:right;font-variant-numeric:tabular-nums">${fmt(soaRefs.reduce((s, r) => s + r.allocatedAmount, 0))}</td>
       </tr>
     </tbody>
@@ -187,6 +190,11 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; 
 .top-right b { font-weight: 400; color: #555; }
 .top-right span { font-weight: 700; }
 
+/* Side-by-side body row: payments left, SOA Details + reconciliation right */
+.dv-body-row { display: flex; gap: 10mm; align-items: flex-start; margin-bottom: 4px; }
+.dv-body-col-left  { flex: 55 0 0; min-width: 0; }
+.dv-body-col-right { flex: 45 0 0; min-width: 0; }
+
 /* Payment table */
 .pay-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
 .pay-table th { text-align: left; font-size: 9pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 10px; border-top: 2px solid #000; border-bottom: 2px solid #000; }
@@ -194,8 +202,8 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; 
 .pay-cell { padding: 5px 10px; font-size: 9pt; }
 .pay-table tbody tr:last-child .pay-cell { border-bottom: 2px solid #000; }
 
-/* Reconciliation (right-aligned) */
-.recon { width: 45%; margin-left: auto; margin-top: 10px; font-size: 9pt; line-height: 1.4; }
+/* Reconciliation — flows naturally inside the right column (was right-floated) */
+.recon { width: 100%; margin-top: 10px; font-size: 9pt; line-height: 1.4; }
 .recon-row { display: flex; justify-content: space-between; padding: 0 2px; }
 .recon-line { border-top: 1px solid #000; margin: 1px 0; }
 .recon-dline { border-top: 3px double #000; margin: 1px 0; }
@@ -232,20 +240,24 @@ ${d.isVoided ? '<div class="voided-watermark">VOIDED</div>' : ""}
   </div>
 </div>
 
-${soaBreakdownSection}
-
-<table class="pay-table">
-  <thead><tr>
-    <th style="width:28%">Date</th>
-    <th style="width:42%">Reference</th>
-    <th class="right" style="width:30%">Amount</th>
-  </tr></thead>
-  <tbody>
-    ${payRows}
-  </tbody>
-</table>
-
-${reconSection}
+<div class="dv-body-row">
+  <div class="dv-body-col-left">
+    <table class="pay-table">
+      <thead><tr>
+        <th style="width:28%">Date</th>
+        <th style="width:42%">Reference</th>
+        <th class="right" style="width:30%">Amount</th>
+      </tr></thead>
+      <tbody>
+        ${payRows}
+      </tbody>
+    </table>
+  </div>
+  <div class="dv-body-col-right">
+    ${soaBreakdownSection}
+    ${reconSection}
+  </div>
+</div>
 
 <div class="spacer"></div>
 
