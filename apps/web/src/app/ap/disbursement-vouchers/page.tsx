@@ -1,25 +1,35 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FileText, Plus } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { buildDisbursementVoucherHtml } from "@/lib/disbursement-voucher-html";
 
 import type { DVRecord, Supplier, SortField, SortDir } from "./components/dv-types";
-import { DVSummaryCards } from "./components/dv-summary-cards";
+import { DVSummaryCards, type DVSummary } from "./components/dv-summary-cards";
 import { DVFilters } from "./components/dv-filters";
 import { DVTable } from "./components/dv-table";
 import { VoidDialog } from "./components/void-dialog";
 import { VoucherDetailModal } from "./components/voucher-detail-modal";
 
+const EMPTY_SUMMARY: DVSummary = {
+  totalCount: 0,
+  confirmedCount: 0,
+  confirmedAmt: 0,
+  voidedCount: 0,
+  voidedAmt: 0,
+};
+
 export default function DisbursementVoucherListPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   // Data
   const [records, setRecords] = useState<DVRecord[]>([]);
+  const [summary, setSummary] = useState<DVSummary>(EMPTY_SUMMARY);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -30,6 +40,19 @@ export default function DisbursementVoucherListPage() {
   const [methodFilter, setMethodFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [includeVoided, setIncludeVoided] = useState(
+    () => searchParams.get("includeVoided") === "1",
+  );
+
+  // Keep the includeVoided URL param in sync with state (shareable/refreshable).
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (includeVoided) params.set("includeVoided", "1");
+    else params.delete("includeVoided");
+    const qs = params.toString();
+    router.replace(qs ? `?${qs}` : window.location.pathname, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeVoided]);
 
   // Sort + pagination
   const [sortField, setSortField] = useState<SortField>("dvNumber");
@@ -51,14 +74,16 @@ export default function DisbursementVoucherListPage() {
       if (statusFilter) params.set("status", statusFilter);
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
+      if (includeVoided) params.set("includeVoided", "1");
       params.set("limit", "200");
-      const res = await apiFetch<{ data: DVRecord[] }>(
+      const res = await apiFetch<{ data: DVRecord[]; summary?: DVSummary }>(
         `/ap/disbursement-vouchers?${params.toString()}`,
         { token, locationId },
       );
       setRecords(res.data || []);
+      if (res.summary) setSummary(res.summary);
     } catch {} finally { setLoading(false); }
-  }, [token, locationId, search, statusFilter, dateFrom, dateTo]);
+  }, [token, locationId, search, statusFilter, dateFrom, dateTo, includeVoided]);
 
   const fetchSuppliers = useCallback(async () => {
     if (!token || !locationId) return;
@@ -87,7 +112,12 @@ export default function DisbursementVoucherListPage() {
   };
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [search, statusFilter, supplierFilter, methodFilter, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, supplierFilter, methodFilter, dateFrom, dateTo, includeVoided]);
+
+  // Hint: rows are empty under "All Statuses" default filter, but voided rows exist
+  // and would show if the toggle were on.
+  const hiddenVoidedHint =
+    !loading && filtered.length === 0 && !statusFilter && !includeVoided && summary.voidedCount > 0;
 
   // Actions
   const handleReprint = async (r: DVRecord) => {
@@ -161,7 +191,7 @@ export default function DisbursementVoucherListPage() {
         </button>
       </div>
 
-      <DVSummaryCards data={filtered} />
+      <DVSummaryCards summary={summary} />
 
       <DVFilters
         suppliers={suppliers}
@@ -171,6 +201,7 @@ export default function DisbursementVoucherListPage() {
         dateFrom={dateFrom} dateTo={dateTo}
         onDateRangeChange={(s, e) => { setDateFrom(s); setDateTo(e); }}
         onSearchChange={setSearch}
+        includeVoided={includeVoided} onIncludeVoidedChange={setIncludeVoided}
       />
 
       <DVTable
@@ -185,6 +216,19 @@ export default function DisbursementVoucherListPage() {
         onPrint={handleReprint}
         isLoading={loading}
       />
+      {hiddenVoidedHint && (
+        <div className="mt-2 text-center text-[12px] text-muted-foreground">
+          {summary.voidedCount} voided voucher{summary.voidedCount !== 1 ? "s" : ""} hidden.{" "}
+          <button
+            type="button"
+            onClick={() => setIncludeVoided(true)}
+            className="text-primary hover:underline"
+          >
+            Include voided
+          </button>
+          {" "}to show them.
+        </div>
+      )}
 
       <VoidDialog
         open={voidingDV !== null}

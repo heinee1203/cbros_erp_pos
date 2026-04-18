@@ -17,6 +17,8 @@ interface DVFiltersProps {
   dateTo: string;
   onDateRangeChange: (start: string, end: string) => void;
   onSearchChange: (v: string) => void;
+  includeVoided: boolean;
+  onIncludeVoidedChange: (v: boolean) => void;
 }
 
 export function DVFilters({
@@ -31,6 +33,8 @@ export function DVFilters({
   dateTo,
   onDateRangeChange,
   onSearchChange,
+  includeVoided,
+  onIncludeVoidedChange,
 }: DVFiltersProps) {
   const [searchText, setSearchText] = useState("");
 
@@ -105,6 +109,20 @@ export function DVFilters({
         endDate={dateTo}
         onChange={(start, end) => onDateRangeChange(start, end)}
       />
+
+      <label
+        className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+        title={statusFilter ? "Ignored when a specific status is selected" : "Show voided vouchers"}
+      >
+        <input
+          type="checkbox"
+          checked={includeVoided}
+          onChange={(e) => onIncludeVoidedChange(e.target.checked)}
+          disabled={!!statusFilter}
+          className="h-3.5 w-3.5 accent-primary disabled:cursor-not-allowed"
+        />
+        Include voided
+      </label>
     </div>
   );
 }

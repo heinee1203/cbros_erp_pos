@@ -2318,6 +2318,7 @@ export async function listDisbursementVouchers(
     dateFrom?: string;
     dateTo?: string;
     limit?: number;
+    includeVoided?: boolean;
   } = {},
 ) {
   const limit = Math.min(opts.limit ?? 100, 200);
@@ -2327,7 +2328,13 @@ export async function listDisbursementVouchers(
     const p = `%${opts.search.trim()}%`;
     conditions.push(sql`(dv.dv_number ILIKE ${p} OR s.name ILIKE ${p})`);
   }
-  if (opts.status) conditions.push(sql`dv.status = ${opts.status}`);
+  if (opts.status) {
+    // Explicit status wins — show only that status, ignore includeVoided.
+    conditions.push(sql`dv.status = ${opts.status}`);
+  } else if (!opts.includeVoided) {
+    // "All statuses" default: hide voided unless explicitly requested.
+    conditions.push(sql`dv.status != 'VOIDED'`);
+  }
   if (opts.dateFrom) conditions.push(sql`dv.payment_date >= ${opts.dateFrom}`);
   if (opts.dateTo) conditions.push(sql`dv.payment_date <= ${opts.dateTo}`);
   const where = sql.join(conditions, sql` AND `);
@@ -2361,6 +2368,31 @@ export async function listDisbursementVouchers(
     WHERE ${where}
   `)) as any[];
 
+  // Org-wide summary (ignores search/status/supplier/date filters) so the
+  // three stat cards stay stable as the table filters change.
+  const summaryRows = (await db.execute(sql`
+    SELECT status, COUNT(*)::int AS cnt, COALESCE(SUM(amount), 0)::text AS total
+    FROM supplier_disbursement_vouchers
+    WHERE org_id = ${orgId}
+    GROUP BY status
+  `)) as any[];
+  const summary = summaryRows.reduce(
+    (acc: any, r: any) => {
+      const cnt = r.cnt;
+      const amt = parseFloat(r.total);
+      acc.totalCount += cnt;
+      if (r.status === "CONFIRMED") {
+        acc.confirmedCount = cnt;
+        acc.confirmedAmt = amt;
+      } else if (r.status === "VOIDED") {
+        acc.voidedCount = cnt;
+        acc.voidedAmt = amt;
+      }
+      return acc;
+    },
+    { totalCount: 0, confirmedCount: 0, confirmedAmt: 0, voidedCount: 0, voidedAmt: 0 },
+  );
+
   return {
     data: rows.map((r: any) => {
       const soaNums: string[] = (r.soa_numbers ?? []).filter(Boolean);
@@ -2383,6 +2415,7 @@ export async function listDisbursementVouchers(
       };
     }),
     total: countRows[0]?.total ?? 0,
+    summary,
   };
 }
 

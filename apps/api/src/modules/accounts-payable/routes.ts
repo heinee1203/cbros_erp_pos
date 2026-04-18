@@ -836,6 +836,7 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
       dateFrom: q.dateFrom,
       dateTo: q.dateTo,
       limit: q.limit ? parseInt(q.limit) : undefined,
+      includeVoided: q.includeVoided === "1" || q.includeVoided === "true",
     });
     return reply.send(result);
   });
