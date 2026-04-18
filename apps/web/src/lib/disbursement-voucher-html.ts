@@ -145,10 +145,6 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
         <td style="padding:2px 0;font-family:monospace;font-weight:600">${esc(r.soaNumber.replace(/^SUPP-SOA-/, ""))}</td>
         <td style="padding:2px 0;text-align:right;font-variant-numeric:tabular-nums">${fmt(r.allocatedAmount)}</td>
       </tr>`).join("\n")}
-      <tr style="border-top:1px solid #000;font-weight:900">
-        <td style="padding:3px 0">TOTAL</td>
-        <td style="padding:3px 0;text-align:right;font-variant-numeric:tabular-nums">${fmt(soaRefs.reduce((s, r) => s + r.allocatedAmount, 0))}</td>
-      </tr>
     </tbody>
   </table>
 </div>` : "";
@@ -209,8 +205,13 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; 
 .recon-dline { border-top: 3px double #000; margin: 1px 0; }
 .recon-total { font-weight: 900; font-size: 10pt; padding-top: 1px; }
 
-/* Spacer pushes sig+footer to bottom of half page */
+/* Spacer pushes TOTAL+sig+footer to bottom of half page */
 .spacer { flex: 1; }
+
+/* Bottom TOTAL — sits just above signatures, right-aligned, shows NET PAYMENT */
+.dv-total-row { display: flex; justify-content: flex-end; align-items: baseline; gap: 8mm; margin-top: 6mm; padding-right: 10mm; border-top: 1px solid #000; padding-top: 3mm; }
+.dv-total-label { font-weight: 900; font-size: 11pt; letter-spacing: 0.04em; }
+.dv-total-amount { font-weight: 900; font-size: 12pt; min-width: 40mm; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Signatures */
 .sig { display: flex; justify-content: space-between; font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
@@ -260,6 +261,11 @@ ${d.isVoided ? '<div class="voided-watermark">VOIDED</div>' : ""}
 </div>
 
 <div class="spacer"></div>
+
+<div class="dv-total-row">
+  <div class="dv-total-label">TOTAL</div>
+  <div class="dv-total-amount">&#8369;${fmt(net)}</div>
+</div>
 
 <div class="sig">
   <div class="sig-col">
