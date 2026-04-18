@@ -723,6 +723,9 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
       if (err.message === "Supplier SOA not found") {
         return reply.status(404).send({ error: err.message });
       }
+      if (err?.code === "SOA_HAS_ACTIVE_DV") {
+        return reply.status(400).send({ error: "SOA_HAS_ACTIVE_DV", details: err.details });
+      }
       return reply.status(400).send({ error: err.message });
     }
   });

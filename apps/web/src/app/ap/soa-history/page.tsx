@@ -548,12 +548,27 @@ export default function SupplierSOAHistoryPage() {
                         className="rounded px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10">
                         Reprint
                       </button>
-                      {(state === "BILLED" || state === "PARTIAL_NO_DV" || state === "PAID") && (
-                        <button onClick={() => setVoidingSOA(r)}
-                          className="rounded px-2 py-0.5 text-[10px] font-medium text-red-500 hover:bg-red-50">
-                          Void
-                        </button>
-                      )}
+                      {(state === "BILLED" || state === "PARTIAL_NO_DV" || state === "PAID" || state === "PENDING_CONFIRMATION") && (() => {
+                        // Block SOA void while a live DV (DRAFT/PRINTED/CONFIRMED)
+                        // is linked. User must void the DV first to keep cascade
+                        // integrity (no orphaned disbursements).
+                        const hasLiveDv = !!r.activeDvNumber && r.activeDvStatus !== "VOIDED";
+                        return (
+                          <button
+                            onClick={() => setVoidingSOA(r)}
+                            disabled={hasLiveDv}
+                            title={hasLiveDv ? "Void the DV first" : undefined}
+                            className={cn(
+                              "rounded px-2 py-0.5 text-[10px] font-medium",
+                              hasLiveDv
+                                ? "text-muted-foreground/50 cursor-not-allowed"
+                                : "text-red-500 hover:bg-red-50",
+                            )}
+                          >
+                            Void
+                          </button>
+                        );
+                      })()}
                       {state === "PENDING_CONFIRMATION" && (
                         <button onClick={() => handleVoidDv(dvId)}
                           className="rounded px-2 py-0.5 text-[10px] font-medium text-red-500 hover:bg-red-50">

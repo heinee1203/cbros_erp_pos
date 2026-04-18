@@ -1961,6 +1961,34 @@ export async function updateSupplierSOAStatus(
     }
 
     if (status === "VOID") {
+      // Defense-in-depth: block the void if any non-VOIDED DV (DRAFT/PRINTED/
+      // CONFIRMED) is still linked to this SOA. Voiding here would orphan the
+      // disbursement (CONFIRMED) or leave printed/draft DVs pointing at
+      // nothing. UI also disables the button — this catches direct API hits
+      // and stale-UI submissions. Same junction + legacy union pattern used
+      // by the SOA list query so live DVs surface consistently.
+      const liveDvs = (await tx.execute(sql`
+        WITH linked AS (
+          SELECT dv.id, dv.dv_number, dv.status
+          FROM supplier_dv_soas ds
+          JOIN supplier_disbursement_vouchers dv ON dv.id = ds.dv_id
+          WHERE ds.soa_id = ${soaId} AND dv.status != 'VOIDED'
+          UNION
+          SELECT dv.id, dv.dv_number, dv.status
+          FROM supplier_disbursement_vouchers dv
+          WHERE dv.soa_id = ${soaId}
+            AND dv.status != 'VOIDED'
+            AND NOT EXISTS (SELECT 1 FROM supplier_dv_soas WHERE dv_id = dv.id)
+        )
+        SELECT id, dv_number, status FROM linked
+      `)) as any[];
+      if (liveDvs.length > 0) {
+        const err: any = new Error("SOA_HAS_ACTIVE_DV");
+        err.code = "SOA_HAS_ACTIVE_DV";
+        err.details = liveDvs.map((d) => ({ dvId: d.id, dvNumber: d.dv_number, status: d.status }));
+        throw err;
+      }
+
       // Unmark invoices so they can be re-billed
       await tx.execute(sql`
         UPDATE supplier_invoices
