@@ -134,7 +134,9 @@ const NAV_TOP: NavEntry[] = [
     kind: "group",
     label: "Inventory",
     icon: Warehouse,
-    match: /^\/procurement/,
+    // Negative lookahead: /procurement/supplier-returns belongs to the Suppliers
+    // group (since 661cf70 moved it from /ap/supplier-returns), not Inventory.
+    match: /^\/procurement(?!\/supplier-returns)/,
     permission: "bo.manage_inventory",
     children: [
       { label: "Stock Levels", href: "/procurement/stock-levels", match: /^\/procurement\/stock-levels/ },
@@ -191,7 +193,7 @@ const NAV_TOP: NavEntry[] = [
     kind: "group",
     label: "Suppliers",
     icon: CreditCard,
-    match: /^\/ap/,
+    match: /^\/(ap|procurement\/supplier-returns)/,
     permission: "bo.manage_customers",
     children: [
       { label: "Suppliers", href: "/ap/suppliers", match: /^\/ap\/suppliers/ },
