@@ -1771,11 +1771,55 @@ export async function listAllSupplierSOAs(
 
   const where = sql.join(conditions, sql` AND `);
 
+  // Aggregate non-voided DVs per SOA via the junction table, with a legacy
+  // fallback to dv.soa_id for DVs created before the junction existed. Same
+  // junction-first/legacy-fallback pattern used by confirmDisbursementVoucher.
+  // Sorted so the "most advanced" DV (CONFIRMED > PRINTED > DRAFT) lands
+  // first — the frontend's resolveStatus() picks dvRefs[0] as the active DV.
   const rows = (await db.execute(sql`
     SELECT sr.id, sr.soa_number, sr.supplier_id, s.name AS supplier_name,
            sr.date_from::text, sr.date_to::text, sr.generated_at,
            sr.total_amount::text, sr.total_paid::text, sr.total_balance::text,
-           sr.invoice_count, sr.status, sr.notes
+           sr.invoice_count, sr.status, sr.notes,
+           COALESCE(
+             (
+               WITH linked AS (
+                 -- Modern link via junction table
+                 SELECT dv.id AS dv_id, dv.dv_number, dv.status, dv.amount,
+                        ds.allocated_amount AS alloc, dv.created_at
+                 FROM supplier_dv_soas ds
+                 JOIN supplier_disbursement_vouchers dv ON dv.id = ds.dv_id
+                 WHERE ds.soa_id = sr.id AND dv.status != 'VOIDED'
+                 UNION ALL
+                 -- Legacy link via dv.soa_id (only when no junction entry exists)
+                 SELECT dv.id, dv.dv_number, dv.status, dv.amount,
+                        COALESCE(dv.gross_amount, dv.amount) AS alloc, dv.created_at
+                 FROM supplier_disbursement_vouchers dv
+                 WHERE dv.soa_id = sr.id
+                   AND dv.status != 'VOIDED'
+                   AND NOT EXISTS (SELECT 1 FROM supplier_dv_soas WHERE dv_id = dv.id)
+               )
+               SELECT json_agg(
+                 json_build_object(
+                   'dvId', linked.dv_id,
+                   'dvNumber', linked.dv_number,
+                   'status', linked.status,
+                   'amount', linked.amount::text,
+                   'allocatedAmount', linked.alloc::text
+                 )
+                 ORDER BY
+                   CASE linked.status
+                     WHEN 'CONFIRMED' THEN 1
+                     WHEN 'PRINTED' THEN 2
+                     WHEN 'DRAFT' THEN 3
+                     ELSE 4
+                   END,
+                   linked.created_at DESC
+               )
+               FROM linked
+             ),
+             '[]'::json
+           ) AS dv_refs
     FROM supplier_soa_records sr
     JOIN suppliers s ON s.id = sr.supplier_id
     WHERE ${where}
@@ -1791,21 +1835,35 @@ export async function listAllSupplierSOAs(
   `)) as any[];
 
   return {
-    data: rows.map((r: any) => ({
-      id: r.id,
-      soaNumber: r.soa_number,
-      supplierId: r.supplier_id,
-      supplierName: r.supplier_name,
-      dateFrom: r.date_from,
-      dateTo: r.date_to,
-      generatedAt: r.generated_at,
-      totalAmount: parseFloat(r.total_amount),
-      totalPaid: parseFloat(r.total_paid),
-      totalBalance: parseFloat(r.total_balance),
-      invoiceCount: r.invoice_count,
-      status: r.status,
-      notes: r.notes,
-    })),
+    data: rows.map((r: any) => {
+      const dvRefs = (r.dv_refs ?? []).map((d: any) => ({
+        dvId: d.dvId,
+        dvNumber: d.dvNumber,
+        status: d.status,
+        amount: parseFloat(d.amount),
+        allocatedAmount: parseFloat(d.allocatedAmount),
+      }));
+      const active = dvRefs[0] ?? null;
+      return {
+        id: r.id,
+        soaNumber: r.soa_number,
+        supplierId: r.supplier_id,
+        supplierName: r.supplier_name,
+        dateFrom: r.date_from,
+        dateTo: r.date_to,
+        generatedAt: r.generated_at,
+        totalAmount: parseFloat(r.total_amount),
+        totalPaid: parseFloat(r.total_paid),
+        totalBalance: parseFloat(r.total_balance),
+        invoiceCount: r.invoice_count,
+        status: r.status,
+        notes: r.notes,
+        dvRefs,
+        activeDvId: active?.dvId ?? null,
+        activeDvNumber: active?.dvNumber ?? null,
+        activeDvStatus: active?.status ?? null,
+      };
+    }),
     total: countRows[0]?.total ?? 0,
   };
 }

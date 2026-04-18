@@ -31,6 +31,14 @@ import {
   dvStatusToUnified,
 } from "@/lib/payment-status";
 
+interface SupplierDvRef {
+  dvId: string;
+  dvNumber: string;
+  status: string;
+  amount: number;
+  allocatedAmount: number;
+}
+
 interface SupplierSOARecord {
   id: string;
   soaNumber: string;
@@ -48,6 +56,7 @@ interface SupplierSOARecord {
   activeDvId: string | null;
   activeDvNumber: string | null;
   activeDvStatus: string | null;
+  dvRefs?: SupplierDvRef[];
 }
 
 // Resolve the post-SOA payment stage. The backend's `status` column only tracks
@@ -385,18 +394,19 @@ export default function SupplierSOAHistoryPage() {
                 <th className="px-3 py-2 text-right">Amount</th>
                 <th className="w-10 px-2 py-2 text-center">Inv</th>
                 <th className="px-3 py-2 text-left">Status</th>
+                <th className="px-3 py-2 text-left">DV Ref</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
         {loading ? (
-          <tr><td colSpan={7}>
+          <tr><td colSpan={8}>
             <div className="flex h-48 items-center justify-center">
               <Loader2 size={18} className="animate-spin text-muted-foreground" />
             </div>
           </td></tr>
         ) : records.length === 0 ? (
-          <tr><td colSpan={7}>
+          <tr><td colSpan={8}>
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <FileText size={24} className="text-muted-foreground/30" />
               <p className="mt-3 text-[13px] font-medium">No supplier SOA records found</p>
@@ -445,28 +455,46 @@ export default function SupplierSOAHistoryPage() {
                   <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-[12px] whitespace-nowrap">{fmtPeso(r.totalAmount)}</td>
                   <td className="w-10 px-2 py-1.5 text-center text-[12px] text-muted-foreground">{r.invoiceCount}</td>
                   <td className="px-3 py-1.5 text-left whitespace-nowrap">
-                    <div className="inline-flex items-center gap-1.5">
-                      <span
-                        className={cn(
-                          "inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                          STATUS_BADGE_CLASS[state],
-                        )}
-                        title={state === "PARTIAL_NO_DV"
-                          ? `Partially paid (${fmtPeso(r.totalPaid)}) with no DV record — investigate before paying further`
-                          : undefined}
-                      >
-                        {STATUS_LABELS[state]}
-                      </span>
-                      {dvNumber && (state === "PAID" || state === "PENDING_CONFIRMATION") && (
-                        <button
-                          onClick={() => setViewingDvId(dvId)}
-                          className="font-mono text-[10px] text-muted-foreground hover:text-foreground hover:underline"
-                          title={dvNumber}
-                        >
-                          {dvNumber.replace(/^DV-\d{4}-/, "DV-")}
-                        </button>
+                    <span
+                      className={cn(
+                        "inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                        STATUS_BADGE_CLASS[state],
                       )}
-                    </div>
+                      title={state === "PARTIAL_NO_DV"
+                        ? `Partially paid (${fmtPeso(r.totalPaid)}) with no DV record — investigate before paying further`
+                        : undefined}
+                    >
+                      {STATUS_LABELS[state]}
+                    </span>
+                  </td>
+                  <td className="px-3 py-1.5 text-left whitespace-nowrap">
+                    {(() => {
+                      const refs = r.dvRefs ?? [];
+                      if (refs.length === 0) {
+                        return <span className="text-[11px] text-muted-foreground">—</span>;
+                      }
+                      const [first, ...rest] = refs;
+                      const display = first.dvNumber.replace(/^DV-/, "");
+                      return (
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() => setViewingDvId(first.dvId)}
+                            className="font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                            title={first.dvNumber}
+                          >
+                            {display}
+                          </button>
+                          {rest.length > 0 && (
+                            <span
+                              className="rounded bg-muted px-1 text-[10px] font-semibold text-muted-foreground"
+                              title={refs.map((d) => d.dvNumber).join(", ")}
+                            >
+                              +{rest.length}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="px-3 py-1.5 text-right whitespace-nowrap">
                     <div className="inline-flex items-center gap-1">
@@ -491,7 +519,7 @@ export default function SupplierSOAHistoryPage() {
                         className="rounded px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10">
                         Reprint
                       </button>
-                      {(state === "BILLED" || state === "PARTIAL_NO_DV") && (
+                      {(state === "BILLED" || state === "PARTIAL_NO_DV" || state === "PAID") && (
                         <button onClick={() => setVoidingSOA(r)}
                           className="rounded px-2 py-0.5 text-[10px] font-medium text-red-500 hover:bg-red-50">
                           Void
