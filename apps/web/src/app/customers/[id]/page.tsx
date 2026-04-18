@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -246,6 +246,13 @@ export default function CustomerDetailPage() {
   const [payLoading, setPayLoading] = useState(false);
   const [paySoaList, setPaySoaList] = useState<any[]>([]);
   const [paySelectedSoas, setPaySelectedSoas] = useState<Set<string>>(new Set());
+  // Mirror of paySelectedSoas readable from inside async closures (e.g. an SOA's
+  // invoice-fetch resolve callback) without capturing a stale Set value. Without
+  // this, a rapid check→uncheck→check sequence races: the in-flight fetch resolves
+  // and writes the unchecked SOA's invoices into invoiceAllocs because the closure
+  // sees the old, still-checked Set.
+  const paySelectedSoasRef = useRef<Set<string>>(new Set());
+  useEffect(() => { paySelectedSoasRef.current = paySelectedSoas; }, [paySelectedSoas]);
   // Invoice-level allocation within SOAs
   const [soaInvoices, setSoaInvoices] = useState<Record<string, any[]>>({}); // soaId → invoice[]
   const [invoiceAllocs, setInvoiceAllocs] = useState<Record<string, string>>({}); // txnId → allocated amount string
@@ -1440,35 +1447,42 @@ export default function CustomerDetailPage() {
                               <input type="checkbox" disabled={isPaid} checked={isSelected}
                                 onChange={async (e) => {
                                   const next = new Set(paySelectedSoas);
+                                  if (e.target.checked) next.add(s.id);
+                                  else next.delete(s.id);
+                                  // Sync ref + state BEFORE the await so a concurrent fetch resolve
+                                  // sees the user's current selection, not a stale snapshot. The
+                                  // ref is the load-bearing one — closures read it; React state is
+                                  // updated alongside for normal re-render flow.
+                                  paySelectedSoasRef.current = next;
+                                  setPaySelectedSoas(next);
                                   if (e.target.checked) {
-                                    next.add(s.id);
                                     // Always fetch fresh invoices for this SOA (don't cache)
-                                    {
-                                      try {
-                                        const res = await apiFetch<{ data: any[] }>(`/customers/${id}/soa/${s.id}/invoices`, { token, locationId });
-                                        setSoaInvoices((prev) => ({ ...prev, [s.id]: res.data || [] }));
-                                        // Auto-FIFO allocate — use actual invoice remaining, not SOA-level total
-                                        const newAllocs: Record<string, string> = {};
-                                        const actualRemaining = (res.data || []).filter((inv: any) => inv.type === "CHARGE" && inv.remainingAmount > 0).reduce((s: number, inv: any) => s + inv.remainingAmount, 0);
-                                        let rem = actualRemaining;
-                                        for (const inv of (res.data || [])) {
-                                          if (rem <= 0.005) break;
-                                          if (inv.type !== "CHARGE" || inv.remainingAmount <= 0) continue;
-                                          const a = Math.min(rem, inv.remainingAmount);
-                                          newAllocs[inv.id] = a.toFixed(2);
-                                          rem -= a;
-                                        }
-                                        setInvoiceAllocs((prev) => ({ ...prev, ...newAllocs }));
-                                      } catch {}
-                                    }
+                                    try {
+                                      const res = await apiFetch<{ data: any[] }>(`/customers/${id}/soa/${s.id}/invoices`, { token, locationId });
+                                      // Race guard: discard stale data if the user unchecked or
+                                      // swapped this SOA while the fetch was in flight. Otherwise
+                                      // we'd merge invoices into invoiceAllocs for an SOA that's
+                                      // no longer selected (PAY-2026-0025 leak vector).
+                                      if (!paySelectedSoasRef.current.has(s.id)) return;
+                                      setSoaInvoices((prev) => ({ ...prev, [s.id]: res.data || [] }));
+                                      // Auto-FIFO allocate — use actual invoice remaining, not SOA-level total
+                                      const newAllocs: Record<string, string> = {};
+                                      const actualRemaining = (res.data || []).filter((inv: any) => inv.type === "CHARGE" && inv.remainingAmount > 0).reduce((s: number, inv: any) => s + inv.remainingAmount, 0);
+                                      let rem = actualRemaining;
+                                      for (const inv of (res.data || [])) {
+                                        if (rem <= 0.005) break;
+                                        if (inv.type !== "CHARGE" || inv.remainingAmount <= 0) continue;
+                                        const a = Math.min(rem, inv.remainingAmount);
+                                        newAllocs[inv.id] = a.toFixed(2);
+                                        rem -= a;
+                                      }
+                                      setInvoiceAllocs((prev) => ({ ...prev, ...newAllocs }));
+                                    } catch {}
                                   } else {
-                                    next.delete(s.id);
-                                    // Clear allocations for this SOA's invoices
+                                    // Clear allocations for this SOA's invoices (sync; no fetch)
                                     const invIds = new Set((soaInvoices[s.id] || []).map((i: any) => i.id));
                                     setInvoiceAllocs((prev) => { const n = { ...prev }; for (const k of Object.keys(n)) if (invIds.has(k)) delete n[k]; return n; });
                                   }
-                                  // Don't auto-fill payment amount here — let invoice selection drive it
-                                  setPaySelectedSoas(next);
                                 }} className="h-3.5 w-3.5 accent-primary rounded" />
                               <span className="font-mono text-[11px] font-semibold text-primary">{s.soaNumber}</span>
                               <span className="text-muted-foreground flex-1">
