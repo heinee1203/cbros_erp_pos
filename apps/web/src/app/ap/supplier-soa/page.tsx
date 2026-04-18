@@ -700,7 +700,7 @@ export default function SupplierSOAPage() {
                 <div key={s.supplierId}>
                   <div
                     onClick={() => setExpandedId(isExpanded ? null : s.supplierId)}
-                    className={cn("flex items-center px-4 py-3 cursor-pointer transition-colors hover:bg-accent/40", isExpanded && "bg-accent/20")}
+                    className={cn("flex items-center px-4 py-1.5 cursor-pointer transition-colors hover:bg-accent/40", isExpanded && "bg-accent/20")}
                   >
                     <div className="flex-1 min-w-0 flex items-center gap-1.5">
                       {isExpanded ? <ChevronDown size={12} className="text-muted-foreground flex-shrink-0" /> : <ChevronRight size={12} className="text-muted-foreground flex-shrink-0" />}
