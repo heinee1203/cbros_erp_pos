@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { FileText, Plus } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso } from "@/lib/format";
@@ -9,7 +10,7 @@ import { fmtPeso } from "@/lib/format";
 import { InvoiceSummaryCards } from "./components/invoice-summary-cards";
 import { InvoiceFilters } from "./components/invoice-filters";
 import { InvoiceTable, type Invoice, type SortField, type SortDir } from "./components/invoice-table";
-import { RecordInvoiceModal } from "./components/record-invoice-modal";
+import { RecordInvoiceModal, type RecordInvoiceOutcome } from "./components/record-invoice-modal";
 import { EditInvoiceModal, type EditableInvoice } from "./components/edit-invoice-modal";
 import { BulkPayDialog } from "./components/bulk-pay-dialog";
 import { SupplierDetailDrawer } from "@/app/ap/suppliers/supplier-detail-drawer";
@@ -73,15 +74,29 @@ export default function SupplierInvoicesPage() {
     invoiceCount: 0,
   });
 
-  // ── Notifications ──
-  const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  // ── Row highlight (tap a success toast to scroll + pulse matching rows) ──
+  const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Clear any pending timer on unmount.
   useEffect(() => {
-    if (notification) {
-      const timer = setTimeout(() => setNotification(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [notification]);
+    return () => {
+      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    };
+  }, []);
+
+  const pulseRows = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setHighlightedIds(new Set(ids));
+    // Scroll the first row into view — the row DOM id is set by InvoiceTable.
+    setTimeout(() => {
+      const firstRow = document.getElementById(`invoice-row-${ids[0]}`);
+      firstRow?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+    // Clear the highlight after the pulse animation completes.
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlightedIds(new Set()), 1500);
+  }, []);
 
   // ── Fetch suppliers ──
   const fetchSuppliers = useCallback(async () => {
@@ -93,7 +108,7 @@ export default function SupplierInvoicesPage() {
       );
       setSuppliers(res.data);
     } catch {
-      setNotification({ type: "error", message: "Failed to load suppliers" });
+      toast.error("Failed to load suppliers");
     }
   }, [token, locationId]);
 
@@ -130,7 +145,7 @@ export default function SupplierInvoicesPage() {
             invoiceCount: parseInt(sumRes.invoice_count ?? "0", 10),
           });
         } catch {
-          setNotification({ type: "error", message: "Failed to load summary" });
+          toast.error("Failed to load summary");
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Failed to load invoices";
@@ -194,6 +209,78 @@ export default function SupplierInvoicesPage() {
     }
   };
 
+  // ── Record Invoice success/partial handler ──
+  //
+  // Three outcomes the server reports:
+  //   (a) All rows created           → success toast, auto-dismiss 4s, tap to pulse new rows
+  //   (b) Some rows failed (partial) → warning toast summarising both counts
+  //   (c) All rows failed            → (handled inside the modal) modal stays open, no toast here
+  //
+  // Because the bulk-create endpoint does not return invoice IDs (response shape frozen per
+  // the Item List audit), we refetch the list first, then resolve the newly-created invoices
+  // by matching (supplierId, invoiceNumber). Only then can we trigger the row pulse.
+  const handleRecordInvoiceOutcome = useCallback(
+    async (outcome: RecordInvoiceOutcome) => {
+      // Kick off the list refresh — summary cards + list both update off this single call.
+      await fetchInvoices();
+
+      // Build the toast BEFORE resolving IDs so the user sees feedback within ~100ms of the
+      // API response. The tap-to-navigate action resolves IDs lazily on click.
+      const single = outcome.successInvoiceNumbers.length === 1;
+      const soleInvoiceNumber = single ? outcome.successInvoiceNumbers[0] : null;
+      const hasErrors = outcome.errors.length > 0;
+      const amountText = fmtPeso(outcome.successTotal);
+
+      const title = hasErrors
+        ? `${outcome.created} created, ${outcome.errors.length} failed`
+        : single
+          ? `Invoice ${soleInvoiceNumber} recorded`
+          : `${outcome.created} invoices recorded`;
+
+      const description = single
+        ? `${outcome.supplierName} · ${amountText}`
+        : `${outcome.supplierName} · ${amountText} total`;
+
+      // `pulseRows` needs the fresh list in state — setState is async, so grab the latest
+      // via a ref-style read inside the action handler.
+      const action = {
+        label: single ? "View" : "View rows",
+        onClick: () => {
+          // Pull the latest invoices from state at click-time.
+          setInvoices((current) => {
+            const matched = current
+              .filter(
+                (inv) =>
+                  inv.supplierId === outcome.supplierId &&
+                  outcome.successInvoiceNumbers.includes(inv.invoiceNumber),
+              )
+              .map((inv) => inv.id);
+            if (matched.length > 0) pulseRows(matched);
+            return current; // no-op setter — we only needed read access to `current`
+          });
+        },
+      };
+
+      if (hasErrors) {
+        // Partial success: surface both sides. Longer duration, action still available.
+        toast.warning(title, {
+          description: `${description} — ${outcome.errors
+            .map((e) => `${e.invoiceNumber}: ${e.message}`)
+            .join(", ")}`,
+          duration: 6000,
+          action,
+        });
+      } else {
+        toast.success(title, {
+          description,
+          duration: 4000,
+          action,
+        });
+      }
+    },
+    [fetchInvoices, pulseRows],
+  );
+
   // ── Edit handler ──
   const handleEdit = (inv: Invoice) => {
     setEditInvoice({
@@ -221,12 +308,12 @@ export default function SupplierInvoicesPage() {
         locationId,
         method: "POST",
       });
-      setNotification({ type: "success", message: `Invoice ${voidTarget.invoiceNumber} voided` });
+      toast.success(`Invoice ${voidTarget.invoiceNumber} voided`);
       setVoidTarget(null);
       fetchInvoices();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to void invoice";
-      setNotification({ type: "error", message });
+      toast.error(message, { duration: Infinity });
     }
   };
 
@@ -241,18 +328,7 @@ export default function SupplierInvoicesPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Notification toast */}
-      {notification && (
-        <div
-          className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border px-4 py-1.5 text-[13px] font-medium shadow-lg animate-in slide-in-from-bottom-2 ${
-            notification.type === "success"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-destructive/30 bg-destructive/5 text-destructive"
-          }`}
-        >
-          {notification.message}
-        </div>
-      )}
+      {/* Toasts are rendered globally via <Toaster /> in app/layout.tsx — no per-page host needed. */}
 
       {/* Header */}
       <div className="mb-4 flex items-center justify-between">
@@ -347,6 +423,7 @@ export default function SupplierInvoicesPage() {
         onEdit={handleEdit}
         onVoid={handleVoidRequest}
         onViewSupplier={setViewSupplierId}
+        highlightedIds={highlightedIds}
       />
 
       {/* Void Confirmation Dialog */}
@@ -381,7 +458,7 @@ export default function SupplierInvoicesPage() {
       <RecordInvoiceModal
         open={showRecordModal}
         onClose={() => setShowRecordModal(false)}
-        onCreated={() => fetchInvoices()}
+        onCreated={handleRecordInvoiceOutcome}
         token={token!}
         locationId={locationId!}
       />

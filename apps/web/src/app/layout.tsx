@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Toaster } from "sonner";
 import { QueryProvider } from "@/lib/query-provider";
 import "./globals.css";
 import { AuthProvider } from "./auth-context";
@@ -22,6 +23,14 @@ export default function RootLayout({
             <AppShell>{children}</AppShell>
           </AuthProvider>
         </QueryProvider>
+        {/* Global toast host — rendered at body level so toasts survive modal dismissal. */}
+        <Toaster
+          position="bottom-right"
+          richColors
+          closeButton
+          expand={false}
+          duration={4000}
+        />
       </body>
     </html>
   );

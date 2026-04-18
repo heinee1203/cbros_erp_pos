@@ -217,6 +217,9 @@ interface InvoiceTableProps {
   onEdit: (inv: Invoice) => void;
   onVoid: (inv: Invoice) => void;
   onViewSupplier: (supplierId: string) => void;
+  /** Rows in this set render with a brief pulse highlight (used by the Record
+   *  Invoice success toast's "View" action). */
+  highlightedIds?: Set<string>;
 }
 
 export function InvoiceTable({
@@ -231,6 +234,7 @@ export function InvoiceTable({
   onEdit,
   onVoid,
   onViewSupplier,
+  highlightedIds,
 }: InvoiceTableProps) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(25);
@@ -388,13 +392,20 @@ export function InvoiceTable({
                   (inv.status === "OPEN" || inv.status === "PARTIALLY_PAID") &&
                   new Date(inv.dueDate) < new Date();
                 const displayStatus = isOverdue ? "OVERDUE" : inv.status;
+                const isHighlighted = highlightedIds?.has(inv.id) ?? false;
 
                 return (
                   <tr
                     key={inv.id}
-                    className={`border-b border-border transition-colors hover:bg-accent/50 ${
-                      i % 2 === 0 ? "bg-background" : "bg-muted/20"
-                    }`}
+                    id={`invoice-row-${inv.id}`}
+                    className={cn(
+                      "border-b border-border transition-colors hover:bg-accent/50",
+                      i % 2 === 0 ? "bg-background" : "bg-muted/20",
+                      // Pulse the background for ~1s when the row was just created via
+                      // Record Invoice and the user tapped the success toast. The class
+                      // overrides the zebra stripe for the duration of the animation.
+                      isHighlighted && "!bg-emerald-50 animate-[pulse_1s_ease-in-out_1]",
+                    )}
                   >
                     {/* Checkbox */}
                     <td className="w-10 px-2 py-1.5">

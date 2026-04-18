@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { X, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso } from "@/lib/format";
 
@@ -17,6 +18,25 @@ interface InvoiceRow {
   invoiceNumber: string;
   invoiceDate: string;
   amount: string;
+}
+
+/**
+ * Outcome shape passed to the parent after a successful (or partially-successful) save.
+ * Parent uses this to build the toast and highlight the new rows after refetch.
+ *
+ * The bulk-create endpoint does not return invoice IDs (response shape is frozen per audit),
+ * so we hand back invoice-number + supplier context and the parent resolves IDs by
+ * matching against the fresh list.
+ */
+export interface RecordInvoiceOutcome {
+  created: number;
+  errors: Array<{ invoiceNumber: string; message: string }>;
+  supplierId: string;
+  supplierName: string;
+  /** Invoice numbers that were accepted by the server (submitted minus errored). */
+  successInvoiceNumbers: string[];
+  /** Sum of amounts for the successfully created invoices. */
+  successTotal: number;
 }
 
 function newRow(date: string): InvoiceRow {
@@ -36,7 +56,7 @@ export function RecordInvoiceModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: (outcome: RecordInvoiceOutcome) => void;
   token: string;
   locationId: string;
 }) {
@@ -116,6 +136,9 @@ export function RecordInvoiceModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Requirement 7: re-entrant submits are blocked by `saving` — the button is also
+    // disabled, but this guard short-circuits rapid keyboard-Enter bursts too.
+    if (saving) return;
     if (!supplierId || validRows.length === 0) return;
 
     // Check for duplicate invoice numbers within the batch
@@ -128,6 +151,13 @@ export function RecordInvoiceModal({
 
     setSaving(true);
     setError(null);
+    const supplier = selectedSupplier;
+    const submittedRows = validRows.map((r) => ({
+      invoiceNumber: r.invoiceNumber.trim(),
+      invoiceDate: r.invoiceDate,
+      amount: r.amount,
+    }));
+
     try {
       const res = await apiFetch<{ created: number; total: number; errors: Array<{ invoiceNumber: string; message: string }> }>(
         "/ap/invoices/bulk-create",
@@ -139,22 +169,45 @@ export function RecordInvoiceModal({
             supplierId,
             sourcePoId: poReference || undefined,
             notes: notes || undefined,
-            invoices: validRows.map((r) => ({
-              invoiceNumber: r.invoiceNumber.trim(),
-              invoiceDate: r.invoiceDate,
-              amount: r.amount,
-            })),
+            invoices: submittedRows,
           }),
         },
       );
-      if (res.errors && res.errors.length > 0) {
-        setError(`${res.created} created, ${res.errors.length} failed: ${res.errors.map((e) => `${e.invoiceNumber}: ${e.message}`).join(", ")}`);
+      const erroredNumbers = new Set((res.errors ?? []).map((e) => e.invoiceNumber));
+      const successRows = submittedRows.filter((r) => !erroredNumbers.has(r.invoiceNumber));
+      const successTotal = successRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+
+      const outcome: RecordInvoiceOutcome = {
+        created: res.created ?? successRows.length,
+        errors: res.errors ?? [],
+        supplierId,
+        supplierName: supplier?.name ?? "Supplier",
+        successInvoiceNumbers: successRows.map((r) => r.invoiceNumber),
+        successTotal,
+      };
+
+      // If NOTHING was created (server returned errors for every row), keep the
+      // modal open and surface the issue inline so the user can fix and retry.
+      if (outcome.created === 0 && outcome.errors.length > 0) {
+        setError(
+          `Could not record invoice${outcome.errors.length === 1 ? "" : "s"}: ${outcome.errors
+            .map((e) => `${e.invoiceNumber} — ${e.message}`)
+            .join("; ")}`,
+        );
+        return;
       }
-      onCreated();
+
+      // Partial or full success → hand off to parent (toast + list refresh + row pulse).
+      onCreated(outcome);
       onClose();
     } catch (err: unknown) {
+      // Network / 4xx / 5xx — the save did not happen at all.
       const message = err instanceof Error ? err.message : "Failed to record invoices";
       setError(message);
+      toast.error("Could not record invoice", {
+        description: message || "Please try again or check your connection",
+        duration: Infinity, // manual dismiss only on errors
+      });
     } finally {
       setSaving(false);
     }
