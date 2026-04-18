@@ -122,6 +122,16 @@ export default function NewDisbursementVoucherPage() {
   }, [charges]);
   const payTotal = useMemo(() => payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0), [payments]);
   const payMismatch = payments.length > 0 && netAmount > 0 && Math.abs(payTotal - netAmount) > 0.01;
+  // Charges with an amount but no description would be silently dropped by the API (Zod requires min(1) description),
+  // which then breaks the payment-lines-equal-net check. Surface it inline and block submit instead.
+  const chargeErrorIdxs = useMemo(() => {
+    const s = new Set<number>();
+    charges.forEach((c, i) => {
+      if ((parseFloat(c.amount) || 0) > 0 && c.description.trim().length === 0) s.add(i);
+    });
+    return s;
+  }, [charges]);
+  const hasChargeError = chargeErrorIdxs.size > 0;
 
   // Fetch SOA(s) — handles both single soaId and multi soaIds
   const fetchSOA = useCallback(async () => {
@@ -257,6 +267,7 @@ export default function NewDisbursementVoucherPage() {
 
   // For multi-SOA: create ONE DV linked to all selected SOAs via junction table
   const handleMultiSave = async (andPrint: boolean) => {
+    if (hasChargeError) { setError("Additional charges with an amount must have a description."); return; }
     setSaving(true); setError(null);
     try {
       const body = {
@@ -286,6 +297,7 @@ export default function NewDisbursementVoucherPage() {
   };
 
   const handleSaveDraft = async () => {
+    if (hasChargeError) { setError("Additional charges with an amount must have a description."); return; }
     if (isMultiSOA) { await handleMultiSave(false); return; }
     setSaving(true); setError(null);
     try {
@@ -295,6 +307,7 @@ export default function NewDisbursementVoucherPage() {
   };
 
   const handleSaveAndPrint = async () => {
+    if (hasChargeError) { setError("Additional charges with an amount must have a description."); return; }
     if (isMultiSOA) { await handleMultiSave(true); return; }
     setSaving(true); setError(null);
     try {
@@ -497,7 +510,14 @@ export default function NewDisbursementVoucherPage() {
                     {CHARGE_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                   <input type="text" value={c.description} onChange={(e) => updateCharge(i, "description", e.target.value)}
-                    placeholder="Description / Reference" className="h-8 flex-1 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" />
+                    placeholder={chargeErrorIdxs.has(i) ? "Description required" : "Description / Reference"}
+                    aria-invalid={chargeErrorIdxs.has(i) || undefined}
+                    className={cn(
+                      "h-8 flex-1 rounded border bg-background px-2 text-[12px] outline-none focus:border-primary",
+                      chargeErrorIdxs.has(i)
+                        ? "border-destructive/60 placeholder:text-destructive/70"
+                        : "border-border",
+                    )} />
                   <input type="text" value={c.referenceNumber} onChange={(e) => updateCharge(i, "referenceNumber", e.target.value)}
                     placeholder="Ref #" className="h-8 w-24 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" />
                   <input type="number" step="0.01" value={c.amount} onChange={(e) => updateCharge(i, "amount", e.target.value)}
@@ -642,9 +662,9 @@ export default function NewDisbursementVoucherPage() {
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={() => router.back()} className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancel</button>
-          <button onClick={handleSaveDraft} disabled={saving || payMismatch || netAmount <= 0}
+          <button onClick={handleSaveDraft} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError}
             className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">{saving ? "Saving…" : "Save Draft"}</button>
-          <button onClick={handleSaveAndPrint} disabled={saving || payMismatch || netAmount <= 0}
+          <button onClick={handleSaveAndPrint} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{saving ? "Saving…" : "Save & Print"}</button>
         </div>
       </div>
