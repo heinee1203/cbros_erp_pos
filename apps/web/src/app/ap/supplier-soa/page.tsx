@@ -101,6 +101,22 @@ function dueStatus(row: SupplierRow): { label: string; color: string } {
   return { label: "Critical", color: "text-red-700 bg-red-100 font-bold" };
 }
 
+/** Invoice-level aging text for the AGE column. Plural-aware. */
+function ageText(ageDays: number): string {
+  if (ageDays < 0) return "Not due";
+  if (ageDays === 0) return "Due today";
+  if (ageDays === 1) return "1 day overdue";
+  return `${ageDays} days overdue`;
+}
+
+/** Invoice-level aging bucket for the STATUS pill. 4 buckets per spec. */
+function agingBucket(ageDays: number): { label: string; classes: string } {
+  if (ageDays <= 0) return { label: "Current", classes: "bg-emerald-50 text-emerald-600" };
+  if (ageDays <= 30) return { label: "30d", classes: "bg-blue-50 text-blue-600" };
+  if (ageDays <= 60) return { label: "60d", classes: "bg-amber-50 text-amber-700" };
+  return { label: "90+", classes: "bg-red-50 text-red-600" };
+}
+
 /* ═══════════════════════════════════════════════════════
  * Expanded Supplier Detail — invoice list with selection + BILLED tracking
  * ═══════════════════════════════════════════════════════ */
@@ -110,6 +126,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   /** Called after generate / void actions so the outer supplier list can refresh totals. */
   onAfterMutation?: () => void;
 }) {
+  const router = useRouter();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [soaHistory, setSoaHistory] = useState<SupplierSOAHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,6 +141,15 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
     () => invoices.filter((i) => !i.billed),
     [invoices],
   );
+
+  // Lookup table for the BILLED column: invoice.billedSoaId → soaNumber.
+  // soaHistory is loaded in fetchAll alongside invoices, so once that resolves
+  // every billed invoice's SOA id should resolve to a number here.
+  const soaIdToNumber = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of soaHistory) m.set(h.id, h.soaNumber);
+    return m;
+  }, [soaHistory]);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -332,7 +358,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   return (
     <div className="bg-muted/20 border-t border-border">
       {/* Invoice table header — extra narrow 'Billed' column at the end */}
-      <div className="grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_70px_70px_60px] gap-1 px-6 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border/50">
+      <div className="grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_100px_70px_90px] gap-1 px-6 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border/50">
         <span />
         <span>Invoice #</span>
         <span className="text-right">Date</span>
@@ -355,15 +381,18 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
         const isCreditMemo = parseFloat(inv.totalAmount) < 0 || inv.invoiceNumber.startsWith("CM");
         const isOverdue = !isCreditMemo && new Date(inv.dueDate) < new Date();
         const ageDays = overdueDays(inv.dueDate);
-        const age = isCreditMemo ? "\u2014" : ageDays <= 0 ? "Not due" : `${ageDays}d overdue`;
+        const age = isCreditMemo ? "\u2014" : ageText(ageDays);
+        const bucket = agingBucket(ageDays);
         const isSelected = selected.has(inv.id);
         const isBilled = inv.billed === true;
+        const billedSoaNumber = inv.billedSoaId ? soaIdToNumber.get(inv.billedSoaId) ?? null : null;
+        const billedDisplay = billedSoaNumber ? billedSoaNumber.replace(/^SUPP-SOA-/, "") : null;
         return (
           <div
             key={inv.id}
             onClick={() => toggle(inv.id, isBilled)}
             className={cn(
-              "grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_70px_70px_60px] gap-1 px-6 py-2 text-[12px] border-b border-border/30 transition-colors",
+              "grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_100px_70px_90px] gap-1 px-6 py-2 text-[12px] border-b border-border/30 transition-colors",
               isBilled && "opacity-50 cursor-not-allowed bg-muted/30",
               !isBilled && (isSelected ? "bg-primary/[0.04] cursor-pointer" : "hover:bg-accent/30 cursor-pointer"),
             )}
@@ -394,7 +423,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
             <span className={cn("text-right tabular-nums font-medium", isCreditMemo ? "text-emerald-600" : "text-foreground")}>
               {isCreditMemo ? `(${fmtPeso(Math.abs(parseFloat(inv.balance || inv.totalAmount)))})` : fmtPeso(inv.balance || inv.totalAmount)}
             </span>
-            <span className={cn("text-right tabular-nums", isCreditMemo ? "text-muted-foreground" : isOverdue ? "text-red-600" : "text-muted-foreground")}>
+            <span className={cn("text-right tabular-nums", isCreditMemo ? "text-muted-foreground" : ageDays <= 0 ? "text-muted-foreground" : "text-foreground")}>
               {age}
             </span>
             <span>
@@ -402,21 +431,22 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
                 <span className="inline-flex rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600">
                   Credit
                 </span>
-              ) : isOverdue ? (
-                <span className="inline-flex rounded-md bg-red-50 px-1.5 py-0.5 text-[9px] font-semibold text-red-600">
-                  Overdue
-                </span>
               ) : (
-                <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
-                  Current
+                <span className={cn("inline-flex rounded-md px-1.5 py-0.5 text-[9px] font-semibold", bucket.classes)}>
+                  {bucket.label}
                 </span>
               )}
             </span>
             <span className="text-center">
-              {isBilled && (
-                <span className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
-                  BILLED
-                </span>
+              {billedDisplay ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); router.push(`/ap/soa-history?soaNumber=${encodeURIComponent(billedDisplay)}`); }}
+                  className="font-mono text-[11px] text-primary hover:underline tabular-nums"
+                >
+                  {billedDisplay}
+                </button>
+              ) : (
+                <span className="text-muted-foreground">&mdash;</span>
               )}
             </span>
           </div>
