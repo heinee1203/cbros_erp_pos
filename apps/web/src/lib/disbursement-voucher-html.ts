@@ -210,7 +210,7 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; 
 
 /* Final TOTAL — sits inside the right column as the last element, below the
  * SOA Details table (or recon block when deductions exist). Shows NET PAYMENT. */
-.dv-total-final { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid #000; margin-top: 6mm; padding-top: 3mm; font-weight: 900; font-size: 10pt; letter-spacing: 0.04em; }
+.dv-total-final { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid #000; margin-top: 2mm; padding-top: 3mm; font-weight: 900; font-size: 10pt; letter-spacing: 0.04em; }
 .dv-total-final-amount { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Signatures — guaranteed top margin so a content-heavy right column
