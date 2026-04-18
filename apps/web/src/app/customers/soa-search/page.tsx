@@ -26,10 +26,10 @@ interface SOARecord {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  GENERATED: "bg-blue-100 text-blue-700",
-  SENT: "bg-amber-100 text-amber-700",
-  PAID: "bg-emerald-100 text-emerald-700",
-  VOID: "bg-red-100 text-red-700",
+  GENERATED: "border border-blue-200 bg-blue-100 text-blue-700",
+  PARTIAL: "border border-amber-200 bg-amber-100 text-amber-700",
+  PAID: "border border-emerald-200 bg-emerald-100 text-emerald-700",
+  VOID: "bg-gray-200 text-gray-700",
 };
 
 export default function SOASearchPage() {
@@ -125,9 +125,9 @@ export default function SOASearchPage() {
           <div className="w-32">SOA #</div>
           <div className="flex-1">Customer</div>
           <div className="w-40">Period</div>
-          <div className="w-24 text-right">Charges</div>
+          <div className="w-24 text-right">Amount</div>
           <div className="w-24 text-right">Credits</div>
-          <div className="w-24 text-right">Payable</div>
+          <div className="w-24 text-right">Balance</div>
           <div className="w-20 text-center">Status</div>
           <div className="w-32 text-right">Actions</div>
         </div>
@@ -143,7 +143,14 @@ export default function SOASearchPage() {
           <div className="divide-y divide-border">
             {records.map((r) => (
               <div key={r.id} className="flex items-center px-4 py-1.5 text-[13px] hover:bg-accent/30">
-                <div className="w-32 font-mono text-[12px] font-semibold text-primary">{r.soaNumber}</div>
+                <div
+                  className={cn(
+                    "w-32 font-mono text-[12px] font-semibold text-primary",
+                    r.status === "VOID" && "line-through text-muted-foreground",
+                  )}
+                >
+                  {r.soaNumber.replace(/^SOA-/, "")}
+                </div>
                 <div className="flex-1 min-w-0">
                   <button onClick={() => router.push(`/customers/${r.customerId}`)} className="text-[13px] font-medium text-foreground hover:text-primary hover:underline truncate block text-left">
                     {r.customerName}
