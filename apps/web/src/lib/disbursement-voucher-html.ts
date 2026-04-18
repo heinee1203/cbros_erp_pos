@@ -205,16 +205,18 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #000; 
 .recon-dline { border-top: 3px double #000; margin: 1px 0; }
 .recon-total { font-weight: 900; font-size: 10pt; padding-top: 1px; }
 
-/* Spacer pushes TOTAL+sig+footer to bottom of half page */
+/* Spacer pushes sig+footer to bottom of half page */
 .spacer { flex: 1; }
 
-/* Bottom TOTAL — sits just above signatures, right-aligned, shows NET PAYMENT */
-.dv-total-row { display: flex; justify-content: flex-end; align-items: baseline; gap: 8mm; margin-top: 6mm; padding-right: 10mm; border-top: 1px solid #000; padding-top: 3mm; }
-.dv-total-label { font-weight: 900; font-size: 11pt; letter-spacing: 0.04em; }
-.dv-total-amount { font-weight: 900; font-size: 12pt; min-width: 40mm; text-align: right; font-variant-numeric: tabular-nums; }
+/* Final TOTAL — sits inside the right column as the last element, below the
+ * SOA Details table (or recon block when deductions exist). Shows NET PAYMENT. */
+.dv-total-final { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid #000; margin-top: 6mm; padding-top: 3mm; font-weight: 900; font-size: 10pt; letter-spacing: 0.04em; }
+.dv-total-final-amount { text-align: right; font-variant-numeric: tabular-nums; }
 
-/* Signatures */
-.sig { display: flex; justify-content: space-between; font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+/* Signatures — guaranteed top margin so a content-heavy right column
+ * (which now ends with the TOTAL row) can't crash into the signature line
+ * when the spacer above gets squeezed on a tall body row. */
+.sig { display: flex; justify-content: space-between; font-size: 10pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin-top: 12mm; }
 .sig-col { width: 45%; }
 .sig-label { margin-bottom: 4px; }
 .sig-line { border-bottom: 1px solid #000; height: 28px; }
@@ -257,15 +259,14 @@ ${d.isVoided ? '<div class="voided-watermark">VOIDED</div>' : ""}
   <div class="dv-body-col-right">
     ${soaBreakdownSection}
     ${reconSection}
+    <div class="dv-total-final">
+      <span>TOTAL</span>
+      <span class="dv-total-final-amount">&#8369;${fmt(net)}</span>
+    </div>
   </div>
 </div>
 
 <div class="spacer"></div>
-
-<div class="dv-total-row">
-  <div class="dv-total-label">TOTAL</div>
-  <div class="dv-total-amount">&#8369;${fmt(net)}</div>
-</div>
 
 <div class="sig">
   <div class="sig-col">
