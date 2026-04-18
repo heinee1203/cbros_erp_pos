@@ -417,18 +417,17 @@ export default function CustomersPage() {
 
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
-        <div className="flex items-center border-b border-border bg-muted/40 px-4 py-2">
+        <div className="flex items-center border-b border-border bg-muted/40 px-3 py-2">
           <button onClick={() => handleSort("name")} className={cn("flex-1 flex items-center gap-0.5 text-[11px] font-semibold uppercase tracking-[0.06em]", sortBy === "name" ? "text-foreground" : "text-muted-foreground hover:text-foreground")}>
             Customer {sortBy === "name" && (sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
           </button>
           <div className="w-24 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Type</div>
-          <div className="w-24 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Code</div>
-          <button onClick={() => handleSort("currentBalance")} className={cn("w-28 flex items-center justify-end gap-0.5 text-[11px] font-semibold uppercase tracking-[0.06em]", sortBy === "currentBalance" ? "text-foreground" : "text-muted-foreground hover:text-foreground")}>
+          <button onClick={() => handleSort("currentBalance")} className={cn("w-32 flex items-center justify-end gap-0.5 text-[11px] font-semibold uppercase tracking-[0.06em]", sortBy === "currentBalance" ? "text-foreground" : "text-muted-foreground hover:text-foreground")}>
             Balance {sortBy === "currentBalance" && (sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
           </button>
           <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Last Payment</div>
-          <div className="w-28 text-center text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Status</div>
-          <div className="w-8" />
+          <div className="w-32 text-center text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Status</div>
+          <div className="w-10" />
         </div>
 
         {customerQuery.isLoading ? (
@@ -443,13 +442,14 @@ export default function CustomersPage() {
             {customers.map((c) => {
               const balance = parseFloat(c.currentBalance);
               return (
-                <div key={c.id} className="flex w-full items-center px-4 py-3 text-left transition-colors hover:bg-accent/40">
+                <div key={c.id} className="flex w-full items-center px-3 py-1.5 text-left transition-colors hover:bg-accent/40">
                   <button onClick={() => {
                     const ref = c.matchedRef ? (() => { try { return JSON.parse(c.matchedRef); } catch { return null; } })() : null;
                     const highlight = ref?.number ? `?highlight=${encodeURIComponent(ref.number)}` : "";
                     router.push(`/customers/${c.id}${highlight}`);
                   }} className="flex-1 min-w-0 text-left">
                     <span className="block truncate text-[13px] font-medium text-foreground">{c.name}</span>
+                    {c.phone && <span className="block truncate text-[10px] font-mono text-muted-foreground/70">{c.phone}</span>}
                     {c.contactPerson && !c.matchedRef && <span className="block truncate text-[11px] text-muted-foreground">{c.contactPerson}</span>}
                     {c.matchedRef && (() => {
                       try {
@@ -470,8 +470,7 @@ export default function CustomersPage() {
                       {c.customerType}
                     </span>
                   </div>
-                  <div className="w-24 text-[12px] text-muted-foreground truncate">{c.phone || "\u2014"}</div>
-                  <div className="w-28 text-right">
+                  <div className="w-32 text-right">
                     <span className={cn("text-[12px] font-semibold tabular-nums", balance === 0 ? "text-emerald-600" : "text-red-600")}>
                       {fmtPeso(c.currentBalance)}
                     </span>
@@ -479,17 +478,17 @@ export default function CustomersPage() {
                   <div className="w-28 text-right text-[12px] tabular-nums text-muted-foreground">
                     {c.lastPaymentDate ? timeAgo(c.lastPaymentDate) : "\u2014"}
                   </div>
-                  <div className="w-28 text-center">
+                  <div className="w-32 text-center">
                     {balance === 0 ? (
-                      <span className="inline-flex items-center gap-0.5 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-600">{"\u2713"} Current</span>
+                      <span className="inline-flex items-center gap-0.5 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600">{"\u2713"} Current</span>
                     ) : c.isOverdue ? (
-                      <span className="inline-flex items-center gap-0.5 rounded-md bg-red-500/10 px-2 py-0.5 text-[9px] font-semibold text-red-600">{"\u26A0"} Overdue</span>
+                      <span className="inline-flex items-center gap-0.5 rounded-md bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-600">{"\u26A0"} Overdue</span>
                     ) : c.unbilledCount > 0 ? (
-                      <span className="inline-flex items-center gap-0.5 rounded-md bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold text-amber-600">{"\u26A0"} {c.unbilledCount} unbilled</span>
+                      <span className="inline-flex items-center gap-0.5 rounded-md bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600">{"\u26A0"} {c.unbilledCount} unbilled</span>
                     ) : c.totalChargeCount > 0 ? (
-                      <span className="inline-flex items-center gap-0.5 rounded-md bg-blue-500/10 px-2 py-0.5 text-[9px] font-semibold text-blue-600">{"\u2713"} Billed</span>
+                      <span className="inline-flex items-center gap-0.5 rounded-md bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-600">{"\u2713"} Billed</span>
                     ) : (
-                      <span className="text-[10px] text-muted-foreground">&mdash;</span>
+                      <span className="text-[11px] text-muted-foreground">&mdash;</span>
                     )}
                   </div>
                   <CustomerRowActions
@@ -634,14 +633,14 @@ function KPICard({ icon, label, value, accent, className, subtitle, href }: {
     <div
       onClick={href ? () => router.push(href) : undefined}
       className={cn(
-        "rounded-xl border border-border bg-background p-3.5 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]",
+        "rounded-xl border border-border bg-background p-3 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]",
         accent && "border-amber-200 bg-amber-50/30 dark:border-amber-800 dark:bg-amber-950/20",
         href && "cursor-pointer hover:border-primary/30 hover:shadow-md transition-all",
       )}
     >
-      <div className="flex items-center gap-1.5 text-muted-foreground mb-1">{icon}<span className="text-[11px] font-medium">{label}</span></div>
-      <div className={cn("text-[18px] font-bold tabular-nums text-foreground", className)}>{value}</div>
-      {subtitle && <div className="text-[11px] text-muted-foreground mt-0.5">{subtitle}</div>}
+      <div className="flex items-center gap-1.5 text-muted-foreground">{icon}<span className="text-[11px] font-medium">{label}</span></div>
+      <div className={cn("mt-1 text-xl font-semibold tabular-nums text-foreground", className)}>{value}</div>
+      {subtitle && <div className="text-[10px] text-muted-foreground/70">{subtitle}</div>}
     </div>
   );
 }
@@ -665,7 +664,7 @@ function CustomerRowActions({ customer, onEdit, onNavigate }: {
   }, [open]);
 
   return (
-    <div ref={ref} className="relative w-8 flex justify-center">
+    <div ref={ref} className="relative w-10 flex justify-center">
       <button
         ref={buttonRef}
         onClick={(e) => {
