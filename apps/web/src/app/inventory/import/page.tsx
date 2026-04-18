@@ -32,7 +32,7 @@ interface PreviewRow {
   row: number;
   sku: string;
   name: string;
-  action: "CREATE" | "UPDATE" | "SKIP";
+  action: "CREATE" | "UPDATE" | "NO_CHANGE" | "SKIP";
   changes?: string[];
 }
 
@@ -49,12 +49,25 @@ interface LocationMatch {
   matched: boolean;
 }
 
+interface PreviewSummaryRow {
+  rowIndex: number;
+  name: string;
+  sku: string;
+  action: "CREATE" | "UPDATE" | "NO_CHANGE" | "SKIP";
+  changes?: string[];
+  errors?: string[];
+  variantName?: string | null;
+  isVariant?: boolean;
+}
+
 interface PreviewResponse {
   previewToken: string;
   format: string;
   totalRows: number;
   createCount: number;
   updateCount: number;
+  /** Rows whose CSV values match the DB on every tracked field — skipped on import. */
+  noChangeCount: number;
   skipCount: number;
   errorCount: number;
   locationMapping: Array<{
@@ -73,24 +86,16 @@ interface PreviewResponse {
     updateCount: number;
   }>;
   errors: Array<{ rowIndex: number; field?: string; message: string }>;
-  preview: Array<{
-    rowIndex: number;
-    name: string;
-    sku: string;
-    action: "CREATE" | "UPDATE" | "SKIP";
-    changes?: string[];
-    errors?: string[];
-  }>;
-  createPreview?: Array<{
-    rowIndex: number;
-    name: string;
-    sku: string;
-    action: "CREATE";
-    changes?: string[];
-    errors?: string[];
-    variantName?: string | null;
-    isVariant?: boolean;
-  }>;
+  /** First 100 parsed rows (any action). */
+  preview: PreviewSummaryRow[];
+  /** All CREATE rows. */
+  createPreview?: PreviewSummaryRow[];
+  /** All UPDATE rows — needed because with NO_CHANGE often dominating the CSV,
+   *  updates don't appear in the 100-row default slice. Typically small. */
+  updatePreview?: PreviewSummaryRow[];
+  /** First 100 NO_CHANGE rows for user sanity-check. Shown only when the
+   *  No Change filter chip is active. */
+  noChangePreview?: PreviewSummaryRow[];
 }
 
 interface ProgressResponse {
@@ -99,7 +104,10 @@ interface ProgressResponse {
   total: number;
   created: number;
   updated: number;
+  /** Rows skipped because of validation errors or mode filter (create_only/update_only). */
   skipped: number;
+  /** Rows the preview classified as NO_CHANGE and the import loop silently skipped. */
+  noChange?: number;
   errors: number;
   errorLog?: { row: number; message: string }[];
   durationMs?: number;
@@ -121,6 +129,11 @@ export default function ImportItemsPage() {
   const [importMode, setImportMode] = useState<ImportMode>("create_only");
   const [includeCreates, setIncludeCreates] = useState(true);
   const [includeUpdates, setIncludeUpdates] = useState(true);
+  // NO_CHANGE rows are never imported (backend skips them). This toggle only
+  // affects whether a sample appears in the preview table, for sanity-checking
+  // what's being skipped. Default off — a 47K NO_CHANGE CSV would otherwise
+  // drown the 8 real UPDATE rows.
+  const [includeNoChange, setIncludeNoChange] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
@@ -574,13 +587,34 @@ export default function ImportItemsPage() {
                 {includeUpdates ? "✓" : "✗"} Updates ({preview.updateCount.toLocaleString()})
               </button>
             )}
+            {/* No Change chip — off by default so 47K unchanged rows don't
+                drown the preview. When on, server-sampled (first 100). */}
+            <button
+              onClick={() => setIncludeNoChange(!includeNoChange)}
+              className={cn(
+                "rounded-full border px-3 py-1 text-sm font-medium transition-colors",
+                includeNoChange
+                  ? "border-slate-300 bg-slate-50 text-slate-700"
+                  : "border-border bg-muted/50 text-muted-foreground",
+              )}
+              title={
+                includeNoChange
+                  ? "Hide rows with no detected changes"
+                  : "Show a sample of rows that will be skipped (no detected changes)"
+              }
+            >
+              {includeNoChange ? "✓" : "+"} No Change ({preview.noChangeCount.toLocaleString()})
+            </button>
             <span className="rounded-full border border-border bg-muted/50 px-3 py-1 text-sm text-muted-foreground">
               Errors ({preview.errorCount})
             </span>
           </div>
 
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {/* Summary cards — 5 cells.
+              "Will Import" = creates + updates ONLY. NO_CHANGE rows are
+              deliberately excluded — the whole point of the classification
+              is that those rows are skipped. */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             {[
               {
                 label: "Will Import",
@@ -598,6 +632,13 @@ export default function ImportItemsPage() {
                 value: preview.updateCount,
                 color: includeUpdates ? "text-primary" : "text-muted-foreground/50",
                 dimmed: !includeUpdates,
+              },
+              {
+                label: "No Change",
+                value: preview.noChangeCount,
+                // Muted on purpose — these rows are "healthy noise", not
+                // something the user needs to look at unless they want to.
+                color: "text-muted-foreground",
               },
               { label: "Errors", value: preview.errorCount, color: "text-red-600" },
             ].map((card) => (
@@ -863,17 +904,17 @@ export default function ImportItemsPage() {
                 </thead>
                 <tbody>
                   {(() => {
-                    // When updates are off, use createPreview (which has ALL create rows, not just first 100)
-                    if (includeCreates && !includeUpdates) {
-                      return (preview.createPreview ?? []).slice(0, 100);
-                    }
-                    if (!includeCreates && includeUpdates) {
-                      return (preview.preview ?? []).filter((r) => r.action === "UPDATE").slice(0, 100);
-                    }
-                    // Both on — show creates first, then updates
-                    const creates = preview.createPreview ?? [];
-                    const updates = (preview.preview ?? []).filter((r) => r.action === "UPDATE");
-                    return [...creates, ...updates].slice(0, 100);
+                    // Compose the preview rows from the chip toggles. The
+                    // server hands us separate arrays for CREATE, UPDATE,
+                    // and (capped) NO_CHANGE so we don't need to re-filter
+                    // a 47K list on the client.
+                    const rows: PreviewSummaryRow[] = [];
+                    if (includeCreates) rows.push(...(preview.createPreview ?? []));
+                    if (includeUpdates) rows.push(...(preview.updatePreview ?? []));
+                    if (includeNoChange) rows.push(...(preview.noChangePreview ?? []));
+                    // If nothing is selected (e.g. in update_only mode with
+                    // updates off and no-change off), show nothing.
+                    return rows.slice(0, 100);
                   })().map((row) => (
                     <tr
                       key={row.rowIndex}
@@ -885,7 +926,7 @@ export default function ImportItemsPage() {
                         {row.name}
                       </td>
                       <td className="max-w-[150px] truncate px-4 py-2 text-muted-foreground">
-                        {(row as any).variantName || "—"}
+                        {row.variantName || "—"}
                       </td>
                       <td className="px-4 py-2">
                         <span
@@ -893,10 +934,13 @@ export default function ImportItemsPage() {
                             "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
                             row.action === "CREATE" && "bg-emerald-50 text-emerald-600",
                             row.action === "UPDATE" && "bg-primary/10 text-primary",
+                            // NO_CHANGE — muted slate, quieter than the others.
+                            // Render "NO CHANGE" with a space so it reads naturally.
+                            row.action === "NO_CHANGE" && "bg-slate-100 text-slate-500",
                             row.action === "SKIP" && "bg-muted text-muted-foreground",
                           )}
                         >
-                          {row.action}
+                          {row.action === "NO_CHANGE" ? "NO CHANGE" : row.action}
                         </span>
                       </td>
                       <td className="max-w-[200px] truncate px-4 py-2 text-xs text-muted-foreground">
@@ -994,11 +1038,12 @@ export default function ImportItemsPage() {
               </div>
 
               {/* Counters */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                 {[
                   { label: "Processed", value: progress?.processed ?? 0, total: progress?.total ?? 0, showTotal: true },
                   { label: "Created", value: progress?.created ?? 0 },
                   { label: "Updated", value: progress?.updated ?? 0 },
+                  { label: "No Change", value: progress?.noChange ?? 0 },
                   { label: "Errors", value: progress?.errors ?? 0 },
                 ].map((c) => (
                   <div key={c.label} className="text-center">
@@ -1058,11 +1103,16 @@ export default function ImportItemsPage() {
                 )}
               </div>
 
-              {/* Summary grid */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {/* Summary grid.
+                  "Skipped" counts validation errors + mode-filter skips.
+                  "No Change" counts rows the diff found to be no-ops. These
+                  are distinct — a row with an invalid SKU is "skipped", a
+                  row with valid data that matches the DB is "no change". */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                 {[
                   { label: "Created", value: results.created, color: "text-emerald-600" },
                   { label: "Updated", value: results.updated, color: "text-primary" },
+                  { label: "No Change", value: results.noChange ?? 0, color: "text-slate-500" },
                   { label: "Skipped", value: results.skipped, color: "text-muted-foreground" },
                   { label: "Errors", value: results.errors, color: "text-red-600" },
                 ].map((c) => (

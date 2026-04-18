@@ -38,10 +38,21 @@ export interface ParsedRowLocation {
   csvLocationName: string;
   apexLocationId: string | null;
   stockLevel: number;
+  /** True iff the CSV row had a non-empty `In stock [X]` cell for this location.
+   *  Distinguishes "explicitly 0" (compare against DB) from "not provided"
+   *  (diff helper treats as unchanged, does NOT write 0 over existing stock). */
+  stockLevelWasPresent: boolean;
   available: boolean;
   reorderPoint: number | null;
   optimalStock: number | null;
 }
+
+/** Row classification after diffing CSV values against the DB row.
+ *  - CREATE    → SKU not found in DB
+ *  - UPDATE    → SKU found AND at least one tracked field differs
+ *  - NO_CHANGE → SKU found AND no tracked field differs (import MUST skip)
+ *  See `computeItemDiff` for the tracked-field list. */
+export type RowAction = "CREATE" | "UPDATE" | "NO_CHANGE";
 
 export interface ParsedRow {
   rowIndex: number;
@@ -76,7 +87,7 @@ export interface ParsedRow {
   oemNumber: string;
   supplierName: string;
   locations: ParsedRowLocation[];
-  action: "CREATE" | "UPDATE";
+  action: RowAction;
   existingProductId: string | null;
   changes: string[];
   errors: string[];
@@ -97,27 +108,189 @@ function sanitizeText(s: string | undefined | null): string {
   return s.replace(/[\u200B-\u200F\u202A-\u202E\uFEFF\u00AD]/g, "").trim();
 }
 
+// ── Diff helper ──────────────────────────────────────────────────────
+//
+// Single source of truth for deciding whether an existing row needs to change
+// after an import. Used by both the preview pass (to classify NO_CHANGE vs
+// UPDATE) and — via the same ParsedRow.changes list — by the results UI.
+//
+// Tracked fields (per product-manager spec):
+//   1. Name              — trim, case-sensitive
+//   2. Unit price        — parseFloat + round to 2 decimals
+//   3. Cost price        — parseFloat + round to 2 decimals
+//   4. Barcode           — trim, case-sensitive. ABSENT/empty CSV never clears
+//                          the DB value (treat absent as unchanged).
+//   5. Category name     — trim, case-sensitive. ABSENT CSV → unchanged.
+//   6. Quantity per mapped location — numeric compare; absent/blank CSV cell
+//                                    → unchanged (NOT coerced to 0).
+//   7. Variant option values — set comparison of (type,value) pairs.
+//
+// Anything NOT in this list (description, sort order, updated_at, etc.) is
+// explicitly ignored. See the "out of scope" notes in the task.
+//
+// Rounding: float equality is unreliable. Use Math.round(x * 100) / 100 on
+// both sides before comparing. `"500"` / `"500.00"` / `500` → same bucket.
+//
+// This helper returns the human-readable change messages AND the raw
+// changed-field count. `changes.length === 0` → caller classifies NO_CHANGE.
+
+function parseMoney2dp(value: string | number | null | undefined): number | null {
+  if (value == null) return null;
+  const s = typeof value === "number" ? String(value) : value.trim();
+  if (!s) return null;
+  const n = parseFloat(s.replace(/[^0-9.-]/g, ""));
+  if (isNaN(n)) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function normalizeText(s: string | null | undefined): string {
+  // Trim both sides — handles trailing \r from Windows-exported CSVs.
+  return (s ?? "").trim();
+}
+
+interface ExistingForDiff {
+  name: string | null;
+  unitPrice: string | null;
+  costPrice: string | null;
+  barcode: string | null;
+  categoryName: string | null;
+}
+
+interface CsvForDiff {
+  name: string;
+  unitPrice: string; // already formatted as X.YY string by the parser
+  costPrice: string;
+  barcode: string;
+  categoryName: string;
+  isVariant: boolean;
+  option1Name: string;
+  option1Value: string;
+  option2Name: string;
+  option2Value: string;
+  option3Name: string;
+  option3Value: string;
+  locations: ParsedRowLocation[];
+}
+
+/** Returns a list of human-readable change strings. Empty list ⇒ NO_CHANGE. */
+function computeItemDiff(
+  existing: ExistingForDiff,
+  csv: CsvForDiff,
+  existingStockByLocation: Map<string, number>,
+  existingVariantOptions: Array<{ typeName: string; value: string }>,
+): string[] {
+  const changes: string[] = [];
+
+  // ── Name ──────────────────────────────────────────────────────────
+  // Absent CSV name never overwrites DB name.
+  const csvName = normalizeText(csv.name);
+  const dbName = normalizeText(existing.name);
+  if (csvName && csvName !== dbName) {
+    changes.push(`name: "${dbName}" → "${csvName}"`);
+  }
+
+  // ── Unit price ────────────────────────────────────────────────────
+  const csvPrice = parseMoney2dp(csv.unitPrice);
+  const dbPrice = parseMoney2dp(existing.unitPrice);
+  if (csvPrice !== null && csvPrice !== (dbPrice ?? 0)) {
+    changes.push(`unitPrice: ${(dbPrice ?? 0).toFixed(2)} → ${csvPrice.toFixed(2)}`);
+  }
+
+  // ── Cost price ────────────────────────────────────────────────────
+  const csvCost = parseMoney2dp(csv.costPrice);
+  const dbCost = parseMoney2dp(existing.costPrice);
+  if (csvCost !== null && csvCost !== (dbCost ?? 0)) {
+    changes.push(`costPrice: ${(dbCost ?? 0).toFixed(2)} → ${csvCost.toFixed(2)}`);
+  }
+
+  // ── Barcode ───────────────────────────────────────────────────────
+  // Absent/empty CSV never clears DB barcode. Present + different ⇒ change.
+  const csvBarcode = normalizeText(csv.barcode);
+  const dbBarcode = normalizeText(existing.barcode);
+  if (csvBarcode && csvBarcode !== dbBarcode) {
+    changes.push(`barcode: "${dbBarcode}" → "${csvBarcode}"`);
+  }
+
+  // ── Category name ─────────────────────────────────────────────────
+  // Absent CSV category never clears the existing one.
+  const csvCategory = normalizeText(csv.categoryName);
+  const dbCategory = normalizeText(existing.categoryName);
+  if (csvCategory && csvCategory !== dbCategory) {
+    changes.push(`category: "${dbCategory}" → "${csvCategory}"`);
+  }
+
+  // ── Quantity per mapped location ──────────────────────────────────
+  for (const loc of csv.locations) {
+    // Unmapped CSV location (user didn't wire it to a real store) → ignore.
+    if (!loc.apexLocationId) continue;
+    // Absent/blank CSV cell → treat as unchanged (not coerced to 0).
+    if (!loc.stockLevelWasPresent) continue;
+    const dbStock = existingStockByLocation.get(loc.apexLocationId) ?? 0;
+    if (loc.stockLevel !== dbStock) {
+      changes.push(`qty@${loc.csvLocationName}: ${dbStock} → ${loc.stockLevel}`);
+    }
+  }
+
+  // ── Variant option values (only relevant when the row is a variant) ─
+  if (csv.isVariant) {
+    const csvPairs: string[] = [];
+    if (csv.option1Name && csv.option1Value)
+      csvPairs.push(`${normalizeText(csv.option1Name)}=${normalizeText(csv.option1Value)}`);
+    if (csv.option2Name && csv.option2Value)
+      csvPairs.push(`${normalizeText(csv.option2Name)}=${normalizeText(csv.option2Value)}`);
+    if (csv.option3Name && csv.option3Value)
+      csvPairs.push(`${normalizeText(csv.option3Name)}=${normalizeText(csv.option3Value)}`);
+
+    const dbPairs = existingVariantOptions.map(
+      (p) => `${normalizeText(p.typeName)}=${normalizeText(p.value)}`,
+    );
+
+    const csvSet = new Set(csvPairs);
+    const dbSet = new Set(dbPairs);
+    const added = csvPairs.filter((x) => !dbSet.has(x));
+    const removed = dbPairs.filter((x) => !csvSet.has(x));
+    if (added.length > 0 || removed.length > 0) {
+      changes.push("variant options changed");
+    }
+  }
+
+  return changes;
+}
+
+export interface PreviewRowSummary {
+  rowIndex: number;
+  name: string;
+  variantName: string | null;
+  sku: string;
+  action: RowAction;
+  changes: string[];
+  errors: string[];
+  isVariant?: boolean;
+}
+
 export interface PreviewResult {
   previewToken: string;
   format: "loyverse";
   totalRows: number;
   createCount: number;
   updateCount: number;
+  /** Rows with SKU found but zero tracked-field differences — skipped on import. */
+  noChangeCount: number;
   skipCount: number;
   errorCount: number;
   locationMapping: LocationMapping[];
   categoryMapping: CategoryMapping[];
   errors: Array<{ row: number; message: string }>;
-  preview: Array<{
-    rowIndex: number;
-    name: string;
-    variantName: string | null;
-    sku: string;
-    action: "CREATE" | "UPDATE";
-    changes: string[];
-    errors: string[];
-    isVariant?: boolean;
-  }>;
+  /** First 100 parsed rows (any action). Preserves the historical default view. */
+  preview: PreviewRowSummary[];
+  /** ALL CREATE rows — caller can show creates even if none are in the first 100. */
+  createPreview: PreviewRowSummary[];
+  /** ALL UPDATE rows — needed when NO_CHANGE dominates and updates wouldn't
+   *  otherwise appear in the 100-row default slice. Typically small. */
+  updatePreview: PreviewRowSummary[];
+  /** First 100 NO_CHANGE rows for sanity-check preview. The full list can be
+   *  tens of thousands and would blow the JSON response, so it's sampled. */
+  noChangePreview: PreviewRowSummary[];
 }
 
 export interface ExecuteOptions {
@@ -132,7 +305,11 @@ export interface ExecuteOptions {
 export interface ImportResult {
   created: number;
   updated: number;
+  /** Rows skipped because of validation errors or mode filter (create_only/update_only).
+   *  Does NOT include NO_CHANGE rows — those are counted separately in `noChange`. */
   skipped: number;
+  /** Rows the diff helper classified as NO_CHANGE and the import loop silently skipped. */
+  noChange: number;
   errors: Array<{ row: number; message: string }>;
   duration: number;
 }
@@ -144,6 +321,10 @@ export interface ProgressUpdate {
   percent: number;
   created: number;
   updated: number;
+  /** Only populated by the Item Catalog import pipeline. Optional so the
+   *  Sales Receipts / Inventory Movements pipelines (out of scope for the
+   *  NO_CHANGE refactor) don't need to construct it. */
+  noChange?: number;
   errors: number;
 }
 
@@ -409,7 +590,9 @@ export async function parseLoyverseCSV(
     return (row[idx] ?? "").trim();
   };
 
-  // Load all existing products by SKU for this org (bulk lookup)
+  // Load all existing products by SKU for this org (bulk lookup).
+  // Added categoryName (left-joined) so the diff helper can compare against
+  // the CSV's category column without a second per-row lookup.
   const existingProducts = await db
     .select({
       id: products.id,
@@ -419,14 +602,77 @@ export async function parseLoyverseCSV(
       costPrice: products.costPrice,
       barcode: products.barcode,
       categoryId: products.categoryId,
+      categoryName: categories.name,
       description: products.description,
     })
     .from(products)
+    .leftJoin(categories, eq(products.categoryId, categories.id))
     .where(eq(products.orgId, orgId));
 
   const skuMap = new Map<string, (typeof existingProducts)[number]>();
   for (const p of existingProducts) {
     skuMap.set(p.sku.toLowerCase(), p);
+  }
+
+  // ── Pre-load existing per-location stock ─────────────────────────────
+  // One sweep across the org's inventory. The diff helper needs to know what
+  // stock the DB already has at each (product, location) so it can decide
+  // whether the CSV's stock column is a real change. Fetching per-row during
+  // parse would be O(N × locations) queries — prohibitive at 47K rows.
+  const existingInventoryRows = await db
+    .select({
+      productId: inventory.productId,
+      locationId: inventory.locationId,
+      stockLevel: inventory.stockLevel,
+    })
+    .from(inventory)
+    .innerJoin(products, eq(products.id, inventory.productId))
+    .where(eq(products.orgId, orgId));
+
+  /** productId → (locationId → stockLevel) */
+  const existingStockMap = new Map<string, Map<string, number>>();
+  for (const row of existingInventoryRows) {
+    let locs = existingStockMap.get(row.productId);
+    if (!locs) {
+      locs = new Map();
+      existingStockMap.set(row.productId, locs);
+    }
+    locs.set(row.locationId, row.stockLevel);
+  }
+
+  // ── Pre-load existing variant option values ──────────────────────────
+  // Only variants have entries here. Used by the diff helper to detect
+  // "variant options changed" vs NO_CHANGE. Missing entry ⇒ no options.
+  const existingVariantOptionRows = await db
+    .select({
+      productId: productVariantOptions.productId,
+      typeName: productOptionTypes.name,
+      value: productOptionValues.value,
+    })
+    .from(productVariantOptions)
+    .innerJoin(
+      productOptionValues,
+      eq(productVariantOptions.optionValueId, productOptionValues.id),
+    )
+    .innerJoin(
+      productOptionTypes,
+      eq(productOptionValues.optionTypeId, productOptionTypes.id),
+    )
+    .innerJoin(products, eq(products.id, productVariantOptions.productId))
+    .where(eq(products.orgId, orgId));
+
+  /** variantProductId → [{ typeName, value }, …] */
+  const existingVariantOptionMap = new Map<
+    string,
+    Array<{ typeName: string; value: string }>
+  >();
+  for (const row of existingVariantOptionRows) {
+    let arr = existingVariantOptionMap.get(row.productId);
+    if (!arr) {
+      arr = [];
+      existingVariantOptionMap.set(row.productId, arr);
+    }
+    arr.push({ typeName: row.typeName, value: row.value });
   }
 
   // Parse data rows
@@ -513,9 +759,14 @@ export async function parseLoyverseCSV(
       const optimalStockIdx =
         headerIdx[`optimal stock [${mapping.csvName}]`.toLowerCase()];
 
-      const stockLevel = stockIdx !== undefined
-        ? parseInt(row[stockIdx] ?? "0", 10) || 0
-        : 0;
+      // Track whether the CSV actually had a stock cell for this row —
+      // the diff helper uses this to distinguish "explicitly 0" (compare
+      // against DB) from "not provided" (treat as unchanged). Previously
+      // both cases collapsed to 0 which made every no-op re-export look
+      // like an update on stock=0 items.
+      const rawStock = stockIdx !== undefined ? (row[stockIdx] ?? "").trim() : "";
+      const stockLevelWasPresent = rawStock !== "";
+      const stockLevel = stockLevelWasPresent ? (parseInt(rawStock, 10) || 0) : 0;
       const availRaw = availIdx !== undefined ? (row[availIdx] ?? "").trim().toLowerCase() : "";
       const available = availRaw === "" ? true : (availRaw === "y" || availRaw === "yes" || availRaw === "true" || availRaw === "1");
       // Blank reorder point defaults to 0 (no alert), not the schema default of 10
@@ -532,28 +783,59 @@ export async function parseLoyverseCSV(
         csvLocationName: mapping.csvName,
         apexLocationId: mapping.apexLocationId,
         stockLevel,
+        stockLevelWasPresent,
         available,
         reorderPoint,
         optimalStock,
       });
     }
 
-    // Determine action
+    // ── Classify the row ─────────────────────────────────────────────
+    // CREATE  → SKU not found
+    // UPDATE  → SKU found, diff has ≥1 change on tracked fields
+    // NO_CHANGE → SKU found, diff is empty (import MUST skip)
+    //
+    // Diff is computed by `computeItemDiff` using the pre-loaded DB context
+    // (stock per location, variant option values, category name). Description
+    // is deliberately NOT tracked — the import loop never writes description
+    // on UPDATE, so showing it in "changes" was a phantom.
     const existing = sku ? skuMap.get(sku.toLowerCase()) : null;
-    const action: "CREATE" | "UPDATE" = existing ? "UPDATE" : "CREATE";
-
-    // Compute changes for updates
-    const changes: string[] = [];
-    if (existing) {
-      if (name && name !== existing.name) changes.push(`name: "${existing.name}" → "${name}"`);
-      if (unitPrice.toFixed(2) !== (existing.unitPrice ?? "0.00"))
-        changes.push(`unitPrice: ${existing.unitPrice} → ${unitPrice.toFixed(2)}`);
-      if (costPrice.toFixed(2) !== (existing.costPrice ?? "0.00"))
-        changes.push(`costPrice: ${existing.costPrice} → ${costPrice.toFixed(2)}`);
-      if (barcode && barcode !== (existing.barcode ?? ""))
-        changes.push(`barcode: "${existing.barcode ?? ""}" → "${barcode}"`);
-      if (description && description !== (existing.description ?? ""))
-        changes.push("description changed");
+    let action: RowAction;
+    let changes: string[];
+    if (!existing) {
+      action = "CREATE";
+      changes = [];
+    } else {
+      changes = computeItemDiff(
+        {
+          name: existing.name,
+          unitPrice: existing.unitPrice,
+          costPrice: existing.costPrice,
+          barcode: existing.barcode,
+          categoryName: existing.categoryName,
+        },
+        {
+          name,
+          unitPrice: isNaN(unitPrice) ? "0.00" : unitPrice.toFixed(2),
+          costPrice: isNaN(costPrice) ? "0.00" : costPrice.toFixed(2),
+          barcode,
+          categoryName,
+          // `isVariant` / option fields are patched later during variant
+          // grouping; we reclassify in the second pass below so they're
+          // honored. For now, compare as non-variant (options empty).
+          isVariant: false,
+          option1Name,
+          option1Value,
+          option2Name,
+          option2Value,
+          option3Name,
+          option3Value,
+          locations: rowLocations,
+        },
+        existingStockMap.get(existing.id) ?? new Map(),
+        existingVariantOptionMap.get(existing.id) ?? [],
+      );
+      action = changes.length > 0 ? "UPDATE" : "NO_CHANGE";
     }
 
     if (rowErrors.length > 0) {
@@ -563,9 +845,11 @@ export async function parseLoyverseCSV(
       }
     } else if (action === "CREATE") {
       createCount++;
-    } else {
+    } else if (action === "UPDATE") {
       updateCount++;
     }
+    // NO_CHANGE rows don't contribute to any count at this point — they're
+    // tallied during the final recount pass below.
 
     parsedRows.push({
       rowIndex: rowNum,
@@ -663,12 +947,54 @@ export async function parseLoyverseCSV(
     }
   }
 
-  // Recount after variant resolution (some rows may have lost their errors)
+  // Recount after variant resolution (some rows may have lost their errors).
+  //
+  // Also re-run the diff for rows that are now known to be variants — the
+  // first-pass classification treated them as non-variants (isVariant=false)
+  // because the variant grouping runs afterward. For these rows the option
+  // fields need to participate in the diff, which can promote NO_CHANGE to
+  // UPDATE (or vice versa) when option values actually differ.
   createCount = 0;
   updateCount = 0;
+  let noChangeCount = 0;
   skipCount = 0;
   const updatedErrors: Array<{ row: number; message: string }> = [];
   for (const row of parsedRows) {
+    // Re-diff variant rows whose existingProductId is known — their first-pass
+    // diff ignored option values.
+    if (row.isVariant && row.existingProductId && row.errors.length === 0) {
+      const existing = skuMap.get(row.sku.toLowerCase());
+      if (existing) {
+        row.changes = computeItemDiff(
+          {
+            name: existing.name,
+            unitPrice: existing.unitPrice,
+            costPrice: existing.costPrice,
+            barcode: existing.barcode,
+            categoryName: existing.categoryName,
+          },
+          {
+            name: row.name,
+            unitPrice: row.unitPrice,
+            costPrice: row.costPrice,
+            barcode: row.barcode,
+            categoryName: row.categoryName,
+            isVariant: true,
+            option1Name: row.option1Name,
+            option1Value: row.option1Value,
+            option2Name: row.option2Name,
+            option2Value: row.option2Value,
+            option3Name: row.option3Name,
+            option3Value: row.option3Value,
+            locations: row.locations,
+          },
+          existingStockMap.get(existing.id) ?? new Map(),
+          existingVariantOptionMap.get(existing.id) ?? [],
+        );
+        row.action = row.changes.length > 0 ? "UPDATE" : "NO_CHANGE";
+      }
+    }
+
     if (row.errors.length > 0) {
       skipCount++;
       for (const e of row.errors) {
@@ -676,8 +1002,10 @@ export async function parseLoyverseCSV(
       }
     } else if (row.action === "CREATE") {
       createCount++;
-    } else {
+    } else if (row.action === "UPDATE") {
       updateCount++;
+    } else {
+      noChangeCount++;
     }
   }
 
@@ -735,42 +1063,46 @@ export async function parseLoyverseCSV(
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
 
+  // Row → preview-summary shape. Keeps variant display logic in one place.
+  const toSummary = (r: ParsedRow): PreviewRowSummary => ({
+    rowIndex: r.rowIndex,
+    name: r.isVariant ? r.parentName : r.name,
+    variantName: r.isVariant
+      ? [r.option1Value, r.option2Value, r.option3Value].filter(Boolean).join(" / ") || null
+      : null,
+    sku: r.sku,
+    action: r.action,
+    changes: r.changes,
+    errors: r.errors,
+    isVariant: r.isVariant,
+  });
+
   return {
     previewToken,
     format: "loyverse",
     totalRows: parsedRows.length,
     createCount,
     updateCount,
+    noChangeCount,
     skipCount,
     errorCount: updatedErrors.length,
     locationMapping,
     categoryMapping,
     errors: updatedErrors,
-    preview: parsedRows.slice(0, 100).map((r) => ({
-      rowIndex: r.rowIndex,
-      name: r.isVariant ? r.parentName : r.name,
-      variantName: r.isVariant
-        ? [r.option1Value, r.option2Value, r.option3Value].filter(Boolean).join(" / ") || null
-        : null,
-      sku: r.sku,
-      action: r.action,
-      changes: r.changes,
-      errors: r.errors,
-      isVariant: r.isVariant,
-    })),
-    // All CREATE rows for the preview (so frontend can show them even if none are in the first 100)
-    createPreview: parsedRows.filter((r) => r.action === "CREATE").map((r) => ({
-      rowIndex: r.rowIndex,
-      name: r.isVariant ? r.parentName : r.name,
-      variantName: r.isVariant
-        ? [r.option1Value, r.option2Value, r.option3Value].filter(Boolean).join(" / ") || null
-        : null,
-      sku: r.sku,
-      action: r.action as "CREATE",
-      changes: r.changes,
-      errors: r.errors,
-      isVariant: r.isVariant,
-    })),
+    preview: parsedRows.slice(0, 100).map(toSummary),
+    // ALL CREATE rows — lets the frontend show creates even if none are in the first 100.
+    createPreview: parsedRows.filter((r) => r.action === "CREATE").map(toSummary),
+    // ALL UPDATE rows — typically small (this fix's whole premise is that only a
+    // handful of rows on a 47K reimport are real updates). Needed because with
+    // NO_CHANGE rows dominating the CSV, updates would never appear in the
+    // first-100 slice.
+    updatePreview: parsedRows.filter((r) => r.action === "UPDATE").map(toSummary),
+    // Sample of NO_CHANGE rows for user sanity-check. Capped — the full list can
+    // be tens of thousands of rows and would blow the JSON response.
+    noChangePreview: parsedRows
+      .filter((r) => r.action === "NO_CHANGE")
+      .slice(0, 100)
+      .map(toSummary),
   };
 }
 
@@ -922,6 +1254,7 @@ export async function executeImport(
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  let noChange = 0;
   const importErrors: Array<{ row: number; message: string }> = [];
 
   // Init progress
@@ -932,6 +1265,7 @@ export async function executeImport(
     percent: 0,
     created: 0,
     updated: 0,
+    noChange: 0,
     errors: 0,
   });
 
@@ -1047,6 +1381,19 @@ export async function executeImport(
               skipped++;
               continue;
             }
+          }
+
+          // NO_CHANGE: the preview pass already diffed CSV vs DB and found
+          // zero changed tracked fields. Skipping here means:
+          //   - no SAVEPOINT open
+          //   - no UPDATE/INSERT against products/inventory
+          //   - no audit-table write (price-change log, etc.)
+          //   - no updated_at bump
+          // This is the entire point of the NO_CHANGE classification — turning
+          // 47K no-op UPDATEs into a zero-write walk.
+          if (row.action === "NO_CHANGE") {
+            noChange++;
+            continue;
           }
 
           try {
@@ -1433,6 +1780,7 @@ export async function executeImport(
       percent: Math.round((processed / parsedRows.length) * 100),
       created,
       updated,
+      noChange,
       errors: importErrors.length,
     });
   }
@@ -1447,6 +1795,7 @@ export async function executeImport(
     percent: 100,
     created,
     updated,
+    noChange,
     errors: importErrors.length,
     errorLog: importErrors,
   });
@@ -1454,7 +1803,7 @@ export async function executeImport(
   // Clean up cached preview data (import is done)
   previewCache.delete(options.previewToken);
 
-  return { created, updated, skipped, errors: importErrors.length, errorLog: importErrors, duration };
+  return { created, updated, skipped, noChange, errors: importErrors.length, errorLog: importErrors, duration };
 }
 
 // ── getProgress ──────────────────────────────────────────────────────
