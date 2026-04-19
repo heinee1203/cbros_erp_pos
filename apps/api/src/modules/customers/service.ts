@@ -374,9 +374,11 @@ export async function recomputeSOAStatus(
   tx: any,
   orgId: string,
   soaId: string,
-): Promise<{ soaId: string; prevStatus: string; newStatus: string; realAllocated: number; totalPayable: number; unpaidCharges: number } | null> {
+): Promise<{ soaId: string; prevStatus: string; newStatus: string; realAllocated: number; totalPayable: number } | null> {
   const [soa] = (await tx.execute(sql`
-    SELECT id, status, total_payable::numeric AS total_payable,
+    SELECT id, status,
+           total_charges::numeric AS total_charges,
+           total_payable::numeric AS total_payable,
            COALESCE(paid_amount, 0)::numeric AS stored_paid
     FROM soa_records
     WHERE id = ${soaId} AND org_id = ${orgId}
@@ -387,43 +389,55 @@ export async function recomputeSOAStatus(
   // VOID is terminal — never overwrite
   if (soa.status === "VOID") return null;
 
-  // Real allocation = sum of ar_payment_allocations on this SOA's line items
-  const [allocRow] = (await tx.execute(sql`
-    SELECT COALESCE(SUM(pa.allocated_amount)::numeric, 0) AS real_allocated
+  // Cash coverage = sum of ar_payment_allocations against CHARGE line items only.
+  // Allocations against CM line items (if any exist from the UI auto-tick) are
+  // intentionally ignored — credits contribute via creditCoverage below, never
+  // via this path, so there's no double-count risk.
+  const [chargeAllocRow] = (await tx.execute(sql`
+    SELECT COALESCE(SUM(pa.allocated_amount)::numeric, 0) AS charge_allocated
     FROM soa_line_items sli
-    JOIN ar_payment_allocations pa ON pa.charge_transaction_id = sli.transaction_id
+    JOIN customer_transactions ct ON ct.id = sli.transaction_id AND ct.type = 'CHARGE'
+    LEFT JOIN ar_payment_allocations pa ON pa.charge_transaction_id = sli.transaction_id
     WHERE sli.soa_id = ${soaId}
   `)) as any[];
-  const realAllocated = parseFloat(allocRow?.real_allocated ?? "0");
+  const realAllocatedCharges = parseFloat(chargeAllocRow?.charge_allocated ?? "0");
+
+  // Credit coverage = sum of CM line-item amounts on this SOA. Uses the CM
+  // amount field directly (not allocations) so legacy payments with no CM
+  // allocation rows still recompute correctly, and so a future change to how
+  // CM allocations are written can't accidentally double-count.
+  const [creditRow] = (await tx.execute(sql`
+    SELECT COALESCE(SUM(ct.amount)::numeric, 0) AS credit_coverage
+    FROM soa_line_items sli
+    JOIN customer_transactions ct ON ct.id = sli.transaction_id AND ct.type = 'CREDIT_NOTE'
+    WHERE sli.soa_id = ${soaId}
+  `)) as any[];
+  const creditCoverage = parseFloat(creditRow?.credit_coverage ?? "0");
+
+  const totalCharges = parseFloat(soa.total_charges);
   const totalPayable = parseFloat(soa.total_payable);
 
-  // Count unpaid CHARGE lines (a CHARGE is unpaid if allocations < its amount)
-  const [unpaidRow] = (await tx.execute(sql`
-    SELECT COUNT(*)::int AS n
-    FROM soa_line_items sli
-    JOIN customer_transactions ct ON ct.id = sli.transaction_id
-    LEFT JOIN (
-      SELECT charge_transaction_id, SUM(allocated_amount)::numeric AS allocated
-      FROM ar_payment_allocations
-      GROUP BY charge_transaction_id
-    ) pa ON pa.charge_transaction_id = ct.id
-    WHERE sli.soa_id = ${soaId}
-      AND ct.type = 'CHARGE'
-      AND ct.amount::numeric > COALESCE(pa.allocated, 0)
-  `)) as any[];
-  const unpaidCharges = parseInt(unpaidRow?.n ?? "0", 10);
-
+  // PAID when cash + credits cover the gross charges. Replaces the old per-charge
+  // unpaidCharges check, which counted Q3283 as unpaid when the customer paid the
+  // SOA's correct net amount but the cash distribution ran out exactly on the
+  // last charge by the CM amount (PAY-2026-0106 case).
+  // PARTIAL requires actual cash to have arrived — CMs alone (e.g. on a
+  // freshly-generated SOA whose CMs were tallied in but no payment yet) don't
+  // promote out of GENERATED.
+  const effectiveCoverage = realAllocatedCharges + creditCoverage;
   let newStatus: string;
-  if (realAllocated >= totalPayable - 0.005 && unpaidCharges === 0) {
+  if (effectiveCoverage >= totalCharges - 0.005) {
     newStatus = "PAID";
-  } else if (realAllocated > 0.005) {
+  } else if (realAllocatedCharges > 0.005) {
     newStatus = "PARTIAL";
   } else {
-    // No allocations — preserve existing non-payment state (GENERATED/SENT)
+    // No cash arrived — preserve existing non-payment state (GENERATED/SENT)
     newStatus = soa.status === "PAID" || soa.status === "PARTIAL" ? "GENERATED" : soa.status;
   }
 
-  const storedPaid = Math.min(realAllocated, totalPayable).toFixed(2);
+  // paid_amount keeps cash-only semantics. External reports may depend on this
+  // representing money that came in, not credit applied.
+  const storedPaid = Math.min(realAllocatedCharges, totalPayable).toFixed(2);
 
   await tx.execute(sql`
     UPDATE soa_records
@@ -435,9 +449,8 @@ export async function recomputeSOAStatus(
     soaId,
     prevStatus: soa.status,
     newStatus,
-    realAllocated,
+    realAllocated: realAllocatedCharges,
     totalPayable,
-    unpaidCharges,
   };
 }
 
