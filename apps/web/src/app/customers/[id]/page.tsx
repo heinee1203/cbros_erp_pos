@@ -398,7 +398,13 @@ export default function CustomerDetailPage() {
           batchNumber: primaryLine.method === "CREDIT_CARD" ? (primaryLine.batchNo || undefined) : undefined,
           traceNumber: primaryLine.method === "CREDIT_CARD" ? (primaryLine.traceNo || undefined) : undefined,
           cardType: primaryLine.method === "CREDIT_CARD" ? (primaryLine.cardType || undefined) : undefined,
-          paymentLines: (payLines.length > 1 || ewtEnabled) ? linesJson : undefined,
+          // Always send the structured lines — payment_lines JSON is the canonical
+          // store for method-specific details (bank, check #, check date, card type,
+          // batch, trace, reference). The previous gate skipped single-line non-EWT
+          // payments, dropping check/card details on the floor; the reprint path
+          // (customer transactions list) then had nothing to render and the receipt
+          // came out missing Bank/CheckNo/CheckDate rows.
+          paymentLines: linesJson,
           // Invoice-level allocations from the expanded SOA view
           allocations: Object.keys(invoiceAllocs).length > 0
             ? Object.entries(invoiceAllocs).filter(([, amt]) => parseFloat(amt) !== 0).map(([chargeTransactionId, amount]) => ({ chargeTransactionId, amount: Math.abs(parseFloat(amount)) }))
