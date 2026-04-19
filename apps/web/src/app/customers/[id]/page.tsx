@@ -1476,6 +1476,15 @@ export default function CustomerDetailPage() {
                                         newAllocs[inv.id] = a.toFixed(2);
                                         rem -= a;
                                       }
+                                      // Also auto-tick all CMs on this SOA so the Selected Invoices total
+                                      // matches the SOA payable header. Mirrors the Select-All button's
+                                      // behavior (writes full inv.amount, ignoring any prior allocation
+                                      // against the CM — same as Select-All today).
+                                      for (const inv of (res.data || [])) {
+                                        if (inv.type === "CREDIT_NOTE") {
+                                          newAllocs[inv.id] = `-${inv.amount.toFixed(2)}`;
+                                        }
+                                      }
                                       setInvoiceAllocs((prev) => ({ ...prev, ...newAllocs }));
                                     } catch {}
                                   } else {
