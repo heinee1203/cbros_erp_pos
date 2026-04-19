@@ -61,13 +61,24 @@ function buildAppliedToSection(d: PaymentReceiptData): string {
 
   // Single SOA
   if (soas.length === 1) {
-    const soaNum = soas[0].soaNumber;
+    const soa = soas[0];
+    const soaNum = soa.soaNumber;
     const soaInvoices = invoices.length > 0 ? invoices.filter((i) => !i.soaNumber || i.soaNumber === soaNum) : [];
-    const invoiceNet = soaInvoices.reduce((s, inv) => s + inv.amount, 0);
-    const isFullPayment = soaInvoices.length > 0 && Math.abs(d.amount - Math.abs(invoiceNet)) < 1;
+
+    // Hide the Invoices Settled list when this payment fully settles the only
+    // SOA — the SOA number on the "Applied to" row is authoritative and the
+    // invoice list is redundant noise. Use soaRemaining (post-payment balance)
+    // as the source of truth; fall back to the legacy amount-vs-invoice-net
+    // check when the caller didn't include soaRemaining.
+    const fullySettled = soa.soaRemaining !== undefined
+      ? soa.soaRemaining < 0.005
+      : (() => {
+          const invoiceNet = soaInvoices.reduce((s, inv) => s + inv.amount, 0);
+          return soaInvoices.length > 0 && Math.abs(d.amount - Math.abs(invoiceNet)) < 1;
+        })();
 
     let html = `<tr><td class="lbl">Applied to:</td><td colspan="3">${esc(soaNum)}</td></tr>`;
-    if (!isFullPayment && soaInvoices.length > 0) {
+    if (!fullySettled && soaInvoices.length > 0) {
       html += `<tr><td colspan="4"><div style="margin-top:2px"><div style="font-weight:700;font-size:6.5pt;margin-bottom:1px">Invoices Settled:</div><table style="width:100%;border-collapse:collapse;line-height:1.2">`;
       html += soaInvoices.map((inv) => `<tr><td style="padding:1px 0 1px 4px;font-size:6.5pt;font-family:monospace">${esc(inv.referenceNumber)}</td><td style="text-align:right;padding:1px 0;font-size:6.5pt">${fmt(inv.amount)}</td></tr>`).join("\n");
       html += `</table></div></td></tr>`;
@@ -136,7 +147,7 @@ function formatLineDetail(l: PaymentLineData, d: PaymentReceiptData): string {
 }
 
 function buildPaymentDetails(d: PaymentReceiptData): string {
-  // Build payment lines — always use the breakdown format
+  // Build payment lines from the structured array, or fall back to top-level fields
   let effectiveLines: PaymentLineData[] = [];
 
   if (d.paymentLines && d.paymentLines.length > 0) {
@@ -151,6 +162,35 @@ function buildPaymentDetails(d: PaymentReceiptData): string {
     }];
   }
 
+  // Single-line branch: inline label rows (Amount / Method / Bank / Check No /
+  // Check Date) — matches the physical receipt's layout. The numbered Payment
+  // Breakdown block adds visual noise when there's only one line.
+  if (effectiveLines.length === 1) {
+    const l = effectiveLines[0];
+    const methodLabel = METHOD_LABELS[l.method] ?? l.method;
+    const rows: string[] = [];
+    rows.push(
+      `<tr><td class="lbl">Amount:</td><td>${fmt(l.amount)}</td><td class="lbl2">Method:</td><td>${esc(methodLabel)}</td></tr>`
+    );
+    if (l.method === "CHECK") {
+      if (l.bank) rows.push(`<tr><td class="lbl">Bank:</td><td colspan="3">${esc(l.bank)}</td></tr>`);
+      if (l.checkNumber) rows.push(`<tr><td class="lbl">Check No:</td><td colspan="3">${esc(l.checkNumber)}</td></tr>`);
+      if (l.checkDate) rows.push(`<tr><td class="lbl">Check Date:</td><td colspan="3">${esc(fmtShortDate(l.checkDate))}</td></tr>`);
+    } else if (l.method === "CREDIT_CARD") {
+      if (l.cardType) rows.push(`<tr><td class="lbl">Card Type:</td><td colspan="3">${esc(l.cardType)}</td></tr>`);
+      if (l.batchNumber) rows.push(`<tr><td class="lbl">Batch No:</td><td colspan="3">${esc(l.batchNumber)}</td></tr>`);
+      if (l.traceNumber) rows.push(`<tr><td class="lbl">Trace No:</td><td colspan="3">${esc(l.traceNumber)}</td></tr>`);
+    } else if (l.method === "BANK_TRANSFER" || l.method === "GCASH" || l.method === "MAYA" || l.method === "QRPH") {
+      if (l.reference) rows.push(`<tr><td class="lbl">Reference:</td><td colspan="3">${esc(l.reference)}</td></tr>`);
+    } else if (l.method === "EWT") {
+      if (l.rate) rows.push(`<tr><td class="lbl">Rate:</td><td colspan="3">${l.rate}%</td></tr>`);
+      if (l.bir2307) rows.push(`<tr><td class="lbl">BIR 2307:</td><td colspan="3">${esc(l.bir2307)}</td></tr>`);
+    }
+    return rows.join("\n");
+  }
+
+  // Multi-line branch: numbered Payment Breakdown table — preserves working
+  // behavior for split payments (e.g. Cash + Check).
   const hasEwt = effectiveLines.some((l) => l.method === "EWT");
   const rows = effectiveLines.map((l, i) =>
     `<tr><td style="padding:1px 0;font-size:7pt">${i + 1}. ${formatLineDetail(l, d)}</td><td style="text-align:right;padding:1px 0;font-size:7pt;tabular-nums">${fmt(l.amount)}</td></tr>`
