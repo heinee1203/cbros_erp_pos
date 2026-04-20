@@ -170,6 +170,7 @@ const NAV_TOP: NavEntry[] = [
     permission: "bo.manage_customers",
     children: [
       { label: "Customers", href: "/customers", match: /^\/customers$/ },
+      { label: "Customer Invoices", href: "/customers/invoices", match: /^\/customers\/invoices/ },
       { label: "AR Aging Report", href: "/customers/reports/aging", match: /^\/customers\/reports\/aging/ },
       { label: "SOA History", href: "/customers/soa-search", match: /^\/customers\/soa-search/ },
       { label: "Payment Register", href: "/customers/payment-register", match: /^\/customers\/payment-register/ },
