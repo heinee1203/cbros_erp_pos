@@ -8,6 +8,7 @@ import {
   boolean,
   jsonb,
   timestamp,
+  date,
   index,
 } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
@@ -54,6 +55,13 @@ export const customerTransactions = pgTable(
     cardType: varchar("card_type", { length: 20 }),
     /** Split payment details: array of { method, amount, reference?, bank?, checkNumber?, checkDate?, cardType?, batchNumber?, traceNumber? } */
     paymentLines: jsonb("payment_lines"),
+    /** Where this charge came from: MANUAL (Customer Invoices page), POS
+     * (chargeCustomerAccount on a sale), or IMPORT (future AR import path).
+     * CHECK constraint at the SQL layer enforces the enum. */
+    source: text("source").notNull().default("MANUAL"),
+    /** Due date for charges — drives the Overdue KPI and Due Date column on
+     * the Customer Invoices page. NULL on historical rows (no inferred default). */
+    dueDate: date("due_date"),
   },
   (table) => [
     index("idx_customer_txn_org_cust_date").on(
