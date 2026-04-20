@@ -3287,8 +3287,12 @@ async function handleAllLocationsQuery(
     ? sql`AND p.category = ${q.category}`
     : sql``;
 
-  const subCategoryFilter = q.subCategoryId
-    ? q.subCategoryId === "__none__" ? sql`AND p.category_id IS NULL` : sql`AND p.category_id = ${q.subCategoryId}::uuid`
+  // Bug 8 follow-up: client sends `categoryId` (canonical name); the legacy
+  // `subCategoryId` was the only Bug-8-incomplete spot left in this file.
+  // Variable name kept as subCategoryFilter to avoid colliding with the
+  // separate `categoryFilter` (free-text legacy `p.category` column) above.
+  const subCategoryFilter = q.categoryId
+    ? q.categoryId === "__none__" ? sql`AND p.category_id IS NULL` : sql`AND p.category_id = ${q.categoryId}::uuid`
     : sql``;
 
   const subcategoryFilter = q.subcategoryId
