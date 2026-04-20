@@ -2,7 +2,8 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Search, X, Download, Plus, MoreVertical, AlertTriangle, Clock, DollarSign } from "lucide-react";
+import { FileText, Search, X, Download, Plus, MoreVertical, AlertTriangle, Clock, DollarSign, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { cn } from "@/lib/utils";
 import { fmtPeso, fmtDate } from "@/lib/format";
@@ -482,83 +483,144 @@ function CustomerPicker({ value, onChange, token, locationId }: {
 }
 
 /* ─── Create Invoice Modal ─── */
+/** One row in the batch-create form. amount stays as a string for input control. */
+interface DraftRow { id: string; referenceNumber: string; recordedAt: string; dueDate: string; amount: string; }
+const newDraftRow = (): DraftRow => ({
+  id: Math.random().toString(36).slice(2),
+  referenceNumber: "",
+  recordedAt: todayISO(),
+  dueDate: plusDaysISO(30),
+  amount: "",
+});
+
 function CreateInvoiceModal({ token, locationId, onClose, onSuccess }: {
   token: string; locationId: string; onClose: () => void; onSuccess: () => void;
 }) {
   const [customer, setCustomer] = useState<CustomerLite | null>(null);
-  const [refNum, setRefNum] = useState("");
-  const [chargeDate, setChargeDate] = useState(todayISO());
-  const [dueDate, setDueDate] = useState(plusDaysISO(30));
-  const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
+  const [rows, setRows] = useState<DraftRow[]>(() => [newDraftRow()]);
+  const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  const updateRow = (id: string, field: keyof DraftRow, value: string) =>
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  const removeRow = (id: string) => setRows((prev) => prev.filter((r) => r.id !== id));
+  const addRow = () => setRows((prev) => [...prev, newDraftRow()]);
+
+  // Count + total of valid rows (ref# present + amount > 0). Drives the
+  // submit button label and disabled state.
+  const validRows = rows.filter((r) => r.referenceNumber.trim() && parseFloat(r.amount) > 0);
+  const validTotal = validRows.reduce((s, r) => s + parseFloat(r.amount), 0);
+  const canSubmit = !!customer && validRows.length > 0 && !submitting;
 
   const submit = async () => {
     setError("");
     if (!customer) { setError("Customer is required"); return; }
-    if (!refNum.trim()) { setError("Reference # is required"); return; }
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) { setError("Amount must be greater than 0"); return; }
+    if (validRows.length === 0) { setError("Add at least one row with a reference # and amount"); return; }
     setSubmitting(true);
     try {
-      await apiFetch(`/customers/${customer.id}/charges`, {
+      const res = await apiFetch<{ created: number }>(`/customers/invoices/batch`, {
         method: "POST", token, locationId,
         body: JSON.stringify({
-          amount: amt.toFixed(2),
-          referenceNumber: refNum.trim(),
-          chargeDate: chargeDate ? `${chargeDate}T00:00:00Z` : undefined,
-          dueDate: dueDate || undefined,
-          description: description.trim() || undefined,
+          customerId: customer.id,
+          notes: notes.trim() || undefined,
+          invoices: validRows.map((r) => ({
+            referenceNumber: r.referenceNumber.trim(),
+            recordedAt: r.recordedAt ? `${r.recordedAt}T00:00:00Z` : undefined,
+            dueDate: r.dueDate || undefined,
+            amount: parseFloat(r.amount),
+          })),
         }),
       });
+      const noun = res.created === 1 ? "invoice" : "invoices";
+      toast.success(`Recorded ${res.created} ${noun} for ${customer.name}`);
       onSuccess();
     } catch (err: any) {
-      setError(err.message || "Failed to create invoice");
+      const msg = err?.message || "Failed to record invoices";
+      setError(msg);
+      toast.error(msg);
     } finally { setSubmitting(false); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-[480px] rounded-xl border border-border bg-background shadow-xl">
+      <div className="w-[720px] rounded-xl border border-border bg-background shadow-xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-[14px] font-semibold">Create Invoice</h2>
+          <h2 className="text-[14px] font-semibold">Record Customer Invoices</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X size={16} /></button>
         </div>
+
         <div className="p-4 space-y-3">
           <Field label="Customer">
             <CustomerPicker value={customer} onChange={setCustomer} token={token} locationId={locationId} />
           </Field>
-          <Field label="Reference #">
-            <input type="text" value={refNum} onChange={(e) => setRefNum(e.target.value)}
-              className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40" />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Invoice Date">
-              <input type="date" value={chargeDate} onChange={(e) => setChargeDate(e.target.value)}
-                className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40" />
-            </Field>
-            <Field label="Due Date">
-              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)}
-                className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40" />
-            </Field>
+
+          {/* Invoices section header */}
+          <div className="flex items-center justify-between pt-1">
+            <label className="text-[11px] font-medium text-muted-foreground">Invoices</label>
+            <button onClick={addRow} className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/10">
+              <Plus size={12} /> Add Row
+            </button>
           </div>
-          <Field label="Amount">
-            <input type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)}
-              placeholder="0.00"
-              className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] tabular-nums outline-none focus:border-primary/40" />
-          </Field>
-          <Field label="Description (optional)">
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
+
+          {/* Rows table */}
+          <div className="overflow-hidden rounded border border-border">
+            <div className="grid grid-cols-[28px_1fr_120px_120px_120px_28px] gap-1 border-b border-border bg-muted/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <span>#</span>
+              <span>Invoice #</span>
+              <span>Date</span>
+              <span>Due Date</span>
+              <span className="text-right">Amount</span>
+              <span />
+            </div>
+            {rows.map((r, idx) => (
+              <div key={r.id} className="grid grid-cols-[28px_1fr_120px_120px_120px_28px] gap-1 border-b border-border/50 px-2 py-1 text-[12px] last:border-b-0 items-center">
+                <span className="text-[11px] text-muted-foreground">{idx + 1}</span>
+                <input type="text" value={r.referenceNumber} onChange={(e) => updateRow(r.id, "referenceNumber", e.target.value)}
+                  placeholder="INV-001"
+                  className="h-7 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40" />
+                <input type="date" value={r.recordedAt} onChange={(e) => updateRow(r.id, "recordedAt", e.target.value)}
+                  className="h-7 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40" />
+                <input type="date" value={r.dueDate} onChange={(e) => updateRow(r.id, "dueDate", e.target.value)}
+                  className="h-7 rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40" />
+                <input type="number" step="0.01" min="0" value={r.amount} onChange={(e) => updateRow(r.id, "amount", e.target.value)}
+                  placeholder="0.00"
+                  className="h-7 rounded border border-border bg-background px-2 text-[12px] tabular-nums text-right outline-none focus:border-primary/40" />
+                <button
+                  onClick={() => removeRow(r.id)}
+                  disabled={rows.length === 1}
+                  title={rows.length === 1 ? "At least one row required" : "Remove row"}
+                  className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:pointer-events-none"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            {/* Totals footer */}
+            <div className="grid grid-cols-[28px_1fr_120px_120px_120px_28px] gap-1 bg-muted/30 px-2 py-1 text-[11px] font-semibold">
+              <span />
+              <span className="text-muted-foreground">{validRows.length} of {rows.length} valid</span>
+              <span />
+              <span className="text-right text-muted-foreground">Total</span>
+              <span className="text-right tabular-nums">{fmtPeso(validTotal)}</span>
+              <span />
+            </div>
+          </div>
+
+          <Field label="Notes (shared, optional)">
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+              placeholder="Applies to every row in this batch"
               className="w-full rounded border border-border bg-background px-2 py-1 text-[12px] outline-none focus:border-primary/40" />
           </Field>
+
           {error && <div className="text-[11px] text-red-600">{error}</div>}
         </div>
+
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
           <button onClick={onClose} className="rounded-lg px-3 py-1.5 text-[12px] text-muted-foreground hover:bg-muted">Cancel</button>
-          <button onClick={submit} disabled={submitting}
+          <button onClick={submit} disabled={!canSubmit}
             className="rounded-lg bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-            {submitting ? "Saving…" : "Create Invoice"}
+            {submitting ? "Recording…" : `Record ${validRows.length} ${validRows.length === 1 ? "Invoice" : "Invoices"}`}
           </button>
         </div>
       </div>

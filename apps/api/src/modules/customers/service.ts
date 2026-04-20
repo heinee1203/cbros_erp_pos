@@ -1267,6 +1267,107 @@ export async function recordManualCharge(
   });
 }
 
+/**
+ * Batch-record manual customer charges (Customer Invoices "+ Create Invoice"
+ * modal). All-or-nothing: any failure rolls back the entire batch.
+ *
+ * Locks the customer row once, validates the total against the credit limit
+ * once, iterates inserts, then writes a single balance update at the end.
+ * Avoids the N×lock overhead of calling recordManualCharge in a loop.
+ *
+ * Each row's recordedAt + dueDate are independent; notes are shared across
+ * the batch (caller passes a single string applied to every row).
+ */
+export async function recordManualChargeBatch(
+  orgId: string,
+  customerId: string,
+  data: {
+    invoices: Array<{
+      referenceNumber: string;
+      recordedAt?: string;     // ISO date or datetime; defaults to now()
+      dueDate?: string;        // YYYY-MM-DD; nullable
+      amount: number;
+    }>;
+    notes?: string;
+  },
+  userId: string,
+) {
+  if (!data.invoices || data.invoices.length === 0) {
+    throw new Error("At least one invoice is required");
+  }
+  if (data.invoices.length > 100) {
+    throw new Error("Cannot record more than 100 invoices in a single batch");
+  }
+
+  // Pre-validate every row before opening the transaction so a malformed input
+  // doesn't burn a customer-row lock.
+  for (const [idx, inv] of data.invoices.entries()) {
+    if (!inv.referenceNumber || !inv.referenceNumber.trim()) {
+      throw new Error(`Row ${idx + 1}: reference number is required`);
+    }
+    if (!inv.amount || inv.amount <= 0) {
+      throw new Error(`Row ${idx + 1}: amount must be greater than 0`);
+    }
+  }
+
+  return db.transaction(async (tx) => {
+    const rows = await tx.execute(
+      sql`SELECT * FROM customers WHERE id = ${customerId} AND org_id = ${orgId} FOR UPDATE`,
+    );
+    if (rows.length === 0) throw new Error("Customer not found");
+    const row = rows[0] as any;
+    if (!row.is_active) throw new Error("Customer account is inactive");
+
+    const startBalance = parseFloat(row.current_balance);
+    const creditLimit = parseFloat(row.credit_limit);
+    const batchTotal = data.invoices.reduce((s, inv) => s + inv.amount, 0);
+
+    // Credit limit check — apply against the WHOLE batch, not row-by-row, so
+    // partial-acceptance behaviour matches the user's intent (all or nothing).
+    if (creditLimit > 0 && startBalance + batchTotal > creditLimit) {
+      throw Object.assign(
+        new Error(
+          `Credit limit exceeded by batch. Limit: \u20B1${creditLimit.toFixed(2)}, Current: \u20B1${startBalance.toFixed(2)}, Batch total: \u20B1${batchTotal.toFixed(2)}`,
+        ),
+        { statusCode: 422 },
+      );
+    }
+
+    // Insert each row, accumulating the running balance for balance_after.
+    const created: Array<{ id: string; referenceNumber: string }> = [];
+    let runningBalance = startBalance;
+    for (const inv of data.invoices) {
+      runningBalance += inv.amount;
+      const [transaction] = await tx
+        .insert(customerTransactions)
+        .values({
+          orgId,
+          customerId,
+          type: "CHARGE",
+          amount: inv.amount.toFixed(2),
+          balanceAfter: runningBalance.toFixed(2),
+          referenceType: "manual_charge",
+          referenceNumber: inv.referenceNumber.trim(),
+          notes: data.notes && data.notes.trim() ? data.notes.trim() : null,
+          source: "MANUAL",
+          dueDate: inv.dueDate ?? null,
+          recordedBy: userId,
+          recordedAt: inv.recordedAt ? new Date(inv.recordedAt) : new Date(),
+        })
+        .returning();
+      created.push({ id: transaction.id, referenceNumber: transaction.referenceNumber ?? "" });
+    }
+
+    // Single balance update at the end.
+    await tx
+      .update(customers)
+      .set({ currentBalance: runningBalance.toFixed(2) })
+      .where(eq(customers.id, customerId));
+
+    return { created: created.length, transactions: created };
+  });
+}
+
 // ── AR Report Functions ──
 
 /**

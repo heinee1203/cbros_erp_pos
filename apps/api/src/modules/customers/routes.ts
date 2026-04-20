@@ -37,6 +37,7 @@ import {
   recomputeSOAStatus,
   listPayments,
   listInvoices,
+  recordManualChargeBatch,
 } from "./service";
 
 function assertArRole(role: string) {
@@ -299,6 +300,53 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       pageSize: q.pageSize ? parseInt(q.pageSize, 10) : undefined,
     });
     return reply.send(result);
+  });
+
+  // ─── POST /customers/invoices/batch ───────────────
+  // Batch-create manual customer invoices. All-or-nothing transaction.
+  // Used by the Customer Invoices "+ Create Invoice" modal which mirrors
+  // the AP Record Supplier Invoices bulk-create flow.
+  // Registered BEFORE /:id routes to avoid Fastify pattern collision.
+  app.post("/invoices/batch", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertArRole(role);
+
+    const body = request.body as {
+      customerId?: string;
+      invoices?: Array<{ referenceNumber?: string; recordedAt?: string; dueDate?: string; amount?: number | string }>;
+      notes?: string;
+    };
+    if (!body.customerId) return reply.status(400).send({ error: "customerId is required" });
+    if (!Array.isArray(body.invoices) || body.invoices.length === 0) {
+      return reply.status(400).send({ error: "invoices[] must contain at least one row" });
+    }
+    // dueDate format guard (mirrors single-invoice route)
+    for (const [idx, inv] of body.invoices.entries()) {
+      if (inv.dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(inv.dueDate)) {
+        return reply.status(400).send({ error: `Row ${idx + 1}: dueDate must be YYYY-MM-DD` });
+      }
+    }
+
+    const normalized = body.invoices.map((inv) => ({
+      referenceNumber: (inv.referenceNumber ?? "").trim(),
+      recordedAt: inv.recordedAt,
+      dueDate: inv.dueDate,
+      amount: typeof inv.amount === "string" ? parseFloat(inv.amount) : Number(inv.amount ?? 0),
+    }));
+
+    try {
+      const result = await recordManualChargeBatch(
+        orgId,
+        body.customerId,
+        { invoices: normalized, notes: body.notes },
+        userId,
+      );
+      return reply.status(201).send(result);
+    } catch (err: any) {
+      const status = err.statusCode || 400;
+      return reply.status(status).send({ error: err.message });
+    }
   });
 
   // ─── GET /customers/payments ──────────────────────
