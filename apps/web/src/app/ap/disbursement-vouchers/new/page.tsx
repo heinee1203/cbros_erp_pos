@@ -256,14 +256,28 @@ export default function NewDisbursementVoucherPage() {
         amount: String(parseFloat(c.amount).toFixed(2)),
       }));
 
-  const buildBody = (soaId?: string, soaGross?: string) => ({
-    supplierId, soaId: soaId || soaIdParam || undefined,
-    grossAmount: soaGross || grossAmount,
-    paymentDate, remarks: remarks || undefined,
-    deductions: buildDeductions(),
-    additionalCharges: buildCharges(),
-    payments: buildPaymentLines(),
-  });
+  const buildBody = (soaId?: string, soaGross?: string) => {
+    // Send soaId for the explicit-singular path; ALSO send soaIds whenever the
+    // URL has any (parsed from ?soaIds= comma-csv OR singular ?soaId=). Without
+    // the soaIds branch, a single SOA arriving via the plural URL param (e.g.
+    // soa-history's "Pay Selected" with one SOA ticked) would lose its linkage
+    // and the 65c970d server guard would correctly reject the orphan payload.
+    // Server resolves soaIds-first per service.ts:2204, so sending both is safe.
+    const explicitSingle = soaId || soaIdParam;
+    const urlSoaIds = soaIdsParam
+      ? soaIdsParam.split(",").filter(Boolean)
+      : soaIdParam ? [soaIdParam] : [];
+    return {
+      supplierId,
+      ...(explicitSingle ? { soaId: explicitSingle } : {}),
+      ...(urlSoaIds.length > 0 ? { soaIds: urlSoaIds } : {}),
+      grossAmount: soaGross || grossAmount,
+      paymentDate, remarks: remarks || undefined,
+      deductions: buildDeductions(),
+      additionalCharges: buildCharges(),
+      payments: buildPaymentLines(),
+    };
+  };
 
   // For multi-SOA: create ONE DV linked to all selected SOAs via junction table
   const handleMultiSave = async (andPrint: boolean) => {
