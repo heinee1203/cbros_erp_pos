@@ -61,6 +61,47 @@ const METHOD_LABELS: Record<string, string> = {
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
+/** Effective payment method for display: ignores EWT deduction lines.
+ * A Check + EWT payment used to count as 2 lines and display "Split"; now
+ * the EWT line is excluded from the split-detection so it correctly
+ * displays as "Check". */
+function displayMethod(row: PaymentRecord): string {
+  const lines = Array.isArray(row.paymentLines) ? row.paymentLines : [];
+  const nonEwt = lines.filter((l: any) => l && typeof l.method === "string" && l.method !== "EWT");
+  if (nonEwt.length === 0) return row.paymentMethod ?? "";
+  if (nonEwt.length === 1) return nonEwt[0].method;
+  return "SPLIT";
+}
+
+/** Method-specific reference text for the Reference column.
+ * - Cash / Split  → em-dash
+ * - Check         → "{bank} {checkNumber}"
+ * - Bank Transfer → "{bank} {reference}"
+ * - Credit Card   → "{cardType} Batch {batchNumber}"
+ * - Digital       → reference
+ * Falls back to em-dash when payment_lines is null (historical data). */
+function buildReference(row: PaymentRecord): string {
+  const method = displayMethod(row);
+  const dash = "\u2014";
+  if (method === "CASH" || method === "SPLIT" || !method) return dash;
+
+  const lines = Array.isArray(row.paymentLines) ? row.paymentLines : [];
+  const line: any = lines.find((l: any) => l && l.method === method) ?? null;
+
+  const join = (...parts: Array<string | null | undefined>) =>
+    parts.map((p) => (p ? String(p).trim() : "")).filter(Boolean).join(" ") || dash;
+
+  if (method === "CHECK") return join(line?.bank, line?.checkNumber);
+  if (method === "BANK_TRANSFER") return join(line?.bank, line?.reference || row.referenceNumber);
+  if (method === "CREDIT_CARD") {
+    const cardType = line?.cardType ?? row.cardType;
+    const batch = line?.batchNumber ?? row.batchNumber;
+    return join(cardType, batch ? `Batch ${batch}` : null);
+  }
+  // GCASH / MAYA / QRPH / OTHER
+  return join(line?.reference || row.referenceNumber);
+}
+
 function buildPageNumbers(current: number, total: number): (number | "...")[] {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
   const pages: (number | "...")[] = [1];
@@ -189,50 +230,46 @@ export default function PaymentRegisterPage() {
       {/* Table */}
       <div className="overflow-hidden rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Payment #</th>
-                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Date</th>
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground w-[120px]">Payment #</th>
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Date</th>
                 <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Customer</th>
-                <th className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Amount</th>
-                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Method</th>
-                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Reference</th>
-                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">SOA</th>
-                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recorded By</th>
+                <th className="px-3 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground w-[120px]">Amount</th>
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground w-[90px]">Method</th>
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground w-[180px]">Reference</th>
+                <th className="px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground w-[120px]">SOA</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i} className="border-b border-border">
-                    <td colSpan={8} className="px-3 py-3"><div className="h-5 animate-pulse rounded bg-muted" /></td>
+                    <td colSpan={7} className="px-3 py-1.5"><div className="h-5 animate-pulse rounded bg-muted" /></td>
                   </tr>
                 ))
               ) : pageData.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-12 text-center text-sm text-muted-foreground">No payments found.</td>
+                  <td colSpan={7} className="px-3 py-12 text-center text-sm text-muted-foreground">No payments found.</td>
                 </tr>
               ) : (
                 pageData.map((r, i) => {
                   const soaRef = extractSoa(r.notes);
+                  const methodKey = displayMethod(r);
+                  const methodLabel = METHOD_LABELS[methodKey] ?? methodKey ?? "\u2014";
+                  const reference = buildReference(r);
                   return (
                     <tr key={r.id} className={`border-b border-border transition-colors hover:bg-accent/50 ${i % 2 === 0 ? "bg-background" : "bg-muted/20"}`}>
-                      <td className="px-3 py-1.5 font-mono text-[13px] font-semibold text-primary">{r.paymentNumber || "\u2014"}</td>
-                      <td className="px-3 py-1.5 text-xs text-muted-foreground">{fmtDate(r.recordedAt)}</td>
-                      <td className="px-3 py-1.5">
-                        <span className="text-[13px] font-medium text-foreground">{r.customerName}</span>
-                        <span className="ml-1.5 text-[10px] text-muted-foreground">{r.customerCode}</span>
+                      <td className="px-3 py-1.5 font-mono text-[13px] font-semibold text-primary whitespace-nowrap">{r.paymentNumber || "\u2014"}</td>
+                      <td className="px-3 py-1.5 text-xs text-muted-foreground whitespace-nowrap">{fmtDate(r.recordedAt)}</td>
+                      <td className="px-3 py-1.5 text-[13px] font-medium text-foreground whitespace-nowrap overflow-hidden text-ellipsis" title={r.customerName}>{r.customerName}</td>
+                      <td className="px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums whitespace-nowrap">{fmtPeso(r.amount)}</td>
+                      <td className="px-3 py-1.5 text-xs whitespace-nowrap">
+                        <span className="inline-flex rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{methodLabel}</span>
                       </td>
-                      <td className="px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums">{fmtPeso(r.amount)}</td>
-                      <td className="px-3 py-1.5 text-xs">
-                        <span className="inline-flex rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                          {METHOD_LABELS[r.paymentMethod ?? ""] ?? r.paymentMethod ?? "\u2014"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-1.5 text-xs text-muted-foreground font-mono">{r.referenceNumber || "\u2014"}</td>
-                      <td className="px-3 py-1.5 text-xs text-muted-foreground font-mono">{soaRef || "\u2014"}</td>
-                      <td className="px-3 py-1.5 text-xs text-muted-foreground">{r.recordedByName || "\u2014"}</td>
+                      <td className="px-3 py-1.5 text-xs text-muted-foreground font-mono whitespace-nowrap overflow-hidden text-ellipsis" title={reference}>{reference}</td>
+                      <td className="px-3 py-1.5 text-xs text-muted-foreground font-mono whitespace-nowrap">{soaRef || "\u2014"}</td>
                     </tr>
                   );
                 })
