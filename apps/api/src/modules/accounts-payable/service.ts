@@ -2207,6 +2207,18 @@ export async function createDisbursementVoucher(
       ? [data.soaId]
       : [];
 
+  // A DV must be linked to at least one SOA. Without this, the orphan DV
+  // gets created with soa_id=NULL and zero junction rows; downstream
+  // confirmDisbursementVoucher then silently no-ops because soaAllocations
+  // resolves to []. Result: DV ends up CONFIRMED but no SOA ever flips off
+  // BILLED. (See DV-2026-000026 / DV-2026-000027 incident.)
+  if (resolvedSoaIds.length === 0) {
+    const err: any = new Error("DV_REQUIRES_SOA");
+    err.code = "DV_REQUIRES_SOA";
+    err.details = { message: "A disbursement voucher must be linked to at least one SOA. Open the Supplier SOA History page and use the Pay action, or select SOAs from the SOA picker." };
+    throw err;
+  }
+
   return await db.transaction(async (tx) => {
     // Validate ALL SOAs if provided
     let soaBalances: Record<string, number> = {};
@@ -2629,6 +2641,18 @@ export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
               allocatedAmount: dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount),
             }]
           : [];
+
+    // Defense-in-depth: any orphan DV that slipped past the create guard
+    // would silently no-op the SOA-update loop below. Reject explicitly so
+    // the caller sees the failure instead of a "successful" confirm that
+    // updates nothing. The only path to recovery is a manual backfill of the
+    // junction row (see backfill-dv-soa-orphans-2026.sql).
+    if (soaAllocations.length === 0) {
+      const err: any = new Error("DV_HAS_NO_SOA_LINK");
+      err.code = "DV_HAS_NO_SOA_LINK";
+      err.details = { dvId, message: "Cannot confirm: this DV has no linked SOA. Contact support to backfill the link." };
+      throw err;
+    }
 
     // Process each linked SOA
     for (const soaAlloc of soaAllocations) {

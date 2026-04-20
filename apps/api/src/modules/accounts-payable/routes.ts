@@ -825,6 +825,9 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
       });
       return reply.status(201).send(result);
     } catch (err: any) {
+      if (err?.code === "DV_REQUIRES_SOA") {
+        return reply.status(400).send({ error: "DV_REQUIRES_SOA", details: err.details });
+      }
       return reply.status(400).send({ error: err.message });
     }
   });
@@ -882,6 +885,9 @@ export const accountsPayableRoutes: FastifyPluginAsync = async (app) => {
       const result = await confirmDisbursementVoucher(orgId, id);
       return reply.send(result);
     } catch (err: any) {
+      if (err?.code === "DV_HAS_NO_SOA_LINK") {
+        return reply.status(400).send({ error: "DV_HAS_NO_SOA_LINK", details: err.details });
+      }
       return reply.status(400).send({ error: err.message });
     }
   });

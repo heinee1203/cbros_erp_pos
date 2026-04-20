@@ -367,6 +367,18 @@ export default function NewDisbursementVoucherPage() {
       {error && <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">{error}</div>}
 
       <div className="space-y-4 rounded-xl border border-border bg-background p-5 shadow-sm">
+        {/* No-SOA notice — blocks the orphan-DV input shape that produced
+         * DV-2026-000026 and DV-2026-000027. The server also rejects empty
+         * soaIds (DV_REQUIRES_SOA), so this is a UX guard, not a security
+         * boundary. Users must reach this page via Supplier SOA History →
+         * Pay (single SOA) or the multi-SOA selection flow. */}
+        {!soaData && !isMultiSOA && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="font-semibold mb-1">No SOA selected</div>
+            <p>A disbursement voucher must be linked to at least one SOA. Open the <a href="/ap/supplier-soa" className="underline font-medium">Supplier SOA History</a> page and click <strong>Pay</strong> on the SOA(s) you want to settle.</p>
+          </div>
+        )}
+
         {/* SOA info */}
         {soaData && !isMultiSOA && (
           <div className="rounded-lg border border-primary/20 bg-primary/[0.03] p-4 space-y-1 text-sm">
@@ -662,9 +674,9 @@ export default function NewDisbursementVoucherPage() {
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={() => router.back()} className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancel</button>
-          <button onClick={handleSaveDraft} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError}
+          <button onClick={handleSaveDraft} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError || (!soaData && !isMultiSOA)}
             className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">{saving ? "Saving…" : "Save Draft"}</button>
-          <button onClick={handleSaveAndPrint} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError}
+          <button onClick={handleSaveAndPrint} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError || (!soaData && !isMultiSOA)}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{saving ? "Saving…" : "Save & Print"}</button>
         </div>
       </div>
