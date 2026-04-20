@@ -2608,6 +2608,97 @@ export async function printDisbursementVoucher(orgId: string, dvId: string) {
   return rows[0];
 }
 
+/**
+ * Settlement work for a DV: paints invoices FIFO across each SOA's line items,
+ * updates the SOA header's total_paid/total_balance, and marks any
+ * CREDIT_MEMO-type deductions as billed.
+ *
+ * Extracted from confirmDisbursementVoucher so orphan-DV cleanups (DVs that
+ * were CONFIRMED before the junction row existed) can replay the settlement
+ * work that the original confirm silently skipped. See
+ * apps/api/scripts/replay-confirm-orphans-dv26-dv27.ts.
+ *
+ * Does NOT touch supplier_disbursement_vouchers.status or
+ * supplier_soa_records.status — those are caller responsibilities (or
+ * unchanged by AP convention, respectively).
+ *
+ * The caller is responsible for:
+ *   - Resolving soaAllocations (typically from supplier_dv_soas + legacy fallback)
+ *   - Guarding against an empty soaAllocations array (this function would
+ *     no-op silently)
+ *   - Passing a transaction handle (this function never opens its own tx)
+ */
+export async function replayConfirmForOrphan(
+  tx: any,
+  dvId: string,
+  soaAllocations: Array<{ soaId: string; allocatedAmount: number }>,
+): Promise<void> {
+  // Process each linked SOA
+  for (const soaAlloc of soaAllocations) {
+    const soaRows = (await tx.execute(
+      sql`SELECT id, total_paid::text, total_amount::text, total_balance::text, status
+          FROM supplier_soa_records WHERE id = ${soaAlloc.soaId} FOR UPDATE`,
+    )) as any[];
+    if (soaRows.length === 0) throw new Error(`SOA ${soaAlloc.soaId} not found`);
+    const soa = soaRows[0] as any;
+
+    const payAmount = soaAlloc.allocatedAmount;
+
+    // Fetch and pay invoices for this SOA (oldest first / FIFO)
+    const invoiceRows = (await tx.execute(
+      sql`SELECT si.id, si.paid_amount::text, si.balance::text,
+                 si.total_amount::text, si.rtv_credit_amount::text, si.notes
+          FROM supplier_soa_line_items sli
+          JOIN supplier_invoices si ON si.id = sli.invoice_id
+          WHERE sli.soa_id = ${soaAlloc.soaId}
+            AND si.status IN ('OPEN', 'PARTIALLY_PAID') AND si.balance::numeric > 0
+          ORDER BY si.invoice_date ASC FOR UPDATE OF si`,
+    )) as any[];
+
+    let remaining = payAmount;
+    for (const inv of invoiceRows) {
+      if (remaining <= 0) break;
+      const invBal = parseFloat(inv.balance);
+      const alloc = Math.min(remaining, invBal);
+      const newPaid = parseFloat(inv.paid_amount) + alloc;
+      const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
+      const newStatus = newBal <= 0.005 ? "PAID" : "PARTIALLY_PAID";
+      const auditNote = `[DV Payment: ${payAmount.toFixed(2)}, DV#${dvId}]`;
+      const notes = inv.notes ? `${inv.notes}\n${auditNote}` : auditNote;
+      await tx.execute(
+        sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
+            balance = ${String(Math.max(0, newBal).toFixed(2))}, status = ${newStatus}, notes = ${notes}
+            WHERE id = ${inv.id}`,
+      );
+      remaining -= alloc;
+    }
+
+    // Update SOA header
+    const newSoaPaid = parseFloat(soa.total_paid) + payAmount;
+    const newSoaBal = parseFloat(soa.total_amount) - newSoaPaid;
+    await tx.execute(
+      sql`UPDATE supplier_soa_records
+          SET total_paid = ${String(newSoaPaid.toFixed(2))},
+              total_balance = ${String(Math.max(0, newSoaBal).toFixed(2))}
+          WHERE id = ${soaAlloc.soaId}`,
+    );
+  }
+
+  // Mark applied credit memos as billed (so they don't appear as available again)
+  const cmDeds = (await tx.execute(
+    sql`SELECT reference_number FROM supplier_dv_deductions
+        WHERE dv_id = ${dvId} AND deduction_type = 'CREDIT_MEMO' AND reference_number IS NOT NULL`,
+  )) as any[];
+  for (const cm of cmDeds) {
+    if (cm.reference_number) {
+      await tx.execute(
+        sql`UPDATE supplier_invoices SET billed = true, billed_soa_id = ${dvId}
+            WHERE id = ${cm.reference_number}`,
+      );
+    }
+  }
+}
+
 export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
   return await db.transaction(async (tx) => {
     const dvRows = (await tx.execute(
@@ -2654,70 +2745,10 @@ export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
       throw err;
     }
 
-    // Process each linked SOA
-    for (const soaAlloc of soaAllocations) {
-      const soaRows = (await tx.execute(
-        sql`SELECT id, total_paid::text, total_amount::text, total_balance::text, status
-            FROM supplier_soa_records WHERE id = ${soaAlloc.soaId} FOR UPDATE`,
-      )) as any[];
-      if (soaRows.length === 0) throw new Error(`SOA ${soaAlloc.soaId} not found`);
-      const soa = soaRows[0] as any;
-
-      const payAmount = soaAlloc.allocatedAmount;
-
-      // Fetch and pay invoices for this SOA (oldest first / FIFO)
-      const invoiceRows = (await tx.execute(
-        sql`SELECT si.id, si.paid_amount::text, si.balance::text,
-                   si.total_amount::text, si.rtv_credit_amount::text, si.notes
-            FROM supplier_soa_line_items sli
-            JOIN supplier_invoices si ON si.id = sli.invoice_id
-            WHERE sli.soa_id = ${soaAlloc.soaId}
-              AND si.status IN ('OPEN', 'PARTIALLY_PAID') AND si.balance::numeric > 0
-            ORDER BY si.invoice_date ASC FOR UPDATE OF si`,
-      )) as any[];
-
-      let remaining = payAmount;
-      for (const inv of invoiceRows) {
-        if (remaining <= 0) break;
-        const invBal = parseFloat(inv.balance);
-        const alloc = Math.min(remaining, invBal);
-        const newPaid = parseFloat(inv.paid_amount) + alloc;
-        const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
-        const newStatus = newBal <= 0.005 ? "PAID" : "PARTIALLY_PAID";
-        const auditNote = `[DV Payment: ${payAmount.toFixed(2)}, DV#${dvRows[0].id}]`;
-        const notes = inv.notes ? `${inv.notes}\n${auditNote}` : auditNote;
-        await tx.execute(
-          sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
-              balance = ${String(Math.max(0, newBal).toFixed(2))}, status = ${newStatus}, notes = ${notes}
-              WHERE id = ${inv.id}`,
-        );
-        remaining -= alloc;
-      }
-
-      // Update SOA header
-      const newSoaPaid = parseFloat(soa.total_paid) + payAmount;
-      const newSoaBal = parseFloat(soa.total_amount) - newSoaPaid;
-      await tx.execute(
-        sql`UPDATE supplier_soa_records
-            SET total_paid = ${String(newSoaPaid.toFixed(2))},
-                total_balance = ${String(Math.max(0, newSoaBal).toFixed(2))}
-            WHERE id = ${soaAlloc.soaId}`,
-      );
-    }
-
-    // Mark applied credit memos as billed (so they don't appear as available again)
-    const cmDeds = (await tx.execute(
-      sql`SELECT reference_number FROM supplier_dv_deductions
-          WHERE dv_id = ${dvId} AND deduction_type = 'CREDIT_MEMO' AND reference_number IS NOT NULL`,
-    )) as any[];
-    for (const cm of cmDeds) {
-      if (cm.reference_number) {
-        await tx.execute(
-          sql`UPDATE supplier_invoices SET billed = true, billed_soa_id = ${dvId}
-              WHERE id = ${cm.reference_number}`,
-        );
-      }
-    }
+    // Apply settlement work (invoice paint + SOA header update + CM marking).
+    // Extracted so the same code path can be replayed by orphan-DV cleanups
+    // (see replayConfirmForOrphan + scripts/replay-confirm-orphans-*.ts).
+    await replayConfirmForOrphan(tx, dvId, soaAllocations);
 
     // Mark DV as confirmed
     const [updated] = (await tx.execute(
