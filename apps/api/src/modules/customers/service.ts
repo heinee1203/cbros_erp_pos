@@ -935,7 +935,11 @@ export async function reassignTransaction(
 }
 
 /**
- * Edit the amount on a CHARGE transaction.
+ * Edit the amount (and optionally due_date) on a CHARGE transaction.
+ *
+ * dueDate is optional and updated independently of amount. Pass `null` to
+ * clear an existing due_date. Pass `undefined` (or omit) to leave it as-is.
+ * Audit note is appended for both amount and due_date changes.
  */
 export async function editTransactionAmount(
   customerId: string,
@@ -944,23 +948,41 @@ export async function editTransactionAmount(
   reason: string,
   orgId: string,
   userId: string,
+  newDueDate?: string | null,
 ) {
   return db.transaction(async (tx) => {
     const [custRow] = await tx.execute(sql`SELECT id, name FROM customers WHERE id = ${customerId} AND org_id = ${orgId} FOR UPDATE`) as any[];
     if (!custRow) throw new Error("Customer not found");
 
-    const [txn] = await tx.execute(sql`SELECT id, type, amount, reference_number, notes FROM customer_transactions WHERE id = ${transactionId} AND customer_id = ${customerId}`) as any[];
+    const [txn] = await tx.execute(sql`SELECT id, type, amount, due_date, reference_number, notes FROM customer_transactions WHERE id = ${transactionId} AND customer_id = ${customerId}`) as any[];
     if (!txn) throw new Error("Transaction not found");
     if (txn.type !== "CHARGE") throw new Error("Can only edit CHARGE transactions");
     if (newAmount <= 0) throw new Error("Amount must be greater than zero");
 
     const oldAmount = parseFloat(txn.amount);
+    const oldDueDate: string | null = txn.due_date;
     const oldNotes = txn.notes || "";
-    const auditNote = `Amount edited: ${oldAmount.toFixed(2)} → ${newAmount.toFixed(2)}. Reason: ${reason}`;
+
+    const auditParts: string[] = [];
+    if (Math.abs(oldAmount - newAmount) > 0.005) {
+      auditParts.push(`Amount edited: ${oldAmount.toFixed(2)} → ${newAmount.toFixed(2)}`);
+    }
+    const dueDateChanged = newDueDate !== undefined && (newDueDate ?? null) !== oldDueDate;
+    if (dueDateChanged) {
+      auditParts.push(`Due date edited: ${oldDueDate ?? "(none)"} → ${newDueDate ?? "(none)"}`);
+    }
+    if (auditParts.length === 0) {
+      // No-op edit — return current state without writing
+      return { id: transactionId, oldAmount, newAmount: oldAmount, newBalance: parseFloat(custRow.current_balance ?? "0") };
+    }
+    const auditNote = `${auditParts.join("; ")}. Reason: ${reason}`;
     const newNotes = oldNotes ? `${oldNotes} | ${auditNote}` : auditNote;
 
     await tx.execute(sql`
-      UPDATE customer_transactions SET amount = ${newAmount.toFixed(2)}, notes = ${newNotes}
+      UPDATE customer_transactions
+      SET amount = ${newAmount.toFixed(2)},
+          notes = ${newNotes}
+          ${dueDateChanged ? sql`, due_date = ${newDueDate ?? null}` : sql``}
       WHERE id = ${transactionId}
     `);
 
@@ -1156,6 +1178,10 @@ export async function chargeCustomerAccount(
       referenceType: "sale",
       referenceId: saleId,
       referenceNumber: saleNo,
+      // Mark this charge as POS-originated so the Customer Invoices list can
+      // distinguish POS rows from MANUAL/IMPORT. Without this, new POS rows
+      // would inherit the column default 'MANUAL' and be misclassified.
+      source: "POS",
       recordedBy: userId,
     })
     .returning();
@@ -1175,6 +1201,7 @@ export async function recordManualCharge(
     referenceNumber: string;
     description?: string;
     chargeDate?: string;
+    dueDate?: string;
     notes?: string;
   },
   userId: string,
@@ -1226,6 +1253,11 @@ export async function recordManualCharge(
         referenceNumber: data.referenceNumber || null,
         notes:
           [data.description, data.notes].filter(Boolean).join(" — ") || null,
+        // Manual charge from the Customer Invoices page (or anywhere that uses
+        // this function). source defaults to 'MANUAL' at the column level too,
+        // but setting explicitly makes intent unambiguous.
+        source: "MANUAL",
+        dueDate: data.dueDate ?? null,
         recordedBy: userId,
         recordedAt: data.chargeDate ? new Date(data.chargeDate) : new Date(),
       })
@@ -1877,6 +1909,150 @@ export async function listPayments(
       thisWeek: parseFloat(summaryRow.this_week),
       thisMonth: parseFloat(summaryRow.this_month),
       count: summaryRow.count,
+    },
+  };
+}
+
+/**
+ * List CHARGE-type customer transactions for the Customer Invoices page.
+ *
+ * Per-row payment status is derived from ar_payment_allocations (UNPAID /
+ * PARTIAL / PAID), same logic listTransactions uses. KPI summary computes
+ * totalOpen / totalOverdue / dueThisWeek / openCount over the same filter set
+ * EXCEPT the status filter (so the KPIs always reflect the underlying open AR
+ * for the user's customer/source/date scope, not whatever pill they're filtered
+ * to — matches the AP Supplier Invoices KPI behavior).
+ */
+export async function listInvoices(
+  orgId: string,
+  opts: {
+    search?: string;
+    source?: "MANUAL" | "POS" | "IMPORT";
+    status?: "UNPAID" | "PARTIAL" | "PAID";
+    customerId?: string;
+    from?: string;
+    to?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+) {
+  const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 500);
+  const page = Math.max(opts.page ?? 1, 1);
+  const offset = (page - 1) * pageSize;
+
+  // Filters that scope the universe (customer/source/date/search) — applied
+  // to both the data query and the KPI query.
+  const baseConditions: SQL[] = [
+    sql`ct.org_id = ${orgId}`,
+    sql`ct.type = 'CHARGE'`,
+  ];
+  if (opts.customerId) baseConditions.push(sql`ct.customer_id = ${opts.customerId}`);
+  if (opts.source) baseConditions.push(sql`ct.source = ${opts.source}`);
+  if (opts.from) baseConditions.push(sql`ct.recorded_at >= ${opts.from}::timestamptz`);
+  if (opts.to) baseConditions.push(sql`ct.recorded_at <= ${opts.to}::timestamptz`);
+  if (opts.search?.trim()) {
+    const pattern = `%${opts.search.trim()}%`;
+    baseConditions.push(sql`(ct.reference_number ILIKE ${pattern} OR c.name ILIKE ${pattern})`);
+  }
+  const baseWhere = sql.join(baseConditions, sql` AND `);
+
+  // Derived-status filter — applied as a HAVING clause on the per-charge sum.
+  const statusHaving = (() => {
+    if (opts.status === "PAID") return sql`HAVING (ct.amount::numeric - COALESCE(SUM(pa.allocated_amount::numeric), 0)) <= 0.005`;
+    if (opts.status === "PARTIAL") return sql`HAVING COALESCE(SUM(pa.allocated_amount::numeric), 0) > 0.005 AND (ct.amount::numeric - COALESCE(SUM(pa.allocated_amount::numeric), 0)) > 0.005`;
+    if (opts.status === "UNPAID") return sql`HAVING COALESCE(SUM(pa.allocated_amount::numeric), 0) <= 0.005`;
+    return sql``;
+  })();
+
+  // Data query — group by charge to aggregate allocations, then filter by
+  // derived status, then paginate.
+  const rows = (await db.execute(sql`
+    SELECT ct.id, ct.recorded_at, ct.due_date, ct.amount::text AS amount,
+      ct.reference_number, ct.notes, ct.source, ct.billed, ct.billed_soa_id,
+      ct.customer_id, c.name AS customer_name, c.phone AS customer_code,
+      COALESCE(SUM(pa.allocated_amount::numeric), 0)::text AS allocated_amount,
+      (ct.amount::numeric - COALESCE(SUM(pa.allocated_amount::numeric), 0))::text AS balance,
+      CASE
+        WHEN (ct.amount::numeric - COALESCE(SUM(pa.allocated_amount::numeric), 0)) <= 0.005 THEN 'PAID'
+        WHEN COALESCE(SUM(pa.allocated_amount::numeric), 0) > 0.005 THEN 'PARTIAL'
+        ELSE 'UNPAID'
+      END AS payment_status
+    FROM customer_transactions ct
+    JOIN customers c ON c.id = ct.customer_id
+    LEFT JOIN ar_payment_allocations pa ON pa.charge_transaction_id = ct.id
+    WHERE ${baseWhere}
+    GROUP BY ct.id, c.name, c.phone
+    ${statusHaving}
+    ORDER BY ct.recorded_at DESC, ct.id DESC
+    LIMIT ${pageSize} OFFSET ${offset}
+  `)) as any[];
+
+  // Total count for pagination (respects status filter so the count matches
+  // what the user sees paged).
+  const [countRow] = (await db.execute(sql`
+    SELECT COUNT(*)::int AS total FROM (
+      SELECT ct.id
+      FROM customer_transactions ct
+      JOIN customers c ON c.id = ct.customer_id
+      LEFT JOIN ar_payment_allocations pa ON pa.charge_transaction_id = ct.id
+      WHERE ${baseWhere}
+      GROUP BY ct.id
+      ${statusHaving}
+    ) sub
+  `)) as any[];
+
+  // KPI summary — uses base filters but ignores status filter, so the cards
+  // always represent the underlying open AR for the scope.
+  const [summaryRow] = (await db.execute(sql`
+    WITH per_charge AS (
+      SELECT ct.id, ct.amount::numeric AS amount, ct.due_date,
+        COALESCE(SUM(pa.allocated_amount::numeric), 0) AS allocated
+      FROM customer_transactions ct
+      JOIN customers c ON c.id = ct.customer_id
+      LEFT JOIN ar_payment_allocations pa ON pa.charge_transaction_id = ct.id
+      WHERE ${baseWhere}
+      GROUP BY ct.id
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE amount - allocated > 0.005)::int AS open_count,
+      COALESCE(SUM(amount - allocated) FILTER (WHERE amount - allocated > 0.005), 0)::text AS total_open,
+      COALESCE(SUM(amount - allocated) FILTER (
+        WHERE due_date IS NOT NULL AND due_date < CURRENT_DATE AND amount - allocated > 0.005
+      ), 0)::text AS total_overdue,
+      COALESCE(SUM(amount - allocated) FILTER (
+        WHERE due_date IS NOT NULL
+          AND due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+          AND amount - allocated > 0.005
+      ), 0)::text AS due_this_week
+    FROM per_charge
+  `)) as any[];
+
+  return {
+    data: rows.map((r: any) => ({
+      id: r.id,
+      recordedAt: r.recorded_at,
+      dueDate: r.due_date,
+      referenceNumber: r.reference_number,
+      notes: r.notes,
+      source: r.source,
+      billed: r.billed,
+      billedSoaId: r.billed_soa_id,
+      customerId: r.customer_id,
+      customerName: r.customer_name,
+      customerCode: r.customer_code,
+      amount: parseFloat(r.amount),
+      allocatedAmount: parseFloat(r.allocated_amount),
+      balance: parseFloat(r.balance),
+      paymentStatus: r.payment_status,
+    })),
+    page,
+    pageSize,
+    total: countRow?.total ?? 0,
+    summary: {
+      openCount: summaryRow?.open_count ?? 0,
+      totalOpen: parseFloat(summaryRow?.total_open ?? "0"),
+      totalOverdue: parseFloat(summaryRow?.total_overdue ?? "0"),
+      dueThisWeek: parseFloat(summaryRow?.due_this_week ?? "0"),
     },
   };
 }

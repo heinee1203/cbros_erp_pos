@@ -36,6 +36,7 @@ import {
   updateSOAStatus,
   recomputeSOAStatus,
   listPayments,
+  listInvoices,
 } from "./service";
 
 function assertArRole(role: string) {
@@ -271,6 +272,35 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // ─── GET /customers/invoices ──────────────────────
+  // Customer Invoices — all customer CHARGE transactions across all customers.
+  // Mirrors /payments structurally. Per-row paymentStatus derived from
+  // ar_payment_allocations. Summary KPIs respect customer/source/date filters
+  // but ignore the status filter (so cards always show open AR for the scope).
+  // Registered BEFORE /:id to avoid Fastify pattern collision.
+  app.get("/invoices", async (request, reply) => {
+    const { orgId } = request.storeContext!;
+    const { role } = request.user;
+    assertArRole(role);
+    const q = request.query as {
+      search?: string; source?: string; status?: string; customerId?: string;
+      from?: string; to?: string; page?: string; pageSize?: string;
+    };
+    const validSource = q.source && ["MANUAL", "POS", "IMPORT"].includes(q.source) ? (q.source as any) : undefined;
+    const validStatus = q.status && ["UNPAID", "PARTIAL", "PAID"].includes(q.status) ? (q.status as any) : undefined;
+    const result = await listInvoices(orgId, {
+      search: q.search,
+      source: validSource,
+      status: validStatus,
+      customerId: q.customerId,
+      from: q.from,
+      to: q.to,
+      page: q.page ? parseInt(q.page, 10) : undefined,
+      pageSize: q.pageSize ? parseInt(q.pageSize, 10) : undefined,
+    });
+    return reply.send(result);
+  });
+
   // ─── GET /customers/payments ──────────────────────
   // Payment Register — all customer payments across all customers
   app.get("/payments", async (request, reply) => {
@@ -428,6 +458,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
       referenceNumber?: string;
       description?: string;
       chargeDate?: string;
+      dueDate?: string;
       notes?: string;
     };
 
@@ -437,6 +468,10 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
     }
     if (!body.referenceNumber?.trim()) {
       return reply.status(400).send({ error: "Reference number is required" });
+    }
+    // dueDate, if provided, must be ISO YYYY-MM-DD; reject obvious malformed input
+    if (body.dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(body.dueDate)) {
+      return reply.status(400).send({ error: "dueDate must be YYYY-MM-DD" });
     }
 
     try {
@@ -448,6 +483,7 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
           referenceNumber: body.referenceNumber!.trim(),
           description: body.description,
           chargeDate: body.chargeDate,
+          dueDate: body.dueDate,
           notes: body.notes,
         },
         userId,
@@ -500,16 +536,21 @@ export const customerRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ─── PATCH /customers/:id/transactions/:txnId ──
-  // Edit a transaction amount
+  // Edit a CHARGE transaction's amount and/or due date.
+  // dueDate is optional: omit to leave unchanged, pass null to clear, pass
+  // YYYY-MM-DD to set. Audit note appended for whatever fields actually changed.
   app.patch("/:id/transactions/:txnId", async (request, reply) => {
     const { id, txnId } = request.params as { id: string; txnId: string };
     const { orgId } = request.storeContext!;
     const { userId, role } = request.user;
     assertAdmin(role);
-    const { amount, reason } = request.body as { amount: number; reason: string };
+    const { amount, reason, dueDate } = request.body as { amount: number; reason: string; dueDate?: string | null };
     if (!amount || !reason) return reply.status(400).send({ error: "amount and reason are required" });
+    if (dueDate !== undefined && dueDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+      return reply.status(400).send({ error: "dueDate must be YYYY-MM-DD or null" });
+    }
     try {
-      const result = await editTransactionAmount(id, txnId, amount, reason, orgId, userId);
+      const result = await editTransactionAmount(id, txnId, amount, reason, orgId, userId, dueDate);
       return reply.send(result);
     } catch (err: any) {
       return reply.status(400).send({ error: err.message });
