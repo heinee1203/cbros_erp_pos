@@ -14,13 +14,20 @@ ALTER TABLE customer_transactions
   ADD COLUMN IF NOT EXISTS due_date date;
 
 -- Backfill source from the existing reference_type discriminator.
---   reference_type='sale'         → POS  (POS chargeCustomerAccount, current code at customers/service.ts:1156)
---   reference_type='credit_sale'  → POS  (legacy/seeded value; same origin)
+--   reference_type='sale'         → POS    (live POS chargeCustomerAccount,
+--                                            customers/service.ts:1178)
+--   reference_type='credit_sale'  → IMPORT (written exclusively by the
+--                                            apps/api/scripts/add-*.ts
+--                                            historical-data import scripts;
+--                                            see reclassify-credit-sale-to-import.sql
+--                                            for the post-deploy reclassification
+--                                            run on the live DB)
 --   reference_type='manual_charge' → MANUAL (recordManualCharge)
---   everything else (NULL, etc.)  → MANUAL (column default; no IMPORT data yet)
+--   everything else (NULL, etc.)  → MANUAL (column default)
 UPDATE customer_transactions
 SET source = CASE
-  WHEN reference_type IN ('sale', 'credit_sale') THEN 'POS'
+  WHEN reference_type = 'sale' THEN 'POS'
+  WHEN reference_type = 'credit_sale' THEN 'IMPORT'
   ELSE 'MANUAL'
 END
 WHERE type = 'CHARGE';
