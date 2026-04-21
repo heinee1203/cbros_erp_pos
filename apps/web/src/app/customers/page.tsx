@@ -449,7 +449,6 @@ export default function CustomersPage() {
                     router.push(`/customers/${c.id}${highlight}`);
                   }} className="flex-1 min-w-0 text-left">
                     <span className="block truncate text-[13px] font-medium text-foreground">{c.name}</span>
-                    {c.phone && <span className="block truncate text-[10px] font-mono text-muted-foreground/70">{c.phone}</span>}
                     {c.contactPerson && !c.matchedRef && <span className="block truncate text-[11px] text-muted-foreground">{c.contactPerson}</span>}
                     {c.matchedRef && (() => {
                       try {
