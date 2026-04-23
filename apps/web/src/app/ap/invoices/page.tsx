@@ -300,6 +300,14 @@ export default function SupplierInvoicesPage() {
     setVoidTarget(inv);
   };
 
+  // ── Single-row Mark as Paid ──
+  // Reuses BulkPayDialog with a one-element selection set, matching the
+  // bulk flow 1:1 per spec ("same as bulk Mark as Paid button for 1 row").
+  const handleMarkAsPaidSingle = (inv: Invoice) => {
+    setSelectedIds(new Set([inv.id]));
+    setShowBulkPayDialog(true);
+  };
+
   const confirmVoid = async () => {
     if (!voidTarget || !token || !locationId) return;
     try {
@@ -423,6 +431,7 @@ export default function SupplierInvoicesPage() {
         onEdit={handleEdit}
         onVoid={handleVoidRequest}
         onViewSupplier={setViewSupplierId}
+        onMarkAsPaid={handleMarkAsPaidSingle}
         highlightedIds={highlightedIds}
       />
 

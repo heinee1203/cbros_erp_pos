@@ -14,8 +14,11 @@ import {
   Download,
   Pencil,
   Ban,
-  ExternalLink,
+  Eye,
+  CheckCircle2,
+  Copy,
 } from "lucide-react";
+import { toast } from "sonner";
 import { fmtPeso, fmtDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { downloadCSV } from "@/lib/csv-export";
@@ -143,12 +146,12 @@ function RowActions({
   invoice,
   onEdit,
   onVoid,
-  onViewSupplier,
+  onMarkAsPaid,
 }: {
   invoice: Invoice;
   onEdit: (inv: Invoice) => void;
   onVoid: (inv: Invoice) => void;
-  onViewSupplier: (supplierId: string) => void;
+  onMarkAsPaid: (inv: Invoice) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -162,25 +165,75 @@ function RowActions({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const isEditable = invoice.status === "OPEN";
-  const isVoidable = invoice.status === "OPEN";
+  // Per spec Menu Contents rules:
+  //   Edit / Mark as Paid — OPEN or PARTIALLY_PAID only
+  //   Void               — not already VOIDED and not fully paid
+  //   View details       — PAID/VOIDED (or whenever Edit isn't offered)
+  //   Copy invoice #     — always
+  const isPayable = invoice.status === "OPEN" || invoice.status === "PARTIALLY_PAID";
+  const isVoidable = isPayable; // excludes PAID and VOIDED
+
+  const copyInvoiceNumber = async () => {
+    const text = invoice.invoiceNumber;
+    // Prefer the async Clipboard API; fall back to a hidden textarea +
+    // execCommand for contexts lacking document focus (headless test
+    // browsers, older Safari, iframes without the permission).
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        toast.success(`Copied ${text}`);
+        return;
+      }
+    } catch { /* fall through */ }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      if (ok) toast.success(`Copied ${text}`);
+      else toast.error("Failed to copy invoice number");
+    } catch {
+      toast.error("Failed to copy invoice number");
+    }
+  };
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative invoice-row-menu" ref={ref}>
       <button
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-label="Row actions"
       >
         <MoreVertical size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-border bg-background py-1 shadow-lg">
-          {isEditable && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-48 rounded-lg border border-border bg-background py-1 shadow-lg">
+          {isPayable ? (
+            <>
+              <button
+                onClick={() => { onEdit(invoice); setOpen(false); }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted"
+              >
+                <Pencil size={13} /> Edit
+              </button>
+              <button
+                onClick={() => { onMarkAsPaid(invoice); setOpen(false); }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50"
+              >
+                <CheckCircle2 size={13} /> Mark as Paid
+              </button>
+            </>
+          ) : (
             <button
               onClick={() => { onEdit(invoice); setOpen(false); }}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted"
             >
-              <Pencil size={13} /> Edit
+              <Eye size={13} /> View details
             </button>
           )}
           {isVoidable && (
@@ -192,10 +245,10 @@ function RowActions({
             </button>
           )}
           <button
-            onClick={() => { onViewSupplier(invoice.supplierId); setOpen(false); }}
+            onClick={() => { copyInvoiceNumber(); setOpen(false); }}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted"
           >
-            <ExternalLink size={13} /> View Supplier
+            <Copy size={13} /> Copy invoice #
           </button>
         </div>
       )}
@@ -217,6 +270,7 @@ interface InvoiceTableProps {
   onEdit: (inv: Invoice) => void;
   onVoid: (inv: Invoice) => void;
   onViewSupplier: (supplierId: string) => void;
+  onMarkAsPaid: (inv: Invoice) => void;
   /** Rows in this set render with a brief pulse highlight (used by the Record
    *  Invoice success toast's "View" action). */
   highlightedIds?: Set<string>;
@@ -234,6 +288,7 @@ export function InvoiceTable({
   onEdit,
   onVoid,
   onViewSupplier,
+  onMarkAsPaid,
   highlightedIds,
 }: InvoiceTableProps) {
   const [page, setPage] = useState(1);
@@ -461,7 +516,7 @@ export function InvoiceTable({
                     </td>
                     {/* Actions */}
                     <td className="w-12 px-2 py-1.5 text-right">
-                      <RowActions invoice={inv} onEdit={onEdit} onVoid={onVoid} onViewSupplier={onViewSupplier} />
+                      <RowActions invoice={inv} onEdit={onEdit} onVoid={onVoid} onMarkAsPaid={onMarkAsPaid} />
                     </td>
                   </tr>
                 );
