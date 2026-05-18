@@ -15,6 +15,7 @@ interface Supplier {
 
 interface InvoiceRow {
   key: string;
+  kind: "invoice" | "credit_memo";
   invoiceNumber: string;
   invoiceDate: string;
   amount: string;
@@ -35,16 +36,55 @@ export interface RecordInvoiceOutcome {
   supplierName: string;
   /** Invoice numbers that were accepted by the server (submitted minus errored). */
   successInvoiceNumbers: string[];
+  /** Accepted credit memo numbers, used for clearer success copy. */
+  successCreditMemoNumbers: string[];
   /** Sum of amounts for the successfully created invoices. */
   successTotal: number;
 }
 
 function newRow(date: string): InvoiceRow {
-  return { key: Math.random().toString(36).slice(2), invoiceNumber: "", invoiceDate: date, amount: "" };
+  return {
+    key: Math.random().toString(36).slice(2),
+    kind: "invoice",
+    invoiceNumber: "",
+    invoiceDate: date,
+    amount: "",
+  };
 }
 
 function termsLabel(days: number): string {
   return days === 0 ? "COD" : `Net ${days}`;
+}
+
+function normalizeCreditMemoInvoiceNumber(invoiceNumber: string) {
+  const trimmed = invoiceNumber.trim();
+  return /^CM-/i.test(trimmed) ? `CM-${trimmed.slice(3)}` : `CM-${trimmed}`;
+}
+
+function normalizeSubmittedRow(row: InvoiceRow) {
+  const parsedAmount = parseFloat(row.amount);
+  const amount = Math.abs(Number.isFinite(parsedAmount) ? parsedAmount : 0);
+  const isCreditMemo = row.kind === "credit_memo";
+
+  return {
+    kind: row.kind,
+    invoiceNumber: isCreditMemo
+      ? normalizeCreditMemoInvoiceNumber(row.invoiceNumber)
+      : row.invoiceNumber.trim(),
+    invoiceDate: row.invoiceDate,
+    amount: (isCreditMemo ? -amount : amount).toFixed(2),
+  };
+}
+
+function recordButtonLabel(invoiceCount: number, creditMemoCount: number) {
+  const parts: string[] = [];
+  if (invoiceCount > 0) {
+    parts.push(`${invoiceCount} Invoice${invoiceCount !== 1 ? "s" : ""}`);
+  }
+  if (creditMemoCount > 0) {
+    parts.push(`${creditMemoCount} Credit Memo${creditMemoCount !== 1 ? "s" : ""}`);
+  }
+  return `Record ${parts.join(" + ") || "0 Invoices"}`;
 }
 
 export function RecordInvoiceModal({
@@ -98,13 +138,18 @@ export function RecordInvoiceModal({
   const paymentTermsDays = selectedSupplier?.paymentTermsDays ?? 30;
 
   const validRows = useMemo(
-    () => rows.filter((r) => r.invoiceNumber.trim() && parseFloat(r.amount) > 0),
+    () => rows.filter((r) => r.invoiceNumber.trim() && Math.abs(parseFloat(r.amount)) > 0),
     [rows],
   );
   const total = useMemo(
-    () => validRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0),
+    () => validRows.reduce((s, r) => {
+      const amount = Math.abs(parseFloat(r.amount) || 0);
+      return s + (r.kind === "credit_memo" ? -amount : amount);
+    }, 0),
     [validRows],
   );
+  const invoiceCount = validRows.filter((r) => r.kind === "invoice").length;
+  const creditMemoCount = validRows.filter((r) => r.kind === "credit_memo").length;
 
   const updateRow = (key: string, field: keyof InvoiceRow, value: string) => {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
@@ -142,7 +187,8 @@ export function RecordInvoiceModal({
     if (!supplierId || validRows.length === 0) return;
 
     // Check for duplicate invoice numbers within the batch
-    const nums = validRows.map((r) => r.invoiceNumber.trim());
+    const submittedRows = validRows.map(normalizeSubmittedRow);
+    const nums = submittedRows.map((r) => r.invoiceNumber);
     const dupSet = new Set<string>();
     for (const n of nums) {
       if (dupSet.has(n)) { setError(`Duplicate invoice number in batch: ${n}`); return; }
@@ -152,11 +198,6 @@ export function RecordInvoiceModal({
     setSaving(true);
     setError(null);
     const supplier = selectedSupplier;
-    const submittedRows = validRows.map((r) => ({
-      invoiceNumber: r.invoiceNumber.trim(),
-      invoiceDate: r.invoiceDate,
-      amount: r.amount,
-    }));
 
     try {
       const res = await apiFetch<{ created: number; total: number; errors: Array<{ invoiceNumber: string; message: string }> }>(
@@ -176,6 +217,9 @@ export function RecordInvoiceModal({
       const erroredNumbers = new Set((res.errors ?? []).map((e) => e.invoiceNumber));
       const successRows = submittedRows.filter((r) => !erroredNumbers.has(r.invoiceNumber));
       const successTotal = successRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+      const successCreditMemoNumbers = successRows
+        .filter((r) => r.kind === "credit_memo")
+        .map((r) => r.invoiceNumber);
 
       const outcome: RecordInvoiceOutcome = {
         created: res.created ?? successRows.length,
@@ -183,6 +227,7 @@ export function RecordInvoiceModal({
         supplierId,
         supplierName: supplier?.name ?? "Supplier",
         successInvoiceNumbers: successRows.map((r) => r.invoiceNumber),
+        successCreditMemoNumbers,
         successTotal,
       };
 
@@ -216,7 +261,7 @@ export function RecordInvoiceModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-background p-6 shadow-xl">
+      <div className="relative z-10 w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-background p-6 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-semibold">Record Supplier Invoices</h3>
           <button onClick={onClose} className="rounded-lg p-1 hover:bg-muted">
@@ -261,7 +306,12 @@ export function RecordInvoiceModal({
           {/* Invoice Rows */}
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label className="text-xs font-medium text-muted-foreground">Invoices</label>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Invoices & Credit Memos</label>
+                <p className="text-[11px] text-muted-foreground">
+                  Credit memos are saved as negative CM entries and reduce supplier balances.
+                </p>
+              </div>
               <button type="button" onClick={addRow}
                 className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10">
                 <Plus size={12} /> Add Row
@@ -273,6 +323,7 @@ export function RecordInvoiceModal({
                 <thead>
                   <tr className="bg-muted/40 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                     <th className="w-8 px-2 py-1.5 text-center">#</th>
+                    <th className="w-32 px-2 py-1.5 text-left">Type</th>
                     <th className="px-2 py-1.5 text-left">Invoice #</th>
                     <th className="w-36 px-2 py-1.5 text-left">Date</th>
                     <th className="w-32 px-2 py-1.5 text-right">Amount</th>
@@ -284,12 +335,22 @@ export function RecordInvoiceModal({
                     <tr key={row.key} className="border-t border-border/40">
                       <td className="px-2 py-1 text-center text-[10px] text-muted-foreground">{idx + 1}</td>
                       <td className="px-2 py-1">
+                        <select
+                          value={row.kind}
+                          onChange={(e) => updateRow(row.key, "kind", e.target.value as InvoiceRow["kind"])}
+                          className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary"
+                        >
+                          <option value="invoice">Invoice</option>
+                          <option value="credit_memo">Credit Memo</option>
+                        </select>
+                      </td>
+                      <td className="px-2 py-1">
                         <input
                           ref={idx === rows.length - 1 ? lastInvRef : undefined}
                           type="text"
                           value={row.invoiceNumber}
                           onChange={(e) => handleInvoiceNumberChange(row.key, e.target.value)}
-                          placeholder="Invoice #"
+                          placeholder={row.kind === "credit_memo" ? "Credit memo #" : "Invoice #"}
                           className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary"
                         />
                       </td>
@@ -308,8 +369,10 @@ export function RecordInvoiceModal({
                           min="0"
                           value={row.amount}
                           onChange={(e) => updateRow(row.key, "amount", e.target.value)}
-                          placeholder="0.00"
-                          className="h-8 w-full rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary"
+                          placeholder={row.kind === "credit_memo" ? "Credit" : "0.00"}
+                          className={`h-8 w-full rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary ${
+                            row.kind === "credit_memo" ? "text-emerald-700" : ""
+                          }`}
                         />
                       </td>
                       <td className="px-2 py-1 text-center">
@@ -326,9 +389,9 @@ export function RecordInvoiceModal({
               </table>
             </div>
 
-            {total > 0 && (
+            {validRows.length > 0 && (
               <div className="mt-1 text-right text-[12px] tabular-nums font-semibold">
-                Total: {fmtPeso(total)}
+                {creditMemoCount > 0 ? "Net total" : "Total"}: {fmtPeso(total)}
               </div>
             )}
           </div>
@@ -355,7 +418,7 @@ export function RecordInvoiceModal({
             </button>
             <button type="submit" disabled={saving || validRows.length === 0}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-              {saving ? "Saving..." : `Record ${validRows.length} Invoice${validRows.length !== 1 ? "s" : ""}`}
+              {saving ? "Saving..." : recordButtonLabel(invoiceCount, creditMemoCount)}
             </button>
           </div>
         </form>

@@ -30,6 +30,10 @@ interface InvoiceListResponse {
   hasMore: boolean;
 }
 
+function isCreditMemoInvoice(invoice: Pick<Invoice, "invoiceNumber" | "totalAmount">) {
+  return parseFloat(invoice.totalAmount) < 0 || /^CM-/i.test(invoice.invoiceNumber);
+}
+
 /* ═══════════════════════════════════════════════════ */
 /*  Supplier Invoices List Page                        */
 /* ═══════════════════════════════════════════════════ */
@@ -166,7 +170,9 @@ export default function SupplierInvoicesPage() {
 
   // ── Selection helpers ──
   const payableInvoices = useMemo(
-    () => invoices.filter((inv) => inv.status === "OPEN" || inv.status === "PARTIALLY_PAID"),
+    () => invoices.filter((inv) =>
+      !isCreditMemoInvoice(inv) && (inv.status === "OPEN" || inv.status === "PARTIALLY_PAID")
+    ),
     [invoices],
   );
 
@@ -229,12 +235,22 @@ export default function SupplierInvoicesPage() {
       const single = outcome.successInvoiceNumbers.length === 1;
       const soleInvoiceNumber = single ? outcome.successInvoiceNumbers[0] : null;
       const hasErrors = outcome.errors.length > 0;
-      const amountText = fmtPeso(outcome.successTotal);
+      const creditMemoCount = outcome.successCreditMemoNumbers.length;
+      const invoiceCount = outcome.successInvoiceNumbers.length - creditMemoCount;
+      const amountText = single && creditMemoCount === 1
+        ? `Credit ${fmtPeso(Math.abs(outcome.successTotal))}`
+        : fmtPeso(outcome.successTotal);
 
       const title = hasErrors
         ? `${outcome.created} created, ${outcome.errors.length} failed`
+        : single && creditMemoCount === 1
+          ? `Credit memo ${soleInvoiceNumber} recorded`
         : single
           ? `Invoice ${soleInvoiceNumber} recorded`
+        : invoiceCount === 0 && creditMemoCount > 0
+          ? `${creditMemoCount} credit memos recorded`
+        : invoiceCount > 0 && creditMemoCount > 0
+          ? `${invoiceCount} invoices + ${creditMemoCount} credit memo${creditMemoCount !== 1 ? "s" : ""} recorded`
           : `${outcome.created} invoices recorded`;
 
       const description = single

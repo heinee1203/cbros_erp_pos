@@ -59,6 +59,7 @@ const STATUS_COLORS: Record<string, string> = {
   PAID: "bg-emerald-100 text-emerald-700",
   VOIDED: "bg-gray-100 text-gray-500",
   OVERDUE: "bg-red-100 text-red-700",
+  CREDIT_MEMO: "bg-purple-100 text-purple-700",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -67,6 +68,7 @@ const STATUS_LABELS: Record<string, string> = {
   PAID: "Paid",
   VOIDED: "Void",
   OVERDUE: "Overdue",
+  CREDIT_MEMO: "Credit Memo",
 };
 
 const PAGE_SIZES = [25, 50, 100] as const;
@@ -83,6 +85,14 @@ function dueDateClass(dueDate: string, status: string): string {
   if (diffDays < 0) return "text-red-600 font-semibold";
   if (diffDays <= 7) return "text-amber-600 font-medium";
   return "text-emerald-600";
+}
+
+function isCreditMemoInvoice(invoice: Pick<Invoice, "invoiceNumber" | "totalAmount">) {
+  return parseFloat(invoice.totalAmount) < 0 || /^CM-/i.test(invoice.invoiceNumber);
+}
+
+function isBulkPayableInvoice(invoice: Invoice) {
+  return !isCreditMemoInvoice(invoice) && (invoice.status === "OPEN" || invoice.status === "PARTIALLY_PAID");
 }
 
 /** Build an array of page numbers with ellipsis gaps. */
@@ -170,8 +180,9 @@ function RowActions({
   //   Void               — not already VOIDED and not fully paid
   //   View details       — PAID/VOIDED (or whenever Edit isn't offered)
   //   Copy invoice #     — always
-  const isPayable = invoice.status === "OPEN" || invoice.status === "PARTIALLY_PAID";
-  const isVoidable = isPayable; // excludes PAID and VOIDED
+  const isEditable = invoice.status === "OPEN" || invoice.status === "PARTIALLY_PAID";
+  const isPayable = isBulkPayableInvoice(invoice);
+  const isVoidable = isEditable; // excludes PAID and VOIDED
 
   const copyInvoiceNumber = async () => {
     const text = invoice.invoiceNumber;
@@ -213,7 +224,7 @@ function RowActions({
       </button>
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1 w-48 rounded-lg border border-border bg-background py-1 shadow-lg">
-          {isPayable ? (
+          {isEditable ? (
             <>
               <button
                 onClick={() => { onEdit(invoice); setOpen(false); }}
@@ -221,12 +232,14 @@ function RowActions({
               >
                 <Pencil size={13} /> Edit
               </button>
-              <button
-                onClick={() => { onMarkAsPaid(invoice); setOpen(false); }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50"
-              >
-                <CheckCircle2 size={13} /> Mark as Paid
-              </button>
+              {isPayable && (
+                <button
+                  onClick={() => { onMarkAsPaid(invoice); setOpen(false); }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50"
+                >
+                  <CheckCircle2 size={13} /> Mark as Paid
+                </button>
+              )}
             </>
           ) : (
             <button
@@ -341,7 +354,7 @@ export function InvoiceTable({
   const pageNumbers = buildPageNumbers(safePage, totalPages);
 
   const payableInvoices = useMemo(
-    () => sorted.filter((inv) => inv.status === "OPEN" || inv.status === "PARTIALLY_PAID"),
+    () => sorted.filter(isBulkPayableInvoice),
     [sorted],
   );
 
@@ -443,10 +456,12 @@ export function InvoiceTable({
               </tr>
             ) : (
               pageData.map((inv, i) => {
+                const isCreditMemo = isCreditMemoInvoice(inv);
                 const isOverdue =
+                  !isCreditMemo &&
                   (inv.status === "OPEN" || inv.status === "PARTIALLY_PAID") &&
                   new Date(inv.dueDate) < new Date();
-                const displayStatus = isOverdue ? "OVERDUE" : inv.status;
+                const displayStatus = isCreditMemo ? "CREDIT_MEMO" : isOverdue ? "OVERDUE" : inv.status;
                 const isHighlighted = highlightedIds?.has(inv.id) ?? false;
 
                 return (
@@ -464,7 +479,7 @@ export function InvoiceTable({
                   >
                     {/* Checkbox */}
                     <td className="w-10 px-2 py-1.5">
-                      {inv.status === "OPEN" || inv.status === "PARTIALLY_PAID" ? (
+                      {isBulkPayableInvoice(inv) ? (
                         <button
                           onClick={(e) => { e.stopPropagation(); onToggleSelect(inv.id); }}
                           className="flex items-center justify-center"
@@ -494,14 +509,27 @@ export function InvoiceTable({
                     </td>
                     {/* Invoice # */}
                     <td className="w-[140px] px-3 py-1.5 font-mono text-[13px] font-semibold text-primary">
-                      {inv.invoiceNumber}
+                      <span className="inline-flex items-center gap-1.5">
+                        {inv.invoiceNumber}
+                        {isCreditMemo && (
+                          <span className="rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600">
+                            CM
+                          </span>
+                        )}
+                      </span>
                     </td>
                     {/* Amount */}
-                    <td className="w-[140px] px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums">
-                      {fmtPeso(inv.totalAmount)}
+                    <td className={`w-[140px] px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums ${
+                      isCreditMemo ? "text-emerald-700" : ""
+                    }`}>
+                      {isCreditMemo
+                        ? `(${fmtPeso(Math.abs(parseFloat(inv.totalAmount)))})`
+                        : fmtPeso(inv.totalAmount)}
                     </td>
                     {/* Due Date */}
-                    <td className={`w-[120px] px-3 py-1.5 text-xs ${dueDateClass(inv.dueDate, inv.status)}`}>
+                    <td className={`w-[120px] px-3 py-1.5 text-xs ${
+                      isCreditMemo ? "text-muted-foreground" : dueDateClass(inv.dueDate, inv.status)
+                    }`}>
                       {fmtDate(inv.dueDate)}
                     </td>
                     {/* Status */}
