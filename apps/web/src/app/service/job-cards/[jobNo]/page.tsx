@@ -112,7 +112,7 @@ const TAB_LABELS: Record<TabId, string> = {
 export default function JobCardDetailPage() {
   const { token, locationId } = useAuth();
   const params = useParams<{ jobNo: string }>();
-  const jobNo = params.jobNo;
+  const jobNo = params?.jobNo as string;
   const [activeTab, setActiveTab] = useState<TabId>("estimate");
 
   const {

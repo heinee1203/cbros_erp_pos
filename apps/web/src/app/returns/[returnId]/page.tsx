@@ -44,9 +44,9 @@ const REFUND_LABELS: Record<string, string> = {
 };
 
 export default function ReturnDetailPage() {
-  const params = useParams();
+  const params = useParams<{ returnId: string }>();
   const router = useRouter();
-  const returnId = params.returnId as string;
+  const returnId = params?.returnId as string;
   const { token, locationId, user } = useAuth();
 
   const detailQuery = useReturnDetail(token, locationId, returnId);

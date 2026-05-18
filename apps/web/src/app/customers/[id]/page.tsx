@@ -98,9 +98,9 @@ function isDebit(tx: CustomerTransaction): boolean {
 /* ------------------------------------------------------------------ */
 
 export default function CustomerDetailPage() {
-  const { id } = useParams() as { id: string };
+  const { id } = useParams<{ id: string }>() ?? { id: "" };
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const { token, locationId, user } = useAuth();
   const queryClient = useQueryClient();
   const isManager = user?.role === "ADMIN" || user?.role === "MANAGER";
@@ -1170,7 +1170,7 @@ export default function CustomerDetailPage() {
                 {/* Transaction rows */}
                 {soaTxns.map((tx) => {
                   const isBillable = tx.type === "CHARGE" || tx.type === "CREDIT_NOTE";
-                  const isBilled = isBillable && tx.billed;
+                  const isBilled = Boolean(isBillable && tx.billed);
                   const isChecked = selectedSoaTxns.has(tx.id);
                   return (
                     <div key={tx.id} className={cn("flex items-center px-4 py-2 text-[13px]", isChecked && "bg-primary/[0.03]", !isChecked && "hover:bg-accent/20")}>

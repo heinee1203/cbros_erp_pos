@@ -13,7 +13,7 @@ const formatPHP = (amount: number) =>
 
 /* ─── Page component ─── */
 export default function InvoicePrintPage() {
-  const { jobNo } = useParams<{ jobNo: string }>();
+  const { jobNo } = useParams<{ jobNo: string }>() ?? { jobNo: "" };
   const { token, locationId } = useAuth();
 
   const {

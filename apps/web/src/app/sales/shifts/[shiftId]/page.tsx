@@ -110,9 +110,9 @@ function fmtTimeOrDash(dateStr: string | null): string {
 }
 
 export default function ShiftDetailPage() {
-  const params = useParams();
+  const params = useParams<{ shiftId: string }>();
   const router = useRouter();
-  const shiftId = params.shiftId as string;
+  const shiftId = params?.shiftId as string;
   const { token, locationId, user } = useAuth();
   const queryClient = useQueryClient();
 

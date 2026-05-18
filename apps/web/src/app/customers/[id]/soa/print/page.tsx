@@ -70,8 +70,8 @@ const BLANK = "\u00A0\u00A0\u00A0______________________________";
 /* ═══════════════════════════════════════════════════════ */
 
 export default function SOAPrintPage() {
-  const { id } = useParams() as { id: string };
-  const searchParams = useSearchParams();
+  const { id } = useParams<{ id: string }>() ?? { id: "" };
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   // Preferred: historical snapshot by soaId (reads stored soa_line_items).
   // Fallback: date range re-query for ad-hoc statements that aren't persisted.
   const soaId = searchParams.get("soaId");

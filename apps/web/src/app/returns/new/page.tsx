@@ -72,7 +72,7 @@ const CONDITION_OPTIONS = [
 
 export default function NewReturnPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const { token, locationId } = useAuth();
   const createReturn = useCreateReturn(token, locationId);
 
