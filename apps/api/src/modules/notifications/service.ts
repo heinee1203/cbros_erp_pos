@@ -118,7 +118,7 @@ export async function listNotifications(
   const limit = opts.limit ?? 20;
   const conditions: SQL[] = [
     eq(notifications.orgId, orgId),
-    or(eq(notifications.userId, userId), isNull(notifications.userId)),
+    or(eq(notifications.userId, userId), isNull(notifications.userId))!,
   ];
 
   if (opts.type) {
