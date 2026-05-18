@@ -2,7 +2,8 @@ import { ApiError } from "./query-provider";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
-interface FetchOptions extends RequestInit {
+interface FetchOptions extends Omit<RequestInit, "body"> {
+  body?: unknown;
   token?: string;
   locationId?: string;
 }
@@ -46,9 +47,14 @@ export async function apiFetch<T>(
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      headers,
+    const fetchOptions: RequestInit = {
       ...rest,
+      body: rest.body as BodyInit | null | undefined,
+      headers,
+    };
+
+    res = await fetch(`${API_BASE}${path}`, {
+      ...fetchOptions,
     });
   } catch {
     // Network error or timeout → unknown state

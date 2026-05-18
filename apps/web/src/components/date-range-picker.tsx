@@ -145,27 +145,6 @@ export function DateRangePicker({ startDate, endDate, onChange, presets = DEFAUL
     setOpen(false);
   }, []);
 
-  const handleDayClick = useCallback((d: Date) => {
-    const ds = fmt(d);
-    if (selecting === "done" || selecting === "end") {
-      // Start a new selection
-      setDraftStart(ds);
-      setDraftEnd(ds);
-      setSelecting("end");
-      setActivePreset(null);
-    } else if (selecting === "end") {
-      // Set end date
-      if (ds < draftStart) {
-        setDraftEnd(draftStart);
-        setDraftStart(ds);
-      } else {
-        setDraftEnd(ds);
-      }
-      setSelecting("done");
-      setActivePreset(null);
-    }
-  }, [selecting, draftStart]);
-
   // Actually: simpler — first click = start, second click = end
   const handleDayClickSimple = useCallback((d: Date) => {
     const ds = fmt(d);
