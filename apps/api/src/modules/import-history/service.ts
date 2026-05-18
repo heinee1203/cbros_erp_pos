@@ -33,11 +33,16 @@ interface ParsedHistoryRow {
 
 export interface HistoryPreviewResult {
   previewToken: string;
-  totalRows: number;
-  dateRange: { from: string; to: string } | null;
-  reasonBreakdown: Record<string, number>;
-  locationMapping: LocationMapping[];
-  skuMatchRate: { matched: number; unmatched: number; total: number };
+  summary: {
+    totalRows: number;
+    dateRange: { from: string; to: string };
+    reasonBreakdown: Array<{ reason: string; count: number }>;
+    skuMatchRate: number;
+    matchedSkus: number;
+    totalSkus: number;
+    unmatchedSkus: string[];
+  };
+  locations: Array<LocationMapping & { matched: boolean }>;
   errors: Array<{ row: number; message: string }>;
   preview: Array<{
     rowIndex: number;
@@ -72,6 +77,7 @@ export interface ProgressUpdate {
   percent: number;
   inserted: number;
   errors: number;
+  errorLog?: Array<{ row: number; message: string }>;
 }
 
 export interface ImportBatch {
