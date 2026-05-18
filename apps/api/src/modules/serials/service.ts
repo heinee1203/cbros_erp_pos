@@ -130,6 +130,58 @@ export async function getSerialsBySale(orgId: string, saleId: string) {
   return rows;
 }
 
+// Serial validation + registration guards used by the route layer.
+export async function validateSerialNumber(
+  orgId: string,
+  serialNumber: string,
+  productId?: string,
+) {
+  const conditions = [
+    eq(serialNumbers.orgId, orgId),
+    eq(serialNumbers.serialNumber, serialNumber),
+  ];
+  if (productId) {
+    conditions.push(eq(serialNumbers.productId, productId));
+  }
+
+  const [existing] = await db
+    .select({ id: serialNumbers.id, status: serialNumbers.status })
+    .from(serialNumbers)
+    .where(and(...conditions))
+    .limit(1);
+
+  return {
+    exists: !!existing,
+    status: existing?.status ?? null,
+  };
+}
+
+export async function findSerialRegistrationProduct(
+  orgId: string,
+  productId: string,
+) {
+  const [product] = await db
+    .select({ id: products.id, isSerialized: products.isSerialized })
+    .from(products)
+    .where(and(eq(products.id, productId), eq(products.orgId, orgId)))
+    .limit(1);
+
+  return product ?? null;
+}
+
+export async function findSerialRegistrationLocation(
+  orgId: string,
+  locationId: string,
+) {
+  const [location] = await db
+    .select({ id: locations.id })
+    .from(locations)
+    .where(and(eq(locations.id, locationId), eq(locations.orgId, orgId)))
+    .limit(1);
+
+  return location ?? null;
+}
+
 // ── Bulk register serials (manual entry for existing stock) ──
 export async function bulkRegisterSerials(
   orgId: string,
