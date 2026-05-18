@@ -292,7 +292,7 @@ function isChildActive(child: NavChild, pathname: string): boolean {
 
 /* ─── Sidebar Root ─── */
 export function Sidebar() {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const { isCollapsed, toggle, isMobileOpen, closeMobile } = useSidebar();
   const { user } = useAuth();
   // If no permissions data (legacy session), show everything — don't filter

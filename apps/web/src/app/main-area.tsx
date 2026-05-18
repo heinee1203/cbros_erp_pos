@@ -207,13 +207,13 @@ export function MainArea({ children }: { children: ReactNode }) {
   return (
     <div
       className={cn(
-        "flex flex-1 flex-col transition-[margin-left] duration-200 ease-out",
+        "flex min-w-0 flex-1 flex-col transition-[margin-left] duration-200 ease-out",
         isCollapsed ? "md:ml-16" : "md:ml-[252px]",
       )}
     >
       {/* Top bar */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/80 px-4 md:px-6 backdrop-blur-sm">
-        <div className="flex items-center gap-2">
+      <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between gap-3 border-b border-border/80 bg-background/82 px-3 shadow-[0_1px_0_rgba(24,21,17,0.04)] backdrop-blur-xl md:px-6">
+        <div className="flex min-w-0 items-center gap-2">
           {/* Mobile hamburger */}
           <button
             onClick={openMobile}
@@ -221,29 +221,29 @@ export function MainArea({ children }: { children: ReactNode }) {
           >
             <Menu size={18} />
           </button>
-          <div className="hidden h-1.5 w-1.5 rounded-full bg-success md:block" />
-          <span className="text-[13px] font-medium text-foreground">
+          <div className="hidden h-2 w-2 rounded-full bg-success shadow-[0_0_0_4px_rgba(16,185,129,0.12)] md:block" />
+          <span className="truncate text-[13px] font-semibold text-foreground">
             CBROS Autoparts
           </span>
-          <span className="text-muted-foreground">/</span>
-          <span className="text-[13px] text-muted-foreground">Admin</span>
+          <span className="hidden text-muted-foreground sm:inline">/</span>
+          <span className="hidden text-[13px] text-muted-foreground sm:inline">Admin</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* Location switcher */}
           <LocationSelector />
 
           {/* Separator */}
-          <div className="h-6 w-px bg-border" />
+          <div className="hidden h-6 w-px bg-border sm:block" />
 
           {/* Notification bell */}
           <NotificationBell />
 
           {/* User avatar */}
-          <div className="flex items-center gap-2.5 rounded-lg px-1.5 py-1">
+          <div className="hidden items-center gap-2.5 rounded-xl border border-border/70 bg-background/60 px-2 py-1 shadow-sm sm:flex">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary/80 text-[11px] font-semibold text-primary-foreground ring-2 ring-background shadow-sm">
               {initials}
             </div>
-            <div className="hidden text-left lg:block">
+            <div className="hidden text-left xl:block">
               <div className="text-[13px] font-medium leading-none text-foreground">
                 {user?.fullName ?? "Loading..."}
               </div>
@@ -268,7 +268,7 @@ export function MainArea({ children }: { children: ReactNode }) {
       </header>
 
       {/* Page content */}
-      <main className="flex-1 bg-muted/30 p-6">{children}</main>
+      <main className="erp-shell-bg flex-1 p-4 md:p-6">{children}</main>
     </div>
   );
 }

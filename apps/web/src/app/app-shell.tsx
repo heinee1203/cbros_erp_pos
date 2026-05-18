@@ -12,7 +12,7 @@ import { Loader2 } from "lucide-react";
 const PUBLIC_ROUTES = ["/login"];
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const router = useRouter();
   const { isAuthenticated, loading } = useAuth();
   const isPublicRoute = PUBLIC_ROUTES.some((r) => pathname.startsWith(r)) || pathname.startsWith("/print");
