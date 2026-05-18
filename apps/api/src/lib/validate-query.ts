@@ -17,6 +17,22 @@ export function parseQuery<T extends z.ZodType>(
   return parsed.data;
 }
 
+export function parseBody<T extends z.ZodType>(
+  schema: T,
+  body: unknown,
+  reply: FastifyReply,
+): z.infer<T> | null {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    reply.status(400).send({
+      error: "Validation failed",
+      details: parsed.error.flatten(),
+    });
+    return null;
+  }
+  return parsed.data;
+}
+
 // ── Shared query schemas ────────────────────────────────────
 
 const isoDatetime = z.string().datetime({ offset: true }).optional();
