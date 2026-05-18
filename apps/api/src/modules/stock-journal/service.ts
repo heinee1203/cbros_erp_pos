@@ -187,6 +187,7 @@ export async function queryJournal(params: JournalQueryParams): Promise<JournalP
       actorName: users.fullName,
       reversalOfJournalId: stockJournal.reversalOfJournalId,
       lineAmount: stockJournal.unitCostSnapshot, // unit cost for POS journal entries
+      unitPrice: sql<string | null>`NULL`.as("unit_price"),
       createdAt: stockJournal.createdAt,
     })
     .from(stockJournal)
