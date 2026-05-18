@@ -312,7 +312,7 @@ export async function saveDotEntry(
     dotCode,
     manufactureWeek: parsed.week,
     manufactureYear: parsed.year,
-    manufactureDate: parsed.date ? parsed.date.toISOString().slice(0, 10) : null,
+    manufactureDate: parsed.manufactureDate ?? null,
     quantityReceived: quantity,
     quantityInStock: quantity,
     quantitySold: 0,
