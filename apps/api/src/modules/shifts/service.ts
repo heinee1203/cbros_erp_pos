@@ -11,7 +11,6 @@ import {
 } from "@apex/database/schema";
 import { eq, and, sql, desc, inArray, type SQL } from "drizzle-orm";
 import { ShiftStatus, SHIFT_FORCE_CLOSE_ROLES } from "@apex/types";
-import bcrypt from "bcryptjs";
 
 // ── Types ──
 
@@ -52,6 +51,7 @@ export interface ZReadingData {
       amount: string;
       voidedAt: string | null;
       voidedBy: string | null;
+      reason: string | null;
     }>;
     refunds: Array<{
       saleNo: string;
@@ -60,7 +60,78 @@ export interface ZReadingData {
       refundedBy: string | null;
       reason: string | null;
     }>;
+    drawerEvents: Array<ShiftDrawerEventData>;
   };
+}
+
+export type ShiftDrawerEventAction = "NO_SALE" | "PAID_IN" | "PAID_OUT";
+
+export interface ShiftDrawerEventData {
+  id: string;
+  type: ShiftDrawerEventAction;
+  amount: string;
+  reason: string;
+  locationId: string;
+  locationName: string;
+  shiftId: string;
+  cashierId: string;
+  cashierName: string;
+  approvedBy: string;
+  authorizationMethod: "pin" | "barcode" | "card";
+  authorizationUserId: string | null;
+  drawerOpened: boolean;
+  drawerError: string | null;
+  clientEventId: string | null;
+  createdAt: string;
+}
+
+export type ShiftDrawerEventCreateInput = {
+  type: ShiftDrawerEventAction;
+  amount?: string | number | null;
+  reason?: string | null;
+  clientEventId?: string | null;
+  authorizationMethod: "pin" | "barcode" | "card";
+  authorizationUserId: string;
+  approvedBy: string;
+  drawerOpened?: boolean;
+  drawerError?: string | null;
+};
+
+function mapShiftDrawerEventRow(row: any): ShiftDrawerEventData {
+  return {
+    id: row.id,
+    type: row.type ?? row.action,
+    amount: String(row.amount ?? "0.00"),
+    reason: row.reason ?? "",
+    locationId: row.locationId ?? row.location_id,
+    locationName: row.locationName ?? row.location_name ?? "",
+    shiftId: row.shiftId ?? row.shift_id,
+    cashierId: row.cashierId ?? row.cashier_user_id,
+    cashierName: row.cashierName ?? row.cashier_name ?? "",
+    approvedBy: row.approvedBy ?? row.approved_by_name ?? "Manager",
+    authorizationMethod: row.authorizationMethod ?? row.authorization_method,
+    authorizationUserId: row.authorizationUserId ?? row.approved_by_user_id ?? null,
+    drawerOpened: Boolean(row.drawerOpened ?? row.drawer_opened),
+    drawerError: row.drawerError ?? row.drawer_error ?? null,
+    clientEventId: row.clientEventId ?? row.client_event_id ?? null,
+    createdAt: row.createdAt?.toISOString?.() ?? row.created_at?.toISOString?.() ?? row.createdAt ?? row.created_at,
+  };
+}
+
+function parseDrawerAction(value: unknown): ShiftDrawerEventAction {
+  if (value === "NO_SALE" || value === "PAID_IN" || value === "PAID_OUT") {
+    return value;
+  }
+  throw new Error("Drawer action must be NO_SALE, PAID_IN, or PAID_OUT");
+}
+
+function parseDrawerAmount(action: ShiftDrawerEventAction, value: unknown): number {
+  if (action === "NO_SALE") return 0;
+  const amount = parseFloat(String(value ?? "0").trim());
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Drawer amount must be greater than zero");
+  }
+  return amount;
 }
 
 // ── Core Functions ──
@@ -168,11 +239,162 @@ export async function getActiveShift(
 /**
  * Close a shift — compute expected cash, set variance, snapshot Z-reading.
  */
+export async function listShiftDrawerEvents(
+  shiftId: string,
+  orgId: string,
+): Promise<ShiftDrawerEventData[]> {
+  const rows = await db.execute(sql`
+    SELECT
+      sde.id,
+      sde.action AS "type",
+      sde.amount::text AS "amount",
+      sde.reason,
+      sde.location_id AS "locationId",
+      l.name AS "locationName",
+      sde.shift_id AS "shiftId",
+      sde.cashier_user_id AS "cashierId",
+      cashier.full_name AS "cashierName",
+      sde.approved_by_name AS "approvedBy",
+      sde.authorization_method AS "authorizationMethod",
+      sde.approved_by_user_id AS "authorizationUserId",
+      sde.drawer_opened AS "drawerOpened",
+      sde.drawer_error AS "drawerError",
+      sde.client_event_id AS "clientEventId",
+      sde.created_at AS "createdAt"
+    FROM shift_drawer_events sde
+    JOIN locations l ON l.id = sde.location_id
+    JOIN users cashier ON cashier.id = sde.cashier_user_id
+    WHERE sde.shift_id = ${shiftId}
+      AND sde.org_id = ${orgId}
+    ORDER BY sde.created_at DESC
+  `);
+
+  return (rows as any[]).map(mapShiftDrawerEventRow);
+}
+
+export async function createShiftDrawerEvent(
+  shiftId: string,
+  orgId: string,
+  locationId: string,
+  cashierUserId: string,
+  input: ShiftDrawerEventCreateInput,
+): Promise<ShiftDrawerEventData> {
+  const action = parseDrawerAction(input.type);
+  const amount = parseDrawerAmount(action, input.amount);
+  const reason = String(input.reason ?? "").trim().slice(0, 500);
+  const clientEventId = input.clientEventId ? String(input.clientEventId).slice(0, 120) : null;
+
+  if (action !== "NO_SALE" && reason.length < 3) {
+    throw new Error("Reason is required for paid-in and paid-out events");
+  }
+
+  return db.transaction(async (tx) => {
+    const shiftRows = await tx.execute(sql`
+      SELECT id, location_id, status
+      FROM shifts
+      WHERE id = ${shiftId}
+        AND org_id = ${orgId}
+      FOR UPDATE
+    `);
+    const shift = shiftRows[0] as any;
+    if (!shift) throw new Error("Shift not found");
+    if (shift.status !== "OPEN") {
+      throw new Error(`Cannot record drawer event for ${shift.status} shift`);
+    }
+    if (shift.location_id !== locationId) {
+      throw new Error("Drawer event location must match the locked register location");
+    }
+
+    if (clientEventId) {
+      const existing = await tx.execute(sql`
+        SELECT
+          sde.id,
+          sde.action AS "type",
+          sde.amount::text AS "amount",
+          sde.reason,
+          sde.location_id AS "locationId",
+          l.name AS "locationName",
+          sde.shift_id AS "shiftId",
+          sde.cashier_user_id AS "cashierId",
+          cashier.full_name AS "cashierName",
+          sde.approved_by_name AS "approvedBy",
+          sde.authorization_method AS "authorizationMethod",
+          sde.approved_by_user_id AS "authorizationUserId",
+          sde.drawer_opened AS "drawerOpened",
+          sde.drawer_error AS "drawerError",
+          sde.client_event_id AS "clientEventId",
+          sde.created_at AS "createdAt"
+        FROM shift_drawer_events sde
+        JOIN locations l ON l.id = sde.location_id
+        JOIN users cashier ON cashier.id = sde.cashier_user_id
+        WHERE sde.org_id = ${orgId}
+          AND sde.client_event_id = ${clientEventId}
+        LIMIT 1
+      `);
+      if (existing.length > 0) {
+        return mapShiftDrawerEventRow(existing[0]);
+      }
+    }
+
+    const inserted = await tx.execute(sql`
+      INSERT INTO shift_drawer_events (
+        org_id,
+        location_id,
+        shift_id,
+        cashier_user_id,
+        approved_by_user_id,
+        approved_by_name,
+        action,
+        amount,
+        reason,
+        authorization_method,
+        drawer_opened,
+        drawer_error,
+        client_event_id
+      )
+      VALUES (
+        ${orgId},
+        ${locationId},
+        ${shiftId},
+        ${cashierUserId},
+        ${input.authorizationUserId},
+        ${input.approvedBy},
+        ${action},
+        ${amount.toFixed(2)},
+        ${reason},
+        ${input.authorizationMethod},
+        ${Boolean(input.drawerOpened)},
+        ${input.drawerError ? String(input.drawerError).slice(0, 500) : null},
+        ${clientEventId}
+      )
+      RETURNING
+        id,
+        action AS "type",
+        amount::text AS "amount",
+        reason,
+        location_id AS "locationId",
+        (SELECT name FROM locations WHERE id = shift_drawer_events.location_id) AS "locationName",
+        shift_id AS "shiftId",
+        cashier_user_id AS "cashierId",
+        (SELECT full_name FROM users WHERE id = shift_drawer_events.cashier_user_id) AS "cashierName",
+        approved_by_name AS "approvedBy",
+        authorization_method AS "authorizationMethod",
+        approved_by_user_id AS "authorizationUserId",
+        drawer_opened AS "drawerOpened",
+        drawer_error AS "drawerError",
+        client_event_id AS "clientEventId",
+        created_at AS "createdAt"
+    `);
+
+    return mapShiftDrawerEventRow(inserted[0]);
+  });
+}
+
 export async function closeShift(
   shiftId: string,
   orgId: string,
   userId: string,
-  input: { actualCash: string; notes?: string },
+  input: { actualCash: string; expectedCashAdjustment?: string; notes?: string },
 ) {
   return db.transaction(async (tx) => {
     // Lock the shift row
@@ -192,20 +414,39 @@ export async function closeShift(
     // Compute Z-reading
     const zReading = await computeZReading(tx, shiftId, orgId);
 
-    const actualCash = parseFloat(input.actualCash);
-    const expectedCash = parseFloat(zReading.cashReconciliation.expectedCash);
+    const actualCash = parseFloat(String(input.actualCash).trim());
+    if (!Number.isFinite(actualCash) || actualCash < 0) {
+      throw new Error("actualCash must be a non-negative amount");
+    }
+    const expectedCashAdjustment = parseFloat(String(input.expectedCashAdjustment ?? "0").trim());
+    if (!Number.isFinite(expectedCashAdjustment)) {
+      throw new Error("expectedCashAdjustment must be a valid amount");
+    }
+    const expectedCash =
+      parseFloat(zReading.cashReconciliation.expectedCash) + expectedCashAdjustment;
     const variance = actualCash - expectedCash;
+    const closedAt = new Date();
+    const closedSnapshot: ZReadingData = {
+      ...zReading,
+      closedAt: closedAt.toISOString(),
+      cashReconciliation: {
+        ...zReading.cashReconciliation,
+        expectedCash: expectedCash.toFixed(2),
+        actualCash: actualCash.toFixed(2),
+        variance: variance.toFixed(2),
+      },
+    };
 
     // Update shift
     const [updated] = await tx
       .update(shifts)
       .set({
         status: "CLOSED",
-        closedAt: new Date(),
+        closedAt,
         closedByUserId: userId,
         actualCash: actualCash.toFixed(2),
         cashVariance: variance.toFixed(2),
-        zReadingSnapshot: zReading,
+        zReadingSnapshot: closedSnapshot,
         notes: input.notes ?? null,
       })
       .where(eq(shifts.id, shiftId))
@@ -216,36 +457,21 @@ export async function closeShift(
 }
 
 /**
- * Force-close a shift — manager/admin with PIN verification.
+ * Force-close a shift after a manager/admin authorization credential was verified.
  */
 export async function forceCloseShift(
   shiftId: string,
   orgId: string,
   managerId: string,
   managerRole: string,
-  pin: string,
+  managerName?: string,
+  authorizationMethod = "authorization",
 ) {
   if (!SHIFT_FORCE_CLOSE_ROLES.includes(managerRole as any)) {
     throw new Error("Only ADMIN or MANAGER can force-close shifts");
   }
 
   return db.transaction(async (tx) => {
-    // Verify manager's PIN
-    const [manager] = await tx
-      .select({ pinHash: users.pinHash })
-      .from(users)
-      .where(eq(users.id, managerId))
-      .limit(1);
-
-    if (!manager?.pinHash) {
-      throw new Error("Manager PIN not set — cannot force-close");
-    }
-
-    const pinValid = await bcrypt.compare(pin, manager.pinHash);
-    if (!pinValid) {
-      throw new Error("Invalid PIN");
-    }
-
     // Lock shift
     const shiftRows = await tx.execute(
       sql`SELECT * FROM shifts WHERE id = ${shiftId} AND org_id = ${orgId} FOR UPDATE`,
@@ -260,14 +486,20 @@ export async function forceCloseShift(
     // Compute Z-reading
     const zReading = await computeZReading(tx, shiftId, orgId);
 
+    const closedAt = new Date();
+    const closedSnapshot: ZReadingData = {
+      ...zReading,
+      closedAt: closedAt.toISOString(),
+    };
+
     const [updated] = await tx
       .update(shifts)
       .set({
         status: "FORCE_CLOSED",
-        closedAt: new Date(),
+        closedAt,
         closedByUserId: managerId,
-        zReadingSnapshot: zReading,
-        notes: `Force-closed by manager`,
+        zReadingSnapshot: closedSnapshot,
+        notes: `Force-closed by ${managerName ?? "manager"} via ${authorizationMethod}`,
       })
       .where(eq(shifts.id, shiftId))
       .returning();
@@ -328,12 +560,28 @@ async function computeZReading(
 
   // 1. Sales Summary
   const summaryRows = await tx.execute(sql`
+    WITH refund_by_sale AS (
+      SELECT
+        s.id AS sale_id,
+        COALESCE(SUM((sl.line_total::numeric / NULLIF(sl.quantity, 0)) * sl.refunded_quantity), 0) AS refund_total
+      FROM sales s
+      JOIN sale_lines sl ON sl.sale_id = s.id
+      WHERE s.shift_id = ${shiftId}
+        AND s.org_id = ${orgId}
+        AND s.status IN ('PARTIALLY_REFUNDED', 'REFUNDED')
+      GROUP BY s.id
+    )
     SELECT
-      COALESCE(SUM(s.grand_total::numeric) FILTER (WHERE s.status = 'COMPLETED'), 0)::text AS "grossSales",
-      COALESCE(SUM(s.grand_total::numeric) FILTER (WHERE s.status IN ('REFUNDED', 'PARTIALLY_REFUNDED')), 0)::text AS "refundsTotal",
-      COUNT(*) FILTER (WHERE s.status = 'COMPLETED')::int AS "transactionCount",
+      COALESCE(SUM(s.grand_total::numeric) FILTER (
+        WHERE s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+      ), 0)::text AS "grossSales",
+      COALESCE(SUM(rb.refund_total), 0)::text AS "refundsTotal",
+      COUNT(*) FILTER (
+        WHERE s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+      )::int AS "transactionCount",
       COUNT(*) FILTER (WHERE s.status = 'VOIDED')::int AS "voidCount"
     FROM sales s
+    LEFT JOIN refund_by_sale rb ON rb.sale_id = s.id
     WHERE s.shift_id = ${shiftId} AND s.org_id = ${orgId}
   `);
   const summary = summaryRows[0] as any;
@@ -346,56 +594,155 @@ async function computeZReading(
 
   // 2. Payment Breakdown
   const paymentRows = await tx.execute(sql`
+    WITH refund_by_sale AS (
+      SELECT
+        s.id AS sale_id,
+        COALESCE(SUM((sl.line_total::numeric / NULLIF(sl.quantity, 0)) * sl.refunded_quantity), 0) AS refund_total
+      FROM sales s
+      JOIN sale_lines sl ON sl.sale_id = s.id
+      WHERE s.shift_id = ${shiftId}
+        AND s.org_id = ${orgId}
+        AND s.status IN ('PARTIALLY_REFUNDED', 'REFUNDED')
+      GROUP BY s.id
+    ),
+    payment_totals AS (
+      SELECT
+        sp.sale_id,
+        SUM(sp.amount::numeric) AS payment_total
+      FROM sale_payments sp
+      JOIN sales s ON sp.sale_id = s.id
+      WHERE s.shift_id = ${shiftId}
+        AND s.org_id = ${orgId}
+        AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+      GROUP BY sp.sale_id
+    ),
+    net_payments AS (
+      SELECT
+        sp.method,
+        GREATEST(
+          0,
+          sp.amount::numeric - CASE
+            WHEN COALESCE(pt.payment_total, 0) > 0
+              THEN COALESCE(rb.refund_total, 0) * sp.amount::numeric / pt.payment_total
+            ELSE 0
+          END
+        ) AS net_amount
+      FROM sale_payments sp
+      JOIN sales s ON sp.sale_id = s.id
+      LEFT JOIN refund_by_sale rb ON rb.sale_id = s.id
+      LEFT JOIN payment_totals pt ON pt.sale_id = s.id
+      WHERE s.shift_id = ${shiftId}
+        AND s.org_id = ${orgId}
+        AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+    )
     SELECT
-      sp.method,
-      SUM(sp.amount::numeric)::text AS "total",
-      COUNT(*)::int AS "count"
-    FROM sale_payments sp
-    JOIN sales s ON sp.sale_id = s.id
-    WHERE s.shift_id = ${shiftId}
-      AND s.org_id = ${orgId}
-      AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED')
-    GROUP BY sp.method
-    ORDER BY SUM(sp.amount::numeric) DESC
+      method,
+      SUM(net_amount)::text AS "total",
+      COUNT(*) FILTER (WHERE net_amount > 0)::int AS "count"
+    FROM net_payments
+    GROUP BY method
+    HAVING SUM(net_amount) > 0
+    ORDER BY SUM(net_amount) DESC
   `);
 
   // 3. Cash Reconciliation
-  // Expected cash = opening_float + cash sales - cash refunds
+  // Expected cash = opening_float + net cash payments after refunds.
   const cashRows = await tx.execute(sql`
+    WITH refund_by_sale AS (
+      SELECT
+        s.id AS sale_id,
+        COALESCE(SUM((sl.line_total::numeric / NULLIF(sl.quantity, 0)) * sl.refunded_quantity), 0) AS refund_total
+      FROM sales s
+      JOIN sale_lines sl ON sl.sale_id = s.id
+      WHERE s.shift_id = ${shiftId}
+        AND s.org_id = ${orgId}
+        AND s.status IN ('PARTIALLY_REFUNDED', 'REFUNDED')
+      GROUP BY s.id
+    ),
+    payment_totals AS (
+      SELECT
+        sp.sale_id,
+        SUM(sp.amount::numeric) AS payment_total
+      FROM sale_payments sp
+      JOIN sales s ON sp.sale_id = s.id
+      WHERE s.shift_id = ${shiftId}
+        AND s.org_id = ${orgId}
+        AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+      GROUP BY sp.sale_id
+    )
     SELECT
-      COALESCE(SUM(sp.amount::numeric) FILTER (
-        WHERE s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED')
-      ), 0)::text AS "cashIn",
-      COALESCE(SUM(sp.amount::numeric) FILTER (
-        WHERE s.status IN ('REFUNDED')
-      ), 0)::text AS "cashOut"
+      COALESCE(SUM(GREATEST(
+        0,
+        sp.amount::numeric - CASE
+          WHEN COALESCE(pt.payment_total, 0) > 0
+            THEN COALESCE(rb.refund_total, 0) * sp.amount::numeric / pt.payment_total
+          ELSE 0
+        END
+      )), 0)::text AS "cashNet"
     FROM sale_payments sp
     JOIN sales s ON sp.sale_id = s.id
+    LEFT JOIN refund_by_sale rb ON rb.sale_id = s.id
+    LEFT JOIN payment_totals pt ON pt.sale_id = s.id
     WHERE s.shift_id = ${shiftId}
       AND s.org_id = ${orgId}
+      AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
       AND sp.method = 'CASH'
   `);
   const cashData = cashRows[0] as any;
   const openingFloat = parseFloat(shiftInfo.opening_float ?? "0");
-  const cashIn = parseFloat(cashData?.cashIn ?? "0");
-  const cashOut = parseFloat(cashData?.cashOut ?? "0");
-  const expectedCash = openingFloat + cashIn - cashOut;
+  const cashNet = parseFloat(cashData?.cashNet ?? "0");
+  const drawerRows = await tx.execute(sql`
+    SELECT
+      sde.id,
+      sde.action AS "type",
+      sde.amount::text AS "amount",
+      sde.reason,
+      sde.location_id AS "locationId",
+      l.name AS "locationName",
+      sde.shift_id AS "shiftId",
+      sde.cashier_user_id AS "cashierId",
+      cashier.full_name AS "cashierName",
+      sde.approved_by_name AS "approvedBy",
+      sde.authorization_method AS "authorizationMethod",
+      sde.approved_by_user_id AS "authorizationUserId",
+      sde.drawer_opened AS "drawerOpened",
+      sde.drawer_error AS "drawerError",
+      sde.client_event_id AS "clientEventId",
+      sde.created_at AS "createdAt"
+    FROM shift_drawer_events sde
+    JOIN locations l ON l.id = sde.location_id
+    JOIN users cashier ON cashier.id = sde.cashier_user_id
+    WHERE sde.shift_id = ${shiftId}
+      AND sde.org_id = ${orgId}
+    ORDER BY sde.created_at DESC
+  `);
+  const drawerEvents = (drawerRows as any[]).map(mapShiftDrawerEventRow);
+  const drawerExpectedAdjustment = drawerEvents.reduce((sum, event) => {
+    const amount = parseFloat(event.amount);
+    if (event.type === "PAID_IN") return sum + amount;
+    if (event.type === "PAID_OUT") return sum - amount;
+    return sum;
+  }, 0);
+  const expectedCash = openingFloat + cashNet + drawerExpectedAdjustment;
 
   // 4. Top Items (top 5)
   const topItemRows = await tx.execute(sql`
     SELECT
       p.name AS "productName",
       p.mnemonic_sku AS "mnemonicSku",
-      SUM(sl.quantity)::int AS "unitsSold",
-      SUM(sl.line_total::numeric)::text AS "totalRevenue"
+      SUM(sl.quantity - sl.refunded_quantity)::int AS "unitsSold",
+      SUM(
+        sl.line_total::numeric - ((sl.line_total::numeric / NULLIF(sl.quantity, 0)) * sl.refunded_quantity)
+      )::text AS "totalRevenue"
     FROM sale_lines sl
     JOIN sales s ON sl.sale_id = s.id
     JOIN products p ON sl.product_id = p.id
     WHERE s.shift_id = ${shiftId}
       AND s.org_id = ${orgId}
-      AND s.status = 'COMPLETED'
+      AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
     GROUP BY p.id, p.name, p.mnemonic_sku
-    ORDER BY SUM(sl.quantity) DESC
+    HAVING SUM(sl.quantity - sl.refunded_quantity) > 0
+    ORDER BY SUM(sl.quantity - sl.refunded_quantity) DESC
     LIMIT 5
   `);
 
@@ -405,7 +752,8 @@ async function computeZReading(
       s.sale_no AS "saleNo",
       s.grand_total::text AS "amount",
       s.voided_at AS "voidedAt",
-      u.full_name AS "voidedBy"
+      u.full_name AS "voidedBy",
+      NULLIF(regexp_replace(COALESCE(s.notes, ''), '^.*\\[Voided\\]\\s*', ''), '') AS "reason"
     FROM sales s
     LEFT JOIN users u ON s.voided_by_user_id = u.id
     WHERE s.shift_id = ${shiftId}
@@ -416,13 +764,25 @@ async function computeZReading(
 
   // 5. Accountability — refunds
   const refundRows = await tx.execute(sql`
+    WITH refund_by_sale AS (
+      SELECT
+        s.id AS sale_id,
+        COALESCE(SUM((sl.line_total::numeric / NULLIF(sl.quantity, 0)) * sl.refunded_quantity), 0) AS refund_total
+      FROM sales s
+      JOIN sale_lines sl ON sl.sale_id = s.id
+      WHERE s.shift_id = ${shiftId}
+        AND s.org_id = ${orgId}
+        AND s.status IN ('PARTIALLY_REFUNDED', 'REFUNDED')
+      GROUP BY s.id
+    )
     SELECT
       s.sale_no AS "saleNo",
-      s.grand_total::text AS "amount",
+      COALESCE(rb.refund_total, 0)::text AS "amount",
       s.refunded_at AS "refundedAt",
       u.full_name AS "refundedBy",
-      s.notes AS "reason"
+      NULLIF(regexp_replace(COALESCE(s.notes, ''), '^.*\\[Refund\\]\\s*', ''), '') AS "reason"
     FROM sales s
+    LEFT JOIN refund_by_sale rb ON rb.sale_id = s.id
     LEFT JOIN users u ON s.refunded_by_user_id = u.id
     WHERE s.shift_id = ${shiftId}
       AND s.org_id = ${orgId}
@@ -467,6 +827,7 @@ async function computeZReading(
         amount: r.amount,
         voidedAt: r.voidedAt?.toISOString?.() ?? r.voidedAt ?? null,
         voidedBy: r.voidedBy ?? null,
+        reason: r.reason ?? null,
       })),
       refunds: (refundRows as any[]).map((r) => ({
         saleNo: r.saleNo,
@@ -475,6 +836,7 @@ async function computeZReading(
         refundedBy: r.refundedBy ?? null,
         reason: r.reason ?? null,
       })),
+      drawerEvents,
     },
   };
 }
@@ -540,8 +902,74 @@ export async function listShifts(
       grossSales: sql<string>`COALESCE((
         SELECT SUM(s.grand_total::numeric)
         FROM sales s
-        WHERE s.shift_id = "shifts"."id" AND s.status = 'COMPLETED'
+        WHERE s.shift_id = "shifts"."id"
+          AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
       ), 0)::text`,
+      refundsTotal: sql<string>`COALESCE((
+        SELECT SUM((sl.line_total::numeric / NULLIF(sl.quantity, 0)) * sl.refunded_quantity)
+        FROM sales s
+        JOIN sale_lines sl ON sl.sale_id = s.id
+        WHERE s.shift_id = "shifts"."id"
+          AND s.status IN ('PARTIALLY_REFUNDED', 'REFUNDED')
+      ), 0)::text`,
+      netSales: sql<string>`(
+        COALESCE((
+          SELECT SUM(s.grand_total::numeric)
+          FROM sales s
+          WHERE s.shift_id = "shifts"."id"
+            AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+        ), 0)
+        - COALESCE((
+          SELECT SUM((sl.line_total::numeric / NULLIF(sl.quantity, 0)) * sl.refunded_quantity)
+          FROM sales s
+          JOIN sale_lines sl ON sl.sale_id = s.id
+          WHERE s.shift_id = "shifts"."id"
+            AND s.status IN ('PARTIALLY_REFUNDED', 'REFUNDED')
+        ), 0)
+      )::text`,
+      transactionCount: sql<number>`COALESCE((
+        SELECT COUNT(*)::int
+        FROM sales s
+        WHERE s.shift_id = "shifts"."id"
+          AND s.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+      ), 0)`,
+      voidCount: sql<number>`COALESCE((
+        SELECT COUNT(*)::int
+        FROM sales s
+        WHERE s.shift_id = "shifts"."id"
+          AND s.status = 'VOIDED'
+      ), 0)`,
+      drawerEventCount: sql<number>`COALESCE((
+        SELECT COUNT(*)::int
+        FROM shift_drawer_events sde
+        WHERE sde.shift_id = "shifts"."id"
+      ), 0)`,
+      drawerPaidInTotal: sql<string>`COALESCE((
+        SELECT SUM(sde.amount::numeric)
+        FROM shift_drawer_events sde
+        WHERE sde.shift_id = "shifts"."id"
+          AND sde.action = 'PAID_IN'
+      ), 0)::text`,
+      drawerPaidOutTotal: sql<string>`COALESCE((
+        SELECT SUM(sde.amount::numeric)
+        FROM shift_drawer_events sde
+        WHERE sde.shift_id = "shifts"."id"
+          AND sde.action = 'PAID_OUT'
+      ), 0)::text`,
+      drawerNetCash: sql<string>`(
+        COALESCE((
+          SELECT SUM(sde.amount::numeric)
+          FROM shift_drawer_events sde
+          WHERE sde.shift_id = "shifts"."id"
+            AND sde.action = 'PAID_IN'
+        ), 0)
+        - COALESCE((
+          SELECT SUM(sde.amount::numeric)
+          FROM shift_drawer_events sde
+          WHERE sde.shift_id = "shifts"."id"
+            AND sde.action = 'PAID_OUT'
+        ), 0)
+      )::text`,
     })
     .from(shifts)
     .innerJoin(users, eq(users.id, shifts.userId))
