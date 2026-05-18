@@ -7,7 +7,13 @@ import type {
   RecordPaymentInput,
   CustomerAdjustmentInput,
 } from "@apex/types";
-import { verifyPin } from "../auth/service";
+import { verifyAuthorizationCredential, verifyPin } from "../auth/service";
+import {
+  buildAgingReportResponse,
+  buildGeneratedSoaResponse,
+  resolveSoaPaymentStatus,
+  summarizeSoaTransactions,
+} from "./accounting-helpers";
 
 // ── Custom Errors ──
 
@@ -424,21 +430,16 @@ export async function recomputeSOAStatus(
   // PARTIAL requires actual cash to have arrived — CMs alone (e.g. on a
   // freshly-generated SOA whose CMs were tallied in but no payment yet) don't
   // promote out of GENERATED.
-  const effectiveCoverage = realAllocatedCharges + creditCoverage;
-  let newStatus: string;
-  if (effectiveCoverage >= totalCharges - 0.005) {
-    newStatus = "PAID";
-  } else if (realAllocatedCharges > 0.005) {
-    newStatus = "PARTIAL";
-  } else {
-    // No cash arrived — preserve existing non-payment state (GENERATED/SENT)
-    newStatus = soa.status === "PAID" || soa.status === "PARTIAL" ? "GENERATED" : soa.status;
-  }
+  const { newStatus, storedPaid } = resolveSoaPaymentStatus({
+    currentStatus: soa.status,
+    totalCharges,
+    totalPayable,
+    realAllocatedCharges,
+    creditCoverage,
+  });
 
   // paid_amount keeps cash-only semantics. External reports may depend on this
   // representing money that came in, not credit applied.
-  const storedPaid = Math.min(realAllocatedCharges, totalPayable).toFixed(2);
-
   await tx.execute(sql`
     UPDATE soa_records
     SET status = ${newStatus}, paid_amount = ${storedPaid}
@@ -1123,7 +1124,13 @@ export async function chargeCustomerAccount(
   saleNo: string,
   chargeAmount: number,
   userId: string,
-  overridePin?: string,
+  overrideApproval?:
+    | string
+    | {
+        pin?: string;
+        credential?: string;
+        method?: "pin" | "barcode" | "card";
+      },
 ) {
   // Lock customer row
   const rows = await tx.execute(
@@ -1143,13 +1150,26 @@ export async function chargeCustomerAccount(
     const newBalanceCheck = currentBalance + chargeAmount;
     if (newBalanceCheck > creditLimit) {
       const overage = newBalanceCheck - creditLimit;
-      if (!overridePin) {
+      const credential =
+        typeof overrideApproval === "string"
+          ? overrideApproval
+          : overrideApproval?.credential ?? overrideApproval?.pin;
+      if (!credential) {
         throw new CreditLimitError(overage, currentBalance, creditLimit);
       }
-      // Verify the override PIN
-      const pinResult = await verifyPin(orgId, overridePin);
-      if (!pinResult.valid) {
-        throw new Error("Invalid manager PIN");
+      const approval =
+        typeof overrideApproval === "string" ||
+        overrideApproval?.method === "pin" ||
+        overrideApproval?.pin
+          ? await verifyPin(
+              orgId,
+              typeof overrideApproval === "string"
+                ? overrideApproval
+                : overrideApproval.pin ?? credential,
+            )
+          : await verifyAuthorizationCredential(orgId, credential);
+      if (!approval.valid || !["ADMIN", "MANAGER"].includes(approval.role ?? "")) {
+        throw new Error("Invalid manager authorization");
       }
     }
   }
@@ -1417,65 +1437,7 @@ export async function getAgingReport(orgId: string, opts?: { asOfDate?: string }
     ORDER BY c.current_balance DESC
   `)) as any[];
 
-  const data = rows.map((r: any) => {
-    let current = parseFloat(r.current);
-    let d1to30 = parseFloat(r.days1to30);
-    let d31to60 = parseFloat(r.days31to60);
-    let d61to90 = parseFloat(r.days61to90);
-    let d90plus = parseFloat(r.days90plus);
-    const total = parseFloat(r.total);
-    const bucketSum = current + d1to30 + d31to60 + d61to90 + d90plus;
-
-    // Reconcile: if bucket sum exceeds current_balance (unallocated credits/payments),
-    // proportionally reduce each bucket to match total. This handles credit notes and
-    // payments not tracked in ar_payment_allocations.
-    if (bucketSum > total + 0.01 && bucketSum > 0) {
-      const scale = total / bucketSum;
-      current = parseFloat((current * scale).toFixed(2));
-      d1to30 = parseFloat((d1to30 * scale).toFixed(2));
-      d31to60 = parseFloat((d31to60 * scale).toFixed(2));
-      d61to90 = parseFloat((d61to90 * scale).toFixed(2));
-      // Assign remainder to 90+ to avoid rounding drift
-      d90plus = parseFloat((total - current - d1to30 - d31to60 - d61to90).toFixed(2));
-    }
-
-    return {
-      customer: { id: r.id, name: r.name },
-      customerType: r.customer_type,
-      paymentTerms: r.payment_terms_days,
-      current,
-      days1to30: d1to30,
-      days31to60: d31to60,
-      days61to90: d61to90,
-      days90plus: d90plus,
-      total,
-    };
-  });
-
-  // Compute grand totals and percentages
-  const totals = { current: 0, days1to30: 0, days31to60: 0, days61to90: 0, days90plus: 0, total: 0 };
-  for (const r of data) {
-    totals.current += r.current;
-    totals.days1to30 += r.days1to30;
-    totals.days31to60 += r.days31to60;
-    totals.days61to90 += r.days61to90;
-    totals.days90plus += r.days90plus;
-    totals.total += r.total;
-  }
-  const pct = (v: number) => totals.total > 0 ? parseFloat(((v / totals.total) * 100).toFixed(1)) : 0;
-
-  return {
-    asOfDate: asOf,
-    data,
-    totals,
-    percentages: {
-      current: pct(totals.current),
-      days1to30: pct(totals.days1to30),
-      days31to60: pct(totals.days31to60),
-      days61to90: pct(totals.days61to90),
-      days90plus: pct(totals.days90plus),
-    },
-  };
+  return buildAgingReportResponse(asOf, rows);
 }
 
 /**
@@ -1596,8 +1558,7 @@ export async function generateSOA(
       .orderBy(asc(customerTransactions.recordedAt));
   }
 
-  const charges = txns.filter((t) => t.type === "CHARGE").reduce((s, t) => s + parseFloat(t.amount), 0);
-  const credits = txns.filter((t) => t.type !== "CHARGE").reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
+  const { charges, credits } = summarizeSoaTransactions(txns);
 
   // Create SOA record
   const [soa] = await db.execute(sql`
@@ -1620,16 +1581,7 @@ export async function generateSOA(
       .where(eq(customerTransactions.id, txn.id));
   }
 
-  return {
-    id: soa.id,
-    soaNumber: soa.soa_number,
-    totalCharges: parseFloat(soa.total_charges),
-    totalCredits: parseFloat(soa.total_credits),
-    totalPayable: parseFloat(soa.total_payable),
-    transactionCount: soa.transaction_count,
-    billedCount: unbilledCharges.length,
-    status: soa.status,
-  };
+  return buildGeneratedSoaResponse(soa, unbilledCharges.length);
 }
 
 /**
