@@ -1,6 +1,6 @@
 import { db, type DbOrTx } from "@apex/database";
 import { inventory, stockJournal, locations, products } from "@apex/database/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import type { CreateAdjustmentInput } from "@apex/types";
 import {
   checkAndNotifyStockout,
@@ -14,6 +14,103 @@ import {
   UserRole,
 } from "@apex/types";
 
+const ADJUSTMENT_REFERENCE_TYPES = [
+  "ADJUSTMENT",
+  "STOCKTAKE",
+  "OPENING_BALANCE",
+] as const;
+
+function buildAdjustmentListWhere({
+  orgId,
+  locationId,
+  query,
+}: {
+  orgId: string;
+  locationId?: string | null;
+  query: Record<string, string | undefined>;
+}) {
+  const conditions = [
+    eq(stockJournal.orgId, orgId),
+    inArray(stockJournal.referenceType, [...ADJUSTMENT_REFERENCE_TYPES]),
+  ];
+
+  if (query.location === "all" || !locationId) {
+    // Preserve org-wide view when explicitly requested or no location is scoped.
+  } else {
+    conditions.push(eq(stockJournal.locationId, query.locationId ?? locationId));
+  }
+
+  if (query.reasonCode) {
+    conditions.push(sql`${stockJournal.reasonCode} = ${query.reasonCode}`);
+  }
+
+  if (query.direction === "add") {
+    conditions.push(sql`${stockJournal.changeQuantity} > 0`);
+  } else if (query.direction === "deduct") {
+    conditions.push(sql`${stockJournal.changeQuantity} < 0`);
+  }
+
+  return and(...conditions);
+}
+
+export async function listAdjustments({
+  orgId,
+  locationId,
+  query,
+  page,
+  limit,
+  offset,
+}: {
+  orgId: string;
+  locationId?: string | null;
+  query: Record<string, string | undefined>;
+  page: number;
+  limit: number;
+  offset: number;
+}) {
+  const where = buildAdjustmentListWhere({ orgId, locationId, query });
+
+  const [countResult] = await db
+    .select({ total: sql<number>`COUNT(*)::int` })
+    .from(stockJournal)
+    .where(where);
+
+  const total = countResult?.total ?? 0;
+
+  const rows = await db
+    .select({
+      id: stockJournal.id,
+      productId: stockJournal.productId,
+      productName: products.name,
+      productSku: products.sku,
+      locationId: stockJournal.locationId,
+      locationName: locations.name,
+      changeQuantity: stockJournal.changeQuantity,
+      balanceAfter: stockJournal.balanceAfter,
+      referenceType: stockJournal.referenceType,
+      reasonCode: stockJournal.reasonCode,
+      notes: stockJournal.notes,
+      userId: stockJournal.userId,
+      effectiveAt: stockJournal.effectiveAt,
+      createdAt: stockJournal.createdAt,
+    })
+    .from(stockJournal)
+    .innerJoin(products, eq(stockJournal.productId, products.id))
+    .innerJoin(locations, eq(stockJournal.locationId, locations.id))
+    .where(where)
+    .orderBy(desc(stockJournal.effectiveAt))
+    .limit(limit)
+    .offset(offset);
+
+  return {
+    data: rows,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
+
 /**
  * Lock an inventory row with SELECT ... FOR UPDATE for safe concurrent updates.
  * Creates the row if it doesn't exist.
@@ -23,9 +120,9 @@ async function lockInventoryRow(
   orgId: string,
   productId: string,
   locationId: string,
-): Promise<{ id: string; stockLevel: number; reservedLevel: number }> {
+): Promise<{ id: string; stockLevel: number; reservedLevel: number; reorderPoint: number }> {
   const rows = await tx.execute(
-    sql`SELECT id, stock_level, reserved_level
+    sql`SELECT id, stock_level, reserved_level, reorder_point
         FROM inventory
         WHERE org_id = ${orgId}
           AND product_id = ${productId}
@@ -39,6 +136,7 @@ async function lockInventoryRow(
       id: row.id,
       stockLevel: row.stock_level,
       reservedLevel: row.reserved_level,
+      reorderPoint: row.reorder_point,
     };
   }
 
@@ -54,7 +152,7 @@ async function lockInventoryRow(
     })
     .returning();
 
-  return { id: newRow.id, stockLevel: 0, reservedLevel: 0 };
+  return { id: newRow.id, stockLevel: 0, reservedLevel: 0, reorderPoint: newRow.reorderPoint };
 }
 
 export async function createAdjustment(
@@ -103,7 +201,7 @@ export async function createAdjustment(
   }
 
   // ── Transaction ──
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // Validate location belongs to org
     const [location] = await tx
       .select()
