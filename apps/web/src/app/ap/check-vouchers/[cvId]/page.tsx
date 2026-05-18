@@ -206,9 +206,9 @@ function PinModal({
 
 export default function CheckVoucherDetailPage() {
   const { token, locationId, loading: authLoading } = useAuth();
-  const params = useParams();
+  const params = useParams<{ cvId: string }>();
   const router = useRouter();
-  const cvId = params.cvId as string;
+  const cvId = params?.cvId as string;
 
   const [cv, setCv] = useState<CheckVoucherDetail | null>(null);
   const [loading, setLoading] = useState(true);

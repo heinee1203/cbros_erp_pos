@@ -328,7 +328,7 @@ export default function SupplierListPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   // Drawer state — auto-open from ?open= query param
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const [drawerSupplierId, setDrawerSupplierId] = useState<string | null>(
     searchParams.get("open"),
   );

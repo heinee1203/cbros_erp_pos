@@ -89,7 +89,7 @@ function resolveStatus(row: SupplierSOARecord): { state: UnifiedPaymentStatus; d
 export default function SupplierSOAHistoryPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
 
   // When arriving from an invoice's BILLED badge, pre-seed the search with the
   // target SOA number so the list auto-filters to that row on mount.

@@ -71,7 +71,7 @@ const METHOD_OPTIONS = [
 export default function NewDisbursementVoucherPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const router = useRouter();
-  const params = useSearchParams();
+  const params = useSearchParams() ?? new URLSearchParams();
   const soaIdParam = params.get("soaId");
   const soaIdsParam = params.get("soaIds"); // comma-separated, from multi-SOA selection
   const supplierIdParam = params.get("supplierId");
@@ -188,7 +188,7 @@ export default function NewDisbursementVoucherPage() {
       if (sid) {
         try {
           const cmRes = await apiFetch<{ data: any[] }>(
-            `/ap/invoices?supplierId=${sid}&status=PAID&limit=100`,
+            `/ap/invoices?supplierId=${sid}&status=OPEN,PAID&limit=100`,
             { token, locationId },
           );
           const cms = (cmRes.data || [])

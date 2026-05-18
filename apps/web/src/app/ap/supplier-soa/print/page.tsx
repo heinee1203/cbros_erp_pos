@@ -26,7 +26,7 @@ function fmtPeso(v: string | number) {
 
 export default function PrintSupplierSOA() {
   const { token, locationId, loading: authLoading } = useAuth();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const supplierId = searchParams.get("supplierId");
   const [data, setData] = useState<SOAData | null>(null);
   const [loading, setLoading] = useState(true);

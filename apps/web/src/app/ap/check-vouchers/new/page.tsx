@@ -48,7 +48,7 @@ interface InvoiceLine {
 export default function NewCheckVoucherPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const preselectedInvoiceId = searchParams.get("invoiceId");
   const preselectedSupplierId = searchParams.get("supplierId");
   const preselectedInvoiceIds = searchParams.get("invoiceIds")?.split(",").filter(Boolean) ?? [];

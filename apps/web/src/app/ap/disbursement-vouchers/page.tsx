@@ -25,7 +25,7 @@ const EMPTY_SUMMARY: DVSummary = {
 export default function DisbursementVoucherListPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
 
   // Data
   const [records, setRecords] = useState<DVRecord[]>([]);
