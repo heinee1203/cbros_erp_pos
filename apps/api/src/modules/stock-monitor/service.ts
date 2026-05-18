@@ -21,6 +21,11 @@ import {
   inArray,
   type SQL,
 } from "drizzle-orm";
+import {
+  buildStockMonitorSummary,
+  mapStockMonitorMetricRow,
+  type StockMonitorParentInfo,
+} from "./stock-monitor-helpers";
 
 /**
  * Recompute stock_metrics for every active product in the org.
@@ -656,73 +661,16 @@ async function queryStockMonitorSummary(orgId: string): Promise<StockMonitorSumm
       AND (sm.id IS NULL OR (COALESCE(sm.total_stock, 0) = 0 AND COALESCE(sm.avg_daily_sales_90d, 0) < 0.01))
       ${excludeFilter}
   `);
-  const untrackedCount = (untrackedRow as any)?.cnt ?? 0;
-
-  const summary: StockMonitorSummary = {
-    critical: 0,
-    low: 0,
-    healthy: 0,
-    overstock: 0,
-    deadStock: 0,
-    outOfStock: (oosRow as any).count ?? 0,
-    total: 0,
-    fastMovers: 0,
-    strategicStock: 0,
-    watchList: 0,
-    deadStockVelocity: 0,
-    newItems: 0,
-    deadStockValue: parseFloat((deadValueRow as any).value ?? "0"),
-    untrackedCount,
-    totalActiveProducts: 0,
-    computedAt: null as string | null,
-  };
-
   // Get the last computed timestamp
   const [tsRow] = await db.execute(sql`SELECT MAX(sm.computed_at) AS ts FROM stock_metrics sm WHERE sm.org_id = ${orgId}`);
-  summary.computedAt = (tsRow as any)?.ts ? new Date((tsRow as any).ts).toISOString() : null;
-
-  for (const row of statusRows as any[]) {
-    const count = row.count as number;
-    summary.total += count;
-    switch (row.status) {
-      case "CRITICAL":
-        summary.critical = count;
-        break;
-      case "LOW":
-        summary.low = count;
-        break;
-      case "HEALTHY":
-        summary.healthy = count;
-        break;
-      case "OVERSTOCK":
-        summary.overstock = count;
-        break;
-      case "DEAD_STOCK":
-        summary.deadStock = count;
-        break;
-    }
-  }
-
-  for (const row of velocityRows as any[]) {
-    switch (row.velocity_class) {
-      case "FAST_MOVER": summary.fastMovers = row.count; break;
-      case "STRATEGIC_STOCK": summary.strategicStock = row.count; break;
-      case "WATCH_LIST": summary.watchList = row.count; break;
-      case "DEAD_STOCK": summary.deadStockVelocity = row.count; break;
-      case "NEW_ITEM": summary.newItems = row.count; break;
-    }
-  }
-
-  // Sum of five velocity classes + untracked = total active non-parent SKUs.
-  summary.totalActiveProducts =
-    summary.fastMovers +
-    summary.strategicStock +
-    summary.watchList +
-    summary.deadStockVelocity +
-    summary.newItems +
-    summary.untrackedCount;
-
-  return summary;
+  return buildStockMonitorSummary({
+    statusRows: statusRows as any[],
+    velocityRows: velocityRows as any[],
+    outOfStockCount: (oosRow as any).count ?? 0,
+    deadStockValue: (deadValueRow as any).value ?? "0",
+    untrackedCount: (untrackedRow as any)?.cnt ?? 0,
+    computedAt: (tsRow as any)?.ts,
+  }) satisfies StockMonitorSummary;
 }
 
 // ── Paginated stock monitor query ──
@@ -1120,7 +1068,7 @@ export async function queryStockMonitor(
 
   // Batch-fetch parent info for variants (name, brand, category, family)
   const parentIds = [...new Set(rows.filter(r => r.parentProductId).map(r => r.parentProductId!))];
-  const parentInfoMap = new Map<string, { name: string; brandName: string | null; categoryName: string | null; subcategoryName: string | null; familyName: string | null }>();
+  const parentInfoMap = new Map<string, StockMonitorParentInfo>();
   if (parentIds.length > 0) {
     const parentRows = await db
       .select({ id: products.id, name: products.name, brandName: brands.name, categoryName: categories.name, subcategoryName: productSubcategories.name, familyName: productFamilies.name })
@@ -1139,72 +1087,9 @@ export async function queryStockMonitor(
   const data = hasMore ? rows.slice(0, limit) : rows;
   const nextCursor = hasMore ? data[data.length - 1]!.id : null;
 
-  const enriched: StockMonitorRow[] = data.map((r) => {
-    const parentInfo = r.parentProductId ? parentInfoMap.get(r.parentProductId) : null;
-    // Build display name: "Parent Name (Variant)" for variants
-    const displayName = parentInfo ? `${parentInfo.name} (${r.productName})` : r.productName;
-    // Inherit brand/category/family from parent if variant doesn't have its own
-    const brandName = r.brandName || parentInfo?.brandName || null;
-    const categoryName = r.categoryName || parentInfo?.categoryName || null;
-    const subcategoryName = r.subcategoryName || parentInfo?.subcategoryName || null;
-    const familyName = r.familyName || parentInfo?.familyName || null;
-    return {
-    id: r.id,
-    productId: r.productId,
-    productName: displayName,
-    productSku: r.productSku,
-    brandName,
-    categoryName,
-    subcategoryName,
-    familyName,
-    totalStock: r.totalStock,
-    specialOrder: r.specialOrder ?? false,
-    discontinued: r.discontinued ?? false,
-    avgDailySales30d: r.avgDailySales30d,
-    avgDailySales60d: r.avgDailySales60d,
-    avgDailySales90d: r.avgDailySales90d,
-    avgDailySales180d: r.avgDailySales180d,
-    avgDailySales365d: r.avgDailySales365d,
-    avgDailySalesAll: r.avgDailySalesAll,
-    trend: r.trend,
-    trendRecent: r.trendRecent,
-    trendPrior: r.trendPrior,
-    daysOfStock: r.daysOfStock,
-    stockoutDays90d: r.stockoutDays90d,
-    lastPoDate: r.lastPoDate ? r.lastPoDate.toISOString() : null,
-    lastPoSupplierName: r.lastPoSupplierName,
-    lastLeadTimeDays: r.lastLeadTimeDays,
-    lastSaleDate: r.lastSaleDate ? r.lastSaleDate.toISOString() : null,
-    saleDaysCount: r.saleDaysCount,
-    totalQtySold: r.totalQtySold,
-    daysSinceLastSale: r.daysSinceLastSale,
-    velocityClass: r.velocityClass,
-    sold12m: r.sold12m,
-    sold6m: r.sold6m,
-    sold3m: r.sold3m,
-    sold1m: r.sold1m,
-    avgMonth12m: r.avgMonth12m,
-    avgMonth6m: r.avgMonth6m,
-    avgMonth3m: r.avgMonth3m,
-    avgMonth1m: r.avgMonth1m,
-    monthsLeft12m: r.monthsLeft12m,
-    monthsLeft6m: r.monthsLeft6m,
-    monthsLeft3m: r.monthsLeft3m,
-    monthsLeft1m: r.monthsLeft1m,
-    velocityTrend: r.velocityTrend,
-    avgSellingPrice: r.avgSellingPrice,
-    stockAgeMonths: r.stockAgeMonths,
-    suggestedSellPrice: r.suggestedSellPrice,
-    appliedMarkupPct: r.appliedMarkupPct,
-    inflationAdjustedCost: r.inflationAdjustedCost,
-    costPrice: r.costPrice,
-    sellingUnit: r.sellingUnit,
-    purchaseUnit: r.purchaseUnit,
-    conversionFactor: r.conversionFactor,
-    status: r.status,
-    computedAt: r.computedAt.toISOString(),
-  };
-  });
+  const enriched: StockMonitorRow[] = data.map((r) =>
+    mapStockMonitorMetricRow(r, parentInfoMap) as StockMonitorRow,
+  );
 
   const summary = await queryStockMonitorSummary(params.orgId);
 
@@ -1404,7 +1289,7 @@ export async function exportStockMonitorCSV(
 
   // Batch-fetch parent info for variants (name, brand, category, family)
   const csvParentIds = [...new Set(rows.filter(r => r.parentProductId).map(r => r.parentProductId!))];
-  const csvParentInfoMap = new Map<string, { name: string; brandName: string | null; categoryName: string | null; subcategoryName: string | null; familyName: string | null }>();
+  const csvParentInfoMap = new Map<string, StockMonitorParentInfo>();
   if (csvParentIds.length > 0) {
     const parents = await db
       .select({ id: products.id, name: products.name, brandName: brands.name, categoryName: categories.name, subcategoryName: productSubcategories.name, familyName: productFamilies.name })
@@ -1417,100 +1302,18 @@ export async function exportStockMonitorCSV(
     for (const p of parents) csvParentInfoMap.set(p.id, { name: p.name, brandName: p.brandName, categoryName: p.categoryName, subcategoryName: p.subcategoryName, familyName: p.familyName });
   }
 
-  return rows.map((r) => {
-    const parentInfo = r.parentProductId ? csvParentInfoMap.get(r.parentProductId) : null;
-    const displayName = parentInfo ? `${parentInfo.name} (${r.productName})` : r.productName;
-    const brandName = r.brandName || parentInfo?.brandName || null;
-    const categoryName = r.categoryName || parentInfo?.categoryName || null;
-    const subcategoryName = r.subcategoryName || parentInfo?.subcategoryName || null;
-    const familyName = r.familyName || parentInfo?.familyName || null;
-    return {
-    id: r.id,
-    productId: r.productId,
-    productName: displayName,
-    productSku: r.productSku,
-    brandName,
-    categoryName,
-    subcategoryName,
-    familyName,
-    totalStock: r.totalStock,
-    specialOrder: r.specialOrder ?? false,
-    discontinued: r.discontinued ?? false,
-    avgDailySales30d: r.avgDailySales30d,
-    avgDailySales60d: r.avgDailySales60d,
-    avgDailySales90d: r.avgDailySales90d,
-    avgDailySales180d: r.avgDailySales180d,
-    avgDailySales365d: r.avgDailySales365d,
-    avgDailySalesAll: r.avgDailySalesAll,
-    trend: r.trend,
-    trendRecent: r.trendRecent,
-    trendPrior: r.trendPrior,
-    daysOfStock: r.daysOfStock,
-    stockoutDays90d: r.stockoutDays90d,
-    lastPoDate: r.lastPoDate ? r.lastPoDate.toISOString() : null,
-    lastPoSupplierName: r.lastPoSupplierName,
-    lastLeadTimeDays: r.lastLeadTimeDays,
-    lastSaleDate: r.lastSaleDate ? r.lastSaleDate.toISOString() : null,
-    saleDaysCount: r.saleDaysCount,
-    totalQtySold: r.totalQtySold,
-    daysSinceLastSale: r.daysSinceLastSale,
-    velocityClass: r.velocityClass,
-    sold12m: r.sold12m,
-    sold6m: r.sold6m,
-    sold3m: r.sold3m,
-    sold1m: r.sold1m,
-    avgMonth12m: r.avgMonth12m,
-    avgMonth6m: r.avgMonth6m,
-    avgMonth3m: r.avgMonth3m,
-    avgMonth1m: r.avgMonth1m,
-    monthsLeft12m: r.monthsLeft12m,
-    monthsLeft6m: r.monthsLeft6m,
-    monthsLeft3m: r.monthsLeft3m,
-    monthsLeft1m: r.monthsLeft1m,
-    velocityTrend: r.velocityTrend,
-    avgSellingPrice: r.avgSellingPrice,
-    stockAgeMonths: r.stockAgeMonths,
-    suggestedSellPrice: r.suggestedSellPrice,
-    appliedMarkupPct: r.appliedMarkupPct,
-    inflationAdjustedCost: r.inflationAdjustedCost,
-    costPrice: r.costPrice,
-    sellingUnit: r.sellingUnit,
-    purchaseUnit: r.purchaseUnit,
-    conversionFactor: r.conversionFactor,
-    status: r.status,
-    computedAt: r.computedAt.toISOString(),
-  };
-  });
+  return rows.map((r) =>
+    mapStockMonitorMetricRow(r, csvParentInfoMap) as StockMonitorRow,
+  );
 }
 
 // ── Dead Stock Tier Intelligence ──
 
-export interface DeadStockTier {
-  label: string;
-  targetMarginPct: number;
-  daysSinceLastSale: number;
-}
-
-const DEAD_STOCK_TIERS = [
-  { minDays: 90, maxDays: 180, targetMarginPct: 12, label: "Slow Mover" },
-  { minDays: 181, maxDays: 365, targetMarginPct: 3, label: "Clearance" },
-  { minDays: 366, maxDays: null as number | null, targetMarginPct: -15, label: "Deep Clearance" },
-];
-
-export function getDeadStockTier(daysSinceLastSale: number): DeadStockTier | null {
-  for (const tier of DEAD_STOCK_TIERS) {
-    if (daysSinceLastSale >= tier.minDays && (tier.maxDays === null || daysSinceLastSale <= tier.maxDays)) {
-      return { ...tier, daysSinceLastSale };
-    }
-  }
-  return null;
-}
-
-export function suggestClearancePrice(costPrice: number, daysSinceLastSale: number): number | null {
-  const tier = getDeadStockTier(daysSinceLastSale);
-  if (!tier) return null;
-  return Math.round(costPrice * (1 + tier.targetMarginPct / 100) * 100) / 100;
-}
+export {
+  getDeadStockTier,
+  suggestClearancePrice,
+  type DeadStockTier,
+} from "./dead-stock-pricing";
 
 // ── Supplier Metrics Query ──
 
