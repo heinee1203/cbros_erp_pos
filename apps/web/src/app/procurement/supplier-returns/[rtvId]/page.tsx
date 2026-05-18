@@ -177,7 +177,7 @@ function printReturnForm(rtv: any) {
 
 export default function SupplierReturnDetailPage() {
   const params = useParams<{ rtvId: string }>();
-  const rtvId = params.rtvId;
+  const rtvId = params?.rtvId as string;
   const router = useRouter();
   const { token, locationId, loading: authLoading } = useAuth();
 

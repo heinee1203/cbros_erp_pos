@@ -62,7 +62,7 @@ interface POListEntry {
 
 export default function NewTransferPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const queryClient = useQueryClient();
   const { token, locationId: authLocationId } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);

@@ -66,7 +66,7 @@ const CONDITION_OPTIONS = [
 
 export default function NewSupplierReturnPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const { token, locationId, apiLocationId, loading: authLoading } = useAuth();
 
   // ── Data hooks ──

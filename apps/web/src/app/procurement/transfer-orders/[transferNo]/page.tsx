@@ -208,7 +208,7 @@ const STATUS_LABELS: Record<string, string> = {
 export default function TransferDetailPage() {
   const { token, locationId } = useAuth();
   const params = useParams<{ transferNo: string }>();
-  const transferNo = params.transferNo;
+  const transferNo = params?.transferNo as string;
 
   const { data: transfer, isLoading, error, refetch } = useTransferQuery(
     transferNo,
