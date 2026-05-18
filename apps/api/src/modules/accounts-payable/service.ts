@@ -9,57 +9,124 @@ import {
   supplierReturns,
 } from "@apex/database/schema";
 import { eq, and, sql, desc, asc, lt, inArray, or, gte, lte, ilike, type SQL } from "drizzle-orm";
+import {
+  appendAuditNote,
+  buildAuditNote,
+  buildDisbursementVoucherSoaAllocations,
+  buildSoaAllocationMap,
+  calculateCheckVoucherTotals,
+  calculateDisbursementVoucherTotals,
+  calculateInvoicePaymentApplication,
+  calculateInvoicePaymentReversal,
+  calculateSoaPaymentReversalTotals,
+  calculateSoaPaymentTotals,
+  numberToWords,
+  resolveDisbursementVoucherSoaIds,
+} from "./financial-helpers";
+import {
+  buildGeneratedSupplierSoaResponse,
+  buildSupplierSoaDetailResponse,
+  buildSupplierSoaLedgerEntries,
+  buildSupplierSoaOverviewResponse,
+  buildSupplierSoaSearchResponse,
+  mapSupplierSoaRecordRow,
+  summarizeSupplierSoaGenerationInvoices,
+} from "./soa-helpers";
+import {
+  buildApAgingReportResponse,
+  buildCheckRegisterResponse,
+  buildDisbursementVoucherListResponse,
+  buildPdcReportResponse,
+} from "./report-helpers";
+import {
+  assertDisbursementVoucherCreateTotals,
+  assertDisbursementVoucherHasConfirmSoaLinks,
+  assertDisbursementVoucherHasPaymentLines,
+  assertDisbursementVoucherPaymentsMatchNet,
+  assertDisbursementVoucherRequiresSoa,
+  appendDisbursementVoucherPaymentAuditNote,
+  buildDisbursementVoucherAdditionalChargeInsertValues,
+  buildDisbursementVoucherCreditMemoReferences,
+  buildDisbursementVoucherCreateResult,
+  buildDisbursementVoucherDeductionInsertValues,
+  buildDisbursementVoucherDetailResponse,
+  buildDisbursementVoucherInsertValues,
+  buildDisbursementVoucherPaymentInsertValues,
+  buildDisbursementVoucherPaymentAuditNote,
+  buildDisbursementVoucherSoaInsertValues,
+  calculateDisbursementVoucherInvoiceReversalAmount,
+  formatDisbursementVoucherNumber,
+  normalizeDisbursementVoucherListOptions,
+  requireConfirmableDisbursementVoucher,
+  requireDisbursementVoucherPrintResult,
+  requireVoidableDisbursementVoucher,
+  resolveDisbursementVoucherLinkedSoaIds,
+  shouldReverseDisbursementVoucherSettlement,
+  validateDisbursementVoucherSoaRow,
+  type DisbursementVoucherCreateInput,
+  type DisbursementVoucherListOptions,
+} from "./disbursement-voucher-helpers";
+import {
+  assertCheckVoucherCanVoid,
+  assertCheckVoucherHasLines,
+  assertCheckVoucherStatus,
+  buildCheckVoucherInsertValues,
+  buildCheckVoucherLineInsertValues,
+  buildCheckVoucherUpdateFields,
+  formatCheckVoucherNumber,
+  validateCheckVoucherInvoiceLines,
+  type CheckVoucherCreateInput,
+  type CheckVoucherUpdateInput,
+} from "./check-voucher-helpers";
+import {
+  buildBankAccountCreateValues,
+  buildBankAccountUpdateFields,
+  type BankAccountCreateInput,
+  type BankAccountUpdateInput,
+} from "./bank-account-helpers";
+import {
+  buildCheckPaymentStatusResult,
+  calculateCheckPaymentInvoiceReversalAmount,
+  normalizeCheckRegisterOptions,
+  parseCheckPaymentAmount,
+  requireOutstandingCheckPayment,
+  requireReleasedCheckPayment,
+  shouldReverseBouncedCheckSettlement,
+  type CheckRegisterOptions,
+} from "./check-payment-helpers";
+import {
+  assertBulkCreateInvoicesHasRows,
+  assertBulkMarkInvoicesPaidInput,
+  assertInvoiceCanEdit,
+  assertInvoiceCanVoid,
+  buildBulkCreateInvoiceError,
+  buildBulkCreateInvoicesResult,
+  buildBulkMarkInvoicesPaidResult,
+  buildBulkPaidInvoiceUpdate,
+  buildBulkSupplierInvoiceInsertValues,
+  buildSupplierInvoiceInsertValues,
+  buildSupplierInvoiceUpdateFields,
+  collectMissingBulkPaidInvoiceIds,
+  normalizeBulkSupplierInvoiceRow,
+  resolveBulkPaidInvoicePaymentDate,
+  resolveInvoicePaymentTermsDays,
+  shouldSkipBulkPaidInvoice,
+  type BulkMarkInvoicesPaidInput,
+  type BulkSupplierInvoiceCreateInput,
+  type SupplierInvoiceCreateInput,
+  type SupplierInvoiceUpdateInput,
+} from "./invoice-helpers";
+import {
+  buildSupplierApCreateValues,
+  buildSupplierApUpdateFields,
+  mapSupplierApDetailRow,
+  mapSupplierApStatsRow,
+  type SupplierApCreateInput,
+  type SupplierApUpdateInput,
+} from "./supplier-helpers";
 
 // ════════════════════════════════════════════════════════════════════
-// NUMBER TO WORDS (Philippine Peso)
 // ════════════════════════════════════════════════════════════════════
-
-const ones = [
-  "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
-  "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
-  "Seventeen", "Eighteen", "Nineteen",
-];
-const tens = [
-  "", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety",
-];
-
-function chunkToWords(n: number): string {
-  if (n === 0) return "";
-  if (n < 20) return ones[n];
-  if (n < 100) {
-    const remainder = n % 10;
-    return tens[Math.floor(n / 10)] + (remainder ? "-" + ones[remainder] : "");
-  }
-  const remainder = n % 100;
-  return ones[Math.floor(n / 100)] + " Hundred" + (remainder ? " " + chunkToWords(remainder) : "");
-}
-
-export function numberToWords(amount: number): string {
-  if (amount < 0) amount = Math.abs(amount);
-  const wholePart = Math.floor(amount);
-  const centavos = Math.round((amount - wholePart) * 100);
-
-  if (wholePart === 0) {
-    return `Zero Pesos and ${String(centavos).padStart(2, "0")}/100 Only`;
-  }
-
-  const scales = ["", "Thousand", "Million", "Billion"];
-  let remaining = wholePart;
-  const chunks: string[] = [];
-
-  let scaleIdx = 0;
-  while (remaining > 0) {
-    const chunk = remaining % 1000;
-    if (chunk > 0) {
-      const words = chunkToWords(chunk);
-      chunks.unshift(scales[scaleIdx] ? `${words} ${scales[scaleIdx]}` : words);
-    }
-    remaining = Math.floor(remaining / 1000);
-    scaleIdx++;
-  }
-
-  return `${chunks.join(" ")} Pesos and ${String(centavos).padStart(2, "0")}/100 Only`;
-}
 
 // ════════════════════════════════════════════════════════════════════
 // SUPPLIER INVOICES
@@ -222,17 +289,7 @@ export async function getInvoice(orgId: string, id: string) {
 export async function createInvoice(
   orgId: string,
   userId: string,
-  data: {
-    supplierId: string;
-    invoiceNumber: string;
-    invoiceDate: string;
-    totalAmount: string;
-    paymentTermsDays?: number;
-    currency?: string;
-    sourcePoId?: string;
-    sourceReceiptId?: string;
-    notes?: string;
-  },
+  data: SupplierInvoiceCreateInput,
 ) {
   // Validate supplier belongs to org and fetch their payment terms
   const [supplier] = await db
@@ -259,29 +316,14 @@ export async function createInvoice(
   if (dup) throw new Error("Duplicate invoice number for this supplier");
 
   // Calculate due date — use explicit param > supplier's terms > default 30
-  const invoiceDateObj = new Date(data.invoiceDate);
-  const termsDays = data.paymentTermsDays ?? supplier.paymentTermsDays ?? 30;
-  const dueDateObj = new Date(invoiceDateObj);
-  dueDateObj.setDate(dueDateObj.getDate() + termsDays);
-  const dueDate = dueDateObj.toISOString().split("T")[0];
-
   const [invoice] = await db
     .insert(supplierInvoices)
-    .values({
+    .values(buildSupplierInvoiceInsertValues({
       orgId,
-      supplierId: data.supplierId,
-      invoiceNumber: data.invoiceNumber,
-      invoiceDate: data.invoiceDate,
-      dueDate,
-      totalAmount: data.totalAmount,
-      balance: data.totalAmount,
-      paymentTermsDays: termsDays,
-      currency: data.currency ?? "PHP",
-      sourcePoId: data.sourcePoId ?? null,
-      sourceReceiptId: data.sourceReceiptId ?? null,
-      notes: data.notes ?? null,
-      recordedBy: userId,
-    })
+      userId,
+      data,
+      supplierTermsDays: supplier.paymentTermsDays,
+    }))
     .returning();
 
   return invoice;
@@ -293,14 +335,9 @@ export async function createInvoice(
 export async function bulkCreateInvoices(
   orgId: string,
   userId: string,
-  data: {
-    supplierId: string;
-    sourcePoId?: string;
-    notes?: string;
-    invoices: Array<{ invoiceNumber: string; invoiceDate: string; amount: string }>;
-  },
+  data: BulkSupplierInvoiceCreateInput,
 ) {
-  if (!data.invoices.length) throw new Error("No invoices provided");
+  assertBulkCreateInvoicesHasRows(data.invoices);
 
   return await db.transaction(async (tx) => {
     // Validate supplier + get payment terms
@@ -311,7 +348,7 @@ export async function bulkCreateInvoices(
       .limit(1);
     if (!supplier) throw new Error("Supplier not found");
 
-    const termsDays = supplier.paymentTermsDays ?? 30;
+    const termsDays = resolveInvoicePaymentTermsDays(undefined, supplier.paymentTermsDays);
     let created = 0;
     const errors: Array<{ index: number; invoiceNumber: string; message: string }> = [];
     let total = 0;
@@ -319,6 +356,7 @@ export async function bulkCreateInvoices(
     for (let i = 0; i < data.invoices.length; i++) {
       const inv = data.invoices[i];
       try {
+        const normalizedInv = normalizeBulkSupplierInvoiceRow(inv);
         // Check duplicate
         const [dup] = await tx
           .select({ id: supplierInvoices.id })
@@ -327,50 +365,37 @@ export async function bulkCreateInvoices(
             and(
               eq(supplierInvoices.orgId, orgId),
               eq(supplierInvoices.supplierId, data.supplierId),
-              eq(supplierInvoices.invoiceNumber, inv.invoiceNumber),
+              eq(supplierInvoices.invoiceNumber, normalizedInv.invoiceNumber),
             ),
           )
           .limit(1);
-        if (dup) { errors.push({ index: i, invoiceNumber: inv.invoiceNumber, message: "Duplicate invoice number" }); continue; }
+        if (dup) {
+          errors.push(buildBulkCreateInvoiceError(i, normalizedInv.invoiceNumber, "Duplicate invoice number"));
+          continue;
+        }
 
-        const invoiceDateObj = new Date(inv.invoiceDate);
-        const dueDateObj = new Date(invoiceDateObj);
-        dueDateObj.setDate(dueDateObj.getDate() + termsDays);
-
-        await tx.insert(supplierInvoices).values({
+        await tx.insert(supplierInvoices).values(buildBulkSupplierInvoiceInsertValues({
           orgId,
-          supplierId: data.supplierId,
-          invoiceNumber: inv.invoiceNumber,
-          invoiceDate: inv.invoiceDate,
-          dueDate: dueDateObj.toISOString().split("T")[0],
-          totalAmount: inv.amount,
-          balance: inv.amount,
-          paymentTermsDays: termsDays,
-          sourcePoId: data.sourcePoId ?? null,
-          notes: data.notes ?? null,
-          recordedBy: userId,
-        });
+          userId,
+          data,
+          invoice: normalizedInv,
+          termsDays,
+        }));
         created++;
-        total += parseFloat(inv.amount);
+        total += parseFloat(normalizedInv.amount);
       } catch (err: any) {
-        errors.push({ index: i, invoiceNumber: inv.invoiceNumber, message: err.message });
+        errors.push(buildBulkCreateInvoiceError(i, inv.invoiceNumber, err.message));
       }
     }
 
-    return { created, total: parseFloat(total.toFixed(2)), errors };
+    return buildBulkCreateInvoicesResult({ created, total, errors });
   });
 }
 
 export async function updateInvoice(
   orgId: string,
   id: string,
-  data: {
-    invoiceNumber?: string;
-    invoiceDate?: string;
-    totalAmount?: string;
-    paymentTermsDays?: number;
-    notes?: string;
-  },
+  data: SupplierInvoiceUpdateInput,
 ) {
   const [invoice] = await db
     .select()
@@ -379,30 +404,9 @@ export async function updateInvoice(
     .limit(1);
 
   if (!invoice) throw new Error("Invoice not found");
-  if (invoice.status !== "OPEN") throw new Error("Can only edit OPEN invoices");
+  assertInvoiceCanEdit(invoice.status);
 
-  const updates: Record<string, any> = {};
-
-  if (data.invoiceNumber !== undefined) updates.invoiceNumber = data.invoiceNumber;
-  if (data.notes !== undefined) updates.notes = data.notes;
-  if (data.paymentTermsDays !== undefined) updates.paymentTermsDays = data.paymentTermsDays;
-
-  if (data.invoiceDate !== undefined || data.paymentTermsDays !== undefined) {
-    const invDate = data.invoiceDate ?? invoice.invoiceDate;
-    const terms = data.paymentTermsDays ?? invoice.paymentTermsDays ?? 30;
-    const d = new Date(invDate);
-    d.setDate(d.getDate() + terms);
-    updates.dueDate = d.toISOString().split("T")[0];
-    if (data.invoiceDate !== undefined) updates.invoiceDate = data.invoiceDate;
-  }
-
-  if (data.totalAmount !== undefined) {
-    updates.totalAmount = data.totalAmount;
-    // Recalc balance: new total - already paid
-    const paid = parseFloat(invoice.paidAmount);
-    const rtvCredit = parseFloat(invoice.rtvCreditAmount);
-    updates.balance = String(parseFloat(data.totalAmount) - paid - rtvCredit);
-  }
+  const updates = buildSupplierInvoiceUpdateFields({ data, invoice });
 
   if (Object.keys(updates).length === 0) return invoice;
 
@@ -423,8 +427,7 @@ export async function voidInvoice(orgId: string, id: string) {
     .limit(1);
 
   if (!invoice) throw new Error("Invoice not found");
-  if (invoice.status === "VOIDED") throw new Error("Invoice already voided");
-  if (invoice.status === "PAID") throw new Error("Cannot void a fully paid invoice");
+  assertInvoiceCanVoid(invoice.status);
 
   // Check no cleared CVs reference this invoice
   const clearedCvs = await db
@@ -469,17 +472,9 @@ export async function voidInvoice(orgId: string, id: string) {
 export async function bulkMarkInvoicesPaid(
   orgId: string,
   userId: string,
-  data: {
-    invoiceIds: string[];
-    useInvoiceDateAsPaymentDate: boolean;
-    paymentDate?: string;
-    paymentMethod?: string;
-    referenceNumber?: string;
-    notes?: string;
-  },
+  data: BulkMarkInvoicesPaidInput,
 ) {
-  if (!data.invoiceIds.length) throw new Error("No invoice IDs provided");
-  if (data.invoiceIds.length > 100) throw new Error("Maximum 100 invoices per request");
+  assertBulkMarkInvoicesPaidInput(data);
 
   return await db.transaction(async (tx) => {
     // Fetch all requested invoices in one round-trip
@@ -496,79 +491,42 @@ export async function bulkMarkInvoicesPaid(
     const foundIds = new Set(invoices.map((inv) => inv.id));
 
     let successCount = 0;
-    let skippedCount = 0;
-    const skippedIds: string[] = [];
+    const skippedIds = collectMissingBulkPaidInvoiceIds(data.invoiceIds, foundIds);
     let totalAmountPaid = 0;
-
-    // IDs not found in DB → skip
-    for (const id of data.invoiceIds) {
-      if (!foundIds.has(id)) {
-        skippedCount++;
-        skippedIds.push(id);
-      }
-    }
 
     for (const inv of invoices) {
       // Skip already-settled invoices
-      if (inv.status === "PAID" || inv.status === "VOIDED") {
-        skippedCount++;
+      if (shouldSkipBulkPaidInvoice(inv)) {
         skippedIds.push(inv.id);
         continue;
       }
-
-      const currentBalance = parseFloat(inv.balance);
-      if (currentBalance <= 0) {
-        skippedCount++;
-        skippedIds.push(inv.id);
-        continue;
-      }
-
-      // Mirror clearCheckVoucher math (lines 778-789 in this file)
-      const newPaid = parseFloat(inv.paidAmount) + currentBalance;
 
       // Determine payment date
-      const payDate = data.useInvoiceDateAsPaymentDate
-        ? inv.invoiceDate          // COD: paid on delivery day
-        : (data.paymentDate ?? new Date().toISOString().split("T")[0]);
-
-      // Build audit note
-      const parts = [`[Bulk Paid: ${payDate}`];
-      if (data.paymentMethod) parts.push(data.paymentMethod);
-      if (data.referenceNumber) parts.push(`Ref#${data.referenceNumber}`);
-      parts[parts.length - 1] += "]";
-      const auditNote = parts.join(", ");
-
-      const existingNotes = inv.notes ?? "";
-      const updatedNotes = existingNotes
-        ? `${existingNotes}\n${auditNote}`
-        : auditNote;
-      if (data.notes) {
-        // Append user-supplied notes after the audit line
-        updatedNotes.trimEnd();
-      }
+      const payDate = resolveBulkPaidInvoicePaymentDate({
+        invoiceDate: inv.invoiceDate,
+        data,
+        fallbackDate: new Date().toISOString().split("T")[0],
+      });
+      const paymentUpdate = buildBulkPaidInvoiceUpdate({
+        invoice: inv,
+        data,
+        paymentDate: payDate,
+      });
 
       await tx
         .update(supplierInvoices)
-        .set({
-          paidAmount: String(newPaid.toFixed(2)),
-          balance: "0.00",
-          status: "PAID",
-          notes: data.notes
-            ? `${updatedNotes}\n${data.notes}`
-            : updatedNotes,
-        })
+        .set(paymentUpdate.updateFields)
         .where(eq(supplierInvoices.id, inv.id));
 
-      totalAmountPaid += currentBalance;
+      totalAmountPaid += paymentUpdate.amountPaid;
       successCount++;
     }
 
-    return {
+    return buildBulkMarkInvoicesPaidResult({
       successCount,
-      skippedCount,
       skippedIds,
-      totalAmountPaid: parseFloat(totalAmountPaid.toFixed(2)),
-    };
+      totalAmountPaid,
+    });
   });
 }
 
@@ -629,7 +587,7 @@ export async function generateCvNumber(tx: DbOrTx, orgId: string): Promise<strin
         WHERE org_id = ${orgId} AND year = ${year}`,
   );
 
-  return `CV-${year}-${String(next).padStart(6, "0")}`;
+  return formatCheckVoucherNumber(year, next);
 }
 
 export interface CvFilters {
@@ -768,24 +726,9 @@ export async function getCheckVoucher(orgId: string, id: string) {
 export async function createCheckVoucher(
   orgId: string,
   userId: string,
-  data: {
-    supplierId: string;
-    checkDate: string;
-    checkNumber?: string;
-    bankName?: string;
-    bankAccount?: string;
-    notes?: string;
-    lines: Array<{
-      supplierInvoiceId: string;
-      amount: string;
-      deductionAmount?: string;
-      deductionReason?: string;
-    }>;
-  },
+  data: CheckVoucherCreateInput,
 ) {
-  if (!data.lines || data.lines.length === 0) {
-    throw new Error("At least one invoice line is required");
-  }
+  assertCheckVoucherHasLines(data.lines);
 
   // Validate supplier
   const [supplier] = await db
@@ -808,68 +751,33 @@ export async function createCheckVoucher(
       ),
     );
 
-  if (invoiceRows.length !== invoiceIds.length) {
-    throw new Error("One or more invoices not found");
-  }
+  validateCheckVoucherInvoiceLines({
+    lines: data.lines,
+    invoiceRows,
+    supplierId: data.supplierId,
+  });
 
-  const invoiceMap = new Map(invoiceRows.map((i) => [i.id, i]));
-  for (const line of data.lines) {
-    const inv = invoiceMap.get(line.supplierInvoiceId)!;
-    if (inv.supplierId !== data.supplierId) {
-      throw new Error(`Invoice ${inv.invoiceNumber} belongs to a different supplier`);
-    }
-    if (!["OPEN", "PARTIALLY_PAID"].includes(inv.status)) {
-      throw new Error(`Invoice ${inv.invoiceNumber} is not payable (status: ${inv.status})`);
-    }
-    const lineAmount = parseFloat(line.amount);
-    const balance = parseFloat(inv.balance);
-    if (lineAmount > balance) {
-      throw new Error(
-        `Amount ${line.amount} exceeds balance ${inv.balance} for invoice ${inv.invoiceNumber}`,
-      );
-    }
-  }
-
-  // Calculate totals
-  let totalAmount = 0;
-  let totalDeductions = 0;
-  for (const line of data.lines) {
-    totalAmount += parseFloat(line.amount);
-    totalDeductions += parseFloat(line.deductionAmount ?? "0");
-  }
-  const netAmount = totalAmount - totalDeductions;
+  const totals = calculateCheckVoucherTotals(data.lines);
 
   return await db.transaction(async (tx) => {
     const cvNumber = await generateCvNumber(tx, orgId);
 
     const [cv] = await tx
       .insert(checkVouchers)
-      .values({
+      .values(buildCheckVoucherInsertValues({
         orgId,
         cvNumber,
-        supplierId: data.supplierId,
-        checkDate: data.checkDate,
-        checkNumber: data.checkNumber ?? null,
-        bankName: data.bankName ?? null,
-        bankAccount: data.bankAccount ?? null,
-        totalAmount: String(totalAmount.toFixed(2)),
-        deductions: String(totalDeductions.toFixed(2)),
-        netAmount: String(netAmount.toFixed(2)),
-        status: "DRAFT",
-        notes: data.notes ?? null,
-        preparedBy: userId,
-      })
+        userId,
+        data,
+        totals,
+      }))
       .returning();
 
     // Insert lines
     for (const line of data.lines) {
-      await tx.insert(checkVoucherLines).values({
-        checkVoucherId: cv.id,
-        supplierInvoiceId: line.supplierInvoiceId,
-        amount: line.amount,
-        deductionAmount: line.deductionAmount ?? "0",
-        deductionReason: line.deductionReason ?? null,
-      });
+      await tx.insert(checkVoucherLines).values(
+        buildCheckVoucherLineInsertValues(cv.id, line),
+      );
     }
 
     return cv;
@@ -879,13 +787,7 @@ export async function createCheckVoucher(
 export async function updateCheckVoucher(
   orgId: string,
   id: string,
-  data: {
-    checkDate?: string;
-    checkNumber?: string;
-    bankName?: string;
-    bankAccount?: string;
-    notes?: string;
-  },
+  data: CheckVoucherUpdateInput,
 ) {
   const [cv] = await db
     .select()
@@ -894,14 +796,9 @@ export async function updateCheckVoucher(
     .limit(1);
 
   if (!cv) throw new Error("Check voucher not found");
-  if (cv.status !== "DRAFT") throw new Error("Can only edit DRAFT check vouchers");
+  assertCheckVoucherStatus(cv.status, "DRAFT", "Can only edit DRAFT check vouchers");
 
-  const updates: Record<string, any> = {};
-  if (data.checkDate !== undefined) updates.checkDate = data.checkDate;
-  if (data.checkNumber !== undefined) updates.checkNumber = data.checkNumber;
-  if (data.bankName !== undefined) updates.bankName = data.bankName;
-  if (data.bankAccount !== undefined) updates.bankAccount = data.bankAccount;
-  if (data.notes !== undefined) updates.notes = data.notes;
+  const updates = buildCheckVoucherUpdateFields(data);
 
   if (Object.keys(updates).length === 0) return cv;
 
@@ -922,7 +819,7 @@ export async function deleteCheckVoucher(orgId: string, id: string) {
     .limit(1);
 
   if (!cv) throw new Error("Check voucher not found");
-  if (cv.status !== "DRAFT") throw new Error("Can only delete DRAFT check vouchers");
+  assertCheckVoucherStatus(cv.status, "DRAFT", "Can only delete DRAFT check vouchers");
 
   await db.delete(checkVouchers).where(eq(checkVouchers.id, id));
 }
@@ -935,7 +832,7 @@ export async function approveCheckVoucher(orgId: string, id: string, approvedBy:
     .limit(1);
 
   if (!cv) throw new Error("Check voucher not found");
-  if (cv.status !== "DRAFT") throw new Error("Can only approve DRAFT check vouchers");
+  assertCheckVoucherStatus(cv.status, "DRAFT", "Can only approve DRAFT check vouchers");
 
   const [updated] = await db
     .update(checkVouchers)
@@ -954,7 +851,7 @@ export async function markPrinted(orgId: string, id: string) {
     .limit(1);
 
   if (!cv) throw new Error("Check voucher not found");
-  if (cv.status !== "APPROVED") throw new Error("Can only print APPROVED check vouchers");
+  assertCheckVoucherStatus(cv.status, "APPROVED", "Can only print APPROVED check vouchers");
 
   const [updated] = await db
     .update(checkVouchers)
@@ -973,7 +870,7 @@ export async function releaseCheckVoucher(orgId: string, id: string) {
     .limit(1);
 
   if (!cv) throw new Error("Check voucher not found");
-  if (cv.status !== "PRINTED") throw new Error("Can only release PRINTED check vouchers");
+  assertCheckVoucherStatus(cv.status, "PRINTED", "Can only release PRINTED check vouchers");
 
   const [updated] = await db
     .update(checkVouchers)
@@ -992,7 +889,7 @@ export async function clearCheckVoucher(orgId: string, id: string) {
     .limit(1);
 
   if (!cv) throw new Error("Check voucher not found");
-  if (cv.status !== "RELEASED") throw new Error("Can only clear RELEASED check vouchers");
+  assertCheckVoucherStatus(cv.status, "RELEASED", "Can only clear RELEASED check vouchers");
 
   return await db.transaction(async (tx) => {
     // Update each invoice's paid_amount, balance, and status
@@ -1010,16 +907,20 @@ export async function clearCheckVoucher(orgId: string, id: string) {
 
       if (!inv) continue;
 
-      const newPaid = parseFloat(inv.paidAmount) + parseFloat(line.amount);
-      const newBalance = parseFloat(inv.totalAmount) - newPaid - parseFloat(inv.rtvCreditAmount);
-      const newStatus = newBalance <= 0 ? "PAID" : "PARTIALLY_PAID";
+      const paymentUpdate = calculateInvoicePaymentApplication({
+        paidAmount: inv.paidAmount,
+        totalAmount: inv.totalAmount,
+        rtvCreditAmount: inv.rtvCreditAmount,
+        allocation: parseFloat(line.amount),
+        paidThreshold: 0,
+      });
 
       await tx
         .update(supplierInvoices)
         .set({
-          paidAmount: String(newPaid.toFixed(2)),
-          balance: String(Math.max(0, newBalance).toFixed(2)),
-          status: newStatus,
+          paidAmount: paymentUpdate.paidAmountText,
+          balance: paymentUpdate.balanceText,
+          status: paymentUpdate.status,
         })
         .where(eq(supplierInvoices.id, line.supplierInvoiceId));
     }
@@ -1047,8 +948,7 @@ export async function voidCheckVoucher(
     .limit(1);
 
   if (!cv) throw new Error("Check voucher not found");
-  if (cv.status === "CLEARED") throw new Error("Cannot void a CLEARED check voucher");
-  if (cv.status === "VOIDED") throw new Error("Check voucher already voided");
+  assertCheckVoucherCanVoid(cv.status);
 
   const [updated] = await db
     .update(checkVouchers)
@@ -1093,20 +993,7 @@ export async function getAgingReport(orgId: string) {
     `,
   )) as any[];
 
-  return {
-    data: rows.map((r: any) => ({
-      supplierId: r.supplier_id,
-      supplierName: r.supplier_name,
-      current: parseFloat(r.current ?? "0"),
-      days1to30: parseFloat(r.days_1_30 ?? "0"),
-      days31to60: parseFloat(r.days_31_60 ?? "0"),
-      days61to90: parseFloat(r.days_61_90 ?? "0"),
-      days91to120: parseFloat(r.days_91_120 ?? "0"),
-      days121to180: parseFloat(r.days_121_180 ?? "0"),
-      over180: parseFloat(r.days_180_plus ?? "0"),
-      total: parseFloat(r.total ?? "0"),
-    })),
-  };
+  return buildApAgingReportResponse(rows);
 }
 
 export async function getSupplierSOA(
@@ -1197,67 +1084,12 @@ export async function getSupplierSOA(
     )
     .orderBy(asc(supplierReturns.creditReceivedAt));
 
-  // Build SOA entries with running balance
-  type SoaEntry = {
-    date: string;
-    reference: string;
-    type: "DEBIT" | "CREDIT";
-    amount: string;
-    runningBalance: string;
-  };
-
-  const entries: SoaEntry[] = [];
-
-  for (const inv of invoices) {
-    entries.push({
-      date: inv.invoiceDate,
-      reference: `INV ${inv.invoiceNumber}`,
-      type: "DEBIT",
-      amount: inv.totalAmount,
-      runningBalance: "0", // computed below
-    });
-  }
-
-  for (const pmt of payments) {
-    entries.push({
-      date: pmt.checkDate,
-      reference: `CV ${pmt.cvNumber}${pmt.checkNumber ? ` (CHK ${pmt.checkNumber})` : ""}`,
-      type: "CREDIT",
-      amount: pmt.netAmount,
-      runningBalance: "0",
-    });
-  }
-
-  for (const rtv of rtvCredits) {
-    if (parseFloat(rtv.creditAmount) > 0) {
-      entries.push({
-        date: rtv.creditReceivedAt?.toISOString().split("T")[0] ?? "",
-        reference: `RTV ${rtv.rtvNumber}`,
-        type: "CREDIT",
-        amount: rtv.creditAmount,
-        runningBalance: "0",
-      });
-    }
-  }
-
-  // Sort by date
-  entries.sort((a, b) => a.date.localeCompare(b.date));
-
-  // Compute running balance
-  let balance = 0;
-  for (const entry of entries) {
-    if (entry.type === "DEBIT") {
-      balance += parseFloat(entry.amount);
-    } else {
-      balance -= parseFloat(entry.amount);
-    }
-    entry.runningBalance = balance.toFixed(2);
-  }
+  const ledger = buildSupplierSoaLedgerEntries({ invoices, payments, rtvCredits });
 
   return {
     supplier: { id: supplier.id, name: supplier.name },
-    entries,
-    closingBalance: balance.toFixed(2),
+    entries: ledger.entries,
+    closingBalance: ledger.closingBalance,
   };
 }
 
@@ -1287,11 +1119,6 @@ export async function getSupplierSOAOverview(orgId: string) {
     ORDER BY total_balance DESC
   `);
 
-  // Summary totals
-  const totalPayable = (rows as any[]).reduce((s: number, r: any) => s + parseFloat(r.total_balance), 0);
-  const totalOverdue = (rows as any[]).reduce((s: number, r: any) => s + parseFloat(r.overdue_amount), 0);
-  const supplierCount = rows.length;
-
   // Due this week
   const dueThisWeek = await db.execute(sql`
     SELECT COALESCE(SUM(balance::numeric), 0)::numeric(14,2) AS amount
@@ -1301,27 +1128,10 @@ export async function getSupplierSOAOverview(orgId: string) {
       AND due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
   `);
 
-  return {
-    suppliers: (rows as any[]).map((r: any) => ({
-      supplierId: r.supplier_id,
-      supplierName: r.supplier_name,
-      contactEmail: r.contact_email,
-      contactPhone: r.contact_phone,
-      address: r.address,
-      invoiceCount: r.invoice_count,
-      totalBalance: parseFloat(r.total_balance),
-      oldestInvoiceDate: r.oldest_invoice_date,
-      earliestDueDate: r.earliest_due_date,
-      overdueCount: r.overdue_count,
-      overdueAmount: parseFloat(r.overdue_amount),
-    })),
-    summary: {
-      totalPayable: Math.round(totalPayable * 100) / 100,
-      totalOverdue: Math.round(totalOverdue * 100) / 100,
-      supplierCount,
-      dueThisWeek: parseFloat((dueThisWeek as any[])[0]?.amount ?? "0"),
-    },
-  };
+  return buildSupplierSoaOverviewResponse(
+    rows as any[],
+    (dueThisWeek as any[])[0]?.amount,
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1389,31 +1199,7 @@ export async function listSuppliersWithAPStats(orgId: string) {
     ORDER BY s.name ASC
   `)) as any[];
 
-  return rows.map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    contactPerson: r.contact_person,
-    contactPhone: r.contact_phone,
-    contactEmail: r.contact_email,
-    address: r.address,
-    tin: r.tin,
-    mnemonicCode: r.mnemonic_code,
-    paymentTermsDays: r.payment_terms_days,
-    creditLimit: parseFloat(r.credit_limit),
-    bankName: r.bank_name,
-    bankAccountNumber: r.bank_account_number,
-    bankAccountName: r.bank_account_name,
-    notes: r.notes,
-    isActive: r.is_active,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    // AP rollups
-    openCount: r.open_count,
-    totalPayable: parseFloat(r.total_payable),
-    overdueCount: r.overdue_count,
-    overdueAmount: parseFloat(r.overdue_amount),
-    oldestOverdueDate: r.oldest_overdue_date,
-  }));
+  return rows.map(mapSupplierApStatsRow);
 }
 
 /**
@@ -1434,26 +1220,7 @@ export async function getSupplierAPDetail(orgId: string, supplierId: string) {
   `)) as any[];
   if (!row) return null;
 
-  return {
-    id: row.id,
-    name: row.name,
-    contactPerson: row.contact_person,
-    contactPhone: row.contact_phone,
-    contactEmail: row.contact_email,
-    address: row.address,
-    tin: row.tin,
-    mnemonicCode: row.mnemonic_code,
-    paymentTermsDays: row.payment_terms_days,
-    creditLimit: parseFloat(row.credit_limit),
-    bankName: row.bank_name,
-    bankAccountNumber: row.bank_account_number,
-    bankAccountName: row.bank_account_name,
-    notes: row.notes,
-    isActive: row.is_active,
-    avgLeadTimeDays: row.avg_lead_time_days,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+  return mapSupplierApDetailRow(row);
 }
 
 /**
@@ -1465,38 +1232,9 @@ export async function getSupplierAPDetail(orgId: string, supplierId: string) {
 export async function updateSupplierAP(
   orgId: string,
   supplierId: string,
-  input: {
-    name?: string;
-    contactPerson?: string | null;
-    contactPhone?: string | null;
-    contactEmail?: string | null;
-    address?: string | null;
-    tin?: string | null;
-    mnemonicCode?: string | null;
-    paymentTermsDays?: number;
-    creditLimit?: string;
-    bankName?: string | null;
-    bankAccountNumber?: string | null;
-    bankAccountName?: string | null;
-    notes?: string | null;
-    isActive?: boolean;
-  },
+  input: SupplierApUpdateInput,
 ) {
-  const setFields: Record<string, any> = {};
-  if (input.name !== undefined) setFields.name = input.name;
-  if (input.contactPerson !== undefined) setFields.contactPerson = input.contactPerson;
-  if (input.contactPhone !== undefined) setFields.contactPhone = input.contactPhone;
-  if (input.contactEmail !== undefined) setFields.contactEmail = input.contactEmail;
-  if (input.address !== undefined) setFields.address = input.address;
-  if (input.tin !== undefined) setFields.tin = input.tin;
-  if (input.mnemonicCode !== undefined) setFields.mnemonicCode = input.mnemonicCode;
-  if (input.paymentTermsDays !== undefined) setFields.paymentTermsDays = input.paymentTermsDays;
-  if (input.creditLimit !== undefined) setFields.creditLimit = input.creditLimit;
-  if (input.bankName !== undefined) setFields.bankName = input.bankName;
-  if (input.bankAccountNumber !== undefined) setFields.bankAccountNumber = input.bankAccountNumber;
-  if (input.bankAccountName !== undefined) setFields.bankAccountName = input.bankAccountName;
-  if (input.notes !== undefined) setFields.notes = input.notes;
-  if (input.isActive !== undefined) setFields.isActive = input.isActive;
+  const setFields = buildSupplierApUpdateFields(input);
 
   if (Object.keys(setFields).length === 0) {
     throw new Error("No fields to update");
@@ -1519,23 +1257,9 @@ export async function updateSupplierAP(
  */
 export async function createSupplierAP(
   orgId: string,
-  input: {
-    name: string;
-    contactPerson?: string | null;
-    contactPhone?: string | null;
-    contactEmail?: string | null;
-    address?: string | null;
-    tin?: string | null;
-    mnemonicCode?: string | null;
-    paymentTermsDays?: number;
-    creditLimit?: string;
-    bankName?: string | null;
-    bankAccountNumber?: string | null;
-    bankAccountName?: string | null;
-    notes?: string | null;
-  },
+  input: SupplierApCreateInput,
 ) {
-  if (!input.name?.trim()) throw new Error("Supplier name is required");
+  const values = buildSupplierApCreateValues(orgId, input);
 
   const [row] = (await db.execute(sql`
     INSERT INTO suppliers (
@@ -1546,14 +1270,14 @@ export async function createSupplierAP(
       notes, is_active
     )
     VALUES (
-      ${orgId}, ${input.name.trim()},
-      ${input.contactPerson ?? null}, ${input.contactPhone ?? null},
-      ${input.contactEmail ?? null}, ${input.address ?? null},
-      ${input.tin ?? null}, ${input.mnemonicCode ?? null},
-      ${input.paymentTermsDays ?? 30}, ${input.creditLimit ?? "0.00"},
-      ${input.bankName ?? null}, ${input.bankAccountNumber ?? null},
-      ${input.bankAccountName ?? null},
-      ${input.notes ?? null}, true
+      ${values.orgId}, ${values.name},
+      ${values.contactPerson}, ${values.contactPhone},
+      ${values.contactEmail}, ${values.address},
+      ${values.tin}, ${values.mnemonicCode},
+      ${values.paymentTermsDays}, ${values.creditLimit},
+      ${values.bankName}, ${values.bankAccountNumber},
+      ${values.bankAccountName},
+      ${values.notes}, ${values.isActive}
     )
     RETURNING id, name
   `)) as any[];
@@ -1645,17 +1369,7 @@ export async function generateSupplierSOA(
     const soaNumber = `SUPP-SOA-${year}-${String(seq.last_number).padStart(4, "0")}`;
 
     // ── Compute totals + date range ──
-    let totalAmount = 0;
-    let totalPaid = 0;
-    let totalBalance = 0;
-    for (const inv of invoices) {
-      totalAmount += parseFloat(inv.total_amount);
-      totalPaid += parseFloat(inv.paid_amount);
-      totalBalance += parseFloat(inv.balance);
-    }
-    const dates = invoices.map((r: any) => r.invoice_date).sort();
-    const dateFrom = dates[0];
-    const dateTo = dates[dates.length - 1];
+    const totals = summarizeSupplierSoaGenerationInvoices(invoices);
 
     // ── Insert SOA record ──
     const [soa] = (await tx.execute(sql`
@@ -1664,9 +1378,9 @@ export async function generateSupplierSOA(
         generated_by, total_amount, total_paid, total_balance,
         invoice_count, notes
       ) VALUES (
-        ${orgId}, ${supplierId}, ${soaNumber}, ${dateFrom}, ${dateTo},
+        ${orgId}, ${supplierId}, ${soaNumber}, ${totals.dateFrom}, ${totals.dateTo},
         ${userId ?? null},
-        ${totalAmount.toFixed(2)}, ${totalPaid.toFixed(2)}, ${totalBalance.toFixed(2)},
+        ${totals.totalAmountText}, ${totals.totalPaidText}, ${totals.totalBalanceText},
         ${invoices.length}, ${notes ?? null}
       )
       RETURNING id, soa_number, status,
@@ -1692,17 +1406,7 @@ export async function generateSupplierSOA(
       `);
     }
 
-    return {
-      id: soa.id,
-      soaNumber: soa.soa_number,
-      status: soa.status,
-      totalAmount: parseFloat(soa.total_amount),
-      totalPaid: parseFloat(soa.total_paid),
-      totalBalance: parseFloat(soa.total_balance),
-      invoiceCount: soa.invoice_count,
-      dateFrom: soa.date_from,
-      dateTo: soa.date_to,
-    };
+    return buildGeneratedSupplierSoaResponse(soa);
   });
 }
 
@@ -1720,19 +1424,7 @@ export async function listSupplierSOAs(orgId: string, supplierId: string) {
     ORDER BY generated_at DESC
   `)) as any[];
 
-  return rows.map((r: any) => ({
-    id: r.id,
-    soaNumber: r.soa_number,
-    dateFrom: r.date_from,
-    dateTo: r.date_to,
-    generatedAt: r.generated_at,
-    totalAmount: parseFloat(r.total_amount),
-    totalPaid: parseFloat(r.total_paid),
-    totalBalance: parseFloat(r.total_balance),
-    invoiceCount: r.invoice_count,
-    status: r.status,
-    notes: r.notes,
-  }));
+  return rows.map(mapSupplierSoaRecordRow);
 }
 
 /**
@@ -1834,38 +1526,10 @@ export async function listAllSupplierSOAs(
     WHERE ${where}
   `)) as any[];
 
-  return {
-    data: rows.map((r: any) => {
-      const dvRefs = (r.dv_refs ?? []).map((d: any) => ({
-        dvId: d.dvId,
-        dvNumber: d.dvNumber,
-        status: d.status,
-        amount: parseFloat(d.amount),
-        allocatedAmount: parseFloat(d.allocatedAmount),
-      }));
-      const active = dvRefs[0] ?? null;
-      return {
-        id: r.id,
-        soaNumber: r.soa_number,
-        supplierId: r.supplier_id,
-        supplierName: r.supplier_name,
-        dateFrom: r.date_from,
-        dateTo: r.date_to,
-        generatedAt: r.generated_at,
-        totalAmount: parseFloat(r.total_amount),
-        totalPaid: parseFloat(r.total_paid),
-        totalBalance: parseFloat(r.total_balance),
-        invoiceCount: r.invoice_count,
-        status: r.status,
-        notes: r.notes,
-        dvRefs,
-        activeDvId: active?.dvId ?? null,
-        activeDvNumber: active?.dvNumber ?? null,
-        activeDvStatus: active?.status ?? null,
-      };
-    }),
+  return buildSupplierSoaSearchResponse({
+    rows,
     total: countRows[0]?.total ?? 0,
-  };
+  });
 }
 
 /**
@@ -1896,36 +1560,7 @@ export async function getSupplierSOAById(orgId: string, soaId: string) {
     ORDER BY si.invoice_date ASC, si.invoice_number ASC
   `)) as any[];
 
-  return {
-    id: soa.id,
-    soaNumber: soa.soa_number,
-    supplierId: soa.supplier_id,
-    supplier: {
-      name: soa.supplier_name,
-      contactPhone: soa.contact_phone,
-      address: soa.address,
-      contactEmail: soa.contact_email,
-    },
-    dateFrom: soa.date_from,
-    dateTo: soa.date_to,
-    generatedAt: soa.generated_at,
-    totalAmount: parseFloat(soa.total_amount),
-    totalPaid: parseFloat(soa.total_paid),
-    totalBalance: parseFloat(soa.total_balance),
-    invoiceCount: soa.invoice_count,
-    status: soa.status,
-    notes: soa.notes,
-    invoices: lines.map((r: any) => ({
-      id: r.invoice_id,
-      invoiceNumber: r.invoice_number,
-      invoiceDate: r.invoice_date,
-      dueDate: r.due_date,
-      // Frozen snapshot values
-      totalAmount: parseFloat(r.invoice_amount),
-      paidAmount: parseFloat(r.paid_at_generation),
-      balance: parseFloat(r.balance_at_generation),
-    })),
-  };
+  return buildSupplierSoaDetailResponse({ soa, lines });
 }
 
 /**
@@ -2069,11 +1704,12 @@ export async function paySupplierSOA(
     let totalApplied = 0;
 
     // Build audit note
-    const parts = [`[SOA Payment: ${data.paymentDate}`];
-    if (data.paymentMethod) parts.push(data.paymentMethod);
-    if (data.referenceNumber) parts.push(`Ref#${data.referenceNumber}`);
-    parts[parts.length - 1] += "]";
-    const auditNote = parts.join(", ");
+    const auditNote = buildAuditNote({
+      label: "SOA Payment",
+      date: data.paymentDate,
+      paymentMethod: data.paymentMethod,
+      referenceNumber: data.referenceNumber,
+    });
 
     for (const inv of invoiceRows) {
       if (remaining <= 0) break;
@@ -2081,21 +1717,19 @@ export async function paySupplierSOA(
       const invBalance = parseFloat(inv.balance);
       const allocation = Math.min(remaining, invBalance);
 
-      const newPaid = parseFloat(inv.paid_amount) + allocation;
-      const newBalance = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
-      const newStatus = newBalance <= 0.005 ? "PAID" : "PARTIALLY_PAID";
-
-      const existingNotes = inv.notes ?? "";
-      const updatedNotes = existingNotes
-        ? `${existingNotes}\n${auditNote}`
-        : auditNote;
+      const paymentUpdate = calculateInvoicePaymentApplication({
+        paidAmount: inv.paid_amount,
+        totalAmount: inv.total_amount,
+        rtvCreditAmount: inv.rtv_credit_amount,
+        allocation,
+      });
 
       await tx.execute(
         sql`UPDATE supplier_invoices
-            SET paid_amount = ${String(newPaid.toFixed(2))},
-                balance = ${String(Math.max(0, newBalance).toFixed(2))},
-                status = ${newStatus},
-                notes = ${data.notes ? `${updatedNotes}\n${data.notes}` : updatedNotes}
+            SET paid_amount = ${paymentUpdate.paidAmountText},
+                balance = ${paymentUpdate.balanceText},
+                status = ${paymentUpdate.status},
+                notes = ${appendAuditNote(inv.notes, auditNote, data.notes)}
             WHERE id = ${inv.id}`,
       );
 
@@ -2104,13 +1738,16 @@ export async function paySupplierSOA(
     }
 
     // 4. Update SOA header totals
-    const newSoaPaid = parseFloat(soa.total_paid) + totalApplied;
-    const newSoaBalance = parseFloat(soa.total_amount) - newSoaPaid;
+    const soaTotals = calculateSoaPaymentTotals({
+      totalPaid: soa.total_paid,
+      totalAmount: soa.total_amount,
+      appliedAmount: totalApplied,
+    });
 
     await tx.execute(
       sql`UPDATE supplier_soa_records
-          SET total_paid = ${String(newSoaPaid.toFixed(2))},
-              total_balance = ${String(Math.max(0, newSoaBalance).toFixed(2))}
+          SET total_paid = ${soaTotals.totalPaidText},
+              total_balance = ${soaTotals.totalBalanceText}
           WHERE id = ${soaId}`,
     );
 
@@ -2118,8 +1755,8 @@ export async function paySupplierSOA(
       soaId,
       soaNumber: soa.soa_number,
       amountPaid: totalApplied,
-      newTotalPaid: newSoaPaid,
-      newTotalBalance: Math.max(0, newSoaBalance),
+      newTotalPaid: soaTotals.newTotalPaid,
+      newTotalBalance: soaTotals.newTotalBalance,
       invoicesUpdated: invoiceRows.length,
     };
   });
@@ -2145,238 +1782,159 @@ async function generateDvNumber(tx: DbOrTx, orgId: string): Promise<string> {
     sql`UPDATE dv_number_sequence SET last_number = ${next}
         WHERE org_id = ${orgId} AND year = ${year}`,
   );
-  return `DV-${year}-${String(next).padStart(6, "0")}`;
+  return formatDisbursementVoucherNumber(year, next);
 }
 
 export async function createDisbursementVoucher(
   orgId: string,
   userId: string,
-  data: {
-    supplierId: string;
-    soaId?: string;
-    soaIds?: string[];
-    soaAllocations?: Array<{ soaId: string; allocatedAmount: string }>;
-    grossAmount: string;
-    paymentDate: string;
-    remarks?: string;
-    deductions?: Array<{
-      deductionType: string;
-      description: string;
-      referenceNumber?: string;
-      amount: string;
-    }>;
-    additionalCharges?: Array<{
-      chargeType: string;
-      description: string;
-      referenceNumber?: string;
-      amount: string;
-    }>;
-    payments: Array<{
-      paymentMethod: string;
-      amount: string;
-      referenceNumber?: string;
-      bankName?: string;
-      transactionDate?: string;
-      platform?: string;
-      receivedBy?: string;
-    }>;
-  },
+  data: DisbursementVoucherCreateInput,
 ) {
-  const grossAmount = parseFloat(data.grossAmount);
-  if (isNaN(grossAmount) || grossAmount <= 0) throw new Error("Gross amount must be > 0");
-
-  const totalDeductions = (data.deductions ?? []).reduce(
-    (s, d) => s + (parseFloat(d.amount) || 0), 0,
-  );
-  const totalCharges = (data.additionalCharges ?? []).reduce(
-    (s, c) => s + (parseFloat(c.amount) || 0), 0,
-  );
-  const netAmount = grossAmount + totalCharges - totalDeductions;
-  if (netAmount <= 0) throw new Error("Net amount must be > 0 (deductions exceed gross + charges)");
-
-  if (!data.payments || data.payments.length === 0) throw new Error("At least one payment line is required");
-  const paymentSum = data.payments.reduce((s, p) => s + parseFloat(p.amount || "0"), 0);
-  if (Math.abs(paymentSum - netAmount) > 0.01) {
-    throw new Error(`Payment lines total (${paymentSum.toFixed(2)}) must equal net amount (${netAmount.toFixed(2)})`);
-  }
+  const totals = calculateDisbursementVoucherTotals(data);
+  assertDisbursementVoucherCreateTotals(totals);
+  assertDisbursementVoucherHasPaymentLines(data.payments);
+  assertDisbursementVoucherPaymentsMatchNet(totals);
 
   // Normalize: backward compat — if soaId (singular) provided but not soaIds, treat as single-element array
-  const resolvedSoaIds: string[] = data.soaIds && data.soaIds.length > 0
-    ? data.soaIds
-    : data.soaId
-      ? [data.soaId]
-      : [];
+  const resolvedSoaIds = resolveDisbursementVoucherSoaIds(data);
 
   // A DV must be linked to at least one SOA. Without this, the orphan DV
   // gets created with soa_id=NULL and zero junction rows; downstream
   // confirmDisbursementVoucher then silently no-ops because soaAllocations
   // resolves to []. Result: DV ends up CONFIRMED but no SOA ever flips off
   // BILLED. (See DV-2026-000026 / DV-2026-000027 incident.)
-  if (resolvedSoaIds.length === 0) {
-    const err: any = new Error("DV_REQUIRES_SOA");
-    err.code = "DV_REQUIRES_SOA";
-    err.details = { message: "A disbursement voucher must be linked to at least one SOA. Open the Supplier SOA History page and use the Pay action, or select SOAs from the SOA picker." };
-    throw err;
-  }
+  assertDisbursementVoucherRequiresSoa(resolvedSoaIds);
 
   return await db.transaction(async (tx) => {
     // Validate ALL SOAs if provided
-    let soaBalances: Record<string, number> = {};
-    if (resolvedSoaIds.length > 0) {
-      for (const sid of resolvedSoaIds) {
-        const soaRows = (await tx.execute(
-          sql`SELECT id, supplier_id, total_balance::text, status
-              FROM supplier_soa_records
-              WHERE id = ${sid} AND org_id = ${orgId}`,
-        )) as any[];
-        if (soaRows.length === 0) throw new Error(`SOA ${sid} not found`);
-        if (soaRows[0].status === "VOID") throw new Error("Cannot create DV for a voided SOA");
-        if (soaRows[0].supplier_id !== data.supplierId) throw new Error("Supplier does not match SOA");
-        soaBalances[sid] = parseFloat(soaRows[0].total_balance);
-      }
+    const soaBalances: Record<string, number> = {};
+    for (const sid of resolvedSoaIds) {
+      const soaRows = (await tx.execute(
+        sql`SELECT id, supplier_id, total_balance::text, status
+            FROM supplier_soa_records
+            WHERE id = ${sid} AND org_id = ${orgId}`,
+      )) as any[];
+      soaBalances[sid] = validateDisbursementVoucherSoaRow({
+        soaId: sid,
+        rows: soaRows,
+        supplierId: data.supplierId,
+      });
     }
 
     const dvNumber = await generateDvNumber(tx, orgId);
-    const primaryMethod = data.payments[0].paymentMethod;
-
-    // Backward compat: store first SOA in the legacy soa_id column
-    const legacySoaId = resolvedSoaIds.length > 0 ? resolvedSoaIds[0] : null;
+    const dvValues = buildDisbursementVoucherInsertValues({
+      orgId,
+      dvNumber,
+      userId,
+      data,
+      totals,
+      resolvedSoaIds,
+    });
 
     const [row] = (await tx.execute(
       sql`INSERT INTO supplier_disbursement_vouchers
           (org_id, dv_number, supplier_id, soa_id,
            amount, gross_amount, total_deductions, total_charges, net_amount,
            payment_method, payment_date, remarks, status, created_by)
-          VALUES (${orgId}, ${dvNumber}, ${data.supplierId}, ${legacySoaId},
-                  ${String(netAmount.toFixed(2))}, ${data.grossAmount},
-                  ${String(totalDeductions.toFixed(2))}, ${String(totalCharges.toFixed(2))},
-                  ${String(netAmount.toFixed(2))},
-                  ${primaryMethod}, ${data.paymentDate},
-                  ${data.remarks ?? null}, 'DRAFT', ${userId})
+          VALUES (${dvValues.orgId}, ${dvValues.dvNumber}, ${dvValues.supplierId}, ${dvValues.legacySoaId},
+                  ${dvValues.amount}, ${dvValues.grossAmount},
+                  ${dvValues.totalDeductions}, ${dvValues.totalCharges},
+                  ${dvValues.netAmount},
+                  ${dvValues.paymentMethod}, ${dvValues.paymentDate},
+                  ${dvValues.remarks}, ${dvValues.status}, ${dvValues.createdBy})
           RETURNING id, dv_number, status`,
     )) as any[];
 
     // Insert junction rows into supplier_dv_soas
-    if (resolvedSoaIds.length > 0) {
-      // Build allocation map
-      const allocationMap: Record<string, number> = {};
-      if (data.soaAllocations && data.soaAllocations.length > 0) {
-        // Explicit allocations provided
-        for (const a of data.soaAllocations) {
-          allocationMap[a.soaId] = parseFloat(a.allocatedAmount);
-        }
-      } else if (resolvedSoaIds.length === 1) {
-        // Single SOA: allocate full gross amount
-        allocationMap[resolvedSoaIds[0]] = grossAmount;
-      } else {
-        // Proportional allocation based on each SOA's balance vs total balance
-        const totalBalance = Object.values(soaBalances).reduce((s, b) => s + b, 0);
-        if (totalBalance > 0) {
-          let allocated = 0;
-          for (let i = 0; i < resolvedSoaIds.length; i++) {
-            const sid = resolvedSoaIds[i];
-            if (i === resolvedSoaIds.length - 1) {
-              // Last one gets the remainder to avoid rounding drift
-              allocationMap[sid] = parseFloat((grossAmount - allocated).toFixed(2));
-            } else {
-              const proportion = soaBalances[sid] / totalBalance;
-              const amount = parseFloat((grossAmount * proportion).toFixed(2));
-              allocationMap[sid] = amount;
-              allocated += amount;
-            }
-          }
-        } else {
-          // All balances zero — split evenly
-          const each = parseFloat((grossAmount / resolvedSoaIds.length).toFixed(2));
-          let allocated = 0;
-          for (let i = 0; i < resolvedSoaIds.length; i++) {
-            if (i === resolvedSoaIds.length - 1) {
-              allocationMap[resolvedSoaIds[i]] = parseFloat((grossAmount - allocated).toFixed(2));
-            } else {
-              allocationMap[resolvedSoaIds[i]] = each;
-              allocated += each;
-            }
-          }
-        }
-      }
-
-      for (const sid of resolvedSoaIds) {
-        const allocAmt = allocationMap[sid] ?? 0;
-        await tx.execute(
-          sql`INSERT INTO supplier_dv_soas (dv_id, soa_id, allocated_amount)
-              VALUES (${row.id}, ${sid}, ${String(allocAmt.toFixed(2))})`,
-        );
-      }
+    const allocationMap = buildSoaAllocationMap({
+      resolvedSoaIds,
+      grossAmount: totals.grossAmount,
+      soaBalances,
+      explicitAllocations: data.soaAllocations,
+    });
+    for (const sid of resolvedSoaIds) {
+      const soaInsert = buildDisbursementVoucherSoaInsertValues({
+        dvId: row.id,
+        soaId: sid,
+        allocatedAmount: allocationMap[sid] ?? 0,
+      });
+      await tx.execute(
+        sql`INSERT INTO supplier_dv_soas (dv_id, soa_id, allocated_amount)
+            VALUES (${soaInsert.dvId}, ${soaInsert.soaId}, ${soaInsert.allocatedAmountText})`,
+      );
     }
 
     // Insert deduction lines
     for (let i = 0; i < (data.deductions ?? []).length; i++) {
-      const d = data.deductions![i];
+      const deductionInsert = buildDisbursementVoucherDeductionInsertValues({
+        dvId: row.id,
+        deduction: data.deductions![i],
+        sortOrder: i,
+      });
       await tx.execute(
         sql`INSERT INTO supplier_dv_deductions
             (dv_id, deduction_type, description, reference_number, amount, sort_order)
-            VALUES (${row.id}, ${d.deductionType}, ${d.description},
-                    ${d.referenceNumber ?? null}, ${d.amount}, ${i})`,
+            VALUES (${deductionInsert.dvId}, ${deductionInsert.deductionType}, ${deductionInsert.description},
+                    ${deductionInsert.referenceNumber}, ${deductionInsert.amount}, ${deductionInsert.sortOrder})`,
       );
     }
 
     // Insert additional charge lines (ADD to net; mirror of deductions)
     for (let i = 0; i < (data.additionalCharges ?? []).length; i++) {
-      const c = data.additionalCharges![i];
+      const chargeInsert = buildDisbursementVoucherAdditionalChargeInsertValues({
+        dvId: row.id,
+        charge: data.additionalCharges![i],
+        sortOrder: i,
+      });
       await tx.execute(
         sql`INSERT INTO supplier_dv_additional_charges
             (dv_id, charge_type, description, reference_number, amount, sort_order)
-            VALUES (${row.id}, ${c.chargeType}, ${c.description},
-                    ${c.referenceNumber ?? null}, ${c.amount}, ${i})`,
+            VALUES (${chargeInsert.dvId}, ${chargeInsert.chargeType}, ${chargeInsert.description},
+                    ${chargeInsert.referenceNumber}, ${chargeInsert.amount}, ${chargeInsert.sortOrder})`,
       );
     }
 
     // Insert payment lines
     for (let i = 0; i < data.payments.length; i++) {
-      const p = data.payments[i];
+      const paymentInsert = buildDisbursementVoucherPaymentInsertValues({
+        dvId: row.id,
+        payment: data.payments[i],
+        sortOrder: i,
+      });
       await tx.execute(
         sql`INSERT INTO supplier_dv_payments
             (dv_id, payment_method, amount, reference_number, bank_name,
              transaction_date, platform, received_by, sort_order)
-            VALUES (${row.id}, ${p.paymentMethod}, ${p.amount},
-                    ${p.referenceNumber ?? null}, ${p.bankName ?? null},
-                    ${p.transactionDate ?? null}, ${p.platform ?? null},
-                    ${p.receivedBy ?? null}, ${i})`,
+            VALUES (${paymentInsert.dvId}, ${paymentInsert.paymentMethod}, ${paymentInsert.amount},
+                    ${paymentInsert.referenceNumber}, ${paymentInsert.bankName},
+                    ${paymentInsert.transactionDate}, ${paymentInsert.platform},
+                    ${paymentInsert.receivedBy}, ${paymentInsert.sortOrder})`,
       );
     }
 
-    return { id: row.id, dvNumber: row.dv_number, status: row.status };
+    return buildDisbursementVoucherCreateResult(row);
   });
 }
 
 export async function listDisbursementVouchers(
   orgId: string,
-  opts: {
-    search?: string;
-    status?: string;
-    supplierId?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    limit?: number;
-    includeVoided?: boolean;
-  } = {},
+  opts: DisbursementVoucherListOptions = {},
 ) {
-  const limit = Math.min(opts.limit ?? 100, 200);
+  const listOptions = normalizeDisbursementVoucherListOptions(opts);
   const conditions = [sql`dv.org_id = ${orgId}`];
-  if (opts.supplierId) conditions.push(sql`dv.supplier_id = ${opts.supplierId}`);
-  if (opts.search && opts.search.trim()) {
-    const p = `%${opts.search.trim()}%`;
-    conditions.push(sql`(dv.dv_number ILIKE ${p} OR s.name ILIKE ${p})`);
+  if (listOptions.supplierId) conditions.push(sql`dv.supplier_id = ${listOptions.supplierId}`);
+  if (listOptions.searchPattern) {
+    conditions.push(sql`(dv.dv_number ILIKE ${listOptions.searchPattern} OR s.name ILIKE ${listOptions.searchPattern})`);
   }
-  if (opts.status) {
+  if (listOptions.status) {
     // Explicit status wins — show only that status, ignore includeVoided.
-    conditions.push(sql`dv.status = ${opts.status}`);
-  } else if (!opts.includeVoided) {
+    conditions.push(sql`dv.status = ${listOptions.status}`);
+  } else if (!listOptions.includeVoided) {
     // "All statuses" default: hide voided unless explicitly requested.
     conditions.push(sql`dv.status != 'VOIDED'`);
   }
-  if (opts.dateFrom) conditions.push(sql`dv.payment_date >= ${opts.dateFrom}`);
-  if (opts.dateTo) conditions.push(sql`dv.payment_date <= ${opts.dateTo}`);
+  if (listOptions.dateFrom) conditions.push(sql`dv.payment_date >= ${listOptions.dateFrom}`);
+  if (listOptions.dateTo) conditions.push(sql`dv.payment_date <= ${listOptions.dateTo}`);
   const where = sql.join(conditions, sql` AND `);
 
   const rows = (await db.execute(sql`
@@ -2398,7 +1956,7 @@ export async function listDisbursementVouchers(
     JOIN suppliers s ON s.id = dv.supplier_id
     WHERE ${where}
     ORDER BY dv.created_at DESC
-    LIMIT ${limit}
+    LIMIT ${listOptions.limit}
   `)) as any[];
 
   const countRows = (await db.execute(sql`
@@ -2416,47 +1974,11 @@ export async function listDisbursementVouchers(
     WHERE org_id = ${orgId}
     GROUP BY status
   `)) as any[];
-  const summary = summaryRows.reduce(
-    (acc: any, r: any) => {
-      const cnt = r.cnt;
-      const amt = parseFloat(r.total);
-      acc.totalCount += cnt;
-      if (r.status === "CONFIRMED") {
-        acc.confirmedCount = cnt;
-        acc.confirmedAmt = amt;
-      } else if (r.status === "VOIDED") {
-        acc.voidedCount = cnt;
-        acc.voidedAmt = amt;
-      }
-      return acc;
-    },
-    { totalCount: 0, confirmedCount: 0, confirmedAmt: 0, voidedCount: 0, voidedAmt: 0 },
-  );
-
-  return {
-    data: rows.map((r: any) => {
-      const soaNums: string[] = (r.soa_numbers ?? []).filter(Boolean);
-      return {
-        id: r.id,
-        dvNumber: r.dv_number,
-        supplierId: r.supplier_id,
-        supplierName: r.supplier_name,
-        soaId: r.soa_id,
-        soaNumber: soaNums[0] ?? "",
-        soaNumbers: soaNums,
-        amount: parseFloat(r.amount),
-        paymentMethod: r.payment_method,
-        checkNumber: r.check_number,
-        paymentDate: r.payment_date,
-        status: r.status,
-        createdAt: r.created_at,
-        voidedAt: r.voided_at,
-        voidReason: r.void_reason,
-      };
-    }),
+  return buildDisbursementVoucherListResponse({
+    rows,
     total: countRows[0]?.total ?? 0,
-    summary,
-  };
+    summaryRows,
+  });
 }
 
 export async function getDisbursementVoucher(orgId: string, dvId: string) {
@@ -2507,19 +2029,11 @@ export async function getDisbursementVoucher(orgId: string, dvId: string) {
     ORDER BY sr.date_from ASC
   `)) as any[];
 
-  // Build soaRefs array
-  const soaRefs = soaRefRows.map((r: any) => ({
-    soaId: r.soa_id,
-    soaNumber: r.soa_number,
-    allocatedAmount: parseFloat(r.allocated_amount),
-    dateFrom: r.date_from,
-    dateTo: r.date_to,
-  }));
-
   // Determine which SOA IDs to use for line items (junction table first, fallback to legacy)
-  const linkedSoaIds: string[] = soaRefRows.length > 0
-    ? soaRefRows.map((r: any) => r.soa_id)
-    : dv.soa_id ? [dv.soa_id] : [];
+  const linkedSoaIds = resolveDisbursementVoucherLinkedSoaIds({
+    soaRefRows,
+    legacySoaId: dv.soa_id,
+  });
 
   // Fetch SOA line items (invoices + credit memos) from ALL linked SOAs
   let soaLineItems: any[] = [];
@@ -2535,66 +2049,14 @@ export async function getDisbursementVoucher(orgId: string, dvId: string) {
     `)) as any[];
   }
 
-  // Compute gross (positive invoices only) for print breakdown
-  const positiveItems = soaLineItems.filter((i: any) => parseFloat(i.total_amount) > 0);
-  const negativeItems = soaLineItems.filter((i: any) => parseFloat(i.total_amount) < 0);
-  const computedGross = positiveItems.reduce((s: number, i: any) => s + parseFloat(i.total_amount), 0);
-
-  return {
-    id: dv.id,
-    dvNumber: dv.dv_number,
-    supplierId: dv.supplier_id,
-    supplierName: dv.supplier_name,
-    // Backward compat: soaId / soaNumber from first linked SOA (or legacy column)
-    soaId: soaRefs.length > 0 ? soaRefs[0].soaId : dv.soa_id,
-    soaNumber: soaRefs.length > 0 ? soaRefs[0].soaNumber : dv.soa_number,
-    soaDateFrom: soaRefs.length > 0 ? soaRefs[0].dateFrom : dv.soa_date_from,
-    soaDateTo: soaRefs.length > 0 ? soaRefs[0].dateTo : dv.soa_date_to,
-    // New multi-SOA refs
-    soaRefs,
-    grossAmount: computedGross > 0 ? computedGross : (dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount)),
-    totalDeductions: dv.total_deductions ? parseFloat(dv.total_deductions) : 0,
-    totalCharges: dv.total_charges ? parseFloat(dv.total_charges) : 0,
-    netAmount: dv.net_amount ? parseFloat(dv.net_amount) : parseFloat(dv.amount),
-    soaCreditMemos: negativeItems.map((i: any) => ({
-      invoiceNumber: i.invoice_number,
-      amount: Math.abs(parseFloat(i.total_amount)),
-    })),
-    amount: parseFloat(dv.amount),
-    paymentMethod: dv.payment_method,
-    paymentDate: dv.payment_date,
-    remarks: dv.remarks,
-    status: dv.status,
-    printedAt: dv.printed_at,
-    confirmedAt: dv.confirmed_at,
-    voidedAt: dv.voided_at,
-    voidReason: dv.void_reason,
-    createdAt: dv.created_at,
-    payments: paymentRows.map((p: any) => ({
-      id: p.id,
-      paymentMethod: p.payment_method,
-      amount: parseFloat(p.amount),
-      referenceNumber: p.reference_number,
-      bankName: p.bank_name,
-      transactionDate: p.transaction_date,
-      platform: p.platform,
-      receivedBy: p.received_by,
-    })),
-    deductions: deductionRows.map((d: any) => ({
-      id: d.id,
-      deductionType: d.deduction_type,
-      description: d.description,
-      referenceNumber: d.reference_number,
-      amount: parseFloat(d.amount),
-    })),
-    additionalCharges: additionalChargeRows.map((c: any) => ({
-      id: c.id,
-      chargeType: c.charge_type,
-      description: c.description,
-      referenceNumber: c.reference_number,
-      amount: parseFloat(c.amount),
-    })),
-  };
+  return buildDisbursementVoucherDetailResponse({
+    dv,
+    paymentRows,
+    deductionRows,
+    additionalChargeRows,
+    soaRefRows,
+    soaLineItems,
+  });
 }
 
 export async function printDisbursementVoucher(orgId: string, dvId: string) {
@@ -2604,8 +2066,7 @@ export async function printDisbursementVoucher(orgId: string, dvId: string) {
         WHERE id = ${dvId} AND org_id = ${orgId} AND status = 'DRAFT'
         RETURNING id, dv_number, status`,
   )) as any[];
-  if (rows.length === 0) throw new Error("DV not found or not in DRAFT status");
-  return rows[0];
+  return requireDisbursementVoucherPrintResult(rows);
 }
 
 /**
@@ -2660,26 +2121,32 @@ export async function replayConfirmForOrphan(
       if (remaining <= 0) break;
       const invBal = parseFloat(inv.balance);
       const alloc = Math.min(remaining, invBal);
-      const newPaid = parseFloat(inv.paid_amount) + alloc;
-      const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
-      const newStatus = newBal <= 0.005 ? "PAID" : "PARTIALLY_PAID";
-      const auditNote = `[DV Payment: ${payAmount.toFixed(2)}, DV#${dvId}]`;
-      const notes = inv.notes ? `${inv.notes}\n${auditNote}` : auditNote;
+      const paymentUpdate = calculateInvoicePaymentApplication({
+        paidAmount: inv.paid_amount,
+        totalAmount: inv.total_amount,
+        rtvCreditAmount: inv.rtv_credit_amount,
+        allocation: alloc,
+      });
+      const auditNote = buildDisbursementVoucherPaymentAuditNote({ payAmount, dvId });
+      const notes = appendDisbursementVoucherPaymentAuditNote(inv.notes, auditNote);
       await tx.execute(
-        sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
-            balance = ${String(Math.max(0, newBal).toFixed(2))}, status = ${newStatus}, notes = ${notes}
+        sql`UPDATE supplier_invoices SET paid_amount = ${paymentUpdate.paidAmountText},
+            balance = ${paymentUpdate.balanceText}, status = ${paymentUpdate.status}, notes = ${notes}
             WHERE id = ${inv.id}`,
       );
       remaining -= alloc;
     }
 
     // Update SOA header
-    const newSoaPaid = parseFloat(soa.total_paid) + payAmount;
-    const newSoaBal = parseFloat(soa.total_amount) - newSoaPaid;
+    const soaTotals = calculateSoaPaymentTotals({
+      totalPaid: soa.total_paid,
+      totalAmount: soa.total_amount,
+      appliedAmount: payAmount,
+    });
     await tx.execute(
       sql`UPDATE supplier_soa_records
-          SET total_paid = ${String(newSoaPaid.toFixed(2))},
-              total_balance = ${String(Math.max(0, newSoaBal).toFixed(2))}
+          SET total_paid = ${soaTotals.totalPaidText},
+              total_balance = ${soaTotals.totalBalanceText}
           WHERE id = ${soaAlloc.soaId}`,
     );
   }
@@ -2689,13 +2156,11 @@ export async function replayConfirmForOrphan(
     sql`SELECT reference_number FROM supplier_dv_deductions
         WHERE dv_id = ${dvId} AND deduction_type = 'CREDIT_MEMO' AND reference_number IS NOT NULL`,
   )) as any[];
-  for (const cm of cmDeds) {
-    if (cm.reference_number) {
-      await tx.execute(
-        sql`UPDATE supplier_invoices SET billed = true, billed_soa_id = ${dvId}
-            WHERE id = ${cm.reference_number}`,
-      );
-    }
+  for (const referenceNumber of buildDisbursementVoucherCreditMemoReferences(cmDeds)) {
+    await tx.execute(
+      sql`UPDATE supplier_invoices SET billed = true, billed_soa_id = ${dvId}
+          WHERE id = ${referenceNumber}`,
+    );
   }
 }
 
@@ -2707,9 +2172,7 @@ export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
           WHERE id = ${dvId} AND org_id = ${orgId}
           FOR UPDATE`,
     )) as any[];
-    if (dvRows.length === 0) throw new Error("DV not found");
-    const dv = dvRows[0] as any;
-    if (dv.status !== "PRINTED") throw new Error("Can only confirm PRINTED vouchers");
+    const dv = requireConfirmableDisbursementVoucher(dvRows);
 
     // Apply payment to SOA + invoices
     // Query junction table for all linked SOAs; fallback to legacy soa_id
@@ -2719,31 +2182,17 @@ export async function confirmDisbursementVoucher(orgId: string, dvId: string) {
           ORDER BY created_at ASC`,
     )) as any[];
 
-    // Build SOA allocation list: prefer junction table, fallback to legacy column
-    const soaAllocations: Array<{ soaId: string; allocatedAmount: number }> =
-      dvSoaRows.length > 0
-        ? dvSoaRows.map((r: any) => ({
-            soaId: r.soa_id,
-            allocatedAmount: parseFloat(r.allocated_amount),
-          }))
-        : dv.soa_id
-          ? [{
-              soaId: dv.soa_id,
-              allocatedAmount: dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount),
-            }]
-          : [];
+    const soaAllocations = buildDisbursementVoucherSoaAllocations({
+      dvSoaRows,
+      dv,
+    });
 
     // Defense-in-depth: any orphan DV that slipped past the create guard
     // would silently no-op the SOA-update loop below. Reject explicitly so
     // the caller sees the failure instead of a "successful" confirm that
     // updates nothing. The only path to recovery is a manual backfill of the
     // junction row (see backfill-dv-soa-orphans-2026.sql).
-    if (soaAllocations.length === 0) {
-      const err: any = new Error("DV_HAS_NO_SOA_LINK");
-      err.code = "DV_HAS_NO_SOA_LINK";
-      err.details = { dvId, message: "Cannot confirm: this DV has no linked SOA. Contact support to backfill the link." };
-      throw err;
-    }
+    assertDisbursementVoucherHasConfirmSoaLinks(soaAllocations, dvId);
 
     // Apply settlement work (invoice paint + SOA header update + CM marking).
     // Extracted so the same code path can be replayed by orphan-DV cleanups
@@ -2781,12 +2230,10 @@ export async function voidDisbursementVoucher(
           WHERE id = ${dvId} AND org_id = ${orgId}
           FOR UPDATE`,
     )) as any[];
-    if (dvRows.length === 0) throw new Error("DV not found");
-    const dv = dvRows[0] as any;
-    if (dv.status === "VOIDED") throw new Error("DV is already voided");
+    const dv = requireVoidableDisbursementVoucher(dvRows);
 
     // If was CONFIRMED, reverse payment on ALL linked SOAs
-    if (dv.status === "CONFIRMED") {
+    if (shouldReverseDisbursementVoucherSettlement(dv)) {
       // Query junction table for all linked SOAs; fallback to legacy soa_id
       const dvSoaRows = (await tx.execute(
         sql`SELECT soa_id, allocated_amount::text
@@ -2794,18 +2241,10 @@ export async function voidDisbursementVoucher(
             ORDER BY created_at ASC`,
       )) as any[];
 
-      const soaAllocations: Array<{ soaId: string; allocatedAmount: number }> =
-        dvSoaRows.length > 0
-          ? dvSoaRows.map((r: any) => ({
-              soaId: r.soa_id,
-              allocatedAmount: parseFloat(r.allocated_amount),
-            }))
-          : dv.soa_id
-            ? [{
-                soaId: dv.soa_id,
-                allocatedAmount: dv.gross_amount ? parseFloat(dv.gross_amount) : parseFloat(dv.amount),
-              }]
-            : [];
+      const soaAllocations = buildDisbursementVoucherSoaAllocations({
+        dvSoaRows,
+        dv,
+      });
 
       for (const soaAlloc of soaAllocations) {
         const payAmount = soaAlloc.allocatedAmount;
@@ -2823,14 +2262,19 @@ export async function voidDisbursementVoucher(
         let remaining = payAmount;
         for (const inv of invoiceRows) {
           if (remaining <= 0) break;
-          const paid = parseFloat(inv.paid_amount);
-          const reversal = Math.min(remaining, paid);
-          const newPaid = paid - reversal;
-          const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
-          const newStatus = newPaid <= 0.005 ? "OPEN" : "PARTIALLY_PAID";
+          const reversal = calculateDisbursementVoucherInvoiceReversalAmount({
+            remaining,
+            paidAmount: inv.paid_amount,
+          });
+          const reversalUpdate = calculateInvoicePaymentReversal({
+            paidAmount: inv.paid_amount,
+            totalAmount: inv.total_amount,
+            rtvCreditAmount: inv.rtv_credit_amount,
+            reversal,
+          });
           await tx.execute(
-            sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
-                balance = ${String(Math.max(0, newBal).toFixed(2))}, status = ${newStatus}
+            sql`UPDATE supplier_invoices SET paid_amount = ${reversalUpdate.paidAmountText},
+                balance = ${reversalUpdate.balanceText}, status = ${reversalUpdate.status}
                 WHERE id = ${inv.id}`,
           );
           remaining -= reversal;
@@ -2842,12 +2286,15 @@ export async function voidDisbursementVoucher(
               WHERE id = ${soaAlloc.soaId} FOR UPDATE`,
         )) as any[];
         if (soaRows.length > 0) {
-          const newPaid = Math.max(0, parseFloat(soaRows[0].total_paid) - payAmount);
-          const newBal = parseFloat(soaRows[0].total_amount) - newPaid;
+          const soaTotals = calculateSoaPaymentReversalTotals({
+            totalPaid: soaRows[0].total_paid,
+            totalAmount: soaRows[0].total_amount,
+            reversalAmount: payAmount,
+          });
           await tx.execute(
             sql`UPDATE supplier_soa_records
-                SET total_paid = ${String(newPaid.toFixed(2))},
-                    total_balance = ${String(Math.max(0, newBal).toFixed(2))}
+                SET total_paid = ${soaTotals.totalPaidText},
+                    total_balance = ${soaTotals.totalBalanceText}
                 WHERE id = ${soaAlloc.soaId}`,
           );
         }
@@ -2855,18 +2302,16 @@ export async function voidDisbursementVoucher(
     }
 
     // Un-mark applied credit memos (restore as available)
-    if (dv.status === "CONFIRMED") {
+    if (shouldReverseDisbursementVoucherSettlement(dv)) {
       const cmDeds = (await tx.execute(
         sql`SELECT reference_number FROM supplier_dv_deductions
             WHERE dv_id = ${dvId} AND deduction_type = 'CREDIT_MEMO' AND reference_number IS NOT NULL`,
       )) as any[];
-      for (const cm of cmDeds) {
-        if (cm.reference_number) {
-          await tx.execute(
-            sql`UPDATE supplier_invoices SET billed = false, billed_soa_id = NULL
-                WHERE id = ${cm.reference_number}`,
-          );
-        }
+      for (const referenceNumber of buildDisbursementVoucherCreditMemoReferences(cmDeds)) {
+        await tx.execute(
+          sql`UPDATE supplier_invoices SET billed = false, billed_soa_id = NULL
+              WHERE id = ${referenceNumber}`,
+        );
       }
     }
 
@@ -2933,30 +2378,7 @@ export async function getPDCReport(orgId: string) {
     `,
   );
 
-  // Map rows to flat array + compute monthly summary
-  const data = (rows as any[]).map((r: any) => ({
-    id: r.id,
-    cvNo: r.cv_number ?? "",
-    supplierName: r.supplier_name ?? "",
-    checkNo: r.check_number ?? "",
-    bankName: r.bank_name ?? "",
-    checkDate: r.check_date,
-    amount: String(r.net_amount ?? "0"),
-    status: r.status ?? "",
-  }));
-
-  const monthMap = new Map<string, number>();
-  for (const r of rows as any[]) {
-    const bucket = r.month_bucket;
-    if (bucket) {
-      monthMap.set(bucket, (monthMap.get(bucket) || 0) + parseFloat(r.net_amount ?? "0"));
-    }
-  }
-  const monthlySummary = Array.from(monthMap.entries())
-    .map(([month, total]) => ({ month, total }))
-    .sort((a, b) => a.month.localeCompare(b.month));
-
-  return { data, monthlySummary };
+  return buildPdcReportResponse(rows as any[]);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -2965,27 +2387,21 @@ export async function getPDCReport(orgId: string) {
 
 export async function getCheckRegister(
   orgId: string,
-  opts: {
-    search?: string;
-    bank?: string;
-    status?: string;
-    dateFrom?: string;
-    dateTo?: string;
-  } = {},
+  opts: CheckRegisterOptions = {},
 ) {
+  const registerOptions = normalizeCheckRegisterOptions(opts);
   const conditions = [
     sql`dv.org_id = ${orgId}`,
     sql`p.payment_method = 'CHECK'`,
     sql`dv.status IN ('PRINTED', 'CONFIRMED')`,
   ];
-  if (opts.search && opts.search.trim()) {
-    const q = `%${opts.search.trim()}%`;
-    conditions.push(sql`(dv.dv_number ILIKE ${q} OR p.reference_number ILIKE ${q} OR s.name ILIKE ${q})`);
+  if (registerOptions.searchPattern) {
+    conditions.push(sql`(dv.dv_number ILIKE ${registerOptions.searchPattern} OR p.reference_number ILIKE ${registerOptions.searchPattern} OR s.name ILIKE ${registerOptions.searchPattern})`);
   }
-  if (opts.bank) conditions.push(sql`p.bank_name = ${opts.bank}`);
-  if (opts.status) conditions.push(sql`p.status = ${opts.status}`);
-  if (opts.dateFrom) conditions.push(sql`p.transaction_date >= ${opts.dateFrom}::date`);
-  if (opts.dateTo) conditions.push(sql`p.transaction_date <= ${opts.dateTo}::date`);
+  if (registerOptions.bank) conditions.push(sql`p.bank_name = ${registerOptions.bank}`);
+  if (registerOptions.status) conditions.push(sql`p.status = ${registerOptions.status}`);
+  if (registerOptions.dateFrom) conditions.push(sql`p.transaction_date >= ${registerOptions.dateFrom}::date`);
+  if (registerOptions.dateTo) conditions.push(sql`p.transaction_date <= ${registerOptions.dateTo}::date`);
 
   const where = sql.join(conditions, sql` AND `);
 
@@ -3001,49 +2417,7 @@ export async function getCheckRegister(
     ORDER BY p.transaction_date ASC NULLS LAST, dv.dv_number ASC
   `)) as any[];
 
-  const now = new Date();
-  const endOfWeek = new Date(now); endOfWeek.setDate(now.getDate() + (7 - now.getDay()));
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-
-  let totalOutstanding = 0;
-  let maturingThisWeek = 0;
-  let clearedThisMonth = 0;
-  let totalBounced = 0;
-
-  const data = rows.map((r: any) => {
-    const amt = parseFloat(r.amount);
-    const st = r.check_status ?? "OUTSTANDING";
-    const cd = r.check_date ? new Date(r.check_date) : null;
-
-    if (st === "OUTSTANDING" || st === "RELEASED") totalOutstanding += amt;
-    if ((st === "OUTSTANDING" || st === "RELEASED") && cd && cd >= now && cd <= endOfWeek) maturingThisWeek += amt;
-    if (st === "CLEARED" && cd && cd >= monthStart && cd <= monthEnd) clearedThisMonth += amt;
-    if (st === "BOUNCED") totalBounced += amt;
-
-    return {
-      id: r.id,
-      dvId: r.dv_id,
-      dvNumber: r.dv_number,
-      supplierName: r.supplier_name,
-      checkNumber: r.check_number ?? "",
-      bankName: r.bank_name ?? "",
-      checkDate: r.check_date ?? "",
-      amount: amt,
-      status: st,
-      bounceReason: r.bounce_reason,
-    };
-  });
-
-  return {
-    data,
-    summary: {
-      totalOutstanding: parseFloat(totalOutstanding.toFixed(2)),
-      maturingThisWeek: parseFloat(maturingThisWeek.toFixed(2)),
-      clearedThisMonth: parseFloat(clearedThisMonth.toFixed(2)),
-      totalBounced: parseFloat(totalBounced.toFixed(2)),
-    },
-  };
+  return buildCheckRegisterResponse(rows);
 }
 
 /** OUTSTANDING → RELEASED */
@@ -3056,9 +2430,7 @@ export async function releaseCheck(orgId: string, paymentId: string) {
           WHERE p.id = ${paymentId} AND dv.org_id = ${orgId}
           FOR UPDATE OF p`,
     )) as any[];
-    if (rows.length === 0) throw new Error("Check not found");
-    if (rows[0].payment_method !== "CHECK") throw new Error("Not a check payment");
-    if (rows[0].status !== "OUTSTANDING") throw new Error("Can only release OUTSTANDING checks");
+    requireOutstandingCheckPayment(rows, "release");
 
     const [updated] = (await tx.execute(
       sql`UPDATE supplier_dv_payments SET status = 'RELEASED' WHERE id = ${paymentId} RETURNING id, status`,
@@ -3077,9 +2449,7 @@ export async function clearCheck(orgId: string, paymentId: string) {
           WHERE p.id = ${paymentId} AND dv.org_id = ${orgId}
           FOR UPDATE OF p`,
     )) as any[];
-    if (rows.length === 0) throw new Error("Check not found");
-    if (rows[0].payment_method !== "CHECK") throw new Error("Not a check payment");
-    if (rows[0].status !== "RELEASED") throw new Error("Can only clear RELEASED checks");
+    requireReleasedCheckPayment(rows, "clear");
 
     const [updated] = (await tx.execute(
       sql`UPDATE supplier_dv_payments SET status = 'CLEARED' WHERE id = ${paymentId} RETURNING id, status`,
@@ -3102,10 +2472,7 @@ export async function bounceCheck(orgId: string, paymentId: string, reason: stri
           WHERE p.id = ${paymentId} AND dv.org_id = ${orgId}
           FOR UPDATE OF p`,
     )) as any[];
-    if (rows.length === 0) throw new Error("Check not found");
-    const check = rows[0] as any;
-    if (check.payment_method !== "CHECK") throw new Error("Not a check payment");
-    if (check.status !== "RELEASED") throw new Error("Can only bounce RELEASED checks");
+    const check = requireReleasedCheckPayment(rows, "bounce");
 
     // Mark check as bounced
     await tx.execute(
@@ -3114,20 +2481,23 @@ export async function bounceCheck(orgId: string, paymentId: string, reason: stri
     );
 
     // Reverse the bounced amount from SOA + invoices (money never left)
-    const bouncedAmount = parseFloat(check.amount);
-    if (check.soa_id && bouncedAmount > 0) {
+    const bouncedAmount = parseCheckPaymentAmount(check);
+    if (shouldReverseBouncedCheckSettlement(check)) {
       // Reverse SOA header
       const soaRows = (await tx.execute(
         sql`SELECT total_paid::text, total_amount::text FROM supplier_soa_records
             WHERE id = ${check.soa_id} FOR UPDATE`,
       )) as any[];
       if (soaRows.length > 0) {
-        const newPaid = Math.max(0, parseFloat(soaRows[0].total_paid) - bouncedAmount);
-        const newBal = parseFloat(soaRows[0].total_amount) - newPaid;
+        const soaTotals = calculateSoaPaymentReversalTotals({
+          totalPaid: soaRows[0].total_paid,
+          totalAmount: soaRows[0].total_amount,
+          reversalAmount: bouncedAmount,
+        });
         await tx.execute(
           sql`UPDATE supplier_soa_records
-              SET total_paid = ${String(newPaid.toFixed(2))},
-                  total_balance = ${String(Math.max(0, newBal).toFixed(2))}
+              SET total_paid = ${soaTotals.totalPaidText},
+                  total_balance = ${soaTotals.totalBalanceText}
               WHERE id = ${check.soa_id}`,
         );
       }
@@ -3144,21 +2514,26 @@ export async function bounceCheck(orgId: string, paymentId: string, reason: stri
       let remaining = bouncedAmount;
       for (const inv of invRows) {
         if (remaining <= 0) break;
-        const paid = parseFloat(inv.paid_amount);
-        const reversal = Math.min(remaining, paid);
-        const newPaid = paid - reversal;
-        const newBal = parseFloat(inv.total_amount) - newPaid - parseFloat(inv.rtv_credit_amount);
-        const newStatus = newPaid <= 0.005 ? "OPEN" : "PARTIALLY_PAID";
+        const reversal = calculateCheckPaymentInvoiceReversalAmount({
+          remaining,
+          paidAmount: inv.paid_amount,
+        });
+        const reversalUpdate = calculateInvoicePaymentReversal({
+          paidAmount: inv.paid_amount,
+          totalAmount: inv.total_amount,
+          rtvCreditAmount: inv.rtv_credit_amount,
+          reversal,
+        });
         await tx.execute(
-          sql`UPDATE supplier_invoices SET paid_amount = ${String(newPaid.toFixed(2))},
-              balance = ${String(Math.max(0, newBal).toFixed(2))}, status = ${newStatus}
+          sql`UPDATE supplier_invoices SET paid_amount = ${reversalUpdate.paidAmountText},
+              balance = ${reversalUpdate.balanceText}, status = ${reversalUpdate.status}
               WHERE id = ${inv.id}`,
         );
         remaining -= reversal;
       }
     }
 
-    return { id: paymentId, status: "BOUNCED" };
+    return buildCheckPaymentStatusResult(paymentId, "BOUNCED");
   });
 }
 
@@ -3172,9 +2547,7 @@ export async function cancelCheck(orgId: string, paymentId: string) {
           WHERE p.id = ${paymentId} AND dv.org_id = ${orgId}
           FOR UPDATE OF p`,
     )) as any[];
-    if (rows.length === 0) throw new Error("Check not found");
-    if (rows[0].payment_method !== "CHECK") throw new Error("Not a check payment");
-    if (rows[0].status !== "OUTSTANDING") throw new Error("Can only cancel OUTSTANDING checks");
+    requireOutstandingCheckPayment(rows, "cancel");
 
     const [updated] = (await tx.execute(
       sql`UPDATE supplier_dv_payments SET status = 'CANCELLED' WHERE id = ${paymentId} RETURNING id, status`,
@@ -3199,13 +2572,7 @@ export async function listBankAccounts(orgId: string) {
 
 export async function createBankAccount(
   orgId: string,
-  data: {
-    bankName: string;
-    accountName: string;
-    accountNumber: string;
-    branch?: string;
-    isDefault?: boolean;
-  },
+  data: BankAccountCreateInput,
 ) {
   return await db.transaction(async (tx) => {
     // If setting as default, unset existing default
@@ -3216,22 +2583,9 @@ export async function createBankAccount(
         .where(and(eq(bankAccounts.orgId, orgId), eq(bankAccounts.isDefault, true)));
     }
 
-    // Mask the display number
-    const display = data.accountNumber.length > 4
-      ? "****" + data.accountNumber.slice(-4)
-      : data.accountNumber;
-
     const [account] = await tx
       .insert(bankAccounts)
-      .values({
-        orgId,
-        bankName: data.bankName,
-        accountName: data.accountName,
-        accountNumber: data.accountNumber,
-        accountNumberDisplay: display,
-        branch: data.branch ?? null,
-        isDefault: data.isDefault ?? false,
-      })
+      .values(buildBankAccountCreateValues(orgId, data))
       .returning();
 
     return account;
@@ -3241,13 +2595,7 @@ export async function createBankAccount(
 export async function updateBankAccount(
   orgId: string,
   id: string,
-  data: {
-    bankName?: string;
-    accountName?: string;
-    accountNumber?: string;
-    branch?: string;
-    isDefault?: boolean;
-  },
+  data: BankAccountUpdateInput,
 ) {
   const [account] = await db
     .select()
@@ -3265,17 +2613,7 @@ export async function updateBankAccount(
         .where(and(eq(bankAccounts.orgId, orgId), eq(bankAccounts.isDefault, true)));
     }
 
-    const updates: Record<string, any> = {};
-    if (data.bankName !== undefined) updates.bankName = data.bankName;
-    if (data.accountName !== undefined) updates.accountName = data.accountName;
-    if (data.branch !== undefined) updates.branch = data.branch;
-    if (data.isDefault !== undefined) updates.isDefault = data.isDefault;
-    if (data.accountNumber !== undefined) {
-      updates.accountNumber = data.accountNumber;
-      updates.accountNumberDisplay = data.accountNumber.length > 4
-        ? "****" + data.accountNumber.slice(-4)
-        : data.accountNumber;
-    }
+    const updates = buildBankAccountUpdateFields(data);
 
     if (Object.keys(updates).length === 0) return account;
 
