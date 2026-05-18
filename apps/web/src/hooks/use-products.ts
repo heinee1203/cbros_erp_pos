@@ -62,6 +62,7 @@ export type SortField =
   | "costPrice"
   | "stockLevel"
   | "categoryName"
+  | "subcategoryName"
   | "brandName"
   | "margin";
 
@@ -199,6 +200,9 @@ export interface CreateProductPayload {
   isParent?: boolean;
   unitsPerCase?: number;
   packagingUnit?: string;
+  sellingUnit?: string;
+  purchaseUnit?: string | null;
+  conversionFactor?: number;
   primarySupplierId?: string | null;
   isSerialized?: boolean;
   vehicleCompatibility?: {

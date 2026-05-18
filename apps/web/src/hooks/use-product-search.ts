@@ -11,6 +11,9 @@ export interface ProductSearchResult {
   category: string;
   unitPrice: string;
   costPrice: string;
+  sellingUnit?: string | null;
+  purchaseUnit?: string | null;
+  conversionFactor?: number | string | null;
   barcode: string | null;
   stockLevel: number;
   reorderPoint: number;

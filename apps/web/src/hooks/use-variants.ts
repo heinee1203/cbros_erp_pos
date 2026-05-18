@@ -15,6 +15,8 @@ export interface VariantRow {
   isActive: boolean;
   options: Array<{ typeName: string; value: string }>;
   stockLevel: number;
+  specialOrder?: boolean;
+  discontinued?: boolean;
 }
 
 export function useVariants(token: string, locationId: string, parentId?: string) {

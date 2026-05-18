@@ -153,7 +153,11 @@ export function useCreateCount(token: string, locationId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: {
-      countType: string;
+      locationId?: string;
+      label?: string;
+      scope?: string;
+      scopeFilter?: string;
+      countType?: string;
       title?: string;
       notes?: string;
       filterCriteria?: {

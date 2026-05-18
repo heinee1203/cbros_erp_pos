@@ -23,6 +23,7 @@ export interface SalesByItemRow {
   sku: string;
   mnemonicSku: string;
   category: string;
+  categoryName?: string;
   unitsSold: number;
   totalRevenue: string;
   totalCost: string;
