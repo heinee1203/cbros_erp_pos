@@ -18,7 +18,7 @@ import {
   isTransferRole,
   isTransferAdminOrManager,
 } from "./transfer-route-permissions";
-import { verifyAuthorizationCredential } from "../auth/service";
+import { verifyAuthorizationCredential } from "./transfer-auth-service";
 import {
   approveTransfer,
   cancelTransfer,
