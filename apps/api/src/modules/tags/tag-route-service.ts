@@ -1,0 +1,16 @@
+export {
+  addOrCreateProductTag,
+  addProductTag,
+  autoTagTires,
+  bulkAssignBySearch,
+  bulkAssignTag,
+  createTag,
+  deleteTag,
+  getDemandByTag,
+  getProductTags,
+  getTagDemandDetail,
+  getTagProducts,
+  listTags,
+  removeProductTag,
+  updateTag,
+} from "./service";
