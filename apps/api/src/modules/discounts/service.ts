@@ -12,6 +12,18 @@ export async function listTiers(orgId: string) {
     .orderBy(asc(customerTiers.sortOrder));
 }
 
+export async function listTiersWithCustomerCounts(orgId: string) {
+  const tiers = await listTiers(orgId);
+  return Promise.all(
+    tiers.map(async (tier) => {
+      const rows = await db.execute(
+        sql`SELECT count(*)::int AS cnt FROM customers WHERE tier_id = ${tier.id} AND org_id = ${orgId}`,
+      );
+      return { ...tier, customerCount: (rows as any[])[0]?.cnt ?? 0 };
+    }),
+  );
+}
+
 export async function createTier(orgId: string, data: {
   name: string;
   description?: string;
