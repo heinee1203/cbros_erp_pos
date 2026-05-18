@@ -40,6 +40,8 @@ const ACTION_LABELS: Record<string, string> = {
   RTV_SUBMIT: "RTV Submitted",
   PRODUCT_UPDATE: "Product Updated",
   PRODUCT_BULK_UPDATE: "Bulk Product Update",
+  ITEM_IMPORT_EXECUTE: "Item Import Executed",
+  ITEM_IMPORT_ROLLBACK: "Item Import Rollback",
   PRICE_CHANGE: "Price Changed",
   STOCK_ADJUST: "Stock Adjusted",
   SETTINGS_CHANGE: "Settings Changed",
@@ -54,6 +56,8 @@ const ACTION_COLORS: Record<string, string> = {
   PO_SUBMIT: "bg-violet-500/10 text-violet-600",
   PO_RECEIVE: "bg-green-500/10 text-green-600",
   PRODUCT_BULK_UPDATE: "bg-amber-500/10 text-amber-600",
+  ITEM_IMPORT_EXECUTE: "bg-emerald-500/10 text-emerald-600",
+  ITEM_IMPORT_ROLLBACK: "bg-orange-500/10 text-orange-600",
 };
 
 export default function AuditLogPage() {
@@ -159,10 +163,10 @@ export default function AuditLogPage() {
                     </td>
                     <td className="px-4 py-1.5 text-xs text-muted-foreground font-mono">{row.ipAddress || "-"}</td>
                     <td className="px-4 py-1.5 text-center">
-                      {row.details && <ChevronDown size={12} className={cn("text-muted-foreground transition-transform", expandedId === row.id && "rotate-180")} />}
+                      {row.details != null && <ChevronDown size={12} className={cn("text-muted-foreground transition-transform", expandedId === row.id && "rotate-180")} />}
                     </td>
                   </tr>
-                  {expandedId === row.id && row.details && (
+                  {expandedId === row.id && row.details != null && (
                     <tr key={`${row.id}-details`}>
                       <td colSpan={6} className="bg-muted/10 px-8 py-3">
                         <pre className="text-xs text-muted-foreground overflow-x-auto whitespace-pre-wrap font-mono">
