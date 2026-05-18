@@ -1,0 +1,1 @@
+export { getDashboardSummary } from "./service";
