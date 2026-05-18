@@ -59,9 +59,9 @@ async function lockInventoryRow(
   orgId: string,
   productId: string,
   locationId: string,
-): Promise<{ id: string; stockLevel: number; reservedLevel: number }> {
+): Promise<{ id: string; stockLevel: number; reservedLevel: number; reorderPoint: number }> {
   const rows = await tx.execute(
-    sql`SELECT id, stock_level, reserved_level
+    sql`SELECT id, stock_level, reserved_level, reorder_point
         FROM inventory
         WHERE org_id = ${orgId}
           AND product_id = ${productId}
@@ -75,6 +75,7 @@ async function lockInventoryRow(
       id: row.id,
       stockLevel: row.stock_level,
       reservedLevel: row.reserved_level,
+      reorderPoint: row.reorder_point,
     };
   }
 
@@ -90,7 +91,7 @@ async function lockInventoryRow(
     })
     .returning();
 
-  return { id: newRow.id, stockLevel: 0, reservedLevel: 0 };
+  return { id: newRow.id, stockLevel: 0, reservedLevel: 0, reorderPoint: newRow.reorderPoint };
 }
 
 /**
@@ -380,7 +381,7 @@ export async function completeSale(
   userId: string,
   input: CompleteSaleInput,
 ) {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // Lock sale row
     const saleRows = await tx.execute(
       sql`SELECT * FROM sales WHERE id = ${saleId} AND org_id = ${orgId} FOR UPDATE`,
@@ -394,7 +395,14 @@ export async function completeSale(
       sale.status === SaleStatus.COMPLETED &&
       sale.idempotency_key === input.idempotencyKey
     ) {
-      return sale;
+      return {
+        sale,
+        stockAlerts: [],
+        locationId: sale.location_id as string,
+        saleLines: [],
+        customerId: sale.customer_id as string | null,
+        customerName: sale.customer_name as string | null,
+      };
     }
 
     if (
@@ -448,7 +456,7 @@ export async function completeSale(
 
       // Non-inventory items (labor, counts, price adds) — skip stock operations entirely
       const [productCheck] = await tx
-        .select({ trackInventory: products.trackInventory })
+        .select({ trackInventory: products.trackInventory, name: products.name })
         .from(products)
         .where(eq(products.id, line.productId))
         .limit(1);
@@ -504,7 +512,7 @@ export async function completeSale(
       if (newBalance <= inv.reorderPoint) {
         stockAlerts.push({
           productId: line.productId,
-          productName: line.productName,
+          productName: productCheck?.name ?? line.productId,
           locationName: "", // filled after tx
           newBalance,
           reorderPoint: inv.reorderPoint,
@@ -552,7 +560,7 @@ export async function completeSale(
         sale.sale_no,
         grandTotal,
         userId,
-        input.overrideApproval?.pin,
+        input.overrideApproval,
       );
     }
 
@@ -615,7 +623,7 @@ export async function completeSale(
     });
   }
 
-  return result.sale;
+  return (await getSale(saleId, orgId)) ?? result.sale;
 }
 
 /**
@@ -684,7 +692,10 @@ export async function refundSale(
     }
 
     // Process each requested line: restore stock + create journal entry
-    const refundNotes = `[Refund] ${input.reason}`;
+    const extraNotes = input.notes?.trim();
+    const refundNotes = extraNotes
+      ? `[Refund] ${input.reason} | ${extraNotes}`
+      : `[Refund] ${input.reason}`;
     for (const reqLine of input.lines) {
       const line = lineMap.get(reqLine.saleLineId)!;
 
@@ -961,9 +972,22 @@ export async function listSales(
       discountTotal: sales.discountTotal,
       createdAt: sales.createdAt,
       completedAt: sales.completedAt,
+      createdByUserId: sales.createdByUserId,
+      completedByUserId: sales.completedByUserId,
       customerName: customers.name,
       locationName: locations.name,
       employeeName: users.fullName,
+      paymentMethods: sql<string | null>`(
+        SELECT string_agg(DISTINCT sp.method::text, ',')
+        FROM sale_payments sp
+        WHERE sp.sale_id = "sales"."id"
+      )`,
+      hasAccountPayment: sql<boolean>`EXISTS (
+        SELECT 1
+        FROM sale_payments sp_account
+        WHERE sp_account.sale_id = "sales"."id"
+          AND sp_account.method = 'ACCOUNT'
+      )`,
       lineCount: sql<number>`(
         SELECT count(*)::int FROM sale_lines
         WHERE sale_lines.sale_id = "sales"."id"
