@@ -5,23 +5,14 @@ import { useRouter } from "next/navigation";
 import {
   Search,
   X,
-  ChevronDown,
-  ChevronUp,
-  ChevronsUpDown,
   Loader2,
   RefreshCw,
   Download,
   ShoppingCart,
-  ShieldAlert,
-  AlertTriangle,
-  Clock,
-  DollarSign,
   Settings,
   Check,
-  XCircle,
   Sparkles,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import {
   useReorderSuggestions,
@@ -29,7 +20,6 @@ import {
   useReorderDismiss,
   useReorderUpdateQty,
   useReorderCreatePOs,
-  type ReorderSuggestionRow,
   type ReorderSummary,
   type ReorderFilters,
 } from "@/hooks/use-reorder";
@@ -37,35 +27,13 @@ import { useBrands } from "@/hooks/use-brands";
 import { useCategories } from "@/hooks/use-categories";
 import { useSuppliers } from "@/hooks/use-suppliers";
 import { AiAdvisorPanel } from "@/components/ai-advisor-panel";
-
-/* ═══════════════════════════════════════════════════════
- * CONSTANTS
- * ═══════════════════════════════════════════════════════ */
-
-const PRIORITY_CONFIG: Record<string, { label: string; badge: string }> = {
-  CRITICAL: { label: "Critical", badge: "bg-red-100 text-red-700" },
-  URGENT: { label: "Urgent", badge: "bg-orange-100 text-orange-700" },
-  NORMAL: { label: "Normal", badge: "bg-yellow-100 text-yellow-700" },
-};
-
-const ABC_CONFIG: Record<string, { badge: string }> = {
-  A: { badge: "bg-emerald-100 text-emerald-700" },
-  B: { badge: "bg-blue-100 text-blue-700" },
-  C: { badge: "bg-gray-100 text-gray-600" },
-};
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-
-type SortField =
-  | "priority"
-  | "productName"
-  | "currentStock"
-  | "avgDailyDemand"
-  | "reorderPoint"
-  | "suggestedQty"
-  | "supplierName";
-
-type SortDir = "asc" | "desc";
+import { EmptyState } from "./components/empty-state";
+import { FilterSelect } from "./components/filter-select";
+import { SortHeader } from "./components/sort-header";
+import { SuggestionRow } from "./components/suggestion-row";
+import { SummaryCards } from "./components/summary-cards";
+import { API_BASE } from "./constants";
+import type { SortDir, SortField } from "./types";
 
 /* ═══════════════════════════════════════════════════════
  * MAIN PAGE
@@ -549,302 +517,6 @@ export default function SuggestedOrdersPage() {
         productNames={aiProductNames}
         mode={aiMode}
       />
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════
- * SUMMARY CARDS
- * ═══════════════════════════════════════════════════════ */
-
-function SummaryCards({
-  summary,
-  activePriority,
-  onPriorityClick,
-}: {
-  summary: ReorderSummary;
-  activePriority: string;
-  onPriorityClick: (priority: string) => void;
-}) {
-  const cards: { key: string; label: string; value: number | string; icon: React.ReactNode; color: string; bg: string; ring: string; isValue?: boolean }[] = [
-    { key: "CRITICAL", label: "Critical", value: summary.critical, icon: <ShieldAlert size={14} />, color: "text-red-700", bg: "bg-red-50", ring: "ring-red-200" },
-    { key: "URGENT", label: "Urgent", value: summary.urgent, icon: <AlertTriangle size={14} />, color: "text-orange-700", bg: "bg-orange-50", ring: "ring-orange-200" },
-    { key: "NORMAL", label: "Normal", value: summary.normal, icon: <Clock size={14} />, color: "text-yellow-700", bg: "bg-yellow-50", ring: "ring-yellow-200" },
-    { key: "TOTAL_VALUE", label: "Total Value", value: `₱${summary.totalValue.toLocaleString()}`, icon: <DollarSign size={14} />, color: "text-foreground", bg: "bg-muted", ring: "ring-border", isValue: true },
-  ];
-
-  return (
-    <div className="border-b border-border bg-background px-6 py-3">
-      <div className="flex items-center gap-3">
-        {cards.map((card) => (
-          <button
-            key={card.key}
-            onClick={() => !card.isValue && onPriorityClick(card.key)}
-            className={cn(
-              "flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all hover:shadow-sm",
-              !card.isValue && activePriority === card.key
-                ? `${card.bg} border-transparent ring-2 ${card.ring}`
-                : "border-border bg-background hover:bg-muted/30",
-              card.isValue && "cursor-default",
-            )}
-          >
-            <span className={card.color}>{card.icon}</span>
-            <div>
-              <div className={cn("text-sm font-semibold tabular-nums", card.color)}>
-                {typeof card.value === "number" ? card.value.toLocaleString() : card.value}
-              </div>
-              <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                {card.label}
-              </div>
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════
- * TABLE ROW
- * ═══════════════════════════════════════════════════════ */
-
-function SuggestionRow({
-  row,
-  isSelected,
-  onToggle,
-  editingQty,
-  onQtyChange,
-  onQtyBlur,
-  onDismiss,
-  onClick,
-  onAskAi,
-}: {
-  row: ReorderSuggestionRow;
-  isSelected: boolean;
-  onToggle: () => void;
-  editingQty: number | undefined;
-  onQtyChange: (val: number) => void;
-  onQtyBlur: (val: number) => void;
-  onDismiss: () => void;
-  onClick: () => void;
-  onAskAi: () => void;
-}) {
-  const priorityCfg = PRIORITY_CONFIG[row.priority] ?? { label: row.priority, badge: "bg-muted text-muted-foreground" };
-  const abcCfg = ABC_CONFIG[row.abcClass] ?? { badge: "bg-gray-100 text-gray-600" };
-  const avgDemand = parseFloat(row.avgDailyDemand);
-  const rop = parseFloat(row.reorderPoint);
-
-  return (
-    <tr className="group transition-colors hover:bg-muted/30">
-      {/* Checkbox */}
-      <td className="px-4 py-1.5" onClick={(e) => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onChange={onToggle}
-          className="h-3.5 w-3.5 rounded border-border"
-        />
-      </td>
-
-      {/* Priority */}
-      <td className="whitespace-nowrap px-4 py-1.5 cursor-pointer" onClick={onClick}>
-        <span className={cn("inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium", priorityCfg.badge)}>
-          {priorityCfg.label}
-        </span>
-      </td>
-
-      {/* ABC */}
-      <td className="whitespace-nowrap px-4 py-1.5 cursor-pointer" onClick={onClick}>
-        <span className={cn("inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold", abcCfg.badge)}>
-          {row.abcClass}
-        </span>
-      </td>
-
-      {/* Product */}
-      <td className="max-w-[260px] px-4 py-1.5 cursor-pointer" onClick={onClick}>
-        <div className="truncate text-sm font-medium text-foreground" title={row.productName}>
-          {row.productName}
-        </div>
-        <div className="truncate font-mono text-[10px] text-muted-foreground">{row.sku}</div>
-      </td>
-
-      {/* Supplier */}
-      <td className="max-w-[140px] whitespace-nowrap px-4 py-1.5 text-sm text-foreground cursor-pointer" onClick={onClick}>
-        <span className="truncate block" title={row.supplierName ?? undefined}>
-          {row.supplierName ?? "—"}
-        </span>
-      </td>
-
-      {/* Current Stock */}
-      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-foreground cursor-pointer" onClick={onClick}>
-        {row.currentStock.toLocaleString()}
-      </td>
-
-      {/* Pending In */}
-      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
-        {row.pendingInbound.toLocaleString()}
-      </td>
-
-      {/* Demand/Day */}
-      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
-        {avgDemand.toFixed(1)}
-      </td>
-
-      {/* ROP */}
-      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
-        {rop.toFixed(1)}
-      </td>
-
-      {/* Suggested Qty (editable) */}
-      <td className="whitespace-nowrap px-4 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
-        <input
-          type="number"
-          min={1}
-          value={editingQty ?? row.suggestedQty}
-          onChange={(e) => onQtyChange(parseInt(e.target.value, 10) || 0)}
-          onFocus={() => onQtyChange(row.suggestedQty)}
-          onBlur={(e) => onQtyBlur(parseInt(e.target.value, 10) || row.suggestedQty)}
-          className="w-20 rounded-md border border-border bg-background px-2 py-1 text-right text-xs tabular-nums text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-        />
-      </td>
-
-      {/* Est. Cost */}
-      <td className="whitespace-nowrap px-4 py-1.5 text-right tabular-nums text-sm text-muted-foreground cursor-pointer" onClick={onClick}>
-        —
-      </td>
-
-      {/* Actions */}
-      <td className="whitespace-nowrap px-4 py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-center gap-1">
-          <button
-            onClick={() => {
-              // Select this single item and create PO
-              // For single order, just select + trigger PO creation
-            }}
-            className="flex h-6 items-center gap-1 rounded border border-primary/30 bg-primary/5 px-2 text-[10px] font-medium text-primary transition-colors hover:bg-primary/10"
-            title="Create PO for this item"
-          >
-            Order
-          </button>
-          <button
-            onClick={onDismiss}
-            className="flex h-6 items-center gap-1 rounded border border-border px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            title="Dismiss suggestion"
-          >
-            <XCircle size={10} />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onAskAi();
-            }}
-            className="rounded p-1 text-amber-500 hover:bg-amber-50"
-            title="Ask AI"
-          >
-            <Sparkles size={13} />
-          </button>
-        </div>
-      </td>
-    </tr>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════
- * FILTER SELECT
- * ═══════════════════════════════════════════════════════ */
-
-function FilterSelect({
-  value,
-  onChange,
-  options,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-8 appearance-none rounded-md border border-border bg-background pl-2.5 pr-7 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-      <ChevronDown
-        size={12}
-        className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-      />
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════
- * SORTABLE HEADER
- * ═══════════════════════════════════════════════════════ */
-
-function SortHeader({
-  label,
-  field,
-  currentSort,
-  currentDir,
-  onSort,
-  align = "left",
-}: {
-  label: string;
-  field: SortField;
-  currentSort: SortField;
-  currentDir: SortDir;
-  onSort: (field: SortField) => void;
-  align?: "left" | "right";
-}) {
-  const isActive = currentSort === field;
-  return (
-    <th
-      scope="col"
-      className={cn(
-        "cursor-pointer select-none whitespace-nowrap px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground",
-        align === "right" && "text-right",
-        isActive && "text-foreground",
-      )}
-      onClick={() => onSort(field)}
-    >
-      <span className={cn("inline-flex items-center gap-1", align === "right" && "justify-end")}>
-        {label}
-        {isActive ? (
-          currentDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />
-        ) : (
-          <ChevronsUpDown size={12} className="opacity-30" />
-        )}
-      </span>
-    </th>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════
- * EMPTY STATE
- * ═══════════════════════════════════════════════════════ */
-
-function EmptyState({ hasFilters }: { hasFilters: boolean }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 py-20 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
-        <ShoppingCart size={24} className="text-muted-foreground" />
-      </div>
-      <div>
-        <p className="text-sm font-medium text-foreground">
-          {hasFilters ? "No suggestions match your filters" : "No reorder suggestions computed yet"}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {hasFilters
-            ? "Try broadening your search criteria or clearing filters."
-            : 'Click "Refresh Suggestions" to compute reorder points and suggested quantities.'}
-        </p>
-      </div>
     </div>
   );
 }
