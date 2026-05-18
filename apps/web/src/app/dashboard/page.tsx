@@ -3,9 +3,6 @@
 import { useState, useCallback } from "react";
 import { useAuth } from "../auth-context";
 import { useDashboard, type LowStockItem, type RecentActivityEntry } from "@/hooks/use-dashboard";
-import { useRouter } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/api";
 import Link from "next/link";
 import {
   Package,
@@ -20,26 +17,18 @@ import {
   Plus,
   History,
   Loader2,
-  MapPin,
   CheckCircle2,
   ChevronDown,
   ShoppingCart,
+  LayoutDashboard,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtNum, fmtDateTime, timeAgo } from "@/lib/format";
 import { REF_TYPE_LABELS, REF_TYPE_COLORS, isFinancialRole, isOperationalRole } from "@/lib/constants";
-import { ModalShell } from "@/app/inventory/components/modal-shell";
-
-/* ─── Reorder Types ─── */
-
-interface PendingOrdersData {
-  draftPOs: { poId: string; poNumber: string; supplierId: string; supplierName: string; quantity: number; status: string }[];
-  submittedPOs: { poId: string; poNumber: string; supplierId: string; supplierName: string; quantityOrdered: number; quantityReceived: number; quantityRemaining: number; status: string }[];
-  backorders: { backorderId: string; sourcePoNumber: string; supplierId: string; supplierName: string; quantityOutstanding: number; status: string; waitUntil: string | null }[];
-  lastSupplier: { supplierId: string; supplierName: string; lastCost: string; lastPoNumber: string; lastPoDate: string } | null;
-  suggestedQty: number;
-}
+import { EmptyState, LoadingState, PageHeader, WorkspacePage } from "@/components/ui/layout";
+import { ProductReorderModal, ReorderSuccessToast, useProductReorder } from "@/components/procurement/reorder-workflow";
+import { KpiCard as HeadlineCard, WorkbenchLink as QuickAction, WorkbenchPanel as DashboardPanel } from "@/components/ui/workbench";
 
 /* ─── Format Helpers ─── */
 
@@ -86,103 +75,39 @@ interface ActionQueueItem {
 /* ─── Page Component ─── */
 
 export default function DashboardPage() {
-  const { token, locationId, apiLocationId, user } = useAuth();
+  const { token, locationId, user } = useAuth();
   const role = user?.role ?? "";
-  const router = useRouter();
-  const queryClient = useQueryClient();
   const { data, isLoading, isError } = useDashboard(token, locationId);
 
-  // ── Reorder state ──
-  const [reorderModal, setReorderModal] = useState<{ item: LowStockItem; data: PendingOrdersData } | null>(null);
-  const [reorderLoading, setReorderLoading] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const {
+    modal: reorderModal,
+    loadingProductId: reorderLoading,
+    successMessage,
+    reorder,
+    snooze: handleSnooze,
+    dismissModal,
+    createDraftPO,
+    viewExistingDraft,
+  } = useProductReorder({ token, locationId, invalidateKeys: [["dashboard"]] });
 
-  const handleReorder = useCallback(async (item: LowStockItem) => {
-    if (!token || !locationId) return;
-    setReorderLoading(item.productId);
-    try {
-      const pendingData = await apiFetch<PendingOrdersData>(`/products/${item.productId}/pending-orders`, { token, locationId });
-      const hasExisting = pendingData.draftPOs.length > 0 || pendingData.submittedPOs.length > 0 || pendingData.backorders.length > 0;
-      if (hasExisting) {
-        setReorderModal({ item, data: pendingData });
-      } else {
-        await addToDraftPO(item, pendingData.lastSupplier, pendingData.suggestedQty);
-      }
-    } catch {
-      // API error — user can retry via the button
-    } finally {
-      setReorderLoading(null);
-    }
-  }, [token, locationId]);
-
-  const addToDraftPO = useCallback(async (
-    item: LowStockItem,
-    lastSupplier: PendingOrdersData["lastSupplier"],
-    suggestedQty: number,
-  ) => {
-    if (!token || !locationId) return;
-    if (!lastSupplier) {
-      router.push(`/procurement/purchase-orders/new?productId=${item.productId}&qty=${suggestedQty}`);
-      return;
-    }
-
-    // Check for existing draft PO to same supplier
-    const drafts = await apiFetch<{ data: { id: string; poNo: string }[] }>(
-      `/procurement/purchase-orders?status=DRAFT&supplierId=${lastSupplier.supplierId}&limit=1`,
-      { token, locationId },
-    );
-
-    if (drafts.data && drafts.data.length > 0) {
-      const draft = drafts.data[0];
-      await apiFetch(`/procurement/purchase-orders/${draft.id}/lines`, {
-        token, locationId,
-        method: "POST",
-        body: JSON.stringify({ productId: item.productId, orderedQty: suggestedQty, unitCost: lastSupplier.lastCost }),
-      });
-      setReorderModal(null);
-      setSuccessMsg(`Added ${suggestedQty} units to ${draft.poNo}`);
-      setTimeout(() => setSuccessMsg(null), 4000);
-      router.push(`/procurement/purchase-orders/${draft.poNo}`);
-    } else {
-      // Navigate to new PO page with supplier + cost pre-filled for user review
-      setReorderModal(null);
-      const params = new URLSearchParams({
-        productId: item.productId,
-        qty: String(suggestedQty),
-        supplierId: lastSupplier.supplierId,
-        unitCost: lastSupplier.lastCost,
-      });
-      router.push(`/procurement/purchase-orders/new?${params.toString()}`);
-    }
-  }, [token, locationId, apiLocationId, router]);
-
-  const handleSnooze = useCallback(async (productId: string, days: number) => {
-    if (!token || !locationId) return;
-    await apiFetch(`/products/${productId}/snooze-reorder`, {
-      token, locationId,
-      method: "POST",
-      body: JSON.stringify({ days }),
-    });
-    setReorderModal(null);
-    setSuccessMsg(`Snoozed for ${days} days`);
-    setTimeout(() => setSuccessMsg(null), 4000);
-    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-  }, [token, locationId, queryClient]);
+  const handleReorder = useCallback((item: LowStockItem) => {
+    void reorder({ productId: item.productId, productName: item.productName });
+  }, [reorder]);
 
   if (isLoading || !data) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <Loader2 size={20} className="animate-spin text-muted-foreground" />
-        <span className="ml-2 text-[13px] text-muted-foreground">Loading dashboard...</span>
-      </div>
-    );
+    return <LoadingState label="Loading dashboard..." />;
   }
 
   if (isError) {
     return (
-      <div className="flex items-center justify-center py-32">
-        <span className="text-[13px] text-destructive">Failed to load dashboard data.</span>
-      </div>
+      <WorkspacePage className="max-w-[1400px]">
+        <EmptyState
+          icon={AlertTriangle}
+          label="Dashboard Offline"
+          title="Failed to load dashboard data"
+          description="The ERP overview could not fetch its live inventory and operations signals. Please retry in a moment."
+        />
+      </WorkspacePage>
     );
   }
 
@@ -252,26 +177,20 @@ export default function DashboardPage() {
   const groupedActivity = groupActivity(recentActivity);
 
   return (
-    <div className="mx-auto max-w-[1400px]">
-      {/* ── Page Header ── */}
-      <div className="mb-5">
-        <h1 className="text-[18px] font-semibold text-foreground">Dashboard</h1>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-muted-foreground">
-          <MapPin size={12} />
-          <span>{scope.locationName}</span>
-          <span className="text-border">&middot;</span>
-          <span>Real-time overview</span>
-        </div>
-      </div>
+    <WorkspacePage className="max-w-[1400px]">
+      <PageHeader
+        icon={LayoutDashboard}
+        eyebrow="ERP Command Center"
+        title="Dashboard"
+        description={`${scope.locationName} · Real-time inventory, procurement, service, and transfer signals.`}
+      />
 
       {/* ── Section 1: Action Queue ── */}
-      <div className="mb-5 rounded-xl border border-border bg-background">
-        <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3">
-          <AlertTriangle size={14} className="text-amber-600" />
-          <span className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Needs Your Attention
-          </span>
-        </div>
+      <DashboardPanel
+        icon={AlertTriangle}
+        eyebrow="Action Queue"
+        title="Needs Your Attention"
+      >
         <div className="divide-y divide-border/40">
           {visibleActions.length === 0 ? (
             <div className="flex items-center gap-2 px-4 py-4 text-[13px] text-emerald-600">
@@ -286,7 +205,7 @@ export default function DashboardPage() {
                 <Link
                   key={item.description}
                   href={item.href}
-                  className="group flex items-center gap-3 px-4 py-1.5 transition-colors hover:bg-muted/40"
+                  className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/45"
                 >
                   <div
                     className={cn(
@@ -320,10 +239,10 @@ export default function DashboardPage() {
             })
           )}
         </div>
-      </div>
+      </DashboardPanel>
 
       {/* ── Section 2: Headline KPI Strip ── */}
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {/* Total SKUs — all roles */}
         <HeadlineCard
           icon={Package}
@@ -367,28 +286,25 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Section 3: Low Stock Table ── */}
-      <div className="mb-5 rounded-xl border border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-          <div>
-            <div className="text-[13px] font-semibold text-foreground">Low Stock Items</div>
-            <div className="text-[11px] text-muted-foreground">
-              {lowStockItems.length} items at or below reorder point
-            </div>
-          </div>
+      <DashboardPanel
+        title="Low Stock Items"
+        description={`${lowStockItems.length} items at or below reorder point`}
+        action={
           <Link
             href="/procurement/stock-levels?belowReorder=true"
-            className="text-[12px] font-medium text-foreground transition-colors hover:text-foreground/80"
+            className="text-[12px] font-semibold text-foreground transition-colors hover:text-foreground/75"
           >
             View all &rarr;
           </Link>
-        </div>
-        <div className="px-4 py-3">
+        }
+      >
+        <div className="overflow-x-auto px-4 py-3">
           {lowStockItems.length === 0 ? (
             <div className="py-6 text-center text-[12px] text-muted-foreground">
               No low stock items at this location.
             </div>
           ) : (
-            <table className="w-full text-[12px]">
+            <table className="w-full min-w-[820px] text-[12px]">
               <thead>
                 <tr className="border-b border-border/60 text-[11px] font-medium text-muted-foreground">
                   <th scope="col" className="pb-2 pr-2 text-left">Urgency</th>
@@ -415,49 +331,43 @@ export default function DashboardPage() {
             </table>
           )}
         </div>
-      </div>
+      </DashboardPanel>
 
       {/* Success toast */}
-      {successMsg && (
-        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-1.5 text-[13px] font-medium text-emerald-800 shadow-lg animate-in slide-in-from-bottom-2">
-          <CheckCircle2 size={15} />
-          {successMsg}
-        </div>
-      )}
+      <ReorderSuccessToast message={successMessage} />
 
       {/* Reorder modal */}
       {reorderModal && (
-        <ReorderModal
+        <ProductReorderModal
           item={reorderModal.item}
           data={reorderModal.data}
-          onDismiss={() => setReorderModal(null)}
-          onAddToExisting={(po) => { setReorderModal(null); router.push(`/procurement/purchase-orders/${po.poNumber}`); }}
-          onCreateNew={() => addToDraftPO(reorderModal.item, reorderModal.data.lastSupplier, reorderModal.data.suggestedQty)}
+          onDismiss={dismissModal}
+          onAddToExisting={(po) => viewExistingDraft(po.poNumber)}
+          onCreateNew={() => createDraftPO(reorderModal.item, reorderModal.data.lastSupplier, reorderModal.data.suggestedQty)}
           onSnooze={(days) => handleSnooze(reorderModal.item.productId, days)}
         />
       )}
 
       {/* ── Section 4: Activity Feed ── */}
-      <div className="mb-5 rounded-xl border border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-          <div>
-            <div className="text-[13px] font-semibold text-foreground">Recent Activity</div>
-            <div className="text-[11px] text-muted-foreground">Latest stock movements</div>
-          </div>
+      <DashboardPanel
+        title="Recent Activity"
+        description="Latest stock movements"
+        action={
           <Link
             href="/procurement/inventory-history"
-            className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            className="text-[12px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
           >
             Full history &rarr;
           </Link>
-        </div>
-        <div className="px-4 py-3">
+        }
+      >
+        <div className="overflow-x-auto px-4 py-3">
           {recentActivity.length === 0 ? (
             <div className="py-6 text-center text-[12px] text-muted-foreground">
               No recent activity at this location.
             </div>
           ) : (
-            <table className="w-full text-[12px]">
+            <table className="w-full min-w-[720px] text-[12px]">
               <thead>
                 <tr className="border-b border-border/60 text-[11px] font-medium text-muted-foreground">
                   <th scope="col" className="pb-2 pr-2 text-left">Time</th>
@@ -476,12 +386,11 @@ export default function DashboardPage() {
             </table>
           )}
         </div>
-      </div>
+      </DashboardPanel>
 
       {/* ── Section 5: Quick Actions ── */}
-      <div>
-        <div className="mb-2 text-[12px] font-medium text-muted-foreground">Quick Actions</div>
-        <div className="flex flex-wrap gap-2">
+      <DashboardPanel title="Quick Actions" description="Fast paths into common ERP workflows">
+        <div className="flex flex-wrap gap-2 px-4 py-3">
           {/* All roles: basic inventory */}
           <QuickAction icon={History} label="Inventory History" href="/procurement/inventory-history" />
 
@@ -504,51 +413,8 @@ export default function DashboardPage() {
             <QuickAction icon={Package} label="Sales Receipts" href="/sales/receipts" />
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Headline KPI Card ─── */
-
-function HeadlineCard({
-  icon: Icon,
-  iconColor,
-  label,
-  value,
-  subtitle,
-  alert = false,
-}: {
-  icon: LucideIcon;
-  iconColor: string;
-  label: string;
-  value: string;
-  subtitle: string;
-  alert?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-xl border bg-background px-4 py-3",
-        alert ? "border-amber-300" : "border-border",
-      )}
-    >
-      <div className="mb-2 flex items-center gap-2">
-        <div
-          className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-full",
-            iconColor,
-          )}
-        >
-          <Icon size={14} strokeWidth={1.75} />
-        </div>
-        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
-      </div>
-      <div className="text-[20px] font-semibold tabular-nums leading-tight text-foreground">
-        {value}
-      </div>
-      <div className="mt-0.5 text-[11px] text-muted-foreground">{subtitle}</div>
-    </div>
+      </DashboardPanel>
+    </WorkspacePage>
   );
 }
 
@@ -646,122 +512,6 @@ function LowStockRow({ item, onReorder, onSnooze, loading }: { item: LowStockIte
   );
 }
 
-/* ─── Reorder Modal ─── */
-
-function ReorderModal({
-  item,
-  data,
-  onDismiss,
-  onAddToExisting,
-  onCreateNew,
-  onSnooze,
-}: {
-  item: LowStockItem;
-  data: PendingOrdersData;
-  onDismiss: () => void;
-  onAddToExisting: (po: PendingOrdersData["draftPOs"][0]) => void;
-  onCreateNew: () => void;
-  onSnooze: (days: number) => void;
-}) {
-  const [showSnooze, setShowSnooze] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-
-  const handleAction = async (fn: () => Promise<void> | void) => {
-    setActionLoading(true);
-    try { await fn(); } catch { /* parent handles */ }
-    setActionLoading(false);
-  };
-
-  return (
-    <ModalShell title={`Reorder: ${item.productName}`} onClose={onDismiss} wide>
-      {/* Existing orders warning */}
-      <div className="space-y-2 mb-4">
-        <p className="text-[12px] font-medium text-amber-600 flex items-center gap-1.5">
-          <AlertTriangle size={13} />
-          This item has pending orders:
-        </p>
-
-        {data.draftPOs.map((po) => (
-          <div key={po.poId} className="flex justify-between text-[12px] bg-muted/50 p-2 rounded">
-            <span>{po.poNumber} <span className="text-muted-foreground">(Draft)</span> — {po.quantity} units</span>
-            <span className="text-muted-foreground">{po.supplierName}</span>
-          </div>
-        ))}
-
-        {data.submittedPOs.map((po) => (
-          <div key={po.poId} className="flex justify-between text-[12px] bg-blue-50 dark:bg-blue-950/20 p-2 rounded">
-            <span>{po.poNumber} <span className="text-muted-foreground">({po.status})</span> — {po.quantityRemaining} remaining</span>
-            <span className="text-muted-foreground">{po.supplierName}</span>
-          </div>
-        ))}
-
-        {data.backorders.map((bo) => (
-          <div key={bo.backorderId} className="flex justify-between text-[12px] bg-orange-50 dark:bg-orange-950/20 p-2 rounded">
-            <span>Backorder{bo.sourcePoNumber ? ` from ${bo.sourcePoNumber}` : ""} — {bo.quantityOutstanding} pending</span>
-            <span className="text-muted-foreground">{bo.supplierName}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Suggested qty */}
-      <div className="text-[12px] text-muted-foreground mb-5">
-        Suggested reorder qty: <strong className="text-foreground">{data.suggestedQty}</strong>
-        <span className="ml-1">(reorder point - current stock)</span>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2 justify-end flex-wrap">
-        <button
-          onClick={onDismiss}
-          className="px-3 py-1.5 border border-border rounded-md text-[12px] font-medium hover:bg-muted transition-colors"
-        >
-          Dismiss
-        </button>
-
-        {/* Snooze dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => setShowSnooze(!showSnooze)}
-            className="flex items-center gap-1 px-3 py-1.5 border border-border rounded-md text-[12px] font-medium hover:bg-muted transition-colors"
-          >
-            Snooze <ChevronDown size={12} />
-          </button>
-          {showSnooze && (
-            <div className="absolute bottom-full mb-1 right-0 bg-background border border-border rounded-md shadow-lg z-10 min-w-[100px]">
-              {[7, 14, 30, 90].map((days) => (
-                <button
-                  key={days}
-                  onClick={() => { setShowSnooze(false); onSnooze(days); }}
-                  className="block w-full px-3 py-1.5 text-[12px] text-left hover:bg-muted transition-colors first:rounded-t-md last:rounded-b-md"
-                >
-                  {days} days
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {data.draftPOs.length > 0 && (
-          <button
-            onClick={() => onAddToExisting(data.draftPOs[0])}
-            className="px-3 py-1.5 bg-blue-600 text-white rounded-md text-[12px] font-medium hover:bg-blue-700 transition-colors"
-          >
-            View {data.draftPOs[0].poNumber}
-          </button>
-        )}
-
-        <button
-          onClick={() => handleAction(onCreateNew)}
-          disabled={actionLoading}
-          className="px-3 py-1.5 bg-emerald-600 text-white rounded-md text-[12px] font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50"
-        >
-          Create New PO
-        </button>
-      </div>
-    </ModalShell>
-  );
-}
-
 /* ─── Activity Row (Grouped) ─── */
 
 function ActivityRow({ entry }: { entry: GroupedActivity }) {
@@ -818,27 +568,5 @@ function ActivityRow({ entry }: { entry: GroupedActivity }) {
         {entry.actorName ?? "System"}
       </td>
     </tr>
-  );
-}
-
-/* ─── Quick Action ─── */
-
-function QuickAction({
-  icon: Icon,
-  label,
-  href,
-}: {
-  icon: LucideIcon;
-  label: string;
-  href: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.04)] transition-all hover:bg-muted hover:shadow-sm"
-    >
-      <Icon size={13} strokeWidth={1.75} className="text-muted-foreground" />
-      {label}
-    </Link>
   );
 }
