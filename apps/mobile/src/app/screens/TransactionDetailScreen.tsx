@@ -8,35 +8,100 @@ import {
   ActivityIndicator,
   Alert,
   SafeAreaView,
-  Modal,
 } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { useSaleDetailQuery } from '@/hooks/use-transactions';
 import { usePrinter } from '@/hardware/printer/context';
 import { useAuth } from '@/hooks/use-auth';
 import { RefundFlow } from '@/components/RefundFlow';
-import { apiFetch } from '@/services/api-client';
+import { VoidSaleSheet } from '@/components/VoidSaleSheet';
+import { ReceiptPreviewModal } from '@/components/ReceiptPreviewModal';
+import { verifyRefundAuthorizationCredential } from '@/utils/refund-authorization';
+import { printReceiptSafely } from '@/hardware/printer/settings';
 import { useLayout } from '@/hooks/use-layout';
+import { usePosPermission } from '@/hooks/use-pos-permission';
+import { buildSaleReceiptData, formatPaymentMethod } from '@/utils/receipt-data';
+import { formatApiDateTime } from '@/utils/datetime';
 import { colors, textStyles, spacing, layout, radius } from '@/theme';
 import { Card, Badge, Divider, Button } from '@/components/ui';
-import type { ReceiptData } from '@/hardware/printer/types';
 import type { TransactionsStackParamList } from '@/app/MainTabs';
 
 type Route = RouteProp<TransactionsStackParamList, 'TransactionDetail'>;
 
 function fmtPHP(amount: string | number): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return `₱${num.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `\u20B1${num.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function getEffectiveUnitPrice(line: { unitPrice: string; overridePrice?: string | null }): string {
+  return line.overridePrice || line.unitPrice;
+}
+
+function getLineAdjustmentLabel(line: { unitPrice: string; overridePrice?: string | null; discountAmount?: string | null }): string {
+  const parts: string[] = [];
+  if (line.overridePrice) {
+    parts.push(`Override from ${fmtPHP(line.unitPrice)}`);
+  }
+  const discountAmount = parseFloat(line.discountAmount || '0');
+  if (discountAmount > 0) {
+    parts.push(`Discount -${fmtPHP(discountAmount)}`);
+  }
+  return parts.join(' / ');
 }
 
 function getBadgeVariant(status: string): 'success' | 'warning' | 'danger' {
   if (status === 'REFUNDED' || status === 'VOIDED') return 'danger';
-  if (status === 'PARTIALLY_REFUNDED') return 'warning';
+  if (status === 'PARTIALLY_REFUNDED' || status === 'QUOTE' || status === 'OPEN' || status === 'PARKED') return 'warning';
   return 'success';
 }
 
 function formatStatus(status: string): string {
   return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\bRefunded\b/, 'Refunded');
+}
+
+function canVoidStatus(status: string): boolean {
+  return status === 'QUOTE' || status === 'OPEN' || status === 'PARKED';
+}
+
+function fmtDateTime(dateStr: string | null): string {
+  return formatApiDateTime(dateStr, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function parseAmount(amount: string | number | null | undefined): number {
+  if (typeof amount === 'number') return amount;
+  const parsed = parseFloat(amount || '0');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sumPayments(payments: Array<{ amount: string }>): number {
+  return payments.reduce((total, payment) => total + parseAmount(payment.amount), 0);
+}
+
+function sumLineUnits(lines: Array<{ quantity: number }>): number {
+  return lines.reduce((total, line) => total + line.quantity, 0);
+}
+
+function getPaymentHealth(paidTotal: number, grandTotal: number, paymentCount: number): {
+  label: string;
+  detail: string;
+  tone: 'success' | 'warning' | 'danger';
+} {
+  if (paymentCount === 0) {
+    return { label: 'No payment', detail: 'Review before closing', tone: 'warning' };
+  }
+  if (paidTotal + 0.005 < grandTotal) {
+    return { label: 'Short paid', detail: `${fmtPHP(grandTotal - paidTotal)} remaining`, tone: 'danger' };
+  }
+  if (paidTotal - grandTotal > 0.005) {
+    return { label: 'Over paid', detail: `${fmtPHP(paidTotal - grandTotal)} change/overage`, tone: 'warning' };
+  }
+  return { label: 'Paid', detail: `${paymentCount} tender${paymentCount === 1 ? '' : 's'}`, tone: 'success' };
 }
 
 export default function TransactionDetailScreen() {
@@ -47,35 +112,40 @@ export default function TransactionDetailScreen() {
   const { data: sale, isLoading, refetch } = useSaleDetailQuery(saleId);
   const printer = usePrinter();
   const { user } = useAuth();
+  const { can } = usePosPermission();
 
   const [refundVisible, setRefundVisible] = useState(false);
+  const [voidVisible, setVoidVisible] = useState(false);
   const [reprinting, setReprinting] = useState(false);
   const [receiptModalVisible, setReceiptModalVisible] = useState(false);
 
   const styles = createStyles();
 
-  const verifyPin = useCallback(async (pin: string): Promise<boolean> => {
-    try {
-      const res = await apiFetch<{ valid: boolean }>('/auth/verify-pin', {
-        method: 'POST',
-        body: JSON.stringify({ pin }),
-      });
-      return res.valid;
-    } catch {
-      return false;
-    }
-  }, []);
+  const verifyAuthorization = useCallback(verifyRefundAuthorizationCredential, []);
 
   const handleRefundPress = useCallback(() => {
+    if (!can('processSale')) {
+      Alert.alert('Permission Required', 'You do not have permission to process refunds.');
+      return;
+    }
     setRefundVisible(true);
-  }, []);
+  }, [can]);
 
   const handleRefunded = useCallback(() => {
     refetch();
   }, [refetch]);
 
+  const handleVoided = useCallback(() => {
+    refetch();
+  }, [refetch]);
+
   const handleReprint = useCallback(async () => {
-    if (!sale) return;
+    if (!sale || reprinting) return;
+    const ownsSale = sale.createdByUserId === user?.id || sale.completedByUserId === user?.id;
+    if (!can('reprintAnyReceipt') && !(ownsSale && can('reprintOwnReceipt'))) {
+      Alert.alert('Permission Required', 'You do not have permission to reprint this receipt.');
+      return;
+    }
 
     // Check printer connection first
     if (!printer.isConnected) {
@@ -92,45 +162,32 @@ export default function TransactionDetailScreen() {
 
     setReprinting(true);
     try {
-      const receiptData: ReceiptData = {
-        header: {
-          storeName: sale.location?.name || 'CBROS GENUINE AUTOPARTS',
-          address: sale.location?.address || undefined,
-        },
-        transaction: {
-          receiptNumber: sale.saleNo,
-          date: sale.completedAt ? new Date(sale.completedAt).toLocaleString() : new Date(sale.createdAt).toLocaleString(),
-          cashier: user?.fullName || 'Cashier',
-          lines: sale.lines.map(l => ({
-            name: l.productName,
-            qty: l.quantity,
-            unitPrice: parseFloat(l.unitPrice),
-            total: parseFloat(l.lineTotal),
-          })),
-          subtotal: parseFloat(sale.subtotal),
-          discount: parseFloat(sale.discountTotal),
-          grandTotal: parseFloat(sale.grandTotal),
-          paymentMethod: sale.payments[0]?.method === 'ACCOUNT' ? 'CHARGE' : (sale.payments[0]?.method || 'CASH'),
-          payments: sale.payments.map(p => ({
-            method: p.method === 'ACCOUNT' ? 'CHARGE' : p.method,
-            amount: parseFloat(p.amount),
-            reference: p.reference || undefined,
-            installmentTerm: p.notes?.includes('Installment:') ? p.notes.replace('Installment: ', '').replace(' ', '_').toUpperCase() : undefined,
-          })),
-        },
-        footer: { message: '** REPRINT **' },
-      };
+      const receiptData = buildSaleReceiptData(sale, user?.fullName || 'Cashier');
 
-      const result = await printer.printReceipt(receiptData);
+      const result = await printReceiptSafely(printer, receiptData);
       if (!result.success) {
-        Alert.alert('Print Failed', result.error || 'Could not print receipt. Check printer connection.');
+        Alert.alert(
+          'Print Failed',
+          result.error || 'Could not print receipt. Check printer connection.',
+          [
+            { text: 'View on Screen', onPress: () => setReceiptModalVisible(true) },
+            { text: 'OK', style: 'cancel' },
+          ],
+        );
       }
     } catch (err: any) {
-      Alert.alert('Print Error', err.message || 'Could not print receipt.');
+      Alert.alert(
+        'Print Error',
+        err.message || 'Could not print receipt.',
+        [
+          { text: 'View on Screen', onPress: () => setReceiptModalVisible(true) },
+          { text: 'OK', style: 'cancel' },
+        ],
+      );
     } finally {
       setReprinting(false);
     }
-  }, [sale, printer, user]);
+  }, [sale, reprinting, printer, user, can]);
 
   if (isLoading || !sale) {
     return (
@@ -142,6 +199,13 @@ export default function TransactionDetailScreen() {
     );
   }
 
+  const paidTotal = sumPayments(sale.payments);
+  const grandTotal = parseAmount(sale.grandTotal);
+  const unitCount = sumLineUnits(sale.lines);
+  const paymentHealth = getPaymentHealth(paidTotal, grandTotal, sale.payments.length);
+  const canRefundSale = can('processSale') && (sale.status === 'COMPLETED' || sale.status === 'PARTIALLY_REFUNDED');
+  const canVoidSale = can('processSale') && canVoidStatus(sale.status);
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
@@ -151,17 +215,31 @@ export default function TransactionDetailScreen() {
           android_ripple={{ color: colors.accent.glow, borderless: true }}
           hitSlop={12}
         >
-          <Text style={styles.backText}>← Back</Text>
+          <Text style={styles.backText}>Back</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>{sale.saleNo}</Text>
-        <Button
-          title={reprinting ? "Printing…" : "Reprint"}
-          variant="secondary"
-          onPress={handleReprint}
-          disabled={reprinting}
-          style={styles.reprintButton}
-          textStyle={styles.reprintButtonText}
-        />
+        <View style={styles.headerTitleBlock}>
+          <Text style={styles.headerTitle}>{sale.receiptNumber || sale.saleNo}</Text>
+          {sale.receiptNumber ? (
+            <Text style={styles.headerSubtitle}>{sale.saleNo}</Text>
+          ) : null}
+        </View>
+        <View style={styles.headerActions}>
+          <Button
+            title="Receipt"
+            variant="secondary"
+            onPress={() => setReceiptModalVisible(true)}
+            style={styles.headerButton}
+            textStyle={styles.headerButtonText}
+          />
+          <Button
+            title={reprinting ? 'Printing...' : 'Reprint'}
+            variant="secondary"
+            onPress={handleReprint}
+            disabled={reprinting}
+            style={styles.headerButton}
+            textStyle={styles.headerButtonText}
+          />
+        </View>
       </View>
 
       <ScrollView style={styles.body} contentContainerStyle={[
@@ -173,9 +251,54 @@ export default function TransactionDetailScreen() {
         <View style={styles.statusRow}>
           <Badge label={formatStatus(sale.status)} variant={getBadgeVariant(sale.status)} />
           <Text style={styles.dateText}>
-            {sale.completedAt ? new Date(sale.completedAt).toLocaleString() : new Date(sale.createdAt).toLocaleString()}
+            {fmtDateTime(sale.completedAt ?? sale.createdAt)}
           </Text>
         </View>
+
+        <Card style={styles.auditCard}>
+          <View style={styles.auditHeader}>
+            <Text style={styles.sectionLabel}>Sale audit</Text>
+            <Text style={styles.auditReceipt}>{sale.receiptNumber || 'No receipt # yet'}</Text>
+          </View>
+          <View style={styles.auditGrid}>
+            <View style={styles.auditTile}>
+              <Text style={styles.auditLabel}>Payment</Text>
+              <Text
+                style={[
+                  styles.auditValue,
+                  paymentHealth.tone === 'success' && styles.auditValueSuccess,
+                  paymentHealth.tone === 'warning' && styles.auditValueWarning,
+                  paymentHealth.tone === 'danger' && styles.auditValueDanger,
+                ]}
+                numberOfLines={1}
+              >
+                {paymentHealth.label}
+              </Text>
+              <Text style={styles.auditDetail} numberOfLines={1}>{paymentHealth.detail}</Text>
+            </View>
+            <View style={styles.auditTile}>
+              <Text style={styles.auditLabel}>Items</Text>
+              <Text style={styles.auditValue}>{unitCount}</Text>
+              <Text style={styles.auditDetail} numberOfLines={1}>
+                {sale.lines.length} line{sale.lines.length === 1 ? '' : 's'}
+              </Text>
+            </View>
+            <View style={styles.auditTile}>
+              <Text style={styles.auditLabel}>Paid</Text>
+              <Text style={styles.auditValue} numberOfLines={1}>{fmtPHP(paidTotal)}</Text>
+              <Text style={styles.auditDetail} numberOfLines={1}>Total {fmtPHP(grandTotal)}</Text>
+            </View>
+            <View style={styles.auditTile}>
+              <Text style={styles.auditLabel}>Action</Text>
+              <Text style={styles.auditValue} numberOfLines={1}>
+                {canRefundSale ? 'Refundable' : canVoidSale ? 'Voidable' : 'Locked'}
+              </Text>
+              <Text style={styles.auditDetail} numberOfLines={1}>
+                {canRefundSale || canVoidSale ? 'Manager control ready' : 'No sale action available'}
+              </Text>
+            </View>
+          </View>
+        </Card>
 
         {/* Customer */}
         {sale.customer && (
@@ -187,7 +310,7 @@ export default function TransactionDetailScreen() {
             )}
             {sale.vehicle && (
               <Text style={styles.customerDetail}>
-                {sale.vehicle.make} {sale.vehicle.model} {sale.vehicle.plateNo ? `· ${sale.vehicle.plateNo}` : ''}
+                {sale.vehicle.make} {sale.vehicle.model}{sale.vehicle.plateNo ? ` - ${sale.vehicle.plateNo}` : ''}
               </Text>
             )}
           </Card>
@@ -196,20 +319,33 @@ export default function TransactionDetailScreen() {
         {/* Line items */}
         <Card style={styles.sectionCard}>
           <Text style={styles.sectionLabel}>Items</Text>
-          {sale.lines.map((line, i) => (
-            <React.Fragment key={i}>
-              {i > 0 && <Divider style={styles.itemDivider} />}
-              <View style={styles.lineRow}>
-                <View style={styles.lineInfo}>
-                  <Text style={styles.lineName}>{line.productName}</Text>
-                  <Text style={styles.lineMeta}>
-                    {line.quantity} x {fmtPHP(line.unitPrice)}
-                  </Text>
+          {sale.lines.map((line, i) => {
+            const adjustment = getLineAdjustmentLabel(line);
+            const refundedQuantity = line.refundedQuantity ?? 0;
+            const refundableQuantity = Math.max(0, line.quantity - refundedQuantity);
+            return (
+              <React.Fragment key={i}>
+                {i > 0 && <Divider style={styles.itemDivider} />}
+                <View style={styles.lineRow}>
+                  <View style={styles.lineInfo}>
+                    <Text style={styles.lineName}>{line.productName}</Text>
+                    <Text style={styles.lineMeta}>
+                      {line.quantity} x {fmtPHP(getEffectiveUnitPrice(line))}
+                    </Text>
+                    {adjustment ? (
+                      <Text style={styles.lineAdjustment}>{adjustment}</Text>
+                    ) : null}
+                    {refundedQuantity > 0 ? (
+                      <Text style={styles.lineRefundMeta}>
+                        Refunded {refundedQuantity}; {refundableQuantity} remaining
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.lineTotal}>{fmtPHP(line.lineTotal)}</Text>
                 </View>
-                <Text style={styles.lineTotal}>{fmtPHP(line.lineTotal)}</Text>
-              </View>
-            </React.Fragment>
-          ))}
+              </React.Fragment>
+            );
+          })}
         </Card>
 
         {/* Totals */}
@@ -237,16 +373,34 @@ export default function TransactionDetailScreen() {
         {/* Payments */}
         <Card style={styles.sectionCard}>
           <Text style={styles.sectionLabel}>Payment</Text>
+          <View style={styles.paymentSummary}>
+            <Text style={styles.paymentSummaryLabel}>Captured</Text>
+            <Text
+              style={[
+                styles.paymentSummaryValue,
+                paymentHealth.tone === 'danger' && styles.auditValueDanger,
+                paymentHealth.tone === 'warning' && styles.auditValueWarning,
+              ]}
+            >
+              {fmtPHP(paidTotal)}
+            </Text>
+          </View>
+          {sale.payments.length === 0 && (
+            <Text style={styles.emptyPaymentText}>No payment recorded</Text>
+          )}
           {sale.payments.map((p, i) => (
             <View key={i} style={styles.paymentBlock}>
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentMethod}>
-                  {p.method === 'ACCOUNT' ? 'CHARGE' : p.method}
+                  {formatPaymentMethod(p.method)}
                 </Text>
                 <Text style={styles.paymentAmount}>{fmtPHP(p.amount)}</Text>
               </View>
               {p.reference ? (
                 <Text style={styles.paymentRef}>Ref: {p.reference}</Text>
+              ) : null}
+              {p.method === 'ACCOUNT' && sale.customer ? (
+                <Text style={styles.paymentRef}>Account: {sale.customer.name}</Text>
               ) : null}
               {p.notes ? (
                 <Text style={styles.paymentRef}>{p.notes}</Text>
@@ -255,13 +409,22 @@ export default function TransactionDetailScreen() {
           ))}
         </Card>
 
-        {/* Refund button — for completed or partially refunded sales */}
-        {(sale.status === 'COMPLETED' || sale.status === 'PARTIALLY_REFUNDED') && (
+        {/* Refund button for completed or partially refunded sales */}
+        {canRefundSale && (
           <Button
             title={sale.status === 'PARTIALLY_REFUNDED' ? 'Refund Remaining Items' : 'Refund'}
             variant="danger"
             fullWidth
             onPress={handleRefundPress}
+            style={styles.refundButton}
+          />
+        )}
+        {canVoidSale && (
+          <Button
+            title="Void Sale"
+            variant="danger"
+            fullWidth
+            onPress={() => setVoidVisible(true)}
             style={styles.refundButton}
           />
         )}
@@ -283,50 +446,27 @@ export default function TransactionDetailScreen() {
             lineTotal: parseFloat(l.lineTotal),
           }))}
           onRefunded={handleRefunded}
-          verifyPin={verifyPin}
+          verifyAuthorization={verifyAuthorization}
         />
       )}
 
-      {/* On-screen receipt modal */}
-      <Modal visible={receiptModalVisible} animationType="slide" transparent onRequestClose={() => setReceiptModalVisible(false)}>
-        <View style={receiptStyles.overlay}>
-          <View style={receiptStyles.container}>
-            <ScrollView style={receiptStyles.scroll} contentContainerStyle={receiptStyles.content}>
-              <Text style={receiptStyles.header}>{sale.location?.name || 'CBROS GENUINE AUTOPARTS'}</Text>
-              {sale.location?.address && <Text style={receiptStyles.subheader}>{sale.location.address}</Text>}
-              <Text style={receiptStyles.divider}>{'═'.repeat(32)}</Text>
-              <Text style={receiptStyles.line}>Receipt #: {sale.saleNo}</Text>
-              <Text style={receiptStyles.line}>Date: {sale.completedAt ? new Date(sale.completedAt).toLocaleString() : new Date(sale.createdAt).toLocaleString()}</Text>
-              <Text style={receiptStyles.line}>Cashier: {user?.fullName || 'Cashier'}</Text>
-              {sale.customer?.name && <Text style={receiptStyles.line}>Customer: {sale.customer.name}</Text>}
-              <Text style={receiptStyles.divider}>{'─'.repeat(32)}</Text>
-              {sale.lines.map((l, i) => (
-                <View key={i} style={receiptStyles.itemRow}>
-                  <Text style={receiptStyles.itemName} numberOfLines={2}>{l.productName}</Text>
-                  <Text style={receiptStyles.itemDetail}>  {l.quantity} x {fmtPHP(l.unitPrice)}    {fmtPHP(l.lineTotal)}</Text>
-                </View>
-              ))}
-              <Text style={receiptStyles.divider}>{'─'.repeat(32)}</Text>
-              {parseFloat(sale.discountTotal) > 0 && (
-                <>
-                  <Text style={receiptStyles.totalLine}>Subtotal:         {fmtPHP(sale.subtotal)}</Text>
-                  <Text style={receiptStyles.totalLine}>Discount:        -{fmtPHP(sale.discountTotal)}</Text>
-                </>
-              )}
-              <Text style={receiptStyles.grandTotal}>TOTAL:            {fmtPHP(sale.grandTotal)}</Text>
-              <Text style={receiptStyles.divider}>{'─'.repeat(32)}</Text>
-              {sale.payments.map((p, i) => (
-                <Text key={i} style={receiptStyles.line}>{p.method}: {fmtPHP(p.amount)}{p.reference ? ` (${p.reference})` : ''}</Text>
-              ))}
-              <Text style={receiptStyles.divider}>{'═'.repeat(32)}</Text>
-              <Text style={receiptStyles.reprint}>** REPRINT **</Text>
-            </ScrollView>
-            <Pressable style={receiptStyles.closeBtn} onPress={() => setReceiptModalVisible(false)}>
-              <Text style={receiptStyles.closeBtnText}>Close</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
+      <VoidSaleSheet
+        visible={voidVisible}
+        saleId={sale.id}
+        saleNo={sale.saleNo}
+        onClose={() => setVoidVisible(false)}
+        onVoided={handleVoided}
+      />
+
+      <ReceiptPreviewModal
+        visible={receiptModalVisible}
+        sale={sale}
+        cashierName={user?.fullName || 'Cashier'}
+        onClose={() => setReceiptModalVisible(false)}
+        onPrint={handleReprint}
+        printing={reprinting}
+        printLabel="Reprint"
+      />
     </SafeAreaView>
   );
 }
@@ -356,15 +496,31 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.bodyMedium,
     color: colors.text.primary,
   },
+  headerTitleBlock: {
+    flex: 1,
+    alignItems: 'center',
+    minWidth: 0,
+  },
   headerTitle: {
     ...textStyles.monoMd,
     color: colors.text.primary,
   },
-  reprintButton: {
-    minHeight: 36,
-    paddingHorizontal: spacing.md,
+  headerSubtitle: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
   },
-  reprintButtonText: {
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  headerButton: {
+    minHeight: 36,
+    minWidth: 82,
+    paddingHorizontal: spacing.sm,
+  },
+  headerButtonText: {
     ...textStyles.caption,
   },
   body: {
@@ -388,6 +544,57 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.captionSmall,
     color: colors.text.muted,
   },
+  auditCard: {
+    marginBottom: spacing.sm,
+  },
+  auditHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  auditReceipt: {
+    ...textStyles.captionSmall,
+    color: colors.text.secondary,
+  },
+  auditGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  auditTile: {
+    width: '48%',
+    minHeight: 72,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+  },
+  auditLabel: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  auditValue: {
+    ...textStyles.bodyMedium,
+    color: colors.text.primary,
+    marginTop: spacing.xs,
+  },
+  auditValueSuccess: {
+    color: colors.status.successText,
+  },
+  auditValueWarning: {
+    color: colors.status.warningText,
+  },
+  auditValueDanger: {
+    color: colors.status.dangerText,
+  },
+  auditDetail: {
+    ...textStyles.captionSmall,
+    color: colors.text.secondary,
+    marginTop: 2,
+  },
   sectionCard: {
     marginBottom: spacing.sm,
   },
@@ -395,7 +602,7 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.captionSmall,
     color: colors.text.muted,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     marginBottom: spacing.sm,
   },
   customerName: {
@@ -425,6 +632,16 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.caption,
     color: colors.text.secondary,
     marginTop: spacing.xs,
+  },
+  lineAdjustment: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
+  },
+  lineRefundMeta: {
+    ...textStyles.captionSmall,
+    color: colors.status.warningText,
+    marginTop: 2,
   },
   lineTotal: {
     ...textStyles.monoMd,
@@ -477,99 +694,29 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.muted,
     marginTop: 2,
   },
+  emptyPaymentText: {
+    ...textStyles.body,
+    color: colors.text.muted,
+  },
+  paymentSummary: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border.subtle,
+  },
+  paymentSummaryLabel: {
+    ...textStyles.body,
+    color: colors.text.secondary,
+  },
+  paymentSummaryValue: {
+    ...textStyles.monoMd,
+    color: colors.text.primary,
+  },
   refundButton: {
     marginTop: spacing.md,
     marginBottom: spacing.lg,
-  },
-});
-
-const receiptStyles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  container: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    width: '100%',
-    maxWidth: 340,
-    maxHeight: '80%',
-  },
-  scroll: { padding: 20 },
-  content: { paddingBottom: 8 },
-  header: {
-    fontFamily: 'monospace',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-    color: '#000',
-  },
-  subheader: {
-    fontFamily: 'monospace',
-    fontSize: 10,
-    textAlign: 'center',
-    color: '#444',
-    marginTop: 2,
-  },
-  divider: {
-    fontFamily: 'monospace',
-    fontSize: 10,
-    color: '#999',
-    textAlign: 'center',
-    marginVertical: 6,
-  },
-  line: {
-    fontFamily: 'monospace',
-    fontSize: 11,
-    color: '#333',
-    marginVertical: 1,
-  },
-  itemRow: { marginVertical: 3 },
-  itemName: {
-    fontFamily: 'monospace',
-    fontSize: 11,
-    color: '#000',
-    fontWeight: '600',
-  },
-  itemDetail: {
-    fontFamily: 'monospace',
-    fontSize: 10,
-    color: '#555',
-    marginTop: 1,
-  },
-  totalLine: {
-    fontFamily: 'monospace',
-    fontSize: 11,
-    color: '#333',
-    marginVertical: 1,
-  },
-  grandTotal: {
-    fontFamily: 'monospace',
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#000',
-    marginVertical: 4,
-  },
-  reprint: {
-    fontFamily: 'monospace',
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
-    color: '#666',
-    marginTop: 4,
-  },
-  closeBtn: {
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  closeBtnText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#007AFF',
   },
 });

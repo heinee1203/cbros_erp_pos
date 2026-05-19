@@ -12,6 +12,8 @@ export function buildZReadingReceipt(
   paperWidth: '58mm' | '80mm' = '80mm',
 ): Uint8Array {
   const b = new ESCPOSBuilder(paperWidth);
+  const drawerEvents = data.accountability.drawerEvents ?? [];
+  const drawerSummary = summarizeDrawerEvents(drawerEvents);
 
   const title = mode === 'close'
     ? 'Z-READING / END OF DAY'
@@ -65,6 +67,12 @@ export function buildZReadingReceipt(
     .columns('Opening Float', fmtPHP(parseFloat(data.openingFloat)))
     .columns('Expected Cash', fmtPHP(parseFloat(data.cashReconciliation.expectedCash)));
 
+  if (drawerEvents.length > 0) {
+    b.columns('Paid In', fmtPHP(drawerSummary.paidInTotal))
+      .columns('Paid Out', `-${fmtPHP(drawerSummary.paidOutTotal)}`)
+      .columns('Drawer Net', formatSignedAmount(drawerSummary.netCash));
+  }
+
   if (data.cashReconciliation.actualCash !== null) {
     b.columns('Actual Cash', fmtPHP(parseFloat(data.cashReconciliation.actualCash)));
   }
@@ -111,6 +119,33 @@ export function buildZReadingReceipt(
     }
   }
 
+  b.newline()
+    .text(`Drawer Events (${drawerEvents.length})`);
+  if (drawerEvents.length === 0) {
+    b.text('  None');
+  } else {
+    b.columns('  Paid In', fmtPHP(drawerSummary.paidInTotal))
+      .columns('  Paid Out', fmtPHP(drawerSummary.paidOutTotal))
+      .columns('  Net', formatSignedAmount(drawerSummary.netCash));
+
+    const printableEvents = drawerEvents.slice(0, 12);
+    for (const event of printableEvents) {
+      b.columns(`  ${drawerActionLabel(event.type)}`, drawerEventAmountLabel(event))
+        .text(`   ${formatDateTime(event.createdAt)}`)
+        .text(`   ${truncateText(`Cashier ${event.cashierName}`, paperWidth)}`)
+        .text(`   ${truncateText(`Approved ${event.approvedBy} via ${event.authorizationMethod}`, paperWidth)}`);
+      if (event.reason) {
+        b.text(`   ${truncateText(event.reason, paperWidth)}`);
+      }
+      if (event.drawerError) {
+        b.text(`   Drawer issue: ${truncateText(event.drawerError, paperWidth)}`);
+      }
+    }
+    if (drawerEvents.length > printableEvents.length) {
+      b.text(`  +${drawerEvents.length - printableEvents.length} more drawer events`);
+    }
+  }
+
   // Footer
   b.separator('=')
     .alignCenter()
@@ -148,4 +183,48 @@ function formatMethod(method: string): string {
     OTHER: 'Other',
   };
   return map[method] || method;
+}
+
+type DrawerEvent = NonNullable<ZReadingData['accountability']['drawerEvents']>[number];
+
+function drawerActionLabel(type: DrawerEvent['type']): string {
+  if (type === 'PAID_IN') return 'Paid In';
+  if (type === 'PAID_OUT') return 'Paid Out';
+  return 'No Sale';
+}
+
+function drawerEventAmountLabel(event: DrawerEvent): string {
+  if (event.type === 'NO_SALE') return 'Open';
+  const amount = parseFloat(event.amount);
+  return `${event.type === 'PAID_OUT' ? '-' : '+'}${fmtPHP(Math.abs(amount))}`;
+}
+
+function summarizeDrawerEvents(events: DrawerEvent[]) {
+  return events.reduce(
+    (summary, event) => {
+      const amount = parseFloat(event.amount);
+      if (!Number.isFinite(amount)) return summary;
+
+      if (event.type === 'PAID_IN') {
+        summary.paidInTotal += amount;
+        summary.netCash += amount;
+      } else if (event.type === 'PAID_OUT') {
+        summary.paidOutTotal += amount;
+        summary.netCash -= amount;
+      }
+
+      return summary;
+    },
+    { paidInTotal: 0, paidOutTotal: 0, netCash: 0 },
+  );
+}
+
+function formatSignedAmount(amount: number): string {
+  return `${amount >= 0 ? '+' : '-'}${fmtPHP(Math.abs(amount))}`;
+}
+
+function truncateText(value: string, paperWidth: '58mm' | '80mm'): string {
+  const limit = paperWidth === '58mm' ? 28 : 44;
+  if (value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 1))}.`;
 }

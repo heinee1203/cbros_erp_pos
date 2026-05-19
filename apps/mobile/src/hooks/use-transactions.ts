@@ -23,7 +23,11 @@ export interface SaleListItem {
   grandTotal: string;
   completedAt: string | null;
   createdAt: string;
+  createdByUserId?: string | null;
+  completedByUserId?: string | null;
   customerName?: string | null;
+  paymentMethods?: string | null;
+  hasAccountPayment?: boolean;
   lineCount: number;
 }
 
@@ -37,6 +41,9 @@ export interface SaleDetail {
   notes: string | null;
   completedAt: string | null;
   createdAt: string;
+  receiptNumber?: string | null;
+  createdByUserId?: string | null;
+  completedByUserId?: string | null;
   location: { name: string; address?: string | null };
   customer?: { name: string; phone: string } | null;
   vehicle?: { make: string; model: string; plateNo?: string | null } | null;
@@ -47,6 +54,8 @@ export interface SaleDetail {
     quantity: number;
     refundedQuantity: number;
     unitPrice: string;
+    overridePrice?: string | null;
+    discountAmount?: string | null;
     lineTotal: string;
   }>;
   payments: Array<{
@@ -67,9 +76,9 @@ export function useSalesListQuery(searchQuery?: string) {
       const q = queryKey[2] as string; // Extract search term from query key (avoids stale closure)
       const searching = q.length > 0;
 
-      // Build query string manually — RN's URLSearchParams.set is not implemented
+      // Build query string manually; RN's URLSearchParams.set is not implemented.
       const parts: string[] = [
-        'status=COMPLETED,PARTIALLY_REFUNDED,REFUNDED',
+        'status=QUOTE,OPEN,PARKED,COMPLETED,PARTIALLY_REFUNDED,REFUNDED,VOIDED',
         'limit=50',
       ];
       if (!searching) {
@@ -99,7 +108,11 @@ export function useSalesListQuery(searchQuery?: string) {
         grandTotal: s.grandTotal || s.grand_total,
         completedAt: s.completedAt || s.completed_at,
         createdAt: s.createdAt || s.created_at,
+        createdByUserId: s.createdByUserId || s.created_by_user_id || null,
+        completedByUserId: s.completedByUserId || s.completed_by_user_id || null,
         customerName: s.customerName || s.customer_name || null,
+        paymentMethods: s.paymentMethods || s.payment_methods || null,
+        hasAccountPayment: Boolean(s.hasAccountPayment || s.has_account_payment),
         lineCount: s.lineCount || s.line_count || 0,
       }));
 
@@ -121,6 +134,8 @@ export function useSaleDetailQuery(saleId: string) {
       return apiFetch<SaleDetail>(`/sales/${saleId}`);
     },
     enabled: !!saleId,
+    retry: 1,
+    staleTime: 5_000,
   });
 }
 

@@ -9,39 +9,47 @@ import {
   RefreshControl,
   SafeAreaView,
   Animated,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useQueryClient } from '@tanstack/react-query';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useSalesListQuery, useSaleDetailQuery, getCachedTransactions, type SaleListItem } from '@/hooks/use-transactions';
 import { useActiveShiftQuery } from '@/hooks/use-shift';
-import { getPendingSales } from '@/storage/pending-sales';
+import { getPendingSales, onPendingSalesChanged } from '@/storage/pending-sales';
+import { reconcilePendingSales } from '@/hooks/use-checkout';
 import { useLayout } from '@/hooks/use-layout';
 import { SplitView } from '@/components/SplitView';
 import { TransactionDetailPane } from '@/components/TransactionDetailPane';
 import { RefundFlow } from '@/components/RefundFlow';
-import { apiFetch } from '@/services/api-client';
+import { VoidSaleSheet } from '@/components/VoidSaleSheet';
+import { verifyRefundAuthorizationCredential } from '@/utils/refund-authorization';
+import { formatApiDateTime } from '@/utils/datetime';
+import { formatPosError } from '@/utils/pos-error-messages';
+import { getPendingSaleReviewRows, summarizePendingSales } from '@/utils/pending-sale-summary';
 import { colors, textStyles, spacing, layout, fonts, radius, touchTarget } from '@/theme';
 import { useTheme } from '@/theme/ThemeContext';
-import { Badge } from '@/components/ui';
+import { Badge, Icon } from '@/components/ui';
 import { usePosPermission } from '@/hooks/use-pos-permission';
 import { useAuth } from '@/hooks/use-auth';
 import type { TransactionsStackParamList } from '@/app/MainTabs';
 
 type Nav = StackNavigationProp<TransactionsStackParamList, 'TransactionList'>;
 
+type TransactionQuickFilter = 'all' | 'completed' | 'attention' | 'account';
+
 function fmtPHP(amount: string | number): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return `₱${num.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `\u20B1${num.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function fmtTime(dateStr: string | null): string {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' });
+  return formatApiDateTime(dateStr, { hour: '2-digit', minute: '2-digit' });
 }
 
 function getBadgeVariant(status: string): 'success' | 'warning' | 'danger' {
   if (status === 'REFUNDED' || status === 'VOIDED') return 'danger';
-  if (status === 'PARTIALLY_REFUNDED') return 'warning';
+  if (status === 'PARTIALLY_REFUNDED' || status === 'QUOTE' || status === 'OPEN' || status === 'PARKED') return 'warning';
   return 'success';
 }
 
@@ -55,8 +63,12 @@ export default function TransactionListScreen() {
   const { isTablet, screenPadding } = useLayout();
   const { can } = usePosPermission();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
+  const [quickFilter, setQuickFilter] = useState<TransactionQuickFilter>('all');
+  const [pendingSales, setPendingSales] = useState(() => getPendingSales());
+  const [syncingPending, setSyncingPending] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
   const { data: allSales, isLoading, refetch } = useSalesListQuery(searchText || undefined);
   const { data: activeShift } = useActiveShiftQuery();
@@ -65,8 +77,7 @@ export default function TransactionListScreen() {
   const sales = React.useMemo(() => {
     if (!allSales) return undefined;
     if (can('viewAllTransactions')) return allSales;
-    // Filter to own transactions by matching cashier user ID
-    return allSales.filter((s: any) => s.createdByUserId === user?.id || s.cashierId === user?.id);
+    return allSales.filter((s: any) => s.createdByUserId === user?.id || s.completedByUserId === user?.id);
   }, [allSales, can, user?.id]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -74,18 +85,31 @@ export default function TransactionListScreen() {
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await refetch();
-    setIsRefreshing(false);
+    try {
+      await refetch();
+    } finally {
+      setPendingSales(getPendingSales());
+      setIsRefreshing(false);
+    }
   }, [refetch]);
-  const pendingSales = getPendingSales();
+
+  React.useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      setPendingSales(getPendingSales());
+      void refetch();
+    });
+    return unsubscribe;
+  }, [navigation, refetch]);
+
+  React.useEffect(() => onPendingSalesChanged(setPendingSales), []);
 
   const toggleFilter = useCallback(() => {
     setFilterOpen(prev => {
       if (prev) {
-        // Closing — clear search
+        // Closing clears search.
         setSearchText('');
       } else {
-        // Opening — focus input after render
+        // Opening focuses input after render.
         setTimeout(() => searchInputRef.current?.focus(), 100);
       }
       return !prev;
@@ -95,27 +119,63 @@ export default function TransactionListScreen() {
   // Tablet: track selected sale for inline detail pane
   const [selectedSaleId, setSelectedSaleId] = useState<string | null>(null);
 
-  // Refund modal — owned here (root level) to avoid Android ANR from Modals inside SplitView
+  // Refund modal owned here (root level) to avoid Android ANR from Modals inside SplitView.
   const [refundVisible, setRefundVisible] = useState(false);
   const [refundSaleId, setRefundSaleId] = useState<string | null>(null);
+  const [voidSaleTarget, setVoidSaleTarget] = useState<{ id: string; saleNo: string } | null>(null);
 
   // Fetch the sale detail for refund flow (when refundSaleId is set)
   const { data: refundSale } = useSaleDetailQuery(refundSaleId ?? '');
 
-  const visibleSales = sales ?? getCachedTransactions();
-  const displaySales = searchText
-    ? visibleSales.filter(s => {
-        const q = searchText.toLowerCase();
-        return (
-          s.saleNo.toLowerCase().includes(q) ||
-          (s.receiptNumber && s.receiptNumber.toLowerCase().includes(q))
-        );
-      })
-    : visibleSales;
+  const visibleSales = React.useMemo(() => sales ?? getCachedTransactions(), [sales]);
+  const displaySales = React.useMemo(() => {
+    let filtered = visibleSales;
+    if (quickFilter === 'completed') {
+      filtered = filtered.filter(s => s.status === 'COMPLETED');
+    } else if (quickFilter === 'attention') {
+      filtered = filtered.filter(s => s.status === 'PARTIALLY_REFUNDED' || s.status === 'REFUNDED' || s.status === 'VOIDED');
+    } else if (quickFilter === 'account') {
+      filtered = filtered.filter(s => s.hasAccountPayment);
+    }
 
-  // Auto-select first sale on tablet when data loads and nothing selected
+    if (!searchText) return filtered;
+    const q = searchText.toLowerCase();
+    return filtered.filter(s => (
+      s.saleNo.toLowerCase().includes(q) ||
+      (s.receiptNumber && s.receiptNumber.toLowerCase().includes(q)) ||
+      (s.customerName && s.customerName.toLowerCase().includes(q)) ||
+      (s.paymentMethods && s.paymentMethods.toLowerCase().includes(q))
+    ));
+  }, [quickFilter, searchText, visibleSales]);
+
+  const transactionSummary = React.useMemo(() => {
+    return displaySales.reduce(
+      (acc, sale) => {
+        acc.total += parseFloat(sale.grandTotal || '0');
+        if (sale.status === 'COMPLETED') acc.completed += 1;
+        if (sale.status === 'PARTIALLY_REFUNDED' || sale.status === 'REFUNDED' || sale.status === 'VOIDED') acc.attention += 1;
+        if (sale.hasAccountPayment) acc.account += 1;
+        return acc;
+      },
+      { total: 0, completed: 0, attention: 0, account: 0 },
+    );
+  }, [displaySales]);
+
+  const quickFilters = React.useMemo(() => ([
+    { key: 'all' as const, label: 'All', count: visibleSales.length },
+    { key: 'completed' as const, label: 'Completed', count: visibleSales.filter(s => s.status === 'COMPLETED').length },
+    { key: 'attention' as const, label: 'Adjustments', count: visibleSales.filter(s => s.status === 'PARTIALLY_REFUNDED' || s.status === 'REFUNDED' || s.status === 'VOIDED').length },
+    { key: 'account' as const, label: 'Account', count: visibleSales.filter(s => s.hasAccountPayment).length },
+  ]), [visibleSales]);
+
+  // Keep tablet detail selection valid after refreshes and filters.
   React.useEffect(() => {
-    if (isTablet && !selectedSaleId && displaySales && displaySales.length > 0) {
+    if (!isTablet) return;
+    if (displaySales.length === 0) {
+      if (selectedSaleId) setSelectedSaleId(null);
+      return;
+    }
+    if (!selectedSaleId || !displaySales.some(s => s.id === selectedSaleId)) {
       setSelectedSaleId(displaySales[0].id);
     }
   }, [isTablet, selectedSaleId, displaySales]);
@@ -128,34 +188,73 @@ export default function TransactionListScreen() {
     }
   }, [isTablet, navigation]);
 
-  // Called by TransactionDetailPane when user taps Refund — opens RefundFlow directly (PIN is inside the flow)
+  // Called by TransactionDetailPane when user taps Refund.
   const handleRefundPress = useCallback((saleId: string) => {
     setRefundSaleId(saleId);
     setRefundVisible(true);
   }, []);
 
-  const verifyPin = useCallback(async (pin: string): Promise<boolean> => {
-    try {
-      const res = await apiFetch<{ valid: boolean }>('/auth/verify-pin', {
-        method: 'POST',
-        body: JSON.stringify({ pin }),
-      });
-      return res.valid;
-    } catch {
-      return false;
-    }
-  }, []);
+  const verifyAuthorization = useCallback(verifyRefundAuthorizationCredential, []);
 
   const handleRefunded = useCallback(() => {
+    const saleId = refundSaleId;
     setRefundVisible(false);
     setRefundSaleId(null);
+    if (saleId) {
+      void queryClient.invalidateQueries({ queryKey: ['sales', 'detail', saleId] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ['sales', 'list'] });
     refetch();
+  }, [queryClient, refetch, refundSaleId]);
+
+  const handleSyncPending = useCallback(async () => {
+    setSyncingPending(true);
+    try {
+      const summary = await reconcilePendingSales();
+      await refetch();
+      setPendingSales(getPendingSales());
+
+      if (summary.failed > 0) {
+        Alert.alert(
+          'Manager Review Needed',
+          `${summary.failed} pending sale${summary.failed === 1 ? '' : 's'} could not be reconciled automatically.`,
+        );
+      } else if (summary.blockedReason === 'store_lock') {
+        Alert.alert(
+          'Register Locked Store Required',
+          formatPosError('Register this device to a store before processing pending sales.'),
+        );
+      } else if (summary.retryLater > 0) {
+        Alert.alert(
+          'Still Offline',
+          `${summary.retryLater} sale${summary.retryLater === 1 ? '' : 's'} will retry when the server is reachable.`,
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Sync Failed', formatPosError(err, 'Pending sales could not be synced.'));
+    } finally {
+      setSyncingPending(false);
+      setPendingSales(getPendingSales());
+    }
   }, [refetch]);
 
   const handleRefundClose = useCallback(() => {
     setRefundVisible(false);
     setRefundSaleId(null);
   }, []);
+
+  const handleVoided = useCallback(() => {
+    if (voidSaleTarget?.id) {
+      void queryClient.invalidateQueries({ queryKey: ['sales', 'detail', voidSaleTarget.id] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ['sales', 'list'] });
+    refetch();
+  }, [queryClient, refetch, voidSaleTarget?.id]);
+
+  const pendingSummary = React.useMemo(() => summarizePendingSales(pendingSales), [pendingSales]);
+  const pendingRows = React.useMemo(() => getPendingSaleReviewRows(pendingSales, 3), [pendingSales]);
+  const pendingRetryCount = pendingSummary.retryable;
+  const pendingFailedCount = pendingSummary.failed;
 
   const renderItem = useCallback(({ item, index }: { item: SaleListItem; index: number }) => {
     const isSelected = isTablet && item.id === selectedSaleId;
@@ -170,7 +269,17 @@ export default function TransactionListScreen() {
         onPress={() => handlePressSale(item)}
       >
         <View style={styles.rowLeft}>
-          <Text style={styles.receiptNo}>{item.saleNo}</Text>
+          <Text style={styles.receiptNo}>{item.receiptNumber || item.saleNo}</Text>
+          {item.receiptNumber ? (
+            <Text style={styles.saleNoText}>{item.saleNo}</Text>
+          ) : null}
+          {item.customerName ? (
+            <Text style={styles.customerLine} numberOfLines={1}>
+              {item.customerName}{item.hasAccountPayment ? ' / Account sale' : ''}
+            </Text>
+          ) : item.hasAccountPayment ? (
+            <Text style={styles.customerLine}>Account sale</Text>
+          ) : null}
           <Text style={styles.rowTime}>{fmtTime(item.completedAt || item.createdAt)}</Text>
         </View>
         <View style={styles.rowRight}>
@@ -193,7 +302,11 @@ export default function TransactionListScreen() {
           android_ripple={{ color: colors.accent.glow }}
           onPress={toggleFilter}
         >
-          <Text style={[styles.filterBtnIcon, filterOpen && styles.filterBtnIconActive]}>🔍</Text>
+          <Icon
+            name={filterOpen ? 'close' : 'search'}
+            size={20}
+            color={filterOpen ? colors.text.inverse : colors.text.secondary}
+          />
         </Pressable>
       </View>
 
@@ -212,17 +325,104 @@ export default function TransactionListScreen() {
           />
           {searchText.length > 0 && (
             <Pressable style={styles.clearBtn} onPress={() => setSearchText('')}>
-              <Text style={styles.clearBtnText}>✕</Text>
+              <Icon name="close" size={16} color={colors.text.secondary} />
             </Pressable>
           )}
         </View>
       )}
 
+      <View style={[styles.summaryPanel, { marginHorizontal: screenPadding }]}>
+        <View style={styles.summaryHeader}>
+          <View>
+            <Text style={styles.summaryEyebrow}>Visible register activity</Text>
+            <Text style={styles.summaryTotal}>{fmtPHP(transactionSummary.total)}</Text>
+          </View>
+          <View style={styles.summaryCountBox}>
+            <Text style={styles.summaryCount}>{displaySales.length}</Text>
+            <Text style={styles.summaryCountLabel}>sales</Text>
+          </View>
+        </View>
+        <View style={styles.summaryMetrics}>
+          <View style={styles.summaryMetric}>
+            <Text style={styles.summaryMetricValue}>{transactionSummary.completed}</Text>
+            <Text style={styles.summaryMetricLabel}>completed</Text>
+          </View>
+          <View style={styles.summaryMetric}>
+            <Text style={styles.summaryMetricValue}>{transactionSummary.attention}</Text>
+            <Text style={styles.summaryMetricLabel}>adjusted</Text>
+          </View>
+          <View style={styles.summaryMetric}>
+            <Text style={styles.summaryMetricValue}>{transactionSummary.account}</Text>
+            <Text style={styles.summaryMetricLabel}>account</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={[styles.quickFilterStrip, { paddingHorizontal: screenPadding }]}>
+        {quickFilters.map(filter => {
+          const active = filter.key === quickFilter;
+          return (
+            <Pressable
+              key={filter.key}
+              style={[styles.quickFilterChip, active && styles.quickFilterChipActive]}
+              android_ripple={{ color: colors.accent.glow }}
+              onPress={() => setQuickFilter(filter.key)}
+            >
+              <Text style={[styles.quickFilterText, active && styles.quickFilterTextActive]}>
+                {filter.label}
+              </Text>
+              <Text style={[styles.quickFilterCount, active && styles.quickFilterTextActive]}>
+                {filter.count}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
       {pendingSales.length > 0 && (
         <View style={styles.pendingBanner}>
-          <Text style={styles.pendingText}>
-            {pendingSales.length} pending sale{pendingSales.length > 1 ? 's' : ''} awaiting sync
-          </Text>
+          <View style={styles.pendingHeaderRow}>
+            <View style={styles.pendingCopy}>
+              <Text style={styles.pendingText}>
+                {pendingRetryCount > 0
+                  ? `${pendingRetryCount} sale${pendingRetryCount === 1 ? '' : 's'} awaiting sync`
+                  : 'Pending sales need manager review'}
+              </Text>
+              <Text style={styles.pendingHint}>
+                Oldest {pendingSummary.oldestAgeLabel} / {fmtPHP(pendingSummary.totalPayments)} queued
+                {pendingFailedCount > 0 ? ` / ${pendingFailedCount} review` : ''}
+              </Text>
+            </View>
+            {pendingRetryCount > 0 && (
+              <Pressable
+                style={[styles.pendingSyncBtn, syncingPending && styles.pendingSyncBtnDisabled]}
+                onPress={handleSyncPending}
+                disabled={syncingPending}
+              >
+                <Text style={styles.pendingSyncText}>{syncingPending ? 'Syncing...' : 'Sync'}</Text>
+              </Pressable>
+            )}
+          </View>
+          {pendingRows.length > 0 && (
+            <View style={styles.pendingReviewList}>
+              {pendingRows.map(row => (
+                <View key={row.id} style={styles.pendingReviewRow}>
+                  <View style={[
+                    styles.pendingStatusDot,
+                    row.tone === 'danger' ? styles.pendingStatusDanger : row.tone === 'info' ? styles.pendingStatusInfo : styles.pendingStatusWarning,
+                  ]} />
+                  <View style={styles.pendingReviewCopy}>
+                    <Text style={styles.pendingReviewTitle} numberOfLines={1}>{row.title}</Text>
+                    <Text style={styles.pendingReviewDetail} numberOfLines={1}>{row.detail}</Text>
+                  </View>
+                  <View style={styles.pendingReviewMeta}>
+                    <Text style={styles.pendingReviewAmount}>{row.amountLabel}</Text>
+                    <Text style={styles.pendingReviewAge}>{row.ageLabel}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
       )}
 
@@ -231,7 +431,7 @@ export default function TransactionListScreen() {
         <View style={styles.shiftBanner}>
           <View style={styles.shiftInfo}>
             <Text style={styles.shiftText}>
-              Shift Open since {new Date(activeShift.openedAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
+              Shift Open since {fmtTime(activeShift.openedAt)}
             </Text>
           </View>
           <View style={styles.shiftActions}>
@@ -290,8 +490,7 @@ export default function TransactionListScreen() {
     );
   }
 
-  // Tablet: split view — list left, detail right
-  // Modals rendered OUTSIDE SplitView to avoid Android ANR
+  // Tablet split view; modals render outside SplitView to avoid Android ANR.
   return (
     <SafeAreaView style={styles.container}>
       <SplitView
@@ -303,6 +502,7 @@ export default function TransactionListScreen() {
               saleId={selectedSaleId}
               onRefunded={refetch}
               onRefundPress={handleRefundPress}
+              onVoidPress={setVoidSaleTarget}
             />
           ) : (
             <View style={styles.emptyDetail}>
@@ -312,7 +512,7 @@ export default function TransactionListScreen() {
         }
       />
 
-      {/* RefundFlow at root level — outside SplitView to prevent Android ANR */}
+      {/* RefundFlow at root level, outside SplitView to prevent Android ANR */}
       {refundSale && (
         <RefundFlow
           visible={refundVisible}
@@ -329,9 +529,16 @@ export default function TransactionListScreen() {
             lineTotal: parseFloat(l.lineTotal),
           }))}
           onRefunded={handleRefunded}
-          verifyPin={verifyPin}
+          verifyAuthorization={verifyAuthorization}
         />
       )}
+      <VoidSaleSheet
+        visible={!!voidSaleTarget}
+        saleId={voidSaleTarget?.id ?? null}
+        saleNo={voidSaleTarget?.saleNo ?? null}
+        onClose={() => setVoidSaleTarget(null)}
+        onVoided={handleVoided}
+      />
     </SafeAreaView>
   );
 }
@@ -416,16 +623,199 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.secondary,
     fontFamily: fonts.display.bold,
   },
+  summaryPanel: {
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    borderRadius: radius.md,
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  summaryEyebrow: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  summaryTotal: {
+    ...textStyles.monoLg,
+    color: colors.text.primary,
+    marginTop: spacing.xs,
+  },
+  summaryCountBox: {
+    minWidth: 62,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent.muted,
+    alignItems: 'center',
+  },
+  summaryCount: {
+    ...textStyles.monoMd,
+    color: colors.accent.primary,
+  },
+  summaryCountLabel: {
+    ...textStyles.captionSmall,
+    color: colors.text.secondary,
+  },
+  summaryMetrics: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  summaryMetric: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+  },
+  summaryMetricValue: {
+    ...textStyles.monoMd,
+    color: colors.text.primary,
+  },
+  summaryMetricLabel: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
+  },
+  quickFilterStrip: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    paddingBottom: spacing.sm,
+  },
+  quickFilterChip: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.surface,
+    overflow: 'hidden',
+  },
+  quickFilterChipActive: {
+    backgroundColor: colors.accent.primary,
+    borderColor: colors.accent.primary,
+  },
+  quickFilterText: {
+    ...textStyles.caption,
+    color: colors.text.secondary,
+  },
+  quickFilterCount: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    fontFamily: fonts.mono.medium,
+  },
+  quickFilterTextActive: {
+    color: colors.text.inverse,
+  },
   pendingBanner: {
+    gap: spacing.md,
     paddingHorizontal: layout.screenPadding,
     paddingVertical: spacing.sm,
     backgroundColor: colors.sync.offlineBg,
     borderBottomWidth: 1,
     borderBottomColor: colors.border.subtle,
   },
+  pendingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  pendingCopy: {
+    flex: 1,
+  },
   pendingText: {
     ...textStyles.caption,
     color: colors.sync.offlineText,
+  },
+  pendingHint: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
+  },
+  pendingSyncBtn: {
+    minHeight: 36,
+    minWidth: 72,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.accent.primary,
+  },
+  pendingSyncBtnDisabled: {
+    opacity: 0.65,
+  },
+  pendingSyncText: {
+    ...textStyles.button,
+    color: colors.text.inverse,
+  },
+  pendingReviewList: {
+    gap: 6,
+  },
+  pendingReviewRow: {
+    minHeight: 48,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  pendingStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  pendingStatusWarning: {
+    backgroundColor: colors.status.warning,
+  },
+  pendingStatusDanger: {
+    backgroundColor: colors.status.danger,
+  },
+  pendingStatusInfo: {
+    backgroundColor: colors.status.info,
+  },
+  pendingReviewCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pendingReviewTitle: {
+    ...textStyles.caption,
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+  },
+  pendingReviewDetail: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
+  },
+  pendingReviewMeta: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+  },
+  pendingReviewAmount: {
+    ...textStyles.monoSm,
+    color: colors.text.primary,
+  },
+  pendingReviewAge: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
   },
   row: {
     flexDirection: 'row',
@@ -442,7 +832,11 @@ const createStyles = () => StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: colors.accent.primary,
   },
-  rowLeft: {},
+  rowLeft: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: spacing.md,
+  },
   rowRight: {
     alignItems: 'flex-end',
   },
@@ -450,9 +844,19 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.monoMd,
     color: colors.text.primary,
   },
+  saleNoText: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 2,
+  },
   rowTime: {
     ...textStyles.captionSmall,
     color: colors.text.muted,
+    marginTop: spacing.xs,
+  },
+  customerLine: {
+    ...textStyles.caption,
+    color: colors.text.secondary,
     marginTop: spacing.xs,
   },
   rowTotal: {

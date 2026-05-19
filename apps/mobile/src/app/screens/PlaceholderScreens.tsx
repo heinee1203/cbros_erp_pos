@@ -1,258 +1,2300 @@
-/**
- * Placeholder screens for More menu items that don't have full implementations yet.
- *
- * Each screen is a polished dark-themed placeholder with back navigation,
- * relevant icon, title, and description of what the feature will do.
- */
-import React from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import { colors } from '@/theme';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { getHeldCarts, type HeldCart } from '@/storage/held-carts';
+import { selectGrandTotal, selectLineCount, useCartStore } from '@/stores/cart-store';
+import { getPendingSales, onPendingSalesChanged } from '@/storage/pending-sales';
+import { reconcilePendingSales } from '@/hooks/use-checkout';
+import {
+  getUnsyncedRegisterDrawerEvents,
+  onRegisterDrawerEventsChanged,
+} from '@/storage/register-drawer-events';
+import { reconcileRegisterDrawerEvents } from '@/sync/register-drawer-sync';
+import { useCatalogSearch, type CatalogItem } from '@/hooks/use-catalog-search';
+import { useSaleDetailQuery, useSalesListQuery, type SaleListItem } from '@/hooks/use-transactions';
+import { useNetworkStatus } from '@/hooks/use-network-status';
+import { getSyncStatus, onSyncStatus, runFullSync, type SyncStatus } from '@/sync/sync-manager';
+import { RefundFlow } from '@/components/RefundFlow';
+import { LabelPreviewModal } from '@/components/LabelPreviewModal';
+import { BarcodeScanModal } from '@/components/BarcodeScanModal';
+import { ManagerPinModal, type ManagerAuthorization } from '@/components/ManagerPinModal';
+import { verifyRefundAuthorizationCredential } from '@/utils/refund-authorization';
+import { formatPosError } from '@/utils/pos-error-messages';
+import { getPendingSaleReviewRows, summarizePendingSales } from '@/utils/pending-sale-summary';
+import { getRegisterDrawerRecoveryRows, summarizeRegisterDrawerRecovery } from '@/utils/register-drawer-summary';
+import { usePrinter } from '@/hardware/printer/context';
+import { buildShelfLabel } from '@/hardware/printer/zpl-label-builder';
+import { printZplSafely } from '@/hardware/printer/settings';
+import { queryClient } from '@/services/query-client';
+import { colors, fonts, fontSize, radius, spacing } from '@/theme';
+import { Button, Icon, type IconName } from '@/components/ui';
 
-interface PlaceholderProps {
-  icon: string;
-  title: string;
-  subtitle: string;
+function fmtPHP(amount: number): string {
+  return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function PlaceholderLayout({ icon, title, subtitle }: PlaceholderProps) {
-  const navigation = useNavigation();
+function fmtQty(value: number): string {
+  return Math.round(value).toLocaleString('en-PH');
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${fmtQty(count)} ${count === 1 ? singular : plural}`;
+}
+
+function clampLabelCopies(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(10, Math.round(value)));
+}
+
+function timeAgo(isoDate: string): string {
+  const diff = Date.now() - new Date(isoDate).getTime();
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function fmtSyncTime(ts: string | null): string {
+  if (!ts) return 'Never';
+  const diff = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(diff)) return 'Unknown';
+  if (diff < 60_000) return 'Just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+type SyncFreshness = 'fresh' | 'stale' | 'critical';
+
+function getSyncAgeMinutes(ts: string | null): number | null {
+  if (!ts) return null;
+  const time = new Date(ts).getTime();
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Math.floor((Date.now() - time) / 60_000));
+}
+
+function getInventoryFreshness(ts: string | null): SyncFreshness {
+  const minutes = getSyncAgeMinutes(ts);
+  if (minutes === null) return 'critical';
+  if (minutes < 15) return 'fresh';
+  if (minutes < 120) return 'stale';
+  return 'critical';
+}
+
+function syncFreshnessLabel(freshness: SyncFreshness): string {
+  if (freshness === 'fresh') return 'Fresh';
+  if (freshness === 'stale') return 'Stale';
+  return 'Critical';
+}
+
+function syncFreshnessTone(freshness: SyncFreshness): 'success' | 'warning' | 'danger' {
+  if (freshness === 'fresh') return 'success';
+  if (freshness === 'stale') return 'warning';
+  return 'danger';
+}
+
+function fmtAttemptTime(ts: string | null): string {
+  if (!ts) return 'No attempt this session';
+  const ago = fmtSyncTime(ts);
+  if (ago === 'Just now') return 'Just now';
+  if (ago === 'Unknown') return ago;
+  if (ago.includes('/')) return ago;
+  return `${ago} ago`;
+}
+
+function fmtTxnTime(ts: string | null): string {
+  if (!ts) return 'Not completed';
+  return new Date(ts).toLocaleString('en-PH', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function isRefundableStatus(status: string): boolean {
+  return status === 'COMPLETED' || status === 'PARTIALLY_REFUNDED';
+}
+
+function ScreenHeader({ title }: { title: string }) {
+  const navigation = useNavigation<any>();
+  const styles = createStyles();
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} hitSlop={12} style={styles.backBtn}>
-          <Text style={styles.backText}>{'\u2190'} Back</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>{title}</Text>
-        <View style={{ width: 60 }} />
-      </View>
-      <View style={styles.content}>
-        <Text style={styles.icon}>{icon}</Text>
-        <Text style={styles.title}>{title}</Text>
-        <Text style={styles.subtitle}>{subtitle}</Text>
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>COMING SOON</Text>
-        </View>
-      </View>
+    <View style={styles.header}>
+      <Pressable onPress={() => navigation.goBack()} style={styles.backButton} hitSlop={10}>
+        <Icon name="chevron-left" size={19} color={colors.text.secondary} />
+        <Text style={styles.backText}>Back</Text>
+      </Pressable>
+      <Text style={styles.headerTitle}>{title}</Text>
+      <View style={{ width: 72 }} />
+    </View>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  tone = 'default',
+}: {
+  label: string;
+  value: string;
+  tone?: 'default' | 'primary';
+}) {
+  const styles = createStyles();
+  return (
+    <View style={styles.parkedMetricCard}>
+      <Text style={styles.parkedMetricLabel}>{label}</Text>
+      <Text
+        style={[
+          styles.parkedMetricValue,
+          tone === 'primary' && styles.parkedMetricValuePrimary,
+        ]}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
     </View>
   );
 }
 
 export function ParkedOrdersScreen() {
-  return (
-    <PlaceholderLayout
-      icon={'\u23F8'}
-      title="Parked Orders"
-      subtitle="Resume held carts, manage parked orders, and clear expired holds"
-    />
-  );
-}
+  const navigation = useNavigation<any>();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [query, setQuery] = useState('');
+  const activeLineCount = useCartStore(selectLineCount);
+  const activeTotal = useCartStore(selectGrandTotal);
+  const heldCarts = getHeldCarts();
+  const styles = createStyles();
 
-export function ReturnsScreen() {
-  return (
-    <PlaceholderLayout
-      icon={'\u21A9'}
-      title="Returns & Refunds"
-      subtitle="Process customer returns, issue refunds, and manage return inventory"
-    />
-  );
-}
+  const refresh = useCallback(() => setRefreshKey(k => k + 1), []);
+  void refreshKey;
 
-export function BarcodePrintScreen() {
-  return (
-    <PlaceholderLayout
-      icon={'\uD83D\uDCF7'}
-      title="Barcode Printing"
-      subtitle="Print barcode and price labels for products using the ZD230 label printer"
-    />
-  );
-}
+  useFocusEffect(useCallback(() => {
+    refresh();
+  }, [refresh]));
 
-export function ReportsScreen() {
-  return (
-    <PlaceholderLayout
-      icon={'\uD83D\uDCCA'}
-      title="Reports & Analytics"
-      subtitle="View sales reports, stock velocity, margin analysis, and branch performance"
-    />
-  );
-}
+  const visibleHeldCarts = heldCarts.filter(cart => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
 
-export function PriceManagementScreen() {
-  return (
-    <PlaceholderLayout
-      icon={'\uD83D\uDCB0'}
-      title="Price Management"
-      subtitle="Update prices, manage price lists, and track price change history"
-    />
-  );
-}
+    const haystack = [
+      cart.label,
+      cart.customerName,
+      cart.note,
+      ...cart.lines.map((line: any) => `${line.name} ${line.sku ?? ''} ${line.mnemonicSku ?? ''}`),
+    ].filter(Boolean).join(' ').toLowerCase();
 
-export function SuppliersScreen() {
-  return (
-    <PlaceholderLayout
-      icon={'\uD83D\uDE9A'}
-      title="Suppliers"
-      subtitle="Manage supplier contacts, purchase orders, and receiving schedules"
-    />
-  );
-}
+    return haystack.includes(needle);
+  });
 
-export function UserRolesScreen() {
+  const parkedValue = heldCarts.reduce((sum, cart) => sum + cart.totalAmount, 0);
+  const parkedItems = heldCarts.reduce((sum, cart) => sum + cart.lines.length, 0);
+
+  const resumeCart = useCallback((cart: HeldCart) => {
+    const restored = useCartStore.getState().restoreHeldCart(cart.id);
+    if (!restored) {
+      Alert.alert(
+        'Could Not Resume Order',
+        'The active cart could not be parked first. Resume or delete another parked order, then try again.',
+      );
+      return;
+    }
+
+    refresh();
+    navigation.getParent()?.navigate('POS');
+  }, [navigation, refresh]);
+
+  const handleResume = useCallback((cart: HeldCart) => {
+    if (activeLineCount === 0) {
+      resumeCart(cart);
+      return;
+    }
+
+    Alert.alert(
+      'Swap Active Cart?',
+      `Your current cart (${activeLineCount} item${activeLineCount === 1 ? '' : 's'}, ${fmtPHP(activeTotal)}) will be parked before resuming "${cart.label}".`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Resume', onPress: () => resumeCart(cart) },
+      ],
+    );
+  }, [activeLineCount, activeTotal, resumeCart]);
+
+  const handleDelete = useCallback((cart: HeldCart) => {
+    Alert.alert(
+      'Delete Held Order',
+      `Remove ${cart.label} with ${cart.lines.length} item${cart.lines.length === 1 ? '' : 's'}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            useCartStore.getState().deleteHeldCart(cart.id);
+            refresh();
+          },
+        },
+      ],
+    );
+  }, [refresh]);
+
   return (
-    <PlaceholderLayout
-      icon={'\uD83D\uDC64'}
-      title="Users & Roles"
-      subtitle="Manage staff accounts, assign roles, and configure permissions"
-    />
+    <View style={styles.container}>
+      <ScreenHeader title="Parked Orders" />
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.parkedSummaryGrid}>
+          <MetricCard label="Parked Orders" value={String(heldCarts.length)} />
+          <MetricCard label="Items Waiting" value={String(parkedItems)} />
+          <MetricCard label="Parked Value" value={fmtPHP(parkedValue)} tone="primary" />
+        </View>
+
+        <View style={styles.returnSearchBox}>
+          <Icon name="search" size={18} color={colors.text.muted} />
+          <TextInput
+            style={styles.returnSearchInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search customer, item, SKU, or note"
+            placeholderTextColor={colors.text.muted}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+          {query.length > 0 && (
+            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <Icon name="close" size={17} color={colors.text.secondary} />
+            </Pressable>
+          )}
+        </View>
+
+        {activeLineCount > 0 && (
+          <View style={styles.noticeCard}>
+            <Icon name="hold" size={18} color={colors.status.warning} />
+            <Text style={styles.noticeText}>
+              Active cart has {activeLineCount} item{activeLineCount === 1 ? '' : 's'} and will be parked before resuming another order.
+            </Text>
+          </View>
+        )}
+
+        {heldCarts.length === 0 ? (
+          <EmptyState
+            icon="hold"
+            title="No Parked Orders"
+            body="Held carts will appear here after a cashier parks an active sale."
+          />
+        ) : visibleHeldCarts.length === 0 ? (
+          <EmptyState
+            icon="search"
+            title="No Matches"
+            body="Try another customer name, SKU, or item description."
+          />
+        ) : (
+          visibleHeldCarts.map(cart => (
+            <View key={cart.id} style={styles.heldCard}>
+              <View style={styles.heldTopRow}>
+                <View style={styles.heldTitleBlock}>
+                  <Text style={styles.heldTitle} numberOfLines={1}>{cart.label}</Text>
+                  <Text style={styles.heldMeta}>
+                    {cart.lines.length} item{cart.lines.length === 1 ? '' : 's'} / {timeAgo(cart.heldAt)}
+                  </Text>
+                </View>
+                <Text style={styles.heldTotal}>{fmtPHP(cart.totalAmount)}</Text>
+              </View>
+
+              {(cart.customerName || cart.note) && (
+                <View style={styles.heldContext}>
+                  {cart.customerName && (
+                    <Text style={styles.heldContextText} numberOfLines={1}>Customer: {cart.customerName}</Text>
+                  )}
+                  {cart.note && (
+                    <Text style={styles.heldContextText} numberOfLines={2}>Note: {cart.note}</Text>
+                  )}
+                </View>
+              )}
+
+              <View style={styles.heldPreview}>
+                {cart.lines.slice(0, 3).map((line: any) => (
+                  <Text key={line.id} style={styles.heldLine} numberOfLines={1}>
+                    {line.quantity} x {line.name}
+                  </Text>
+                ))}
+                {cart.lines.length > 3 && (
+                  <Text style={styles.heldLineMuted}>+{cart.lines.length - 3} more</Text>
+                )}
+              </View>
+
+              <View style={styles.heldActions}>
+                <Button title="Resume Order" onPress={() => handleResume(cart)} variant="primary" style={{ flex: 1 }} />
+                <Pressable style={styles.deleteButton} onPress={() => handleDelete(cart)}>
+                  <Icon name="trash" size={20} color={colors.status.danger} />
+                </Pressable>
+              </View>
+            </View>
+          ))
+        )}
+      </ScrollView>
+    </View>
   );
 }
 
 export function SyncManagementScreen() {
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => getSyncStatus());
+  const [reconciling, setReconciling] = useState(false);
+  const [drawerReconciling, setDrawerReconciling] = useState(false);
+  const [drawerAuthorizationVisible, setDrawerAuthorizationVisible] = useState(false);
+  const [pendingSales, setPendingSales] = useState(() => getPendingSales());
+  const [pendingDrawerEvents, setPendingDrawerEvents] = useState(() => getUnsyncedRegisterDrawerEvents());
+  const network = useNetworkStatus();
+  const styles = createStyles();
+  const pendingRetryCount = pendingSales.filter(sale => sale.status !== 'failed').length;
+  const pendingFailedCount = pendingSales.length - pendingRetryCount;
+  const pendingSummary = React.useMemo(() => summarizePendingSales(pendingSales), [pendingSales]);
+  const pendingRows = React.useMemo(() => getPendingSaleReviewRows(pendingSales, 5), [pendingSales]);
+  const drawerSummary = React.useMemo(
+    () => summarizeRegisterDrawerRecovery(pendingDrawerEvents),
+    [pendingDrawerEvents],
+  );
+  const drawerRows = React.useMemo(
+    () => getRegisterDrawerRecoveryRows(pendingDrawerEvents, 5),
+    [pendingDrawerEvents],
+  );
+  const inventoryFreshness = getInventoryFreshness(syncStatus.lastInventorySync);
+  const inventoryTone = syncFreshnessTone(inventoryFreshness);
+  const canRunSync = network.isOnline && !syncStatus.isSyncing;
+  const canReconcile = network.isOnline && !reconciling && pendingRetryCount > 0;
+  const canReconcileDrawer = network.isOnline && !drawerReconciling && pendingDrawerEvents.length > 0;
+
+  useEffect(() => {
+    setPendingSales(getPendingSales());
+    setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
+    return onSyncStatus(status => {
+      setSyncStatus(status);
+      setPendingSales(getPendingSales());
+      setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
+    });
+  }, []);
+
+  useEffect(() => onPendingSalesChanged(setPendingSales), []);
+  useEffect(() => onRegisterDrawerEventsChanged(() => {
+    setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
+  }), []);
+
+  useFocusEffect(useCallback(() => {
+    setPendingSales(getPendingSales());
+    setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
+  }, []));
+
+  const handleFullSync = useCallback(async () => {
+    if (!network.isOnline) {
+      Alert.alert('Offline', 'Connect to the server before running a full catalog and inventory sync.');
+      return;
+    }
+    try {
+      const result = await runFullSync();
+      setSyncStatus(result);
+      if (result.error) {
+        Alert.alert('Sync Failed', formatPosError(result.error, 'Catalog and inventory could not be updated.'));
+      } else {
+        Alert.alert('Sync Complete', 'Catalog and inventory are up to date.');
+      }
+    } finally {
+      setPendingSales(getPendingSales());
+    }
+  }, [network.isOnline]);
+
+  const handleReconcile = useCallback(async () => {
+    if (!network.isOnline) {
+      Alert.alert('Offline', 'Pending sales will reconcile once this register is online again.');
+      return;
+    }
+    setReconciling(true);
+    try {
+      const summary = await reconcilePendingSales();
+      setPendingSales(getPendingSales());
+
+      if (summary.failed > 0) {
+        Alert.alert(
+          'Manager Review Needed',
+          `${summary.failed} pending sale${summary.failed === 1 ? '' : 's'} could not be reconciled automatically.`,
+        );
+      } else if (summary.blockedReason === 'store_lock') {
+        Alert.alert(
+          'Register Locked Store Required',
+          formatPosError('Register this device to a store before processing pending sales.'),
+        );
+      } else if (summary.retryLater > 0) {
+        Alert.alert(
+          'Still Pending',
+          `${summary.retryLater} sale${summary.retryLater === 1 ? '' : 's'} will retry when the server is reachable.`,
+        );
+      } else {
+        const completed = summary.synced + summary.alreadyCompleted;
+        Alert.alert(
+          'Reconciliation Complete',
+          `${completed} pending sale${completed === 1 ? '' : 's'} cleared.`,
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Reconciliation Failed', formatPosError(err, 'Unable to process pending sales.'));
+    } finally {
+      setReconciling(false);
+      setPendingSales(getPendingSales());
+    }
+  }, []);
+
+  const handleDrawerReconcilePress = useCallback(() => {
+    if (!network.isOnline) {
+      Alert.alert('Offline', 'Drawer events will sync once this register is online again.');
+      return;
+    }
+    if (pendingDrawerEvents.length === 0) {
+      Alert.alert('No Drawer Events', 'There are no local drawer events waiting for sync.');
+      return;
+    }
+    setDrawerAuthorizationVisible(true);
+  }, [network.isOnline, pendingDrawerEvents.length]);
+
+  const handleDrawerAuthorization = useCallback(async (
+    _approverName: string,
+    approval?: ManagerAuthorization,
+  ) => {
+    setDrawerAuthorizationVisible(false);
+    if (!approval?.credential) {
+      Alert.alert('Authorization Required', 'Manager approval was not captured.');
+      return;
+    }
+
+    setDrawerReconciling(true);
+    try {
+      const summary = await reconcileRegisterDrawerEvents({
+        credential: approval.credential,
+        method: approval.method,
+      });
+      setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+
+      if (summary.blockedReason === 'store_lock') {
+        Alert.alert(
+          'Register Locked Store Required',
+          formatPosError('Register this device to a store before syncing drawer events.'),
+        );
+      } else if (summary.failed > 0) {
+        Alert.alert(
+          'Manager Review Needed',
+          `${summary.failed} drawer event${summary.failed === 1 ? '' : 's'} could not be synced automatically.`,
+        );
+      } else if (summary.retryLater > 0) {
+        Alert.alert(
+          'Still Pending',
+          `${summary.retryLater} drawer event${summary.retryLater === 1 ? '' : 's'} will retry when the server is reachable.`,
+        );
+      } else {
+        Alert.alert(
+          'Drawer Events Synced',
+          `${summary.synced} drawer event${summary.synced === 1 ? '' : 's'} recorded on the server.`,
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Drawer Sync Failed', formatPosError(err, 'Unable to sync drawer events.'));
+    } finally {
+      setDrawerReconciling(false);
+      setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
+    }
+  }, []);
+
   return (
-    <PlaceholderLayout
-      icon={'\uD83D\uDD04'}
-      title="Sync Management"
-      subtitle="View sync status, pending changes, force sync, and resolve conflicts"
-    />
+    <View style={styles.container}>
+      <ScreenHeader title="Sync" />
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={[styles.syncHealthCard, styles[`syncHealth_${inventoryTone}`]]}>
+          <View style={styles.syncHealthHeader}>
+            <View style={styles.syncHealthTitleRow}>
+              <Icon name="sync" size={22} color={colors.accent.primary} />
+              <View>
+                <Text style={styles.syncHealthTitle}>Inventory Health</Text>
+                <Text style={styles.syncHealthSubtitle}>
+                  {network.isOnline ? 'Server reachable' : 'Working offline'}
+                </Text>
+              </View>
+            </View>
+            <View style={[styles.syncHealthBadge, styles[`syncBadge_${inventoryTone}`]]}>
+              <Text style={[styles.syncHealthBadgeText, styles[`syncBadgeText_${inventoryTone}`]]}>
+                {syncFreshnessLabel(inventoryFreshness)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.syncMetricGrid}>
+            <SyncMetric label="Inventory" value={fmtSyncTime(syncStatus.lastInventorySync)} tone={inventoryTone} />
+            <SyncMetric label="Catalog" value={fmtSyncTime(syncStatus.lastCatalogSync)} />
+            <SyncMetric label="Network" value={network.isOnline ? 'Online' : 'Offline'} tone={network.isOnline ? 'success' : 'warning'} />
+            <SyncMetric label="Last Attempt" value={fmtAttemptTime(syncStatus.lastAttemptFinishedAt ?? syncStatus.lastAttemptStartedAt)} />
+          </View>
+
+          {syncStatus.error ? (
+            <View style={styles.syncErrorCard}>
+              <Icon name="alert" size={18} color={colors.status.danger} />
+              <Text style={styles.syncErrorText}>{syncStatus.error}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.syncChecklistCard}>
+          <Text style={styles.syncChecklistTitle}>Recovery Checklist</Text>
+          <SyncCheckRow
+            label="Server connection"
+            detail={network.isOnline ? 'Register can reach the network' : 'Connect before syncing'}
+            ready={network.isOnline}
+          />
+          <SyncCheckRow
+            label="Pending sales"
+            detail={pendingSales.length === 0 ? 'No local sales waiting' : `${pendingSales.length} sale${pendingSales.length === 1 ? '' : 's'} need reconciliation`}
+            ready={pendingSales.length === 0}
+            warning={pendingRetryCount > 0 && pendingFailedCount === 0}
+          />
+          <SyncCheckRow
+            label="Drawer events"
+            detail={pendingDrawerEvents.length === 0 ? 'No local drawer events waiting' : `${pendingDrawerEvents.length} event${pendingDrawerEvents.length === 1 ? '' : 's'} need manager sync`}
+            ready={pendingDrawerEvents.length === 0}
+            warning={drawerSummary.retryable > 0 && drawerSummary.failed === 0}
+          />
+          <SyncCheckRow
+            label="Inventory freshness"
+            detail={syncStatus.lastInventorySync ? `${fmtSyncTime(syncStatus.lastInventorySync)} old` : 'Inventory has not synced'}
+            ready={inventoryFreshness === 'fresh'}
+            warning={inventoryFreshness === 'stale'}
+          />
+          <SyncCheckRow
+            label="Last sync attempt"
+            detail={syncStatus.error ? 'Failed, retry needed' : syncStatus.lastAttemptFinishedAt ? 'Completed this session' : 'No attempt this session'}
+            ready={!syncStatus.error}
+            warning={!syncStatus.error && !syncStatus.lastAttemptFinishedAt}
+          />
+        </View>
+
+        {pendingSales.length > 0 && (
+          <View style={styles.pendingReviewCard}>
+            <View style={styles.pendingReviewHeader}>
+              <View>
+                <Text style={styles.pendingReviewTitle}>Pending Sale Review</Text>
+                <Text style={styles.pendingReviewSubtitle}>
+                  Oldest {pendingSummary.oldestAgeLabel} / {fmtPHP(pendingSummary.totalPayments)} queued
+                </Text>
+              </View>
+              <View style={styles.pendingReviewBadge}>
+                <Text style={styles.pendingReviewBadgeText}>{pendingSummary.total}</Text>
+              </View>
+            </View>
+            <View style={styles.pendingReviewMetrics}>
+              <SyncMetric label="Retryable" value={String(pendingSummary.retryable)} tone={pendingSummary.retryable > 0 ? 'warning' : 'success'} />
+              <SyncMetric label="Review" value={String(pendingSummary.failed)} tone={pendingSummary.failed > 0 ? 'danger' : 'success'} />
+              <SyncMetric label="Offline" value={String(pendingSummary.fullyOffline)} />
+              <SyncMetric label="Complete" value={String(pendingSummary.completionOnly)} />
+            </View>
+            <View style={styles.pendingReviewRows}>
+              {pendingRows.map(row => (
+                <View key={row.id} style={styles.pendingSaleRow}>
+                  <View style={[
+                    styles.pendingSaleDot,
+                    row.tone === 'danger' ? styles.pendingSaleDotDanger : row.tone === 'info' ? styles.pendingSaleDotInfo : styles.pendingSaleDotWarning,
+                  ]} />
+                  <View style={styles.pendingSaleCopy}>
+                    <Text style={styles.pendingSaleTitle} numberOfLines={1}>{row.title}</Text>
+                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>{row.detail}</Text>
+                  </View>
+                  <View style={styles.pendingSaleMeta}>
+                    <Text style={styles.pendingSaleAmount}>{row.amountLabel}</Text>
+                    <Text style={styles.pendingSaleStatus}>{row.statusLabel}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {pendingDrawerEvents.length > 0 && (
+          <View style={styles.pendingReviewCard}>
+            <View style={styles.pendingReviewHeader}>
+              <View>
+                <Text style={styles.pendingReviewTitle}>Drawer Event Recovery</Text>
+                <Text style={styles.pendingReviewSubtitle}>
+                  Oldest {drawerSummary.oldestAgeLabel} / {fmtPHP(drawerSummary.netCashImpact)} net cash impact
+                </Text>
+              </View>
+              <View style={styles.pendingReviewBadge}>
+                <Text style={styles.pendingReviewBadgeText}>{drawerSummary.total}</Text>
+              </View>
+            </View>
+            <View style={styles.pendingReviewMetrics}>
+              <SyncMetric label="Retryable" value={String(drawerSummary.retryable)} tone={drawerSummary.retryable > 0 ? 'warning' : 'success'} />
+              <SyncMetric label="Review" value={String(drawerSummary.failed)} tone={drawerSummary.failed > 0 ? 'danger' : 'success'} />
+              <SyncMetric label="Paid In" value={fmtPHP(drawerSummary.paidInTotal)} />
+              <SyncMetric label="Paid Out" value={fmtPHP(drawerSummary.paidOutTotal)} />
+            </View>
+            <View style={styles.pendingReviewRows}>
+              {drawerRows.map(row => (
+                <View key={row.id} style={styles.pendingSaleRow}>
+                  <View style={[
+                    styles.pendingSaleDot,
+                    row.tone === 'danger' ? styles.pendingSaleDotDanger : styles.pendingSaleDotWarning,
+                  ]} />
+                  <View style={styles.pendingSaleCopy}>
+                    <Text style={styles.pendingSaleTitle} numberOfLines={1}>{row.title}</Text>
+                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>{row.detail}</Text>
+                  </View>
+                  <View style={styles.pendingSaleMeta}>
+                    <Text style={styles.pendingSaleAmount}>{row.amountLabel}</Text>
+                    <Text style={styles.pendingSaleStatus}>{row.statusLabel}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        <View style={styles.infoCard}>
+          <InfoRow label="Status" value={syncStatus.isSyncing ? 'Syncing' : 'Idle'} />
+          <InfoRow label="Catalog" value={fmtSyncTime(syncStatus.lastCatalogSync)} />
+          <InfoRow label="Inventory" value={fmtSyncTime(syncStatus.lastInventorySync)} tone={inventoryTone} />
+          <InfoRow label="Pending Sales" value={String(pendingSales.length)} warning={pendingSales.length > 0} />
+          <InfoRow label="Drawer Events" value={String(pendingDrawerEvents.length)} warning={pendingDrawerEvents.length > 0} />
+          {pendingSales.length > 0 && (
+            <InfoRow
+              label="Needs Review"
+              value={String(pendingFailedCount)}
+              warning={pendingFailedCount > 0}
+            />
+          )}
+          {pendingDrawerEvents.length > 0 && (
+            <InfoRow
+              label="Drawer Review"
+              value={String(drawerSummary.failed)}
+              warning={drawerSummary.failed > 0}
+            />
+          )}
+        </View>
+
+        {syncStatus.progress && (
+          <View style={styles.progressCard}>
+            <Text style={styles.progressTitle}>{syncStatus.progress.phase.toUpperCase()}</Text>
+            <Text style={styles.progressText}>{syncStatus.progress.synced} records synced</Text>
+          </View>
+        )}
+
+        <View style={styles.actionStack}>
+          <Button
+            title={syncStatus.isSyncing ? 'Syncing...' : 'Run Full Sync'}
+            onPress={handleFullSync}
+            loading={syncStatus.isSyncing}
+            disabled={!canRunSync}
+            fullWidth
+          />
+          <Button
+            title={reconciling ? 'Reconciling...' : 'Reconcile Pending Sales'}
+            onPress={handleReconcile}
+            loading={reconciling}
+            disabled={!canReconcile}
+            variant="secondary"
+            fullWidth
+          />
+          <Button
+            title={drawerReconciling ? 'Syncing Drawer Events...' : 'Sync Drawer Events'}
+            onPress={handleDrawerReconcilePress}
+            loading={drawerReconciling}
+            disabled={!canReconcileDrawer}
+            variant="secondary"
+            fullWidth
+          />
+        </View>
+      </ScrollView>
+      <ManagerPinModal
+        visible={drawerAuthorizationVisible}
+        action={`Sync ${pendingDrawerEvents.length} register drawer event${pendingDrawerEvents.length === 1 ? '' : 's'}`}
+        requiredLevel={2}
+        onApprove={handleDrawerAuthorization}
+        onCancel={() => setDrawerAuthorizationVisible(false)}
+      />
+    </View>
   );
 }
 
 export function AboutScreen() {
+  const styles = createStyles();
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Pressable onPress={() => {}} hitSlop={12} style={styles.backBtn}>
-          <Text style={styles.backText}>{'\u2190'} Back</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>About</Text>
-        <View style={{ width: 60 }} />
-      </View>
-      <View style={styles.content}>
-        <View style={styles.logoBadge}>
-          <Text style={styles.logoText}>CB</Text>
+      <ScreenHeader title="About" />
+      <View style={styles.aboutContent}>
+        <View style={styles.aboutLogo}>
+          <Text style={styles.aboutLogoText}>A</Text>
         </View>
-        <Text style={styles.title}>CBROS ERP POS</Text>
-        <Text style={styles.subtitle}>C-BROS Genuine Autoparts & Accessories, Inc.</Text>
+        <Text style={styles.aboutTitle}>APEX POS</Text>
+        <Text style={styles.aboutSubtitle}>C-BROS Genuine Autoparts & Accessories, Inc.</Text>
         <View style={styles.infoCard}>
           <InfoRow label="Version" value="1.0.0" />
-          <InfoRow label="Build" value="2026.04.13" />
-          <InfoRow label="Platform" value="Android Tablet" />
-          <InfoRow label="Branches" value="6 Active" />
+          <InfoRow label="Build" value="2026.05.13" />
+          <InfoRow label="Platform" value="Android POS" />
         </View>
       </View>
     </View>
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+export function ReturnsScreen() {
+  const [searchText, setSearchText] = useState('');
+  const [refundSaleId, setRefundSaleId] = useState<string | null>(null);
+  const { data: sales, isLoading, refetch } = useSalesListQuery(searchText || undefined);
+  const { data: refundSale } = useSaleDetailQuery(refundSaleId ?? '');
+  const styles = createStyles();
+
+  const visibleSales = (sales ?? []).filter(s =>
+    isRefundableStatus(s.status) || s.status === 'REFUNDED',
+  );
+
+  const openRefund = useCallback((sale: SaleListItem) => {
+    if (!isRefundableStatus(sale.status)) return;
+    setRefundSaleId(sale.id);
+  }, []);
+
+  const handleRefunded = useCallback(() => {
+    setRefundSaleId(null);
+    refetch();
+  }, [refetch]);
+
+  return (
+    <View style={styles.container}>
+      <ScreenHeader title="Returns" />
+      <View style={styles.returnsContent}>
+        <View style={styles.returnSearchBox}>
+          <Icon name="search" size={18} color={colors.text.muted} />
+          <TextInput
+            style={styles.returnSearchInput}
+            value={searchText}
+            onChangeText={setSearchText}
+            placeholder="Receipt, sale number, or customer"
+            placeholderTextColor={colors.text.muted}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+          {searchText.length > 0 && (
+            <Pressable onPress={() => setSearchText('')} hitSlop={8}>
+              <Icon name="close" size={17} color={colors.text.secondary} />
+            </Pressable>
+          )}
+        </View>
+
+        <Text style={styles.returnHint}>
+          {searchText ? 'Search results' : 'Refundable sales from today'}
+        </Text>
+
+        {isLoading ? (
+          <View style={styles.returnLoading}>
+            <ActivityIndicator color={colors.accent.primary} />
+          </View>
+        ) : visibleSales.length === 0 ? (
+          <EmptyState
+            icon="receipt"
+            title="No Sales Found"
+            body="Search by receipt or sale number to start a return."
+          />
+        ) : (
+          <ScrollView contentContainerStyle={styles.returnList}>
+            {visibleSales.map(sale => {
+              const disabled = !isRefundableStatus(sale.status);
+              return (
+                <Pressable
+                  key={sale.id}
+                  style={[styles.returnCard, disabled && styles.returnCardDisabled]}
+                  onPress={() => openRefund(sale)}
+                  disabled={disabled}
+                  android_ripple={!disabled ? { color: colors.accent.glow } : undefined}
+                >
+                  <View style={styles.returnCardTop}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.returnSaleNo}>{sale.saleNo}</Text>
+                      <Text style={styles.returnMeta}>
+                        {sale.customerName || 'Walk-in'} / {fmtTxnTime(sale.completedAt || sale.createdAt)}
+                      </Text>
+                    </View>
+                    <Text style={styles.returnTotal}>{fmtPHP(parseFloat(sale.grandTotal))}</Text>
+                  </View>
+                  <View style={styles.returnCardBottom}>
+                    <Text style={[styles.returnStatus, disabled && styles.returnStatusDisabled]}>
+                      {disabled ? 'Fully refunded' : sale.status === 'PARTIALLY_REFUNDED' ? 'Partial refund' : 'Refundable'}
+                    </Text>
+                    {!disabled && (
+                      <View style={styles.returnAction}>
+                        <Text style={styles.returnActionText}>Start Return</Text>
+                        <Icon name="chevron-right" size={16} color={colors.accent.primary} />
+                      </View>
+                    )}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
+      </View>
+
+      {refundSale && (
+        <RefundFlow
+          visible={refundSaleId !== null}
+          onClose={() => setRefundSaleId(null)}
+          saleId={refundSale.id}
+          saleNo={refundSale.saleNo}
+          lines={refundSale.lines.map(l => ({
+            id: l.id,
+            productName: l.productName,
+            sku: l.mnemonicSku,
+            quantity: l.quantity,
+            refundedQuantity: l.refundedQuantity ?? 0,
+            unitPrice: parseFloat(l.unitPrice),
+            lineTotal: parseFloat(l.lineTotal),
+          }))}
+          onRefunded={handleRefunded}
+          verifyAuthorization={verifyRefundAuthorizationCredential}
+        />
+      )}
+    </View>
+  );
+}
+
+export function BarcodePrintScreen() {
+  const { query, setQuery, results, isSearching, searchByBarcode } = useCatalogSearch();
+  const printer = usePrinter();
+  const [printingId, setPrintingId] = useState<string | null>(null);
+  const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null);
+  const [scanModalVisible, setScanModalVisible] = useState(false);
+  const [labelCopies, setLabelCopies] = useState(1);
+  const styles = createStyles();
+
+  const buildItemLabelZpl = useCallback((item: CatalogItem, copies = labelCopies) => {
+    const label = buildShelfLabel({
+      itemName: item.name,
+      barcode: item.barcode,
+      sku: item.sku || item.mnemonicSku,
+      price: item.unitPrice,
+    });
+    return Array.from({ length: clampLabelCopies(copies) }, () => label).join('');
+  }, [labelCopies]);
+
+  const handlePrint = useCallback(async (item: CatalogItem) => {
+    if (!item.barcode) {
+      Alert.alert('No Barcode', 'This product does not have a barcode to print.');
+      return;
+    }
+
+    setPrintingId(item.serverId);
+    try {
+      const result = await printZplSafely(printer, buildItemLabelZpl(item));
+
+      if (!result.success) {
+        Alert.alert('Label Not Printed', result.error || 'Connect a ZPL label printer before printing.', [
+          { text: 'Preview Label', onPress: () => setPreviewItem(item) },
+          { text: 'OK', style: 'cancel' },
+        ]);
+      } else {
+        Alert.alert('Label Sent', `${pluralize(labelCopies, 'label')} for ${item.sku || item.name} sent to the printer.`);
+      }
+    } catch (err: any) {
+      Alert.alert('Print Failed', formatPosError(err, 'Label could not be printed.'));
+    } finally {
+      setPrintingId(null);
+    }
+  }, [buildItemLabelZpl, labelCopies, printer]);
+
+  const handleScanSubmit = useCallback(async (barcode: string) => {
+    const code = barcode.trim();
+    setQuery(code);
+    const item = await searchByBarcode(code);
+
+    if (!item) {
+      Alert.alert('No Product Found', `No product was found for barcode ${code}.`);
+      return false;
+    }
+
+    if (!item.barcode) {
+      Alert.alert('No Barcode', `${item.name} does not have a barcode to print.`);
+      return false;
+    }
+
+    setPreviewItem(item);
+    return true;
+  }, [searchByBarcode, setQuery]);
+
+  return (
+    <View style={styles.container}>
+      <ScreenHeader title="Barcode Print" />
+      <View style={styles.returnsContent}>
+        <View style={styles.returnSearchBox}>
+          <Icon name="search" size={18} color={colors.text.muted} />
+          <TextInput
+            style={styles.returnSearchInput}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search product, SKU, or barcode"
+            placeholderTextColor={colors.text.muted}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+          {query.length > 0 && (
+            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <Icon name="close" size={17} color={colors.text.secondary} />
+            </Pressable>
+          )}
+        </View>
+
+        <Text style={styles.returnHint}>
+          {query ? 'Matching products' : 'Search for a product to print a shelf label'}
+        </Text>
+
+        <View style={styles.priceToolbar}>
+          <Button
+            title="Scan Barcode"
+            onPress={() => setScanModalVisible(true)}
+            variant="secondary"
+            style={styles.priceToolbarButton}
+          />
+          <Text style={styles.scanStatusText} numberOfLines={1}>
+            Hardware scanner or manual barcode input
+          </Text>
+        </View>
+
+        <View style={styles.labelControlCard}>
+          <View style={styles.labelControlCopy}>
+            <Text style={styles.labelControlTitle}>Print Quantity</Text>
+            <Text style={styles.labelControlText}>
+              Applies to preview and print actions for every selected item.
+            </Text>
+          </View>
+          <View style={styles.copyStepper}>
+            <Pressable
+              style={[styles.copyStepButton, labelCopies <= 1 && styles.copyStepButtonDisabled]}
+              onPress={() => setLabelCopies(value => clampLabelCopies(value - 1))}
+              disabled={labelCopies <= 1}
+            >
+              <Text style={styles.copyStepText}>-</Text>
+            </Pressable>
+            <Text style={styles.copyCountText}>{labelCopies}</Text>
+            <Pressable
+              style={[styles.copyStepButton, labelCopies >= 10 && styles.copyStepButtonDisabled]}
+              onPress={() => setLabelCopies(value => clampLabelCopies(value + 1))}
+              disabled={labelCopies >= 10}
+            >
+              <Text style={styles.copyStepText}>+</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {isSearching ? (
+          <View style={styles.returnLoading}>
+            <ActivityIndicator color={colors.accent.primary} />
+          </View>
+        ) : results.length === 0 ? (
+          <EmptyState
+            icon="barcode"
+            title="No Products Found"
+            body="Search by product name, SKU, or barcode."
+          />
+        ) : (
+          <ScrollView contentContainerStyle={styles.returnList}>
+            {results.map(item => {
+              const printing = printingId === item.serverId;
+              return (
+                <View key={item.id} style={styles.labelCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.returnSaleNo} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.returnMeta} numberOfLines={1}>
+                      {item.sku || 'No SKU'} / {item.barcode || 'No barcode'}
+                    </Text>
+                    <Text style={styles.labelCardMeta} numberOfLines={1}>
+                      {fmtPHP(item.unitPrice)} / {pluralize(labelCopies, 'label')} ready
+                    </Text>
+                  </View>
+                  <View style={styles.labelActions}>
+                    <Pressable
+                      style={[styles.previewLabelButton, !item.barcode && styles.printLabelButtonDisabled]}
+                      onPress={() => setPreviewItem(item)}
+                      disabled={!item.barcode}
+                      android_ripple={{ color: colors.accent.glow }}
+                    >
+                      <Icon name="tag" size={16} color={colors.accent.primary} />
+                      <Text style={styles.previewLabelText}>Preview</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.printLabelButton, (!item.barcode || printing) && styles.printLabelButtonDisabled]}
+                      onPress={() => handlePrint(item)}
+                      disabled={!item.barcode || printing}
+                      android_ripple={{ color: colors.accent.glow }}
+                    >
+                      {printing ? (
+                        <ActivityIndicator size="small" color={colors.text.inverse} />
+                      ) : (
+                        <>
+                          <Icon name="barcode" size={16} color={colors.text.inverse} />
+                          <Text style={styles.printLabelText}>Print</Text>
+                        </>
+                      )}
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+        )}
+      </View>
+      {previewItem?.barcode ? (
+        <LabelPreviewModal
+          visible={Boolean(previewItem)}
+          itemName={previewItem.name}
+          sku={previewItem.sku || previewItem.mnemonicSku}
+          barcode={previewItem.barcode}
+          price={previewItem.unitPrice}
+          copies={labelCopies}
+          zpl={buildItemLabelZpl(previewItem)}
+          onClose={() => setPreviewItem(null)}
+          onPrint={() => handlePrint(previewItem)}
+          printing={printingId === previewItem.serverId}
+          statusLabel={printer.isConnected ? undefined : 'Connect a ZPL label printer before printing.'}
+        />
+      ) : null}
+      <BarcodeScanModal
+        visible={scanModalVisible}
+        title="Scan Label Barcode"
+        subtitle="Scan or type a product barcode to open the label preview."
+        actionLabel="Preview Label"
+        onSubmit={handleScanSubmit}
+        onClose={() => setScanModalVisible(false)}
+      />
+    </View>
+  );
+}
+
+function EmptyState({ icon, title, body }: { icon: IconName; title: string; body: string }) {
+  const styles = createStyles();
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIcon}>
+        <Icon name={icon} size={30} color={colors.text.muted} />
+      </View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyBody}>{body}</Text>
+    </View>
+  );
+}
+
+function SyncMetric({
+  label,
+  value,
+  tone = 'default',
+}: {
+  label: string;
+  value: string;
+  tone?: 'default' | 'success' | 'warning' | 'danger';
+}) {
+  const styles = createStyles();
+  return (
+    <View style={styles.syncMetricCard}>
+      <Text style={styles.syncMetricLabel}>{label}</Text>
+      <Text
+        style={[
+          styles.syncMetricValue,
+          tone === 'success' && styles.textSuccess,
+          tone === 'warning' && styles.textWarning,
+          tone === 'danger' && styles.textDanger,
+        ]}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function SyncCheckRow({
+  label,
+  detail,
+  ready,
+  warning = false,
+}: {
+  label: string;
+  detail: string;
+  ready: boolean;
+  warning?: boolean;
+}) {
+  const styles = createStyles();
+  const color = ready ? colors.status.success : warning ? colors.status.warning : colors.status.danger;
+  return (
+    <View style={styles.syncCheckRow}>
+      <View style={[styles.syncCheckDot, { backgroundColor: color }]} />
+      <View style={styles.syncCheckCopy}>
+        <Text style={styles.syncCheckLabel}>{label}</Text>
+        <Text
+          style={[
+            styles.syncCheckDetail,
+            ready && styles.textSuccess,
+            warning && !ready && styles.textWarning,
+            !warning && !ready && styles.textDanger,
+          ]}
+          numberOfLines={1}
+        >
+          {detail}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  warning = false,
+  tone = 'default',
+}: {
+  label: string;
+  value: string;
+  warning?: boolean;
+  tone?: 'default' | 'success' | 'warning' | 'danger';
+}) {
+  const styles = createStyles();
   return (
     <View style={styles.infoRow}>
       <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue}>{value}</Text>
+      <Text
+        style={[
+          styles.infoValue,
+          (warning || tone === 'warning') && styles.infoWarning,
+          tone === 'success' && styles.textSuccess,
+          tone === 'danger' && styles.textDanger,
+        ]}
+      >
+        {value}
+      </Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.bg.base,
+    backgroundColor: colors.bg.primary,
   },
   header: {
+    minHeight: 58,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    paddingHorizontal: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
   },
-  backBtn: {
-    width: 60,
+  backButton: {
+    width: 72,
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
   backText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.accent.primary,
+    color: colors.text.secondary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
   },
   headerTitle: {
-    fontSize: 16,
-    fontWeight: '700',
     color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
   },
   content: {
+    padding: spacing.lg,
+    paddingBottom: 90,
+  },
+  parkedSummaryGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  parkedMetricCard: {
+    flex: 1,
+    minHeight: 72,
+    borderRadius: radius.md,
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    justifyContent: 'center',
+  },
+  parkedMetricLabel: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+  },
+  parkedMetricValue: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+    marginTop: 2,
+  },
+  parkedMetricValuePrimary: {
+    color: colors.accent.primary,
+  },
+  returnsContent: {
+    flex: 1,
+    padding: spacing.lg,
+  },
+  priceManagementContent: {
+    padding: spacing.lg,
+    paddingBottom: 120,
+  },
+  returnSearchBox: {
+    minHeight: 50,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  returnSearchInput: {
+    flex: 1,
+    color: colors.text.primary,
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.base,
+  },
+  returnHint: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  returnLoading: {
+    minHeight: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  returnList: {
+    paddingBottom: 90,
+    gap: spacing.md,
+  },
+  returnCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+  },
+  returnCardDisabled: {
+    opacity: 0.55,
+  },
+  returnCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  returnSaleNo: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+  },
+  returnMeta: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 3,
+  },
+  returnTotal: {
+    color: colors.accent.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+  },
+  returnCardBottom: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  returnStatus: {
+    color: colors.status.success,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  returnStatusDisabled: {
+    color: colors.text.muted,
+  },
+  returnAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  returnActionText: {
+    color: colors.accent.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  labelCard: {
+    minHeight: 76,
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  labelCardMeta: {
+    color: colors.accent.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.xs,
+    marginTop: 3,
+  },
+  labelControlCard: {
+    minHeight: 72,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  labelControlCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  labelControlTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.base,
+  },
+  labelControlText: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 3,
+  },
+  copyStepper: {
+    minWidth: 128,
+    minHeight: 42,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.elevated,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    overflow: 'hidden',
+  },
+  copyStepButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg.surface,
+  },
+  copyStepButtonDisabled: {
+    opacity: 0.42,
+  },
+  copyStepText: {
+    color: colors.accent.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+  },
+  copyCountText: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+    minWidth: 34,
+    textAlign: 'center',
+  },
+  labelActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexShrink: 0,
+  },
+  previewLabelButton: {
+    minWidth: 88,
+    minHeight: 42,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+  },
+  previewLabelText: {
+    color: colors.accent.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  printLabelButton: {
+    minWidth: 82,
+    minHeight: 42,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+  },
+  printLabelButtonDisabled: {
+    opacity: 0.5,
+  },
+  printLabelText: {
+    color: colors.text.inverse,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  segmentRow: {
+    minHeight: 46,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: 4,
+    flexDirection: 'row',
+    gap: 4,
+    marginBottom: spacing.md,
+  },
+  segmentButton: {
+    flex: 1,
+    borderRadius: radius.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  segmentButtonActive: {
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.accent.primary,
+  },
+  segmentText: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  segmentTextActive: {
+    color: colors.accent.primary,
+  },
+  sectionTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+  },
+  sectionBody: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.base,
+    lineHeight: 22,
+    marginTop: spacing.xs,
+  },
+  reportHero: {
+    minHeight: 132,
+    borderRadius: radius.md,
+    backgroundColor: colors.accent.primary,
+    padding: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  reportHeroLabel: {
+    color: colors.white,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+    opacity: 0.84,
+  },
+  reportHeroValue: {
+    color: colors.white,
+    fontFamily: fonts.display.extraBold,
+    fontSize: fontSize['4xl'],
+    marginTop: 3,
+  },
+  reportHeroDelta: {
+    color: colors.white,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    opacity: 0.82,
+    marginTop: 4,
+  },
+  reportHeroBadge: {
+    width: 92,
+    minHeight: 82,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportHeroBadgeValue: {
+    color: colors.white,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['2xl'],
+  },
+  reportHeroBadgeLabel: {
+    color: colors.white,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    opacity: 0.82,
+  },
+  reportMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  reportMetricCard: {
+    width: '48.5%',
+    minHeight: 86,
+    borderRadius: radius.md,
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.md,
+    justifyContent: 'space-between',
+  },
+  reportMetricLabel: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+  },
+  reportMetricValue: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+  },
+  textSuccess: {
+    color: colors.status.success,
+  },
+  textWarning: {
+    color: colors.status.warning,
+  },
+  textDanger: {
+    color: colors.status.danger,
+  },
+  reportSection: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    gap: spacing.md,
+  },
+  paymentRow: {
+    minHeight: 56,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+    paddingTop: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  paymentMethod: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.base,
+  },
+  paymentMeta: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 2,
+  },
+  paymentAmount: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+  },
+  topItemRow: {
+    minHeight: 58,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+    paddingTop: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  rankBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent.muted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rankText: {
+    color: colors.accent.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.sm,
+  },
+  topItemName: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.base,
+  },
+  topItemMeta: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 2,
+  },
+  topItemAmount: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.base,
+  },
+  noticeCard: {
+    minHeight: 48,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.warningBg,
+    borderWidth: 1,
+    borderColor: colors.status.warning,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  successNoticeCard: {
+    minHeight: 48,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.successBg,
+    borderWidth: 1,
+    borderColor: colors.status.success,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  noticeText: {
+    flex: 1,
+    color: colors.text.primary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+  },
+  priceToolbar: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  priceToolbarButton: {
+    minWidth: 154,
+  },
+  scanStatusText: {
+    flex: 1,
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+  },
+  pricingGuardCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.md,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  pricingGuardItem: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  pricingGuardIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pricingGuardCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pricingGuardLabel: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+  },
+  pricingGuardValue: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+    marginTop: 2,
+  },
+  priceEditorCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.accent.primary,
+    padding: spacing.lg,
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  priceEditorHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  priceQuickRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  priceQuickChip: {
+    minHeight: 38,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.elevated,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  priceQuickChipDisabled: {
+    opacity: 0.5,
+  },
+  priceQuickText: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  priceInputRow: {
+    minHeight: 54,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.elevated,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  priceInputPrefix: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  priceInput: {
+    flex: 1,
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['2xl'],
+    paddingVertical: 0,
+  },
+  warningText: {
+    color: colors.status.warning,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+  },
+  productResultCard: {
+    minHeight: 82,
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  productResultActive: {
+    borderColor: colors.accent.primary,
+    backgroundColor: colors.accent.muted,
+  },
+  productPriceBlock: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  productPrice: {
+    color: colors.accent.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+  },
+  productStock: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+  },
+  heldCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  heldTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  heldTitleBlock: {
+    flex: 1,
+  },
+  heldTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+  },
+  heldMeta: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 2,
+  },
+  heldTotal: {
+    color: colors.accent.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+  },
+  heldPreview: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+    gap: 4,
+  },
+  heldContext: {
+    marginTop: spacing.md,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: 3,
+  },
+  heldContextText: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+  },
+  heldLine: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.sm,
+  },
+  heldLineMuted: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+  },
+  heldActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  deleteButton: {
+    width: 54,
+    height: 54,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.dangerBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  syncHealthCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  syncHealth_success: {
+    borderColor: colors.status.success,
+  },
+  syncHealth_warning: {
+    borderColor: colors.status.warning,
+  },
+  syncHealth_danger: {
+    borderColor: colors.status.danger,
+  },
+  syncHealthHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  syncHealthTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flex: 1,
+  },
+  syncHealthTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+  },
+  syncHealthSubtitle: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 2,
+  },
+  syncHealthBadge: {
+    minHeight: 34,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  syncBadge_success: {
+    backgroundColor: colors.status.successBg,
+    borderColor: colors.status.success,
+  },
+  syncBadge_warning: {
+    backgroundColor: colors.status.warningBg,
+    borderColor: colors.status.warning,
+  },
+  syncBadge_danger: {
+    backgroundColor: colors.status.dangerBg,
+    borderColor: colors.status.danger,
+  },
+  syncHealthBadgeText: {
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  syncBadgeText_success: {
+    color: colors.status.successText,
+  },
+  syncBadgeText_warning: {
+    color: colors.status.warningText,
+  },
+  syncBadgeText_danger: {
+    color: colors.status.dangerText,
+  },
+  syncMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  syncMetricCard: {
+    width: '48.5%',
+    minHeight: 62,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    justifyContent: 'center',
+  },
+  syncMetricLabel: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+  },
+  syncMetricValue: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.base,
+    marginTop: 2,
+  },
+  syncErrorCard: {
+    minHeight: 48,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.status.danger,
+    backgroundColor: colors.status.dangerBg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.md,
+  },
+  syncErrorText: {
+    flex: 1,
+    color: colors.status.dangerText,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+  },
+  syncChecklistCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  syncChecklistTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+    marginBottom: spacing.xs,
+  },
+  syncCheckRow: {
+    minHeight: 52,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  syncCheckDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  syncCheckCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  syncCheckLabel: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+  },
+  syncCheckDetail: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+    marginTop: 2,
+  },
+  pendingReviewCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  pendingReviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  pendingReviewTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+  },
+  pendingReviewSubtitle: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 3,
+  },
+  pendingReviewBadge: {
+    minWidth: 42,
+    minHeight: 34,
+    borderRadius: radius.pill,
+    backgroundColor: colors.status.warningBg,
+    borderWidth: 1,
+    borderColor: colors.status.warning,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  pendingReviewBadgeText: {
+    color: colors.status.warningText,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.base,
+  },
+  pendingReviewMetrics: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  pendingReviewRows: {
+    gap: spacing.sm,
+  },
+  pendingSaleRow: {
+    minHeight: 54,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.elevated,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  pendingSaleDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  pendingSaleDotWarning: {
+    backgroundColor: colors.status.warning,
+  },
+  pendingSaleDotDanger: {
+    backgroundColor: colors.status.danger,
+  },
+  pendingSaleDotInfo: {
+    backgroundColor: colors.status.info,
+  },
+  pendingSaleCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pendingSaleTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  pendingSaleDetail: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    marginTop: 2,
+  },
+  pendingSaleMeta: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+  },
+  pendingSaleAmount: {
+    color: colors.text.primary,
+    fontFamily: fonts.mono.medium,
+    fontSize: fontSize.sm,
+  },
+  pendingSaleStatus: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.xs,
+    marginTop: 2,
+  },
+  infoCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  infoRow: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  infoLabel: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.base,
+  },
+  infoValue: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.base,
+    flexShrink: 1,
+    textAlign: 'right',
+  },
+  infoWarning: {
+    color: colors.status.warning,
+  },
+  progressCard: {
+    marginTop: spacing.md,
+    backgroundColor: colors.accent.muted,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+  },
+  progressTitle: {
+    color: colors.accent.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  progressText: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.lg,
+    marginTop: 2,
+  },
+  actionStack: {
+    marginTop: spacing.lg,
+    gap: spacing.md,
+  },
+  emptyState: {
+    minHeight: 280,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: radius.lg,
+    backgroundColor: colors.bg.elevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
+  },
+  emptyTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.xl,
+  },
+  emptyBody: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.base,
+    lineHeight: 22,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+    maxWidth: 340,
+  },
+  aboutContent: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 12,
+    padding: spacing.lg,
+    gap: spacing.sm,
   },
-  icon: {
-    fontSize: 56,
-    opacity: 0.4,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.text.primary,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: colors.text.secondary,
-    textAlign: 'center',
-    lineHeight: 20,
-    maxWidth: 360,
-  },
-  badge: {
-    marginTop: 8,
-    backgroundColor: 'rgba(148,163,184,0.12)',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: colors.text.muted,
-    letterSpacing: 1.5,
-  },
-  logoBadge: {
-    width: 64,
-    height: 64,
-    borderRadius: 16,
-    backgroundColor: '#1E40AF',
+  aboutLogo: {
+    width: 76,
+    height: 76,
+    borderRadius: radius.lg,
+    backgroundColor: colors.accent.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: spacing.sm,
   },
-  logoText: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '800',
+  aboutLogoText: {
+    color: colors.white,
+    fontFamily: fonts.display.extraBold,
+    fontSize: fontSize['5xl'],
   },
-  infoCard: {
-    marginTop: 24,
-    backgroundColor: colors.bg.surface,
-    borderRadius: 8,
-    padding: 16,
-    width: '100%',
-    maxWidth: 320,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  infoLabel: {
-    fontSize: 13,
-    color: colors.text.muted,
-  },
-  infoValue: {
-    fontSize: 13,
-    fontWeight: '600',
+  aboutTitle: {
     color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['3xl'],
+  },
+  aboutSubtitle: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.base,
+    textAlign: 'center',
+    marginBottom: spacing.lg,
   },
 });

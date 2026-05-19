@@ -1,9 +1,20 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
-import { View, Text, Pressable, ScrollView, Animated, StyleSheet, Alert } from 'react-native';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { View, Text, Pressable, ScrollView, Animated, StyleSheet, Alert, TextInput, ActivityIndicator } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuid } from 'uuid';
-import { BottomSheet, Button, Input, Divider } from '@/components/ui';
+import { BottomSheet, Button, Input, Divider, Icon } from '@/components/ui';
+import { useScanner } from '@/hardware/scanner/context';
+import { useAuth } from '@/hooks/use-auth';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import { apiFetch } from '@/services/api-client';
+import { logElevation } from '@/services/audit-logger';
+import type { RefundAuthorizationMethod, RefundAuthorizationResult } from '@/utils/refund-authorization';
+import { formatPosError } from '@/utils/pos-error-messages';
+import {
+  detectAuthorizationCredentialMethod,
+  isCompleteAuthorizationCredentialInput,
+  sanitizeAuthorizationCredential,
+} from '@/utils/authorization-credentials';
 
 interface SaleLine {
   id: string;
@@ -22,14 +33,19 @@ interface RefundFlowProps {
   saleNo: string;
   lines: SaleLine[];
   onRefunded: () => void;
-  verifyPin: (pin: string) => Promise<boolean>;
+  verifyAuthorization: (credential: string, method?: RefundAuthorizationMethod) => Promise<RefundAuthorizationResult>;
 }
 
 type Step = 'select-items' | 'select-reason' | 'confirm' | 'pin';
 
 const REASONS = ['Defective', 'Wrong Part', 'Customer Changed Mind', 'Other'] as const;
-const PIN_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
+const PIN_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'DEL'];
 type Reason = (typeof REASONS)[number];
+type RefundSubmitter = (authorizationOverride?: RefundAuthorizationResult | null) => Promise<void>;
+
+function fmtPHP(amount: number): string {
+  return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
 
 interface RefundItem {
   lineId: string;
@@ -40,10 +56,27 @@ interface RefundItem {
   productName: string;
 }
 
+function buildRefundItems(lines: SaleLine[]): RefundItem[] {
+  return lines.map(l => {
+    const refundable = l.quantity - l.refundedQuantity;
+    return {
+      lineId: l.id,
+      selected: true,
+      quantity: refundable,
+      maxQuantity: refundable,
+      unitPrice: l.quantity > 0 ? l.lineTotal / l.quantity : l.unitPrice,
+      productName: l.productName,
+    };
+  });
+}
+
 export function RefundFlow({
-  visible, onClose, saleId, saleNo, lines, onRefunded, verifyPin,
+  visible, onClose, saleId, saleNo, lines, onRefunded, verifyAuthorization,
 }: RefundFlowProps) {
   const styles = createStyles();
+  const scanner = useScanner();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [step, setStep] = useState<Step>('select-items');
   // Only show lines that still have refundable quantity
   const refundableLines = useMemo(() =>
@@ -51,28 +84,23 @@ export function RefundFlow({
     [lines],
   );
 
-  const [items, setItems] = useState<RefundItem[]>(() =>
-    refundableLines.map(l => {
-      const refundable = l.quantity - l.refundedQuantity;
-      return {
-        lineId: l.id,
-        selected: true,
-        quantity: refundable,
-        maxQuantity: refundable,
-        unitPrice: l.unitPrice,
-        productName: l.productName,
-      };
-    }),
-  );
+  const [items, setItems] = useState<RefundItem[]>(() => buildRefundItems(refundableLines));
   const [reason, setReason] = useState<Reason>('Defective');
   const [otherReason, setOtherReason] = useState('');
+  const [reasonNote, setReasonNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // PIN state (inline in flow, after confirm)
   const [pin, setPin] = useState('');
   const [pinError, setPinError] = useState('');
   const [pinVerifying, setPinVerifying] = useState(false);
+  const [credentialInput, setCredentialInput] = useState('');
+  const [credentialStatus, setCredentialStatus] = useState('');
+  const [authorization, setAuthorization] = useState<RefundAuthorizationResult | null>(null);
+  const credentialInputRef = useRef<TextInput>(null);
+  const pinVerifyingRef = useRef(false);
   const shakeAnim = useRef(new Animated.Value(0)).current;
+  const refundIdempotencyKeyRef = useRef(uuid());
 
   const shakePin = useCallback(() => {
     Animated.sequence([
@@ -83,12 +111,66 @@ export function RefundFlow({
     ]).start();
   }, [shakeAnim]);
 
+  useEffect(() => {
+    if (!visible) return;
+    setStep('select-items');
+    setItems(buildRefundItems(refundableLines));
+    setReason('Defective');
+    setOtherReason('');
+    setReasonNote('');
+    setPin('');
+    setPinError('');
+    setCredentialInput('');
+    setCredentialStatus('');
+    pinVerifyingRef.current = false;
+    setAuthorization(null);
+    setSubmitting(false);
+    refundIdempotencyKeyRef.current = uuid();
+  }, [visible, refundableLines]);
+
   // Use ref so handlePinKey can call the latest submitRefund without circular deps
-  const submitRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  const submitRef = useRef<RefundSubmitter | undefined>(undefined);
+
+  const authorizeCredential = useCallback(async (
+    credential: string,
+    method: RefundAuthorizationMethod,
+  ) => {
+    if (pinVerifyingRef.current || submitting) return;
+
+    pinVerifyingRef.current = true;
+    setPinVerifying(true);
+    setCredentialStatus(method === 'card' ? 'Card swipe detected' : method === 'barcode' ? 'Manager barcode detected' : '');
+    try {
+      const result = await verifyAuthorization(credential, method);
+      if (result.valid) {
+        setAuthorization(result);
+        setPin('');
+        setPinError('');
+        setCredentialInput('');
+        setCredentialStatus('');
+        await submitRef.current?.(result);
+      } else {
+        shakePin();
+        setPin('');
+        setCredentialInput('');
+        setCredentialStatus('');
+        setPinError(method === 'pin' ? 'Invalid PIN' : 'Card or barcode not authorized');
+      }
+    } catch {
+      shakePin();
+      setPin('');
+      setCredentialInput('');
+      setCredentialStatus('');
+      setPinError('Verification failed');
+    } finally {
+      pinVerifyingRef.current = false;
+      setPinVerifying(false);
+    }
+  }, [shakePin, submitting, verifyAuthorization]);
 
   const handlePinKey = useCallback(async (key: string) => {
-    if (pinVerifying) return;
-    if (key === '⌫') {
+    if (pinVerifyingRef.current) return;
+    if (key === 'DEL') {
       setPin(prev => prev.slice(0, -1));
       setPinError('');
       return;
@@ -98,33 +180,63 @@ export function RefundFlow({
     setPin(newPin);
     setPinError('');
     if (newPin.length === 4) {
-      setPinVerifying(true);
-      try {
-        const valid = await verifyPin(newPin);
-        if (valid) {
-          setPin('');
-          setPinError('');
-          // PIN verified — submit the refund
-          await submitRef.current?.();
-        } else {
-          shakePin();
-          setPin('');
-          setPinError('Invalid PIN');
-        }
-      } catch {
-        shakePin();
-        setPin('');
-        setPinError('Verification failed');
-      }
-      setPinVerifying(false);
+      await authorizeCredential(newPin, 'pin');
     }
-  }, [pin, pinVerifying, verifyPin, shakePin]);
+  }, [authorizeCredential, pin]);
 
-  const refundTotal = useMemo(() =>
-    items
-      .filter(i => i.selected)
-      .reduce((sum, i) => sum + i.quantity * i.unitPrice, 0),
-    [items],
+  const focusCredentialInput = useCallback(() => {
+    if (visible && step === 'pin' && !pinVerifyingRef.current && !submitting) {
+      credentialInputRef.current?.focus();
+    }
+  }, [step, submitting, visible]);
+
+  useEffect(() => {
+    if (!visible || step !== 'pin') return;
+
+    setCredentialInput('');
+    const focusTimer = setTimeout(focusCredentialInput, 100);
+    const refocusTimer = setInterval(focusCredentialInput, 1500);
+    scanner.startListening();
+    const unsubscribe = scanner.onScan(async (result) => {
+      const credential = sanitizeAuthorizationCredential(result.barcode);
+      if (!credential) return;
+      setPin('');
+      setPinError('');
+      await authorizeCredential(credential, detectAuthorizationCredentialMethod(credential));
+    });
+
+    return () => {
+      clearTimeout(focusTimer);
+      clearInterval(refocusTimer);
+      unsubscribe();
+      scanner.stopListening();
+    };
+  }, [authorizeCredential, focusCredentialInput, scanner, step, visible]);
+
+  const submitCredentialInput = useCallback(async (value: string) => {
+    const credential = sanitizeAuthorizationCredential(value);
+    if (!credential) return;
+    setCredentialInput('');
+    await authorizeCredential(credential, detectAuthorizationCredentialMethod(credential));
+  }, [authorizeCredential]);
+
+  const handleCredentialInputChange = useCallback((value: string) => {
+    setCredentialInput(value);
+    setPinError('');
+    if (value) setCredentialStatus('Reading credential...');
+    if (isCompleteAuthorizationCredentialInput(value)) {
+      setTimeout(() => void submitCredentialInput(value), 80);
+    }
+  }, [submitCredentialInput]);
+
+  const selectedItems = useMemo(() => items.filter(i => i.selected), [items]);
+  const selectedUnitCount = useMemo(
+    () => selectedItems.reduce((sum, item) => sum + item.quantity, 0),
+    [selectedItems],
+  );
+  const refundTotal = useMemo(
+    () => selectedItems.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0),
+    [selectedItems],
   );
 
   const toggleItem = (lineId: string) => {
@@ -143,54 +255,91 @@ export function RefundFlow({
 
   const handleClose = () => {
     setStep('select-items');
-    setItems(refundableLines.map(l => {
-      const refundable = l.quantity - l.refundedQuantity;
-      return {
-        lineId: l.id,
-        selected: true,
-        quantity: refundable,
-        maxQuantity: refundable,
-        unitPrice: l.unitPrice,
-        productName: l.productName,
-      };
-    }));
+    setItems(buildRefundItems(refundableLines));
     setReason('Defective');
     setOtherReason('');
+    setReasonNote('');
     setPin('');
     setPinError('');
+    setCredentialStatus('');
+    setAuthorization(null);
+    pinVerifyingRef.current = false;
+    refundIdempotencyKeyRef.current = uuid();
     onClose();
   };
 
-  const handleSubmit = async () => {
-    const selectedItems = items.filter(i => i.selected);
+  const handleSubmit: RefundSubmitter = async (authorizationOverride = null) => {
     if (selectedItems.length === 0) {
       Alert.alert('No items selected', 'Please select at least one item to refund.');
       return;
     }
 
     const finalReason = reason === 'Other' ? otherReason.trim() : reason;
+    const finalNote = reasonNote.trim();
     if (!finalReason) {
       Alert.alert('Reason required', 'Please enter a refund reason.');
       return;
     }
 
+    const selectedAuthorization = authorizationOverride ?? authorization;
+    const authorizationNote = selectedAuthorization
+      ? `Authorized by ${selectedAuthorization.fullName ?? 'manager'} via ${selectedAuthorization.method}`
+      : 'Authorization missing';
+    const mobileAuditNote = [
+      `Mobile refund reason: ${finalReason}`,
+      finalNote ? `Cashier note: ${finalNote}` : null,
+      authorizationNote,
+    ].filter(Boolean).join(' | ');
+
     setSubmitting(true);
     try {
       await apiFetch(`/sales/${saleId}/refund`, {
         method: 'POST',
+        requireLockedLocation: true,
         body: JSON.stringify({
-          idempotencyKey: uuid(),
+          idempotencyKey: refundIdempotencyKeyRef.current,
           reason: finalReason,
+          notes: mobileAuditNote,
+          authorizationCredential: selectedAuthorization?.credential,
+          authorizationMethod: selectedAuthorization?.method,
           lines: selectedItems.map(i => ({
             saleLineId: i.lineId,
             quantity: i.quantity,
           })),
         }),
       });
+      logElevation({
+        action: 'refund',
+        description: `Refund ${saleNo} for ${fmtPHP(refundTotal)}`,
+        approvedBy: selectedAuthorization?.fullName ?? 'Authorized manager',
+        performedBy: user?.fullName ?? 'Unknown',
+        metadata: {
+          saleId,
+          saleNo,
+          reason: finalReason,
+          note: finalNote || undefined,
+          refundTotal,
+          selectedLineCount: selectedItems.length,
+          selectedUnitCount,
+          authorizationMethod: selectedAuthorization?.method,
+          authorizationUserId: selectedAuthorization?.userId,
+          authorizationRole: selectedAuthorization?.role,
+          lines: selectedItems.map(i => ({
+            saleLineId: i.lineId,
+            productName: i.productName,
+            quantity: i.quantity,
+            maxQuantity: i.maxQuantity,
+          })),
+        },
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['sales', 'list'] }),
+        queryClient.invalidateQueries({ queryKey: ['sales', 'detail', saleId] }),
+      ]);
       handleClose();
       onRefunded();
     } catch (err: any) {
-      Alert.alert('Refund Failed', err.message || 'Could not process refund');
+      Alert.alert('Refund Failed', formatPosError(err, 'Could not process refund'));
     }
     setSubmitting(false);
   };
@@ -198,13 +347,32 @@ export function RefundFlow({
   // Keep ref in sync so handlePinKey can call latest handleSubmit
   submitRef.current = handleSubmit;
 
-  const anySelected = items.some(i => i.selected);
+  const anySelected = selectedItems.length > 0;
 
   return (
     <BottomSheet visible={visible} onClose={handleClose} title={`Refund ${saleNo}`}>
       {step === 'select-items' && (
         <View style={styles.stepContent}>
           <Text style={styles.stepTitle}>Select items to refund</Text>
+          <View style={styles.auditPanel}>
+            <View style={styles.auditRow}>
+              <Text style={styles.auditLabel}>Sale</Text>
+              <Text style={styles.auditValue}>{saleNo}</Text>
+            </View>
+            <View style={styles.auditRow}>
+              <Text style={styles.auditLabel}>Refundable lines</Text>
+              <Text style={styles.auditValue}>{items.length}</Text>
+            </View>
+            <Text style={styles.auditHint}>
+              Refunds restore stock and are recorded in the Z-reading accountability section.
+            </Text>
+          </View>
+          {items.length === 0 ? (
+            <View style={styles.emptyRefundable}>
+              <Text style={styles.emptyRefundableTitle}>No refundable items</Text>
+              <Text style={styles.emptyRefundableText}>All lines on this sale have already been refunded.</Text>
+            </View>
+          ) : (
           <ScrollView style={styles.itemList}>
             {items.map(item => (
               <View key={item.lineId}>
@@ -216,12 +384,12 @@ export function RefundFlow({
                     styles.checkbox,
                     item.selected && styles.checkboxChecked,
                   ]}>
-                    {item.selected && <Text style={styles.checkmark}>✓</Text>}
+                    {item.selected && <Text style={styles.checkmark}>{'\u2713'}</Text>}
                   </View>
                   <View style={styles.itemInfo}>
                     <Text style={styles.itemName} numberOfLines={1}>{item.productName}</Text>
                     <Text style={styles.itemPrice}>
-                      {'\u20B1'}{item.unitPrice.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                      {fmtPHP(item.unitPrice)} each / {item.maxQuantity} remaining
                     </Text>
                   </View>
                   {item.selected && (
@@ -230,7 +398,7 @@ export function RefundFlow({
                         style={styles.qtyButton}
                         onPress={() => adjustQuantity(item.lineId, -1)}
                       >
-                        <Text style={styles.qtyButtonText}>−</Text>
+                        <Text style={styles.qtyButtonText}>{'\u2212'}</Text>
                       </Pressable>
                       <Text style={styles.qtyText}>{item.quantity}</Text>
                       <Pressable
@@ -246,12 +414,11 @@ export function RefundFlow({
               </View>
             ))}
           </ScrollView>
+          )}
 
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Refund Total</Text>
-            <Text style={styles.totalAmount}>
-              {'\u20B1'}{refundTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-            </Text>
+            <Text style={styles.totalAmount}>{fmtPHP(refundTotal)}</Text>
           </View>
 
           <Button
@@ -291,15 +458,27 @@ export function RefundFlow({
               />
             </View>
           )}
+          <View style={styles.noteBlock}>
+            <Text style={styles.fieldLabel}>Inspection note</Text>
+            <Input
+              value={reasonNote}
+              onChangeText={setReasonNote}
+              placeholder="Optional condition, receipt note, or customer instruction"
+              multiline
+            />
+            <Text style={styles.auditHint}>
+              This note is saved with the refund audit and backend sale notes.
+            </Text>
+          </View>
           <View style={styles.buttonRow}>
             <Button
-              title="← Back"
+              title="Back"
               variant="secondary"
               onPress={() => setStep('select-items')}
               style={styles.btnBack}
             />
             <Button
-              title="Review →"
+              title="Review"
               onPress={() => setStep('confirm')}
               style={styles.btnPrimary}
               disabled={reason === 'Other' && !otherReason.trim()}
@@ -315,7 +494,7 @@ export function RefundFlow({
             {items.filter(i => i.selected).map(item => (
               <View key={item.lineId} style={styles.confirmItem}>
                 <Text style={styles.confirmItemName}>{item.productName}</Text>
-                <Text style={styles.confirmItemQty}>×{item.quantity}</Text>
+                <Text style={styles.confirmItemQty}>x{item.quantity}</Text>
               </View>
             ))}
           </View>
@@ -325,21 +504,40 @@ export function RefundFlow({
               {reason === 'Other' ? otherReason : reason}
             </Text>
           </View>
+          {reasonNote.trim() ? (
+            <View style={styles.confirmReason}>
+              <Text style={styles.confirmReasonLabel}>Note:</Text>
+              <Text style={styles.confirmReasonValue}>{reasonNote.trim()}</Text>
+            </View>
+          ) : null}
+          <View style={styles.auditPanel}>
+            <View style={styles.auditRow}>
+              <Text style={styles.auditLabel}>Items</Text>
+              <Text style={styles.auditValue}>
+                {selectedItems.length} line{selectedItems.length === 1 ? '' : 's'} / {selectedUnitCount} unit{selectedUnitCount === 1 ? '' : 's'}
+              </Text>
+            </View>
+            <View style={styles.auditRow}>
+              <Text style={styles.auditLabel}>Approval</Text>
+              <Text style={styles.auditValue}>Admin or manager required</Text>
+            </View>
+            <Text style={styles.auditHint}>
+              The next screen accepts manager PIN, barcode, or card swipe.
+            </Text>
+          </View>
           <View style={styles.confirmTotal}>
             <Text style={styles.confirmTotalLabel}>REFUND TOTAL</Text>
-            <Text style={styles.confirmTotalAmount}>
-              −{'\u20B1'}{refundTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-            </Text>
+            <Text style={styles.confirmTotalAmount}>-{fmtPHP(refundTotal)}</Text>
           </View>
           <View style={styles.buttonRow}>
             <Button
-              title="← Back"
+              title="Back"
               variant="secondary"
               onPress={() => setStep('select-reason')}
               style={styles.btnBack}
             />
             <Button
-              title="Authorize Refund →"
+              title="Authorize Refund"
               variant="danger"
               onPress={() => { setPin(''); setPinError(''); setStep('pin'); }}
               style={styles.btnPrimary}
@@ -351,7 +549,44 @@ export function RefundFlow({
       {step === 'pin' && (
         <View style={styles.stepContent}>
           <Text style={styles.stepTitle}>Manager Authorization</Text>
-          <Text style={styles.pinSubtitle}>Enter 4-digit PIN to authorize this refund</Text>
+          <Text style={styles.pinSubtitle}>Enter PIN, swipe manager card, or scan manager barcode</Text>
+          <Pressable
+            style={[
+              styles.credentialPanel,
+              (pinVerifying || Boolean(credentialStatus)) && styles.credentialPanelActive,
+            ]}
+            onPress={focusCredentialInput}
+          >
+            {pinVerifying ? (
+              <ActivityIndicator color={colors.accent.primary} size="small" />
+            ) : (
+              <View style={styles.credentialIcons}>
+                <Icon name="barcode" size={20} color={colors.accent.primary} strokeWidth={2.2} />
+                <Icon name="card" size={20} color={colors.accent.primary} strokeWidth={2.2} />
+              </View>
+            )}
+            <View style={styles.credentialCopy}>
+              <Text style={styles.credentialTitle}>
+                {pinVerifying ? 'Checking authorization' : credentialStatus || 'Scan barcode or swipe card'}
+              </Text>
+              <Text style={styles.credentialSubtitle}>
+                Manager badge or card input is captured automatically.
+              </Text>
+            </View>
+          </Pressable>
+          <TextInput
+            ref={credentialInputRef}
+            value={credentialInput}
+            onChangeText={handleCredentialInputChange}
+            onSubmitEditing={() => void submitCredentialInput(credentialInput)}
+            onBlur={() => setTimeout(focusCredentialInput, 50)}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            blurOnSubmit={false}
+            caretHidden
+            showSoftInputOnFocus={false}
+            style={styles.credentialInput}
+          />
 
           <Animated.View style={[styles.dotsRow, { transform: [{ translateX: shakeAnim }] }]}>
             {[0, 1, 2, 3].map(i => (
@@ -381,18 +616,18 @@ export function RefundFlow({
                 disabled={key === '' || pinVerifying || submitting}
                 android_ripple={key !== '' ? { color: colors.accent.glow } : undefined}
               >
-                <Text style={[styles.pinKeyText, key === '⌫' && styles.pinKeyBackspace]}>
-                  {key}
+                <Text style={[styles.pinKeyText, key.length > 1 && styles.pinKeyBackspace]}>
+                  {key.length > 1 ? 'DEL' : key}
                 </Text>
               </Pressable>
             ))}
           </View>
 
-          {submitting && <Text style={styles.pinSubtitle}>Processing refund…</Text>}
+          {submitting && <Text style={styles.pinSubtitle}>Processing refund...</Text>}
 
           <View style={styles.buttonRow}>
             <Button
-              title="← Back"
+              title="Back"
               variant="secondary"
               onPress={() => setStep('confirm')}
               style={styles.btnBack}
@@ -415,8 +650,105 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.primary,
     marginBottom: spacing.lg,
   },
+  auditPanel: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    padding: spacing.md,
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  auditRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  auditLabel: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  auditValue: {
+    ...textStyles.bodyMedium,
+    color: colors.text.primary,
+    flex: 1,
+    textAlign: 'right',
+  },
+  auditHint: {
+    ...textStyles.captionSmall,
+    color: colors.text.secondary,
+    marginTop: spacing.xs,
+  },
   itemList: {
     maxHeight: 250,
+  },
+  credentialInput: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0,
+  },
+  credentialPanel: {
+    minHeight: 58,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.elevated,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  credentialPanelActive: {
+    borderColor: colors.accent.primary,
+    backgroundColor: colors.accent.muted,
+  },
+  credentialIcons: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent.glow,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 2,
+  },
+  credentialCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  credentialTitle: {
+    ...textStyles.bodyMedium,
+    color: colors.text.primary,
+  },
+  credentialSubtitle: {
+    ...textStyles.captionSmall,
+    color: colors.text.secondary,
+    marginTop: 2,
+  },
+  emptyRefundable: {
+    minHeight: 160,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  emptyRefundableTitle: {
+    ...textStyles.bodyMedium,
+    color: colors.text.primary,
+  },
+  emptyRefundableText: {
+    ...textStyles.caption,
+    color: colors.text.secondary,
+    textAlign: 'center',
+    marginTop: spacing.xs,
   },
   itemRow: {
     flexDirection: 'row',
@@ -524,6 +856,16 @@ const createStyles = () => StyleSheet.create({
   otherInput: {
     marginBottom: spacing.lg,
   },
+  noteBlock: {
+    marginBottom: spacing.lg,
+  },
+  fieldLabel: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+    marginBottom: spacing.xs,
+  },
   buttonRow: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -582,14 +924,14 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.caption,
     color: colors.status.danger,
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 0,
     marginBottom: spacing.xs,
   },
   confirmTotalAmount: {
     ...textStyles.display,
     color: colors.status.danger,
   },
-  // ── Inline PIN step ──
+  // Inline PIN step
   pinSubtitle: {
     ...textStyles.caption,
     color: colors.text.secondary,
