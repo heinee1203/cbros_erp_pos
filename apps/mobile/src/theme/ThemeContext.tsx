@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useMemo } from 'react';
-import { useColorScheme, StatusBar } from 'react-native';
+import React, { createContext, useCallback, useContext, useEffect, useMemo } from 'react';
+import { StatusBar } from 'react-native';
 import { storage } from '../storage/mmkv';
 import { KEYS } from '../storage/keys';
 import { darkColors, lightColors, _setActiveTheme } from './colors';
@@ -18,42 +18,40 @@ const ThemeContext = createContext<ThemeContextType | null>(null);
 export function useTheme(): ThemeContextType {
   const ctx = useContext(ThemeContext);
   if (!ctx) {
-    // Fallback for components outside provider — return dark theme
-    return { mode: 'dark', isDark: true, setMode: () => {}, colors: darkColors };
+    // Fallback for components outside provider.
+    return { mode: 'light', isDark: false, setMode: () => {}, colors: lightColors };
   }
   return ctx;
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const systemScheme = useColorScheme();
-  const [mode, setModeState] = useState<ThemeMode>(() => {
-    const saved = storage.getString(KEYS.THEME_MODE);
-    return (saved as ThemeMode) || 'dark';
-  });
+  const mode: ThemeMode = 'light';
+  const isDark = false;
 
-  const setMode = (m: ThemeMode) => {
-    setModeState(m);
-    storage.set(KEYS.THEME_MODE, m);
-  };
+  const setMode = useCallback((_mode: ThemeMode) => {
+    storage.set(KEYS.THEME_MODE, 'light');
+  }, []);
 
-  const isDark = mode === 'system' ? systemScheme !== 'light' : mode === 'dark';
+  useEffect(() => {
+    storage.set(KEYS.THEME_MODE, 'light');
+  }, []);
 
   // Mutate the shared `colors` singleton so every file that imported it
   // reads the active palette on its next render / createStyles() call.
-  _setActiveTheme(isDark);
+  _setActiveTheme(false);
 
-  const themeColors = isDark ? darkColors : lightColors;
+  const themeColors = lightColors;
 
   const value = useMemo(
     () => ({ mode, isDark, setMode, colors: themeColors }),
-    [mode, isDark, themeColors],
+    [setMode],
   );
 
   return (
     <ThemeContext.Provider value={value}>
       <StatusBar
-        barStyle={isDark ? 'light-content' : 'dark-content'}
-        backgroundColor={isDark ? '#0F172A' : '#F5F3EF'}
+        barStyle="dark-content"
+        backgroundColor="#F4F6F8"
       />
       {children}
     </ThemeContext.Provider>

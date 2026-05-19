@@ -89,11 +89,12 @@ const createStyles = () => StyleSheet.create({
     backgroundColor: colors.bg.input,
     borderWidth: 1,
     borderColor: colors.border.default,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.md,
   },
   containerFocused: {
     borderColor: colors.border.focus,
+    backgroundColor: colors.bg.surface,
   },
   iconLeft: {
     marginRight: spacing.sm,

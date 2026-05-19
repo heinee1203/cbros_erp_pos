@@ -34,11 +34,17 @@ const createStyles = () => StyleSheet.create({
   base: {
     backgroundColor: colors.bg.surface,
     borderWidth: 1,
-    borderColor: colors.border.default,
-    borderRadius: radius.sm,
+    borderColor: colors.border.subtle,
+    borderRadius: radius.md,
   },
   elevated: {
-    backgroundColor: colors.bg.elevated,
+    backgroundColor: colors.bg.surface,
+    borderColor: colors.border.default,
+    elevation: 1,
+    shadowColor: colors.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
   },
   padded: {
     padding: spacing.lg,

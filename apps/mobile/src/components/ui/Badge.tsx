@@ -39,7 +39,7 @@ const createStyles = () => StyleSheet.create({
   },
   label: {
     ...textStyles.captionSmall,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
 });

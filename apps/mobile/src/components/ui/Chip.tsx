@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react';
-import { colors } from '@/theme';
+import { colors, fonts, fontSize, radius, spacing } from '@/theme';
 import {
   Animated,
   Pressable,
@@ -64,30 +64,32 @@ export function Chip({ label, active, onPress, count, style }: ChipProps) {
 const styles = StyleSheet.create({
   active: {
     backgroundColor: colors.accent.primary,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 24,
-    marginRight: 8,
+    borderWidth: 1,
+    borderColor: colors.accent.primary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    marginRight: spacing.sm,
   },
   inactive: {
     backgroundColor: colors.bg.surface,
     borderWidth: 1,
     borderColor: colors.border.light,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 24,
-    marginRight: 8,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    marginRight: spacing.sm,
   },
   activeText: {
     color: colors.text.inverse,
-    fontSize: 13,
-    fontFamily: 'Outfit-SemiBold',
-    letterSpacing: 0.3,
+    fontSize: fontSize.md,
+    fontFamily: fonts.display.semiBold,
+    letterSpacing: 0,
   },
   inactiveText: {
-    color: colors.text.muted,
-    fontSize: 13,
-    fontFamily: 'Outfit-Medium',
-    letterSpacing: 0.3,
+    color: colors.text.secondary,
+    fontSize: fontSize.md,
+    fontFamily: fonts.display.medium,
+    letterSpacing: 0,
   },
 });

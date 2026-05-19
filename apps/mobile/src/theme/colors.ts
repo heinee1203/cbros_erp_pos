@@ -1,54 +1,45 @@
-/**
- * Slate Dark — Tailwind slate palette with CBROS orange accent.
- *
- * Background tones shifted from pure-black (#0D0D0F) to navy-slate (#0F172A)
- * to match the Base44 reference design. Text tones shifted from warm cream
- * to cool white/slate. Orange accent (#F97316) retained for brand identity.
- *
- * See design-system/base44-tokens.json for extraction source.
- */
 export const darkColors = {
   bg: {
-    base: '#0F172A',
-    primary: '#0F172A',
-    surface: '#1E293B',
-    elevated: '#334155',
-    overlay: '#334155',
-    input: '#1E293B',
+    base: '#111827',
+    primary: '#111827',
+    surface: '#1F2937',
+    elevated: '#273449',
+    overlay: '#374151',
+    input: '#182231',
   },
   border: {
-    default: 'rgba(148,163,184,0.15)',
-    subtle: 'rgba(148,163,184,0.08)',
-    light: 'rgba(148,163,184,0.20)',
-    medium: 'rgba(148,163,184,0.25)',
-    focus: '#F97316',
+    default: 'rgba(203,213,225,0.18)',
+    subtle: 'rgba(203,213,225,0.10)',
+    light: 'rgba(203,213,225,0.26)',
+    medium: 'rgba(203,213,225,0.34)',
+    focus: '#2563EB',
   },
   text: {
-    primary: '#F8FAFC',
-    secondary: '#94A3B8',
-    muted: '#64748B',
-    inverse: '#0F172A',
+    primary: '#F9FAFB',
+    secondary: '#CBD5E1',
+    muted: '#94A3B8',
+    inverse: '#FFFFFF',
   },
   accent: {
-    primary: '#F97316',
-    pressed: '#EA6B10',
-    hover: '#EA6B10',
-    glow: 'rgba(249,115,22,0.12)',
-    muted: 'rgba(249,115,22,0.06)',
+    primary: '#2563EB',
+    pressed: '#1D4ED8',
+    hover: '#1D4ED8',
+    glow: 'rgba(37,99,235,0.16)',
+    muted: 'rgba(37,99,235,0.08)',
   },
   status: {
     success: '#10B981',
-    successBg: 'rgba(16,185,129,0.1)',
-    successText: '#10B981',
+    successBg: 'rgba(16,185,129,0.14)',
+    successText: '#34D399',
     warning: '#F59E0B',
-    warningBg: 'rgba(245,158,11,0.1)',
-    warningText: '#F59E0B',
+    warningBg: 'rgba(245,158,11,0.14)',
+    warningText: '#FBBF24',
     danger: '#EF4444',
-    dangerBg: 'rgba(239,68,68,0.1)',
-    dangerText: '#EF4444',
-    info: '#3B82F6',
-    infoBg: 'rgba(59,130,246,0.12)',
-    infoText: '#3B82F6',
+    dangerBg: 'rgba(239,68,68,0.14)',
+    dangerText: '#F87171',
+    info: '#38BDF8',
+    infoBg: 'rgba(56,189,248,0.14)',
+    infoText: '#7DD3FC',
     ok: '#10B981',
     low: '#F59E0B',
     out: '#EF4444',
@@ -59,18 +50,18 @@ export const darkColors = {
     out: '#EF4444',
   },
   sync: {
-    offlineBg: 'rgba(245,158,11,0.15)',
-    offlineText: '#F59E0B',
-    reconnectBg: 'rgba(59,130,246,0.15)',
-    reconnectText: '#3B82F6',
-    staleBg: 'rgba(245,158,11,0.10)',
-    staleText: '#D4A050',
+    offlineBg: 'rgba(245,158,11,0.16)',
+    offlineText: '#FBBF24',
+    reconnectBg: 'rgba(56,189,248,0.16)',
+    reconnectText: '#7DD3FC',
+    staleBg: 'rgba(245,158,11,0.12)',
+    staleText: '#FBBF24',
   },
   shift: {
-    bannerBg: '#1E293B',
+    bannerBg: '#182231',
     bannerBorder: '#334155',
-    bannerText: '#F97316',
-    bannerBtnBg: '#F97316',
+    bannerText: '#93C5FD',
+    bannerBtnBg: '#2563EB',
     bannerBtnText: '#FFFFFF',
   },
   toast: {
@@ -80,112 +71,102 @@ export const darkColors = {
     errorText: '#ffffff',
   },
   tab: {
-    active: '#F97316',
-    inactive: '#64748B',
-    bg: '#0F172A',
-    border: '#1E293B',
+    active: '#60A5FA',
+    inactive: '#94A3B8',
+    bg: '#111827',
+    border: '#273449',
   },
   transparent: 'transparent',
   white: '#ffffff',
   black: '#000000',
 } as const;
 
-/** Shared color palette shape — both themes must match this structure */
 type DeepString<T> = { [K in keyof T]: T[K] extends object ? { [J in keyof T[K]]: string } : string };
 type ColorPalette = DeepString<typeof darkColors>;
 
-/**
- * Light mode — Tailwind slate palette, cohesive with the dark slate theme.
- * Shifted from the old warm-toned (#F5F3EF / #6B6560) to cool slate tones
- * so toggling dark ↔ light feels like the same design system, not two
- * different apps. Orange accent stays consistent across both modes.
- */
 export const lightColors: ColorPalette = {
   bg: {
-    base: '#F8FAFC',       // slate-50
-    primary: '#F8FAFC',
-    surface: '#FFFFFF',     // white cards
-    elevated: '#F1F5F9',   // slate-100 (modals, dropdowns)
-    overlay: '#E2E8F0',    // slate-200
-    input: '#F1F5F9',      // slate-100 (input fields)
+    base: '#F4F6F8',
+    primary: '#F4F6F8',
+    surface: '#FFFFFF',
+    elevated: '#EEF2F5',
+    overlay: '#E2E8F0',
+    input: '#FFFFFF',
   },
   border: {
-    default: 'rgba(15,23,42,0.10)',   // slate-900 at 10%
-    subtle: 'rgba(15,23,42,0.06)',
-    light: 'rgba(15,23,42,0.12)',
-    medium: 'rgba(15,23,42,0.18)',
-    focus: '#F97316',                  // orange focus ring
+    default: '#D2DAE5',
+    subtle: '#E3E8EF',
+    light: '#C7D0DC',
+    medium: '#AEB9C8',
+    focus: '#1F6E8C',
   },
   text: {
-    primary: '#0F172A',    // slate-900
-    secondary: '#475569',  // slate-600
-    muted: '#94A3B8',      // slate-400
-    inverse: '#F8FAFC',    // slate-50 (text on dark surfaces)
+    primary: '#172033',
+    secondary: '#485568',
+    muted: '#6F7B8E',
+    inverse: '#FFFFFF',
   },
   accent: {
-    primary: '#F97316',    // same orange as dark mode
-    pressed: '#EA6B10',
-    hover: '#EA6B10',
-    glow: 'rgba(249,115,22,0.12)',
-    muted: 'rgba(249,115,22,0.06)',
+    primary: '#1F6E8C',
+    pressed: '#155A74',
+    hover: '#155A74',
+    glow: 'rgba(31,110,140,0.12)',
+    muted: 'rgba(31,110,140,0.08)',
   },
   status: {
-    success: '#059669',
-    successBg: 'rgba(5,150,105,0.08)',
-    successText: '#059669',
-    warning: '#D97706',
-    warningBg: 'rgba(217,119,6,0.08)',
-    warningText: '#D97706',
-    danger: '#DC2626',
-    dangerBg: 'rgba(220,38,38,0.08)',
-    dangerText: '#DC2626',
-    info: '#2563EB',
-    infoBg: 'rgba(37,99,235,0.08)',
-    infoText: '#2563EB',
-    ok: '#059669',
-    low: '#D97706',
-    out: '#DC2626',
+    success: '#0F8A5F',
+    successBg: 'rgba(15,138,95,0.10)',
+    successText: '#0B6F4B',
+    warning: '#B7791F',
+    warningBg: 'rgba(183,121,31,0.12)',
+    warningText: '#8B5E15',
+    danger: '#C2413A',
+    dangerBg: 'rgba(194,65,58,0.10)',
+    dangerText: '#9F302B',
+    info: '#2563A8',
+    infoBg: 'rgba(37,99,168,0.10)',
+    infoText: '#1D4F88',
+    ok: '#0F8A5F',
+    low: '#B7791F',
+    out: '#C2413A',
   },
   stock: {
-    ok: '#059669',
-    low: '#D97706',
-    out: '#DC2626',
+    ok: '#0F8A5F',
+    low: '#B7791F',
+    out: '#C2413A',
   },
   sync: {
-    offlineBg: 'rgba(217,119,6,0.12)',
-    offlineText: '#D97706',
-    reconnectBg: 'rgba(37,99,235,0.12)',
-    reconnectText: '#2563EB',
-    staleBg: 'rgba(217,119,6,0.08)',
-    staleText: '#92400E',
+    offlineBg: 'rgba(183,121,31,0.12)',
+    offlineText: '#8B5E15',
+    reconnectBg: 'rgba(37,99,168,0.12)',
+    reconnectText: '#1D4F88',
+    staleBg: 'rgba(183,121,31,0.10)',
+    staleText: '#7C4F12',
   },
   shift: {
-    bannerBg: '#EFF6FF',
-    bannerBorder: '#BFDBFE',
-    bannerText: '#1E3A8A',
-    bannerBtnBg: '#F97316',        // orange (was #EA580C)
+    bannerBg: '#EEF6F8',
+    bannerBorder: '#B9D3DE',
+    bannerText: '#155A74',
+    bannerBtnBg: '#1F6E8C',
     bannerBtnText: '#FFFFFF',
   },
   toast: {
-    successBg: 'rgba(5,150,105,0.95)',
+    successBg: 'rgba(15,138,95,0.95)',
     successText: '#ffffff',
-    errorBg: 'rgba(220,38,38,0.95)',
+    errorBg: 'rgba(194,65,58,0.95)',
     errorText: '#ffffff',
   },
   tab: {
-    active: '#F97316',     // orange (consistent with dark mode)
-    inactive: '#94A3B8',   // slate-400 (was warm #A39E96)
-    bg: '#FFFFFF',         // white tab bar (was warm #F5F3EF)
-    border: '#E2E8F0',    // slate-200 (was warm #E8E4DE)
+    active: '#1F6E8C',
+    inactive: '#6F7B8E',
+    bg: '#FFFFFF',
+    border: '#DCE3EB',
   },
   transparent: 'transparent',
   white: '#ffffff',
   black: '#000000',
 } as const;
 
-// ─── Mutable runtime palette ───
-// All files import this same object. ThemeContext mutates it in-place
-// so any code that reads colors.bg.primary at render-time gets the active theme.
 function deepAssign(target: any, source: any) {
   for (const key of Object.keys(source)) {
     if (typeof source[key] === 'object' && source[key] !== null && !Array.isArray(source[key])) {
@@ -197,9 +178,8 @@ function deepAssign(target: any, source: any) {
   }
 }
 
-export const colors: typeof darkColors = JSON.parse(JSON.stringify(darkColors));
+export const colors: typeof darkColors = JSON.parse(JSON.stringify(lightColors));
 
-/** Called by ThemeContext to swap the runtime palette in-place */
-export function _setActiveTheme(isDark: boolean) {
-  deepAssign(colors, isDark ? darkColors : lightColors);
+export function _setActiveTheme(_isDark: boolean) {
+  deepAssign(colors, lightColors);
 }

@@ -9,3 +9,5 @@ export { Toast } from './Toast';
 export { Skeleton } from './Skeleton';
 export { ListRow } from './ListRow';
 export { Divider } from './Divider';
+export { Icon } from './Icon';
+export type { IconName } from './Icon';

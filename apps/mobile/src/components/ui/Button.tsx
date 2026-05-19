@@ -35,20 +35,22 @@ const getVariantStyles = (): Record<
   secondary: {
     bg: colors.bg.surface,
     text: colors.text.primary,
-    border: colors.border.default,
+    border: colors.border.light,
   },
   danger: {
     bg: colors.status.danger,
     text: colors.white,
   },
   ghost: {
-    bg: colors.transparent,
+    bg: colors.bg.elevated,
     text: colors.text.secondary,
   },
 });
 
 const getPressedBgOverrides = (): Partial<Record<ButtonVariant, string>> => ({
   primary: colors.accent.pressed,
+  secondary: colors.bg.elevated,
+  ghost: colors.bg.overlay,
 });
 
 export function Button({
@@ -133,24 +135,24 @@ export function Button({
           innerStyle,
         ]}
       >
-        {loading ? (
-          <ActivityIndicator color={vs.text} size="small" />
-        ) : (
-          <>
-            {icon && <>{icon}</>}
-            <Text
-              style={[
-                styles.label,
-                { color: vs.text },
-                icon ? styles.labelWithIcon : undefined,
-                textStyleOverride,
-              ]}
-              numberOfLines={1}
-            >
-              {title}
-            </Text>
-          </>
-        )}
+        <>
+          {loading ? (
+            <ActivityIndicator color={vs.text} size="small" />
+          ) : (
+            icon && <>{icon}</>
+          )}
+          <Text
+            style={[
+              styles.label,
+              { color: vs.text },
+              (icon || loading) ? styles.labelWithIcon : undefined,
+              textStyleOverride,
+            ]}
+            numberOfLines={1}
+          >
+            {title}
+          </Text>
+        </>
       </Pressable>
     </Animated.View>
   );
@@ -159,11 +161,13 @@ export function Button({
 const createStyles = () => StyleSheet.create({
   base: {
     minHeight: touchTarget.min,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.transparent,
   },
   fullWidth: {
     width: '100%',
