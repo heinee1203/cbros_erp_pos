@@ -9,6 +9,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import { runFullSync, onSyncStatus, type SyncStatus } from '@/sync/sync-manager';
+import { formatPosError, isStoreLockError } from '@/utils/pos-error-messages';
 import { colors, textStyles, spacing, radius } from '@/theme';
 
 interface Props {
@@ -26,6 +27,7 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
   const [syncedCount, setSyncedCount] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const styles = createStyles();
+  const isStoreLockBlocked = isStoreLockError(errorMsg);
 
   const doSync = async () => {
     setPhase('syncing');
@@ -36,14 +38,14 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
       const result = await runFullSync();
       if (result.error) {
         setPhase('error');
-        setErrorMsg(result.error);
+        setErrorMsg(formatPosError(result.error, 'Sync failed'));
       } else {
         setPhase('success');
         setTimeout(onSyncComplete, 800);
       }
     } catch (err: any) {
       setPhase('error');
-      setErrorMsg(err.message || 'Sync failed');
+      setErrorMsg(formatPosError(err, 'Sync failed'));
     }
   };
 
@@ -136,13 +138,15 @@ export default function SyncProgressScreen({ locationName, onSyncComplete }: Pro
                 <Text style={styles.retryText}>Retry Sync</Text>
               )}
             </Pressable>
-            <Pressable
-              style={styles.skipButton}
-              onPress={handleSkip}
-              android_ripple={{ color: colors.accent.glow }}
-            >
-              <Text style={styles.skipText}>Continue with Stale Data</Text>
-            </Pressable>
+            {!isStoreLockBlocked && (
+              <Pressable
+                style={styles.skipButton}
+                onPress={handleSkip}
+                android_ripple={{ color: colors.accent.glow }}
+              >
+                <Text style={styles.skipText}>Continue with Stale Data</Text>
+              </Pressable>
+            )}
           </View>
         )}
       </Animated.View>

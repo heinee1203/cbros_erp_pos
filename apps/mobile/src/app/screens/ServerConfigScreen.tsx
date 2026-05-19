@@ -124,7 +124,7 @@ const createStyles = () => StyleSheet.create({
   logo: {
     ...textStyles.display,
     color: colors.accent.primary,
-    letterSpacing: 4,
+    letterSpacing: 0,
     marginBottom: spacing.xs,
   },
   title: {

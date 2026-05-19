@@ -41,6 +41,7 @@ export async function syncElevationLogs(): Promise<void> {
   try {
     await apiFetch('/pos/elevation-logs', {
       method: 'POST',
+      requireLockedLocation: true,
       body: JSON.stringify({ logs }),
     });
     // Clear synced logs

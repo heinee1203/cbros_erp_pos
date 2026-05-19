@@ -1,37 +1,28 @@
-/**
- * MainTabs — 4-tab bottom navigation matching the Base44 reference design.
- *
- * Tabs: POS | Inventory | Customers | More
- *
- * The bottom tab bar is ALWAYS visible (tablet and phone), replacing the old
- * NavRail sidebar. A persistent TopBar sits above the tab navigator showing
- * C-BROS branding, branch selector, and sync status.
- *
- * POS tab renders a split-screen on tablet (60/40 catalog + cart) and a
- * stack navigator on phone. Other tabs render full-screen content.
- */
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import SyncStatusBar from '@/components/SyncStatusBar';
 import { NetworkBanner } from '@/components/NetworkBanner';
+import { RegisterRecoveryBanner } from '@/components/RegisterRecoveryBanner';
 import { TopBar } from '@/components/TopBar';
 import { SplitView } from '@/components/SplitView';
 import { useCartStore } from '@/stores/cart-store';
 import { useLayout } from '@/hooks/use-layout';
 import { startNetworkMonitor } from '@/services/network-monitor';
-import { colors, textStyles, layout } from '@/theme';
-import { useTheme } from '@/theme/ThemeContext';
+import { colors, fonts, fontSize } from '@/theme';
 import ErrorBoundary from '@/components/ErrorBoundary';
+import { Icon, type IconName } from '@/components/ui';
 import CatalogScreen from './screens/CatalogScreen';
 import CartScreen from './screens/CartScreen';
 import PaymentScreen from './screens/PaymentScreen';
 import TransactionListScreen from './screens/TransactionListScreen';
 import TransactionDetailScreen from './screens/TransactionDetailScreen';
 import ZReadingScreen from './screens/ZReadingScreen';
+import ShiftHistoryScreen from './screens/ShiftHistoryScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import PrinterSetupScreen from './screens/PrinterSetupScreen';
+import RegisterToolsScreen from './screens/RegisterToolsScreen';
 import InventoryScreen from './screens/InventoryScreen';
 import CustomersScreen from './screens/CustomersScreen';
 import MoreScreen from './screens/MoreScreen';
@@ -39,38 +30,35 @@ import {
   ParkedOrdersScreen,
   ReturnsScreen,
   BarcodePrintScreen,
-  ReportsScreen,
-  PriceManagementScreen,
-  SuppliersScreen,
-  UserRolesScreen,
   SyncManagementScreen,
   AboutScreen,
 } from './screens/PlaceholderScreens';
 
-// ─── Tab Icons (unicode emoji — matches the existing NavRail pattern) ───
-const TAB_ICONS: Record<string, string> = {
-  POS: '\uD83D\uDED2',       // 🛒
-  Inventory: '\uD83D\uDCCB', // 📋
-  Customers: '\uD83D\uDC65', // 👥
-  More: '\u2026',              // …
+const TAB_ICONS: Record<string, IconName> = {
+  POS: 'pos',
+  Inventory: 'inventory',
+  Customers: 'customers',
+  More: 'more',
 };
 
-// ─── POS Stack (phone: stacked screens, tablet: split-screen) ───
+export type PaymentIntent = 'CASH' | 'CHARGE' | 'SPLIT';
+
 export type POSStackParamList = {
   Catalog: undefined;
   Cart: undefined;
-  Payment: undefined;
+  Payment: { initialMethod?: PaymentIntent } | undefined;
 };
 
 const POSStack = createStackNavigator<POSStackParamList>();
 
-/** Tablet: Catalog + Cart/Payment rendered side-by-side */
 function POSSplitScreen() {
   const [showPayment, setShowPayment] = useState(false);
+  const [paymentIntent, setPaymentIntent] = useState<PaymentIntent>('CASH');
   const cartLineCount = useCartStore(s => s.lines.length);
   const cartIsEmpty = cartLineCount === 0 && !showPayment;
 
-  const handleProceedToPayment = useCallback(() => {
+  const handleProceedToPayment = useCallback((intent: PaymentIntent = 'CASH') => {
+    setPaymentIntent(intent);
     setShowPayment(true);
   }, []);
 
@@ -83,7 +71,7 @@ function POSSplitScreen() {
       primary={<ErrorBoundary><CatalogScreen /></ErrorBoundary>}
       secondary={
         showPayment ? (
-          <ErrorBoundary><PaymentScreen onBack={handleBackToCart} /></ErrorBoundary>
+          <ErrorBoundary><PaymentScreen onBack={handleBackToCart} initialMethod={paymentIntent} /></ErrorBoundary>
         ) : (
           <ErrorBoundary><CartScreen onProceedToPayment={handleProceedToPayment} /></ErrorBoundary>
         )
@@ -110,16 +98,21 @@ function POSNavigator() {
     <POSStack.Navigator screenOptions={{ headerShown: false }}>
       <POSStack.Screen name="Catalog">{() => <ErrorBoundary><CatalogScreen /></ErrorBoundary>}</POSStack.Screen>
       <POSStack.Screen name="Cart">{() => <ErrorBoundary><CartScreen /></ErrorBoundary>}</POSStack.Screen>
-      <POSStack.Screen name="Payment">{() => <ErrorBoundary><PaymentScreen /></ErrorBoundary>}</POSStack.Screen>
+      <POSStack.Screen name="Payment">
+        {(props: any) => (
+          <ErrorBoundary>
+            <PaymentScreen initialMethod={props.route.params?.initialMethod} />
+          </ErrorBoundary>
+        )}
+      </POSStack.Screen>
     </POSStack.Navigator>
   );
 }
 
-// ─── Transactions Stack (accessed from More → Recent Transactions) ───
 export type TransactionsStackParamList = {
   TransactionList: undefined;
   TransactionDetail: { saleId: string };
-  ZReading: { shiftId: string; mode: 'view' | 'close' };
+  ZReading: { shiftId: string; mode: 'view' | 'close' | 'snapshot' };
 };
 
 const TxStack = createStackNavigator<TransactionsStackParamList>();
@@ -134,7 +127,6 @@ function TransactionsNavigator() {
   );
 }
 
-// ─── Settings Stack (accessed from More → Settings) ───
 export type SettingsStackParamList = {
   SettingsHome: undefined;
   PrinterSetup: undefined;
@@ -151,19 +143,17 @@ function SettingsNavigator() {
   );
 }
 
-// ─── More Stack (grid menu + sub-screens) ───
 export type MoreStackParamList = {
   MoreMenu: undefined;
   Transactions: undefined;
+  ShiftHistory: undefined;
+  ShiftZReading: { shiftId: string; mode: 'view' | 'close' | 'snapshot' };
   Settings: undefined;
   PrinterSetup: undefined;
+  RegisterTools: undefined;
   ParkedOrders: undefined;
   Returns: undefined;
   BarcodePrint: undefined;
-  Reports: undefined;
-  PriceManagement: undefined;
-  Suppliers: undefined;
-  UserRoles: undefined;
   SyncManagement: undefined;
   About: undefined;
 };
@@ -175,44 +165,40 @@ function MoreNavigator() {
     <MoreStack.Navigator screenOptions={{ headerShown: false }}>
       <MoreStack.Screen name="MoreMenu" component={MoreScreen} />
       <MoreStack.Screen name="Transactions" component={TransactionsNavigator} />
+      <MoreStack.Screen name="ShiftHistory">{() => <ErrorBoundary><ShiftHistoryScreen /></ErrorBoundary>}</MoreStack.Screen>
+      <MoreStack.Screen name="ShiftZReading">{(props: any) => <ErrorBoundary><ZReadingScreen {...props} /></ErrorBoundary>}</MoreStack.Screen>
       <MoreStack.Screen name="Settings" component={SettingsNavigator} />
       <MoreStack.Screen name="PrinterSetup">{() => <ErrorBoundary><PrinterSetupScreen /></ErrorBoundary>}</MoreStack.Screen>
+      <MoreStack.Screen name="RegisterTools">{() => <ErrorBoundary><RegisterToolsScreen /></ErrorBoundary>}</MoreStack.Screen>
       <MoreStack.Screen name="ParkedOrders" component={ParkedOrdersScreen} />
       <MoreStack.Screen name="Returns" component={ReturnsScreen} />
       <MoreStack.Screen name="BarcodePrint" component={BarcodePrintScreen} />
-      <MoreStack.Screen name="Reports" component={ReportsScreen} />
-      <MoreStack.Screen name="PriceManagement" component={PriceManagementScreen} />
-      <MoreStack.Screen name="Suppliers" component={SuppliersScreen} />
-      <MoreStack.Screen name="UserRoles" component={UserRolesScreen} />
       <MoreStack.Screen name="SyncManagement" component={SyncManagementScreen} />
       <MoreStack.Screen name="About" component={AboutScreen} />
     </MoreStack.Navigator>
   );
 }
 
-// ─── Main Tab Navigator ───
 const Tab = createBottomTabNavigator();
-
-const BOTTOM_TAB_HEIGHT = 60;
+const BOTTOM_TAB_HEIGHT = 66;
 
 export default function MainTabs() {
-  const { isDark } = useTheme();
-
   useEffect(() => {
     const unsub = startNetworkMonitor();
     return unsub;
   }, []);
 
   return (
-    <View key={isDark ? 'dark' : 'light'} style={{ flex: 1, backgroundColor: colors.bg.primary }}>
+    <View style={{ flex: 1, backgroundColor: colors.bg.primary }}>
       <TopBar />
       <SyncStatusBar />
       <NetworkBanner />
+      <RegisterRecoveryBanner />
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: false,
           tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 22, color }}>{TAB_ICONS[route.name] ?? '?'}</Text>
+            <Icon name={TAB_ICONS[route.name] ?? 'more'} size={22} color={color} strokeWidth={2.3} />
           ),
           tabBarActiveTintColor: colors.tab.active,
           tabBarInactiveTintColor: colors.tab.inactive,
@@ -221,12 +207,13 @@ export default function MainTabs() {
             borderTopColor: colors.tab.border,
             borderTopWidth: 1,
             height: BOTTOM_TAB_HEIGHT,
-            paddingBottom: 6,
-            paddingTop: 4,
+            paddingBottom: 9,
+            paddingTop: 8,
+            elevation: 8,
           },
           tabBarLabelStyle: {
-            fontSize: 11,
-            fontWeight: '600' as const,
+            fontSize: fontSize.xs,
+            fontFamily: fonts.body.semiBold,
           },
         })}
       >
@@ -238,4 +225,3 @@ export default function MainTabs() {
     </View>
   );
 }
-

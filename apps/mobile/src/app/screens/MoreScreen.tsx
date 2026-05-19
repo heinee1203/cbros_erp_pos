@@ -1,168 +1,242 @@
-/**
- * More Menu — 3-column grid of icon cards matching the Base44 reference.
- *
- * Quick stats banner at top (placeholder data), then a grid of menu items
- * that navigate to sub-screens. Items that don't have screens yet show
- * "Coming Soon" placeholders.
- */
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { getHeldCartCount } from '@/storage/held-carts';
+import { getPendingSales, onPendingSalesChanged } from '@/storage/pending-sales';
 import {
-  View,
-  Text,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-} from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import { colors } from '@/theme';
+  getUnsyncedRegisterDrawerEvents,
+  onRegisterDrawerEventsChanged,
+} from '@/storage/register-drawer-events';
+import { getSyncStatus, onSyncStatus, type SyncStatus } from '@/sync/sync-manager';
+import { colors, fonts, fontSize, radius, spacing } from '@/theme';
+import { Icon, type IconName } from '@/components/ui';
 
 interface MenuItem {
-  icon: string;
+  icon: IconName;
   label: string;
-  color: string;
   route: string;
+  enabled: boolean;
+  tone?: 'primary' | 'success' | 'warning' | 'neutral';
 }
 
 const MENU_ITEMS: MenuItem[] = [
-  { icon: '\u23F8', label: 'Parked Orders', color: '#F97316', route: 'ParkedOrders' },
-  { icon: '\uD83D\uDCCB', label: 'Transactions', color: '#3B82F6', route: 'Transactions' },
-  { icon: '\u21A9', label: 'Returns', color: '#EF4444', route: 'Returns' },
-  { icon: '\uD83D\uDCF7', label: 'Barcode Print', color: '#22C55E', route: 'BarcodePrint' },
-  { icon: '\uD83D\uDCCA', label: 'Reports', color: '#F59E0B', route: 'Reports' },
-  { icon: '\uD83D\uDCB0', label: 'Price Mgmt', color: '#F59E0B', route: 'PriceManagement' },
-  { icon: '\uD83D\uDE9A', label: 'Suppliers', color: '#22C55E', route: 'Suppliers' },
-  { icon: '\uD83D\uDC64', label: 'Users & Roles', color: '#6B7280', route: 'UserRoles' },
-  { icon: '\uD83D\uDD04', label: 'Sync', color: '#6B7280', route: 'SyncManagement' },
-  { icon: '\uD83D\uDDA8', label: 'Printer Setup', color: '#22C55E', route: 'PrinterSetup' },
-  { icon: '\u2699', label: 'Settings', color: '#6B7280', route: 'Settings' },
-  { icon: '\u2139', label: 'About', color: '#6B7280', route: 'About' },
+  { icon: 'hold', label: 'Parked Orders', route: 'ParkedOrders', enabled: true, tone: 'warning' },
+  { icon: 'receipt', label: 'Transactions', route: 'Transactions', enabled: true, tone: 'primary' },
+  { icon: 'receipt', label: 'Shift History', route: 'ShiftHistory', enabled: true, tone: 'success' },
+  { icon: 'cash', label: 'Register Tools', route: 'RegisterTools', enabled: true, tone: 'primary' },
+  { icon: 'sync', label: 'Sync', route: 'SyncManagement', enabled: true, tone: 'primary' },
+  { icon: 'printer', label: 'Printer Setup', route: 'PrinterSetup', enabled: true, tone: 'success' },
+  { icon: 'settings', label: 'Settings', route: 'Settings', enabled: true, tone: 'neutral' },
+  { icon: 'info', label: 'About', route: 'About', enabled: true, tone: 'neutral' },
+  { icon: 'receipt', label: 'Returns', route: 'Returns', enabled: true, tone: 'primary' },
+  { icon: 'barcode', label: 'Barcode Print', route: 'BarcodePrint', enabled: true, tone: 'success' },
 ];
+
+function toneColor(tone: MenuItem['tone']) {
+  if (tone === 'success') return colors.status.success;
+  if (tone === 'warning') return colors.status.warning;
+  if (tone === 'primary') return colors.accent.primary;
+  return colors.text.secondary;
+}
+
+function fmtSyncTime(ts: string | null): string {
+  if (!ts) return 'Never';
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60_000) return 'Just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function readMetrics(): { syncStatus: SyncStatus; heldCount: number; pendingCount: number } {
+  return {
+    syncStatus: getSyncStatus(),
+    heldCount: getHeldCartCount(),
+    pendingCount: getPendingSales().length + getUnsyncedRegisterDrawerEvents().length,
+  };
+}
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
+  const styles = createStyles();
+  const [metrics, setMetrics] = useState(readMetrics);
+
+  useEffect(() => onSyncStatus(syncStatus => {
+    setMetrics({
+      syncStatus,
+      heldCount: getHeldCartCount(),
+      pendingCount: getPendingSales().length + getUnsyncedRegisterDrawerEvents().length,
+    });
+  }), []);
+
+  useEffect(() => onPendingSalesChanged(pendingSales => {
+    setMetrics(prev => ({
+      ...prev,
+      heldCount: getHeldCartCount(),
+      pendingCount: pendingSales.length + getUnsyncedRegisterDrawerEvents().length,
+    }));
+  }), []);
+
+  useEffect(() => onRegisterDrawerEventsChanged(drawerEvents => {
+    setMetrics(prev => ({
+      ...prev,
+      heldCount: getHeldCartCount(),
+      pendingCount: getPendingSales().length + drawerEvents.filter(event => event.syncStatus !== 'synced' && !event.serverId).length,
+    }));
+  }), []);
+
+  useFocusEffect(useCallback(() => {
+    setMetrics(readMetrics());
+  }, []));
+
+  const { syncStatus, heldCount, pendingCount } = metrics;
 
   const handlePress = (item: MenuItem) => {
+    if (!item.enabled) {
+      Alert.alert(
+        'Not Available',
+        `${item.label} is not wired for mobile POS yet. It has been disabled here so cashiers do not enter a dead workflow.`,
+      );
+      return;
+    }
     navigation.navigate(item.route);
   };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
-      {/* Quick stats banner */}
-      <View style={styles.statsBanner}>
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Today's Sales</Text>
-          <Text style={styles.statValue}>{'\u20B1'}0.00</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Transactions</Text>
-          <Text style={styles.statValue}>0</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statLabel}>Pending Sync</Text>
-          <Text style={styles.statValue}>0 items</Text>
-        </View>
+      <View style={styles.metrics}>
+        <Metric label="Held" value={String(heldCount)} />
+        <Metric label="Pending Sync" value={String(pendingCount)} tone={pendingCount > 0 ? 'warning' : 'default'} />
+        <Metric label="Last Sync" value={fmtSyncTime(syncStatus.lastInventorySync)} />
       </View>
 
-      {/* Grid of menu items */}
       <View style={styles.grid}>
-        {MENU_ITEMS.map((item, i) => (
-          <Pressable
-            key={i}
-            style={styles.card}
-            onPress={() => handlePress(item)}
-            android_ripple={{ color: 'rgba(255,255,255,0.05)' }}
-          >
-            <Text style={[styles.cardIcon, { color: item.color }]}>{item.icon}</Text>
-            <Text style={styles.cardLabel}>{item.label}</Text>
-          </Pressable>
-        ))}
+        {MENU_ITEMS.map((item) => {
+          const color = toneColor(item.tone);
+          return (
+            <Pressable
+              key={item.route}
+              style={({ pressed }) => [
+                styles.card,
+                !item.enabled && styles.cardDisabled,
+                pressed && item.enabled && styles.cardPressed,
+              ]}
+              onPress={() => handlePress(item)}
+              android_ripple={item.enabled ? { color: colors.accent.glow } : undefined}
+            >
+              <View style={[styles.iconBox, { backgroundColor: item.enabled ? `${color}1F` : colors.bg.elevated }]}>
+                <Icon name={item.icon} size={22} color={item.enabled ? color : colors.text.muted} />
+              </View>
+              <Text style={[styles.cardLabel, !item.enabled && styles.cardLabelDisabled]} numberOfLines={2}>
+                {item.label}
+              </Text>
+              {!item.enabled && <Text style={styles.disabledLabel}>Disabled</Text>}
+            </Pressable>
+          );
+        })}
       </View>
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
+function Metric({
+  label,
+  value,
+  tone = 'default',
+}: {
+  label: string;
+  value: string;
+  tone?: 'default' | 'warning';
+}) {
+  const styles = createStyles();
+  return (
+    <View style={styles.metric}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={[styles.metricValue, tone === 'warning' && styles.metricWarning]} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.bg.base,
+    backgroundColor: colors.bg.primary,
   },
   scrollContent: {
-    padding: 16,
-    paddingBottom: 80,
+    padding: spacing.lg,
+    paddingBottom: 90,
   },
-  statsBanner: {
+  metrics: {
     flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  metric: {
+    flex: 1,
+    minHeight: 66,
+    borderRadius: radius.md,
     backgroundColor: colors.bg.surface,
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 16,
     borderWidth: 1,
     borderColor: colors.border.subtle,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    justifyContent: 'center',
   },
-  statItem: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
+  metricLabel: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
   },
-  statLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.text.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  statValue: {
-    fontSize: 16,
-    fontWeight: '700',
+  metricValue: {
     color: colors.text.primary,
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize['2xl'],
+    marginTop: 2,
   },
-  statDivider: {
-    width: 1,
-    backgroundColor: colors.border.default,
-    marginHorizontal: 8,
+  metricWarning: {
+    color: colors.status.warning,
   },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: spacing.md,
   },
   card: {
-    width: '31%',
+    width: '31.5%',
+    minHeight: 112,
+    borderRadius: radius.md,
     backgroundColor: colors.bg.surface,
-    borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border.subtle,
+    padding: spacing.md,
+    justifyContent: 'space-between',
+  },
+  cardPressed: {
+    backgroundColor: colors.accent.muted,
+  },
+  cardDisabled: {
+    opacity: 0.58,
+  },
+  iconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 20,
-    paddingHorizontal: 8,
-    gap: 8,
-    position: 'relative',
-  },
-  cardIcon: {
-    fontSize: 28,
   },
   cardLabel: {
-    fontSize: 12,
-    fontWeight: '600',
     color: colors.text.primary,
-    textAlign: 'center',
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.base,
+    lineHeight: 18,
   },
-  comingSoonBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    backgroundColor: 'rgba(148,163,184,0.15)',
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
+  cardLabelDisabled: {
+    color: colors.text.secondary,
   },
-  comingSoonText: {
-    fontSize: 8,
-    fontWeight: '700',
+  disabledLabel: {
     color: colors.text.muted,
-    textTransform: 'uppercase',
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
   },
 });

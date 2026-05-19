@@ -3,6 +3,7 @@ export const KEYS = {
   AUTH_TOKEN: 'auth.token',
   AUTH_USER: 'auth.user',
   AUTH_LOCATION_ID: 'auth.locationId',
+  AUTH_LOCATIONS: 'auth.locations',
 
   // Device provisioning
   API_BASE_URL: 'device.apiBaseUrl',
@@ -12,6 +13,7 @@ export const KEYS = {
   // Printer
   PRINTER_DEVICE_ID: 'printer.lastDeviceId',
   PRINTER_PAPER_WIDTH: 'printer.paperWidth',
+  PRINTER_LANGUAGE: 'printer.language',
 
   // Scanner
   SCANNER_MODE: 'scanner.mode',
@@ -28,4 +30,7 @@ export const KEYS = {
 
   // Pending sales queue
   PENDING_SALES: 'pending.sales',
+
+  // Register drawer events
+  REGISTER_DRAWER_EVENTS: 'register.drawerEvents',
 } as const;

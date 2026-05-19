@@ -192,7 +192,7 @@ const createStyles = () => StyleSheet.create({
     fontSize: 8,
     fontFamily: 'Outfit-Medium',
     color: colors.text.muted,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
   heldCartsButton: {

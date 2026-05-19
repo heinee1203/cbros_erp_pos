@@ -1,5 +1,6 @@
 import { secureStorage, storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { getLockedLocationId, requireLockedLocationId } from '@/config/device-binding';
 
 export class ApiError extends Error {
   constructor(
@@ -18,14 +19,15 @@ function getBaseUrl(): string {
 }
 
 function getToken(): string | null {
-  return secureStorage.getString(KEYS.AUTH_TOKEN) ?? null;
+  return secureStorage.getString(KEYS.AUTH_TOKEN)
+    ?? storage.getString(KEYS.AUTH_TOKEN)
+    ?? null;
 }
 
 function getLocationId(): string | null {
-  // Priority: auth context location > device binding location
-  const authLoc = storage.getString(KEYS.AUTH_LOCATION_ID);
-  if (authLoc) return authLoc;
-  // Fallback to device binding
+  const lockedLocationId = getLockedLocationId();
+  if (lockedLocationId) return lockedLocationId;
+
   try {
     const bindingRaw = storage.getString('device_binding');
     if (bindingRaw) {
@@ -33,14 +35,15 @@ function getLocationId(): string | null {
       return binding.locationId ?? null;
     }
   } catch {}
-  return null;
+
+  return storage.getString(KEYS.AUTH_LOCATION_ID) ?? null;
 }
 
 export async function apiFetch<T>(
   path: string,
-  options: RequestInit & { skipAuth?: boolean } = {},
+  options: RequestInit & { skipAuth?: boolean; requireLockedLocation?: boolean } = {},
 ): Promise<T> {
-  const { skipAuth, headers: customHeaders, ...rest } = options;
+  const { skipAuth, requireLockedLocation, headers: customHeaders, ...rest } = options;
 
   const headers: Record<string, string> = {
     ...(customHeaders as Record<string, string> || {}),
@@ -58,7 +61,9 @@ export async function apiFetch<T>(
       console.warn(`[apiFetch] No auth token for ${rest.method || 'GET'} ${path}`);
     }
 
-    const locationId = getLocationId();
+    const locationId = requireLockedLocation
+      ? requireLockedLocationId(`${rest.method || 'GET'} ${path}`)
+      : getLocationId();
     if (locationId) headers['X-Location-ID'] = locationId;
   }
 

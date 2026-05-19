@@ -38,6 +38,9 @@ export const POS_PERMISSIONS = {
   viewAllTransactions: 2,
   reprintAnyReceipt: 2,
   overrideDotFIFO: 2,
+  overrideNegativeStock: 2,
+  viewSalesReports: 2,
+  manageProductPrice: 2,
 
   // Full access (level 3 — ADMIN only)
   processRefund: 3,

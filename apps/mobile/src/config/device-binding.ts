@@ -18,6 +18,38 @@ export function getDeviceBinding(): DeviceBinding | null {
   return getJSON<DeviceBinding>(storage, KEY) ?? null;
 }
 
+export function getLockedLocationId(): string | null {
+  return getDeviceBinding()?.locationId ?? null;
+}
+
+export function requireLockedLocationId(action = 'This POS action'): string {
+  const locationId = getLockedLocationId();
+  if (!locationId) {
+    throw new Error(`${action} requires this register to be locked to a store. Register the device before continuing.`);
+  }
+  return locationId;
+}
+
+export function isLockedToLocation(locationId?: string | null): boolean {
+  const lockedLocationId = getLockedLocationId();
+  return !!lockedLocationId && lockedLocationId === locationId;
+}
+
+export function bindDeviceToLocation(
+  location: { id: string; name: string; code: string },
+  boundBy: string,
+): DeviceBinding {
+  const binding: DeviceBinding = {
+    locationId: location.id,
+    locationName: location.name,
+    locationCode: location.code,
+    boundAt: new Date().toISOString(),
+    boundBy,
+  };
+  setJSON(storage, KEY, binding);
+  return binding;
+}
+
 /**
  * Bind this device to a store location.
  * Only a manager/admin should call this (enforced at UI level).
@@ -28,7 +60,7 @@ export function setDeviceBinding(binding: DeviceBinding): void {
 
 /**
  * Clear the device binding.
- * Used when re-binding to a different store.
+ * Kept for admin/decommission tooling only. Do not expose from Android POS UI.
  */
 export function clearDeviceBinding(): void {
   storage.delete(KEY);

@@ -1,13 +1,25 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
+const catalogIndexSql = `
+create index if not exists "products_parent_name" on "products" ("parent_product_id", "name");
+create index if not exists "products_family_parent_name" on "products" ("family_name", "parent_product_id", "name");
+create index if not exists "inventory_location_product" on "inventory" ("location_id", "product_server_id");
+create index if not exists "inventory_available_location" on "inventory" ("available_for_sale", "location_id");
+`;
+
 export const schema = appSchema({
-  version: 8,
+  version: 9,
+  unsafeSql: (sql, kind) => (
+    kind === 'setup' || kind === 'create_indices'
+      ? `${sql}${catalogIndexSql}`
+      : sql
+  ),
   tables: [
     tableSchema({
       name: 'products',
       columns: [
         { name: 'server_id', type: 'string', isIndexed: true },
-        { name: 'name', type: 'string' },
+        { name: 'name', type: 'string', isIndexed: true },
         { name: 'sku', type: 'string', isIndexed: true },
         { name: 'mnemonic_sku', type: 'string', isIndexed: true },
         { name: 'barcode', type: 'string', isOptional: true, isIndexed: true },
@@ -17,9 +29,9 @@ export const schema = appSchema({
         { name: 'image_url', type: 'string', isOptional: true },
         { name: 'is_variable_price', type: 'boolean' },
         { name: 'family_id', type: 'string', isOptional: true },
-        { name: 'family_name', type: 'string', isOptional: true },
+        { name: 'family_name', type: 'string', isOptional: true, isIndexed: true },
         { name: 'brand_id', type: 'string', isOptional: true },
-        { name: 'parent_product_id', type: 'string', isOptional: true },
+        { name: 'parent_product_id', type: 'string', isOptional: true, isIndexed: true },
         { name: 'is_parent', type: 'boolean' },
         { name: 'is_serialized', type: 'boolean' },
         { name: 'is_tire', type: 'boolean' },

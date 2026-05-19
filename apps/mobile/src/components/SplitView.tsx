@@ -66,17 +66,17 @@ const createStyles = () => StyleSheet.create({
         shadowRadius: 6,
       },
       android: {
-        elevation: 4,
+        elevation: 2,
       },
     }),
   },
   divider: {
     width: 1,
-    backgroundColor: colors.border.light,
+    backgroundColor: colors.border.default,
   },
   collapsedPane: {
     width: 48,
-    backgroundColor: colors.bg.elevated,
+    backgroundColor: colors.bg.surface,
     alignItems: 'center',
     justifyContent: 'center',
     borderLeftWidth: 1,

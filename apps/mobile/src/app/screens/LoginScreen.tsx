@@ -10,16 +10,15 @@ import {
 } from 'react-native';
 import { useAuth } from '@/hooks/use-auth';
 import { getDeviceBinding } from '@/config/device-binding';
-import { colors, textStyles, spacing } from '@/theme';
+import { colors, textStyles, spacing, radius } from '@/theme';
 import { Button, Input } from '@/components/ui';
 
 export default function LoginScreen() {
-  const { login, locations, setLocationId, isAuthenticated } = useAuth();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showLocationPicker, setShowLocationPicker] = useState(false);
   const passwordRef = useRef<TextInput>(null);
 
   const styles = createStyles();
@@ -33,8 +32,7 @@ export default function LoginScreen() {
     setError('');
     try {
       await login(email.trim(), password);
-      // If multiple locations, useAuth auto-selects first retail location
-      // Auth context will switch to MainTabs automatically
+      // Auth context either resumes the locked store or opens first-time registration.
     } catch (err: any) {
       setError(err.message || 'Login failed');
     } finally {
@@ -48,7 +46,7 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.content}>
-        <Text style={styles.logo}>CBROS</Text>
+        <Text style={styles.logo}>APEX POS</Text>
         {(() => {
           const binding = getDeviceBinding();
           return binding ? (
@@ -58,7 +56,7 @@ export default function LoginScreen() {
           ) : null;
         })()}
         <Text style={styles.title}>Sign In</Text>
-        <Text style={styles.subtitle}>Enter your credentials to continue</Text>
+        <Text style={styles.subtitle}>C-BROS retail terminal</Text>
 
         <Text style={styles.label}>Email</Text>
         <Input
@@ -109,16 +107,24 @@ const createStyles = () => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.xl,
   },
   content: {
-    flex: 1,
-    justifyContent: 'center',
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
     paddingHorizontal: spacing['3xl'],
+    paddingVertical: spacing['3xl'],
   },
   logo: {
     ...textStyles.display,
     color: colors.accent.primary,
-    letterSpacing: 4,
+    letterSpacing: 0,
     marginBottom: spacing.xs,
   },
   title: {

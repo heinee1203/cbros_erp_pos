@@ -1,4 +1,4 @@
-import { schemaMigrations, addColumns } from '@nozbe/watermelondb/Schema/migrations';
+import { schemaMigrations, addColumns, unsafeExecuteSql } from '@nozbe/watermelondb/Schema/migrations';
 
 export const migrations = schemaMigrations({
   migrations: [
@@ -70,6 +70,17 @@ export const migrations = schemaMigrations({
             { name: 'warranty_months', type: 'number', isOptional: true },
           ],
         }),
+      ],
+    },
+    {
+      toVersion: 9,
+      steps: [
+        unsafeExecuteSql(`
+          create index if not exists "products_parent_name" on "products" ("parent_product_id", "name");
+          create index if not exists "products_family_parent_name" on "products" ("family_name", "parent_product_id", "name");
+          create index if not exists "inventory_location_product" on "inventory" ("location_id", "product_server_id");
+          create index if not exists "inventory_available_location" on "inventory" ("available_for_sale", "location_id");
+        `),
       ],
     },
   ],

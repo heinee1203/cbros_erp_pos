@@ -40,7 +40,8 @@ export type SyncProgress = {
   total: number | null;
 };
 
-const PAGE_SIZE = 1000;
+// Keep below Android SQLite's common bind-parameter ceiling for oneOf queries.
+const PAGE_SIZE = 500;
 
 function mapProductFields(record: any, item: ServerProduct) {
   record.name = item.name;
@@ -80,7 +81,9 @@ export async function syncCatalog(
     if (cursor) params.push(`cursor=${cursor}`);
     const url = `/sync/catalog?${params.join('&')}`;
 
-    const response = await apiFetch<CatalogSyncResponse>(url);
+    const response = await apiFetch<CatalogSyncResponse>(url, {
+      requireLockedLocation: true,
+    });
     lastSyncedAt = response.syncedAt;
 
     if (response.data.length === 0) break;

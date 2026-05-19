@@ -6,17 +6,30 @@ import {
   getStoredToken,
   isTokenExpired,
   setActiveLocation as setLocationService,
+  clearActiveLocation,
   getActiveLocation,
+  getStoredLocations,
   fetchLocations,
   type UserInfo,
   type LocationInfo,
 } from '@/services/auth';
+import {
+  bindDeviceToLocation,
+  getDeviceBinding,
+  type DeviceBinding,
+} from '@/config/device-binding';
+import { useCartStore } from '@/stores/cart-store';
+
+type BindingInvalidReason = 'missing' | 'inactive' | null;
 
 interface AuthContextValue {
   token: string | null;
   user: UserInfo | null;
   locationId: string | null;
   locations: LocationInfo[];
+  deviceBinding: DeviceBinding | null;
+  bindingInvalidReason: BindingInvalidReason;
+  isDeviceBindingInvalid: boolean;
   isAuthenticated: boolean;
   needsLocationSelect: boolean;
   isLoading: boolean;
@@ -27,39 +40,101 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function getInitialAuthState() {
+  try {
+    const stored = getStoredToken();
+    const expired = stored ? isTokenExpired(stored) : true;
+
+    if (!stored || expired) {
+      if (stored) logoutService();
+      return { token: null, user: null, locationId: null, locations: [], deviceBinding: null };
+    }
+
+    const storedUser = getStoredUser();
+    if (!storedUser) {
+      console.error('[auth] Stored token exists without stored user; clearing auth');
+      logoutService();
+      return { token: null, user: null, locationId: null, locations: [], deviceBinding: null };
+    }
+
+    return {
+      token: stored,
+      user: storedUser,
+      locationId: getActiveLocation(),
+      locations: getStoredLocations(),
+      deviceBinding: getDeviceBinding(),
+    };
+  } catch (err) {
+    console.error('[auth] Initial auth restore failed:', err);
+    logoutService();
+    return { token: null, user: null, locationId: null, locations: [], deviceBinding: null };
+  }
+}
+
+function getBindingInvalidReason(
+  binding: DeviceBinding | null,
+  locations: LocationInfo[],
+): BindingInvalidReason {
+  if (!binding || locations.length === 0) return null;
+  const boundLocation = locations.find(location => location.id === binding.locationId);
+  if (!boundLocation) return 'missing';
+  return boundLocation.isActive ? null : 'inactive';
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<UserInfo | null>(null);
-  const [locationId, setLocationId] = useState<string | null>(null);
-  const [locations, setLocations] = useState<LocationInfo[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [initialAuth] = useState(getInitialAuthState);
+  const [token, setToken] = useState<string | null>(initialAuth.token);
+  const [user, setUser] = useState<UserInfo | null>(initialAuth.user);
+  const [locationId, setLocationId] = useState<string | null>(initialAuth.locationId);
+  const [locations, setLocations] = useState<LocationInfo[]>(initialAuth.locations);
+  const [deviceBinding, setDeviceBindingState] = useState<DeviceBinding | null>(initialAuth.deviceBinding);
+  const [isLoading] = useState(false);
+  const bindingInvalidReason = getBindingInvalidReason(deviceBinding, locations);
 
   // Bootstrap from stored credentials
   useEffect(() => {
-    const stored = getStoredToken();
-    if (__DEV__) {
-      console.log('[auth] Bootstrap: stored token exists:', !!stored);
-      if (stored) console.log('[auth] Bootstrap: token expired:', isTokenExpired(stored));
-    }
-    if (stored && !isTokenExpired(stored)) {
-      setToken(stored);
-      setUser(getStoredUser());
-      setLocationId(getActiveLocation());
+    let isMounted = true;
+
+    if (initialAuth.token && initialAuth.user) {
       fetchLocations()
-        .then(setLocations)
+        .then((locs) => {
+          if (!isMounted) return;
+          setLocations(locs);
+
+          const activeIds = new Set(locs.filter(loc => loc.isActive).map(loc => loc.id));
+          const binding = getDeviceBinding();
+          setDeviceBindingState(binding);
+
+          if (binding) {
+            setLocationService(binding.locationId);
+            setLocationId(binding.locationId);
+            useCartStore.getState().reloadForCurrentLocation();
+            return;
+          }
+
+          if (locationId && !activeIds.has(locationId)) {
+            clearActiveLocation();
+            setLocationId(null);
+            useCartStore.getState().reloadForCurrentLocation();
+          }
+        })
         .catch((err) => {
-          if (__DEV__) console.error('[auth] Bootstrap fetchLocations failed:', err.message);
+          console.error('[auth] Bootstrap fetchLocations failed:', err.message);
           // If token is rejected, clear auth so user can re-login
-          if (err.status === 401) {
+          if (err.status === 401 && isMounted) {
             logoutService();
             setToken(null);
             setUser(null);
             setLocationId(null);
+            setLocations([]);
           }
         });
     }
-    setIsLoading(false);
-  }, []);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [initialAuth.token, initialAuth.user, locationId]);
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await loginService(email, password);
@@ -91,8 +166,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw err;
     }
     setLocations(locs);
-    // Don't auto-select — let LocationSelectScreen handle it
-    // This ensures the user explicitly picks their store on every fresh login
+
+    const binding = getDeviceBinding();
+    setDeviceBindingState(binding);
+
+    if (binding) {
+      setLocationService(binding.locationId);
+      setLocationId(binding.locationId);
+      useCartStore.getState().reloadForCurrentLocation();
+      return;
+    }
+
+    clearActiveLocation();
+    setLocationId(null);
+    useCartStore.getState().reloadForCurrentLocation();
   }, []);
 
   const logout = useCallback(() => {
@@ -101,20 +188,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setLocationId(null);
     setLocations([]);
+    setDeviceBindingState(getDeviceBinding());
+    useCartStore.getState().reloadForCurrentLocation();
   }, []);
 
   const handleSetLocation = useCallback((id: string) => {
-    setLocationService(id);
-    setLocationId(id);
-  }, []);
+    const existingBinding = deviceBinding ?? getDeviceBinding();
+    if (existingBinding) {
+      setLocationService(existingBinding.locationId);
+      setLocationId(existingBinding.locationId);
+      useCartStore.getState().reloadForCurrentLocation();
+      return;
+    }
+
+    const availableLocations = locations.length > 0 ? locations : getStoredLocations();
+    const selectedLocation = availableLocations.find(location => location.id === id && location.isActive);
+    if (!selectedLocation) {
+      console.error('[auth] Cannot bind device to missing or inactive location:', id);
+      return;
+    }
+
+    const binding = bindDeviceToLocation(
+      selectedLocation,
+      user?.fullName ?? user?.email ?? 'Unknown user',
+    );
+
+    setDeviceBindingState(binding);
+    setLocationService(binding.locationId);
+    setLocationId(binding.locationId);
+    useCartStore.getState().reloadForCurrentLocation();
+  }, [deviceBinding, locations, user?.email, user?.fullName]);
 
   const value: AuthContextValue = {
     token,
     user,
     locationId,
     locations,
+    deviceBinding,
+    bindingInvalidReason,
+    isDeviceBindingInvalid: bindingInvalidReason !== null,
     isAuthenticated: !!token && !!user,
-    needsLocationSelect: !!token && !!user && !locationId,
+    needsLocationSelect: !!token && !!user && !deviceBinding,
     isLoading,
     login,
     logout,

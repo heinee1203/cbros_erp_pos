@@ -2,12 +2,15 @@ import { syncCatalog, type SyncProgress } from './catalog-sync';
 import { syncInventory } from './inventory-sync';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { getLockedLocationId } from '@/config/device-binding';
 
 export interface SyncStatus {
   isSyncing: boolean;
   lastCatalogSync: string | null;
   lastInventorySync: string | null;
   error: string | null;
+  lastAttemptStartedAt: string | null;
+  lastAttemptFinishedAt: string | null;
   /** Live progress during sync */
   progress: SyncProgress | null;
 }
@@ -15,13 +18,18 @@ export interface SyncStatus {
 let _isSyncing = false;
 let _listeners: Array<(status: SyncStatus) => void> = [];
 let _currentProgress: SyncProgress | null = null;
+let _lastError: string | null = null;
+let _lastAttemptStartedAt: string | null = null;
+let _lastAttemptFinishedAt: string | null = null;
 
 function getStatus(): SyncStatus {
   return {
     isSyncing: _isSyncing,
     lastCatalogSync: storage.getString(KEYS.LAST_CATALOG_SYNC) ?? null,
     lastInventorySync: storage.getString(KEYS.LAST_INVENTORY_SYNC) ?? null,
-    error: null,
+    error: _lastError,
+    lastAttemptStartedAt: _lastAttemptStartedAt,
+    lastAttemptFinishedAt: _lastAttemptFinishedAt,
     progress: _currentProgress,
   };
 }
@@ -40,8 +48,21 @@ export function onSyncStatus(listener: (status: SyncStatus) => void): () => void
 export async function runFullSync(): Promise<SyncStatus> {
   if (_isSyncing) return getStatus();
 
+  if (!getLockedLocationId()) {
+    const now = new Date().toISOString();
+    _lastError = 'Register this device to a store before syncing POS data.';
+    _lastAttemptStartedAt = now;
+    _lastAttemptFinishedAt = now;
+    const status = getStatus();
+    notify(status);
+    return status;
+  }
+
   _isSyncing = true;
   _currentProgress = null;
+  _lastError = null;
+  _lastAttemptStartedAt = new Date().toISOString();
+  _lastAttemptFinishedAt = null;
   notify(getStatus());
 
   const handleProgress = (progress: SyncProgress) => {
@@ -54,14 +75,18 @@ export async function runFullSync(): Promise<SyncStatus> {
     await syncInventory(handleProgress);
 
     _currentProgress = null;
-    const status = getStatus();
     _isSyncing = false;
+    _lastError = null;
+    _lastAttemptFinishedAt = new Date().toISOString();
+    const status = getStatus();
     notify(status);
     return status;
   } catch (error: any) {
     _isSyncing = false;
     _currentProgress = null;
-    const status = { ...getStatus(), error: error.message };
+    _lastError = error?.message || 'Sync failed. Check the server connection and try again.';
+    _lastAttemptFinishedAt = new Date().toISOString();
+    const status = getStatus();
     notify(status);
     return status;
   }

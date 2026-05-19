@@ -25,7 +25,8 @@ interface InventorySyncResponse {
   hasMore: boolean;
 }
 
-const PAGE_SIZE = 1000;
+// Keep below Android SQLite's common bind-parameter ceiling for oneOf queries.
+const PAGE_SIZE = 500;
 
 function mapInventoryFields(record: any, item: ServerInventory) {
   record.productServerId = item.productId;
@@ -54,7 +55,9 @@ export async function syncInventory(
     if (cursor) params.push(`cursor=${cursor}`);
     const url = `/sync/inventory?${params.join('&')}`;
 
-    const response = await apiFetch<InventorySyncResponse>(url);
+    const response = await apiFetch<InventorySyncResponse>(url, {
+      requireLockedLocation: true,
+    });
     lastSyncedAt = response.syncedAt;
 
     if (response.data.length === 0) break;

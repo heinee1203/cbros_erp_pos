@@ -1,5 +1,6 @@
 import { secureStorage, storage, setJSON, getJSON } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { getLockedLocationId } from '@/config/device-binding';
 import { apiFetch } from './api-client';
 
 export interface UserInfo {
@@ -31,34 +32,62 @@ export async function login(email: string, password: string): Promise<LoginRespo
   });
   // Persist
   secureStorage.set(KEYS.AUTH_TOKEN, result.token);
+  storage.set(KEYS.AUTH_TOKEN, result.token);
   setJSON(secureStorage, KEYS.AUTH_USER, result.user);
+  setJSON(storage, KEYS.AUTH_USER, result.user);
   return result;
 }
 
 export function logout(): void {
   secureStorage.delete(KEYS.AUTH_TOKEN);
   secureStorage.delete(KEYS.AUTH_USER);
+  storage.delete(KEYS.AUTH_TOKEN);
+  storage.delete(KEYS.AUTH_USER);
   storage.delete(KEYS.AUTH_LOCATION_ID);
+  storage.delete(KEYS.AUTH_LOCATIONS);
 }
 
 export function getStoredUser(): UserInfo | null {
-  return getJSON<UserInfo>(secureStorage, KEYS.AUTH_USER);
+  return getJSON<UserInfo>(secureStorage, KEYS.AUTH_USER)
+    ?? getJSON<UserInfo>(storage, KEYS.AUTH_USER);
 }
 
 export function getStoredToken(): string | null {
-  return secureStorage.getString(KEYS.AUTH_TOKEN) ?? null;
+  return secureStorage.getString(KEYS.AUTH_TOKEN)
+    ?? storage.getString(KEYS.AUTH_TOKEN)
+    ?? null;
 }
 
 export function setActiveLocation(locationId: string): void {
-  storage.set(KEYS.AUTH_LOCATION_ID, locationId);
+  const lockedLocationId = getLockedLocationId();
+  storage.set(KEYS.AUTH_LOCATION_ID, lockedLocationId ?? locationId);
+}
+
+export function clearActiveLocation(): void {
+  storage.delete(KEYS.AUTH_LOCATION_ID);
 }
 
 export function getActiveLocation(): string | null {
+  const lockedLocationId = getLockedLocationId();
+  if (lockedLocationId) {
+    storage.set(KEYS.AUTH_LOCATION_ID, lockedLocationId);
+    return lockedLocationId;
+  }
+
   return storage.getString(KEYS.AUTH_LOCATION_ID) ?? null;
+}
+
+export function getStoredLocations(): LocationInfo[] {
+  return getJSON<LocationInfo[]>(storage, KEYS.AUTH_LOCATIONS) ?? [];
+}
+
+export function setStoredLocations(locations: LocationInfo[]): void {
+  setJSON(storage, KEYS.AUTH_LOCATIONS, locations);
 }
 
 export async function fetchLocations(): Promise<LocationInfo[]> {
   const result = await apiFetch<{ data: LocationInfo[] }>('/locations');
+  setStoredLocations(result.data);
   return result.data;
 }
 

@@ -1,12 +1,13 @@
 import { useState, useCallback } from 'react';
 import { usePosPermission } from './use-pos-permission';
 import type { PosPermission } from '@/config/pos-permissions';
+import type { ManagerAuthorization } from '@/components/ManagerPinModal';
 
 interface ElevationRequest {
   permission: PosPermission;
   action: string;
   requiredLevel: number;
-  onApprove: (approverName: string) => void;
+  onApprove: (approverName: string, approval?: ManagerAuthorization) => void;
 }
 
 /**
@@ -17,7 +18,7 @@ interface ElevationRequest {
  *   const { guard, elevationProps } = useRequireElevation();
  *
  *   // In handler:
- *   guard('priceOverride', 'Override price on Brake Pad', (approverName) => {
+ *   guard('priceOverride', 'Override price on Brake Pad', (approverName, approval) => {
  *     store.setLinePriceOverride(lineId, newPrice, approverName);
  *   });
  *
@@ -31,7 +32,7 @@ export function useRequireElevation() {
   const guard = useCallback((
     permission: PosPermission,
     actionDescription: string,
-    onApproved: (approverName: string) => void,
+    onApproved: (approverName: string, approval?: ManagerAuthorization) => void,
   ) => {
     if (can(permission)) {
       // User has permission — execute immediately with their own name
@@ -43,8 +44,8 @@ export function useRequireElevation() {
       permission,
       action: actionDescription,
       requiredLevel: getRequiredLevel(permission),
-      onApprove: (approverName: string) => {
-        onApproved(approverName);
+      onApprove: (approverName: string, approval?: ManagerAuthorization) => {
+        onApproved(approverName, approval);
         setRequest(null);
       },
     });

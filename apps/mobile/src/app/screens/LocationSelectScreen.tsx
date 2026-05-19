@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { useAuth } from '@/hooks/use-auth';
 import { colors, textStyles, spacing, radius } from '@/theme';
-import type { LocationInfo } from '@/services/auth';
+import { fetchLocations, type LocationInfo } from '@/services/auth';
 
 interface Props {
   onLocationSelected: (locationId: string) => void;
@@ -18,10 +18,40 @@ interface Props {
 
 export default function LocationSelectScreen({ onLocationSelected }: Props) {
   const { locations, user } = useAuth();
+  const [freshLocations, setFreshLocations] = useState<LocationInfo[]>([]);
+  const [isFetching, setIsFetching] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const styles = createStyles();
 
-  const activeLocations = locations.filter(l => l.isActive);
+  useEffect(() => {
+    let isMounted = true;
+    if (locations.length > 0) return;
+
+    setIsFetching(true);
+    fetchLocations()
+      .then(locs => {
+        if (!isMounted) return;
+        setFreshLocations(locs);
+        setLoadError(null);
+      })
+      .catch(err => {
+        if (!isMounted) return;
+        setLoadError(err?.message || 'Locations could not be loaded.');
+      })
+      .finally(() => {
+        if (isMounted) setIsFetching(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [locations.length]);
+
+  const activeLocations = useMemo(
+    () => (locations.length > 0 ? locations : freshLocations).filter(l => l.isActive),
+    [freshLocations, locations],
+  );
 
   const handleSelect = (loc: LocationInfo) => {
     setSelectedId(loc.id);
@@ -34,9 +64,9 @@ export default function LocationSelectScreen({ onLocationSelected }: Props) {
         <Text style={styles.greeting}>
           Welcome, {user?.fullName?.split(' ')[0] || 'User'}
         </Text>
-        <Text style={styles.title}>Select Your Store</Text>
+        <Text style={styles.title}>Register This Device</Text>
         <Text style={styles.subtitle}>
-          Choose the location you're working at today.
+          Choose the store this register will be permanently locked to.
         </Text>
       </View>
 
@@ -75,9 +105,14 @@ export default function LocationSelectScreen({ onLocationSelected }: Props) {
         }}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No locations available.</Text>
+            {isFetching && (
+              <ActivityIndicator size="small" color={colors.accent.primary} />
+            )}
+            <Text style={styles.emptyText}>
+              {isFetching ? 'Loading locations...' : 'No locations available.'}
+            </Text>
             <Text style={styles.emptySubtext}>
-              Contact your admin to assign store locations.
+              {loadError || 'Contact your admin to assign store locations.'}
             </Text>
           </View>
         }
@@ -122,7 +157,7 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.bg.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
     marginBottom: spacing.md,
     borderWidth: 1,
@@ -130,13 +165,13 @@ const createStyles = () => StyleSheet.create({
   },
   locationCardActive: {
     borderColor: colors.accent.primary,
-    backgroundColor: colors.accent.glow,
+    backgroundColor: colors.accent.muted,
   },
   locationIcon: {
     width: 48,
     height: 48,
-    borderRadius: 12,
-    backgroundColor: colors.bg.overlay,
+    borderRadius: radius.md,
+    backgroundColor: colors.bg.elevated,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: spacing.md,
