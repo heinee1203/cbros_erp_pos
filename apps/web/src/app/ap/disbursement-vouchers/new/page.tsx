@@ -75,6 +75,35 @@ const METHOD_OPTIONS = [
   { value: "ONLINE", label: "Online" },
 ];
 
+function paymentLineWarnings(payment: PaymentLine): string[] {
+  const warnings: string[] = [];
+  if ((parseFloat(payment.amount) || 0) <= 0) warnings.push("Amount is missing.");
+
+  if (payment.paymentMethod === "CHECK") {
+    if (!payment.referenceNumber.trim()) warnings.push("Check number is missing.");
+    if (!payment.bankName.trim()) warnings.push("Bank is missing.");
+    if (!payment.transactionDate) warnings.push("Check date is missing.");
+  }
+
+  if (payment.paymentMethod === "BANK_TRANSFER") {
+    if (!payment.referenceNumber.trim()) warnings.push("Transfer reference is missing.");
+    if (!payment.bankName.trim()) warnings.push("Bank is missing.");
+    if (!payment.transactionDate) warnings.push("Transfer date is missing.");
+  }
+
+  if (payment.paymentMethod === "ONLINE") {
+    if (!payment.referenceNumber.trim()) warnings.push("Transaction ID is missing.");
+    if (!payment.platform.trim()) warnings.push("Platform is missing.");
+    if (!payment.transactionDate) warnings.push("Transaction date is missing.");
+  }
+
+  if (payment.paymentMethod === "CASH" && !payment.receivedBy.trim()) {
+    warnings.push("Receiver name is missing.");
+  }
+
+  return warnings;
+}
+
 /* ── Page ── */
 
 export default function NewDisbursementVoucherPage() {
@@ -134,6 +163,11 @@ export default function NewDisbursementVoucherPage() {
   }, [charges]);
   const payTotal = useMemo(() => payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0), [payments]);
   const payMismatch = payments.length > 0 && netAmount > 0 && Math.abs(payTotal - netAmount) > 0.01;
+  const paymentWarnings = useMemo(() => payments.map(paymentLineWarnings), [payments]);
+  const paymentWarningCount = useMemo(
+    () => paymentWarnings.reduce((sum, warnings) => sum + warnings.length, 0),
+    [paymentWarnings],
+  );
   // Charges with an amount but no description would be silently dropped by the API (Zod requires min(1) description),
   // which then breaks the payment-lines-equal-net check. Surface it inline and block submit instead.
   const chargeErrorIdxs = useMemo(() => {
@@ -694,7 +728,9 @@ export default function NewDisbursementVoucherPage() {
             </button>
           </div>
           <div className="space-y-2">
-            {payments.map((p, idx) => (
+            {payments.map((p, idx) => {
+              const warnings = paymentWarnings[idx] ?? [];
+              return (
               <div key={idx} className="rounded-lg border border-border bg-muted/20 p-3">
                 <div className="flex items-center gap-2 mb-2">
                   <select value={p.paymentMethod} onChange={(e) => updatePay(idx, "paymentMethod", e.target.value)}
@@ -737,12 +773,32 @@ export default function NewDisbursementVoucherPage() {
                       <input type="text" value={p.receivedBy} onChange={(e) => updatePay(idx, "receivedBy", e.target.value)} className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary" /></div>
                   )}
                 </div>
+                {warnings.length > 0 && (
+                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-5 text-amber-800">
+                    <span className="font-semibold">Review payment line {idx + 1}:</span>{" "}
+                    {warnings.join(" ")}
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
           </div>
           {netAmount > 0 && (
             <div className={`mt-1 text-right text-[11px] tabular-nums ${payMismatch ? "text-red-500 font-semibold" : "text-emerald-600"}`}>
               Payment total: {fmtPeso(payTotal)}{payMismatch && ` (must equal net: ${fmtPeso(netAmount)})`}
+            </div>
+          )}
+          {paymentWarningCount > 0 && (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-800">
+              <div className="flex items-start gap-2">
+                <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                <div>
+                  <div className="font-semibold">Review payment details before saving</div>
+                  <div>
+                    {paymentWarningCount} missing payment detail{paymentWarningCount !== 1 ? "s" : ""} found. Saving is still allowed, but printed vouchers may be incomplete without references, bank names, dates, or receiver names.
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
