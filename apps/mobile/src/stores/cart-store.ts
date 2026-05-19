@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { storage, getJSON, setJSON } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { getLockedLocationId } from '@/config/device-binding';
 import { v4 as uuid } from 'uuid';
 import {
   addHeldCart,
@@ -20,7 +21,7 @@ import {
  * (e.g., manager completing an abandoned cart from a previous shift).
  */
 function cartKey(): string {
-  const locationId = storage.getString(KEYS.AUTH_LOCATION_ID);
+  const locationId = getLockedLocationId() ?? storage.getString(KEYS.AUTH_LOCATION_ID);
   if (locationId) return `${KEYS.CART_STATE_PREFIX}.${locationId}`;
   return KEYS.CART_STATE_PREFIX;
 }
@@ -56,7 +57,9 @@ export interface CartLine {
 export interface PaymentEntry {
   id: string;
   method: string;
+  /** Applied amount posted to the sale. Cash over-tender is tracked separately. */
   amount: number;
+  cashTendered?: number;
   reference: string;
   installmentTerm: string; // 'STRAIGHT' | '3_MONTHS' | '6_MONTHS' | '12_MONTHS'
 }
@@ -107,29 +110,54 @@ interface CartActions {
   clearLinePriceOverride: (lineId: string) => void;
   setLineTechnician: (lineId: string, technicianId: string | null) => void;
   holdCurrentCart: () => boolean;            // save current cart, clear, return success
-  restoreHeldCart: (heldCartId: string) => void;  // load held cart as active
+  restoreHeldCart: (heldCartId: string) => boolean;  // load held cart as active
   deleteHeldCart: (heldCartId: string) => void;
+  reloadForCurrentLocation: () => void;
   clear: () => void;
 }
 
 type CartState = CartStateData & CartActions;
 
-/**
- * Generate next sequential receipt number from MMKV.
- * Format: simple incrementing integer. Cashier can override in PaymentScreen.
- */
-function getNextReceiptNumber(): string {
-  const last = storage.getString(KEYS.LAST_RECEIPT_NUMBER) ?? '0';
-  const next = parseInt(last, 10) + 1;
-  return String(next);
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function clearPaymentsForCartEdit<T extends CartStateData>(state: T): T {
+  return state.payments.length > 0 ? { ...state, payments: [] } : state;
 }
 
 function computeLineTotal(line: Pick<CartLine, 'unitPrice' | 'quantity' | 'discountType' | 'discountValue'> & { overridePrice?: number | null }): number {
   const price = line.overridePrice ?? line.unitPrice;
   const gross = price * line.quantity;
-  if (line.discountType === 'percentage') return gross * (1 - line.discountValue / 100);
-  if (line.discountType === 'fixed') return gross - line.discountValue;
-  return gross;
+  if (line.discountType === 'percentage') {
+    return roundMoney(Math.max(0, gross * (1 - line.discountValue / 100)));
+  }
+  if (line.discountType === 'fixed') {
+    return roundMoney(Math.max(0, gross - line.discountValue));
+  }
+  return roundMoney(Math.max(0, gross));
+}
+
+function computeSubtotal(lines: Pick<CartLine, 'lineTotal'>[]): number {
+  return roundMoney(lines.reduce((sum, line) => sum + line.lineTotal, 0));
+}
+
+function computeCartDiscount(
+  subtotal: number,
+  discountType: 'none' | 'percentage' | 'fixed',
+  discountValue: number,
+): number {
+  const rawDiscount = discountType === 'percentage'
+    ? subtotal * (discountValue / 100)
+    : discountType === 'fixed'
+      ? discountValue
+      : 0;
+  return roundMoney(Math.min(subtotal, Math.max(0, rawDiscount)));
+}
+
+function computeGrandTotal(state: Pick<CartStateData, 'lines' | 'discountType' | 'discountValue'>): number {
+  const subtotal = computeSubtotal(state.lines);
+  return roundMoney(Math.max(0, subtotal - computeCartDiscount(subtotal, state.discountType, state.discountValue)));
 }
 
 /**
@@ -222,7 +250,7 @@ export const useCartStore = create<CartState>((set, get) => ({
           quantity: qty,
           discountType: 'none',
           discountValue: 0,
-          lineTotal: product.unitPrice * qty,
+          lineTotal: roundMoney(product.unitPrice * qty),
           availableStock: product.availableStock ?? null,
           isSerialized: product.isSerialized ?? false,
           serials: [],
@@ -237,9 +265,9 @@ export const useCartStore = create<CartState>((set, get) => ({
         newLines = [...state.lines, newLine];
       }
 
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
-      return { lines: newLines };
+      return { lines: newLines, payments: newState.payments };
     });
   },
 
@@ -247,27 +275,27 @@ export const useCartStore = create<CartState>((set, get) => ({
     set(state => {
       if (qty <= 0) {
         const newLines = state.lines.filter(l => l.id !== lineId);
-        const newState = { ...state, lines: newLines };
+        const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
         persist(newState);
-        return { lines: newLines };
+        return { lines: newLines, payments: newState.payments };
       }
       const newLines = state.lines.map(l =>
         l.id === lineId
           ? { ...l, quantity: qty, lineTotal: computeLineTotal({ ...l, quantity: qty }) }
           : l,
       );
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
-      return { lines: newLines };
+      return { lines: newLines, payments: newState.payments };
     });
   },
 
   removeLine: (lineId) => {
     set(state => {
       const newLines = state.lines.filter(l => l.id !== lineId);
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
-      return { lines: newLines };
+      return { lines: newLines, payments: newState.payments };
     });
   },
 
@@ -283,33 +311,33 @@ export const useCartStore = create<CartState>((set, get) => ({
             }
           : l,
       );
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
-      return { lines: newLines };
+      return { lines: newLines, payments: newState.payments };
     });
   },
 
   setCartDiscount: (type, value) => {
     set(state => {
-      const newState = { ...state, discountType: type, discountValue: value };
+      const newState = clearPaymentsForCartEdit({ ...state, discountType: type, discountValue: value });
       persist(newState);
-      return { discountType: type, discountValue: value };
+      return { discountType: type, discountValue: value, payments: newState.payments };
     });
   },
 
   attachCustomer: (customerId, customerName, vehicleId) => {
     set(state => {
-      const newState = { ...state, customerId, customerName, vehicleId: vehicleId ?? null };
+      const newState = clearPaymentsForCartEdit({ ...state, customerId, customerName, vehicleId: vehicleId ?? null });
       persist(newState);
-      return { customerId, customerName, vehicleId: vehicleId ?? null };
+      return { customerId, customerName, vehicleId: vehicleId ?? null, payments: newState.payments };
     });
   },
 
   detachCustomer: () => {
     set(state => {
-      const newState = { ...state, customerId: null, customerName: null, vehicleId: null };
+      const newState = clearPaymentsForCartEdit({ ...state, customerId: null, customerName: null, vehicleId: null });
       persist(newState);
-      return { customerId: null, customerName: null, vehicleId: null };
+      return { customerId: null, customerName: null, vehicleId: null, payments: newState.payments };
     });
   },
 
@@ -376,7 +404,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       const newLines = state.lines.map(l =>
         l.id === lineId ? { ...l, serials } : l,
       );
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
       return newState;
     });
@@ -387,7 +415,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       const newLines = state.lines.map(l =>
         l.id === lineId ? { ...l, dotAllocation: allocation } : l,
       );
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
       return newState;
     });
@@ -398,7 +426,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       const newLines = state.lines.map(l =>
         l.id === lineId ? { ...l, warrantyPhotoUri: uri } : l,
       );
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
       return newState;
     });
@@ -412,7 +440,7 @@ export const useCartStore = create<CartState>((set, get) => ({
         overridden.lineTotal = computeLineTotal({ ...overridden, unitPrice: newPrice });
         return overridden;
       });
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
       return newState;
     });
@@ -426,7 +454,7 @@ export const useCartStore = create<CartState>((set, get) => ({
         restored.lineTotal = computeLineTotal(restored);
         return restored;
       });
-      const newState = { ...state, lines: newLines };
+      const newState = clearPaymentsForCartEdit({ ...state, lines: newLines });
       persist(newState);
       return newState;
     });
@@ -448,7 +476,7 @@ export const useCartStore = create<CartState>((set, get) => ({
     if (state.lines.length === 0) return false;
 
     const label = state.customerName || getNextHeldLabel();
-    const totalAmount = state.lines.reduce((sum, l) => sum + l.lineTotal, 0);
+    const totalAmount = computeGrandTotal(state);
 
     const heldCart: HeldCart = {
       id: uuid(),
@@ -459,6 +487,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       vehicleId: state.vehicleId,
       discountType: state.discountType,
       discountValue: state.discountValue,
+      note: state.note,
       heldAt: new Date().toISOString(),
       totalAmount,
     };
@@ -474,12 +503,25 @@ export const useCartStore = create<CartState>((set, get) => ({
   restoreHeldCart: (heldCartId) => {
     const heldCarts = getHeldCarts();
     const cart = heldCarts.find(c => c.id === heldCartId);
-    if (!cart) return;
+    if (!cart) return false;
 
-    // If current cart has items, hold it first
     const currentState = get();
+    const shouldSwapFullHeldQueue = currentState.lines.length > 0 && heldCarts.length >= 5;
+    let removedTargetBeforeSwap = false;
+
+    if (shouldSwapFullHeldQueue) {
+      removeHeldCart(heldCartId);
+      removedTargetBeforeSwap = true;
+    }
+
+    // If current cart has items, hold it first. When the queue is full,
+    // freeing the target slot lets cashiers swap carts instead of getting stuck.
     if (currentState.lines.length > 0) {
-      currentState.holdCurrentCart();
+      const heldActiveCart = currentState.holdCurrentCart();
+      if (!heldActiveCart) {
+        if (removedTargetBeforeSwap) addHeldCart(cart);
+        return false;
+      }
     }
 
     // Restore the held cart
@@ -491,22 +533,26 @@ export const useCartStore = create<CartState>((set, get) => ({
       discountType: cart.discountType as any,
       discountValue: cart.discountValue,
       payments: [],
-      receiptNumber: getNextReceiptNumber(),
-      note: '',
+      receiptNumber: '',
+      note: cart.note ?? '',
       allowNegativeStock: false,
     };
 
-    removeHeldCart(heldCartId);
+    if (!removedTargetBeforeSwap) removeHeldCart(heldCartId);
     persist(restored);
     set(restored);
+    return true;
   },
 
   deleteHeldCart: (heldCartId) => {
     removeHeldCart(heldCartId);
   },
 
+  reloadForCurrentLocation: () => {
+    set(loadPersistedCart());
+  },
+
   clear: () => {
-    const nextReceipt = getNextReceiptNumber();
     const empty: CartStateData = {
       lines: [],
       customerId: null,
@@ -515,7 +561,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       discountType: 'none',
       discountValue: 0,
       payments: [],
-      receiptNumber: nextReceipt,
+      receiptNumber: '',
       note: '',
       allowNegativeStock: false,
     };
@@ -527,27 +573,25 @@ export const useCartStore = create<CartState>((set, get) => ({
 // ── Derived selectors ──
 
 export const selectSubtotal = (state: CartState): number =>
-  state.lines.reduce((sum, l) => sum + l.lineTotal, 0);
+  computeSubtotal(state.lines);
 
 export const selectCartDiscount = (state: CartState): number => {
   const subtotal = selectSubtotal(state);
-  if (state.discountType === 'percentage') return subtotal * (state.discountValue / 100);
-  if (state.discountType === 'fixed') return state.discountValue;
-  return 0;
+  return computeCartDiscount(subtotal, state.discountType, state.discountValue);
 };
 
 export const selectGrandTotal = (state: CartState): number =>
-  selectSubtotal(state) - selectCartDiscount(state);
+  computeGrandTotal(state);
 
 export const selectPaidTotal = (state: CartState): number =>
-  state.payments.reduce((sum, p) => sum + p.amount, 0);
+  roundMoney(state.payments.reduce((sum, p) => sum + p.amount, 0));
 
 /** Lines with isSerialized=true that don't have enough serials entered */
 export const selectIncompleteSerials = (state: CartState): CartLine[] =>
   state.lines.filter(l => l.isSerialized && l.serials.length < l.quantity);
 
 export const selectRemainingBalance = (state: CartState): number =>
-  selectGrandTotal(state) - selectPaidTotal(state);
+  roundMoney(Math.max(0, selectGrandTotal(state) - selectPaidTotal(state)));
 
 export const selectLineCount = (state: CartState): number =>
   state.lines.reduce((sum, l) => sum + l.quantity, 0);

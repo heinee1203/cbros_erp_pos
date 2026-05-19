@@ -8,10 +8,17 @@ export interface PendingSale {
   /** Payload for completing an already-created sale */
   payload: {
     idempotencyKey: string;
+    allowNegativeStock?: boolean;
+    overrideApproval?: {
+      pin?: string;
+      credential?: string;
+      method?: 'pin' | 'barcode' | 'card';
+    };
     payments: Array<{
       method: string;
       amount: string;
       reference?: string;
+      notes?: string;
     }>;
   };
   /** Full creation payload — present when sale was never sent to server */
@@ -19,17 +26,44 @@ export interface PendingSale {
     locationId: string;
     customerId?: string;
     customerVehicleId?: string;
+    receiptNumber?: string;
     notes?: string;
     lines: Array<{
       productId: string;
       quantity: number;
+      overridePrice?: string;
       discountAmount?: string;
+      serials?: string[];
+      dotAllocation?: Array<{
+        dotBatchId: string;
+        dotCode: string;
+        quantity: number;
+      }>;
+      technicianId?: string;
     }>;
   };
   createdAt: string;
   attempts: number;
   lastAttemptAt: string | null;
   status: 'pending' | 'reconciling' | 'failed';
+  failureReason?: string;
+}
+
+type PendingSalesListener = (sales: PendingSale[]) => void;
+
+let listeners: PendingSalesListener[] = [];
+
+function notifyPendingSalesChanged(): void {
+  const next = getPendingSales();
+  listeners.forEach(listener => listener(next));
+}
+
+export function onPendingSalesChanged(listener: PendingSalesListener): () => void {
+  listeners.push(listener);
+  listener(getPendingSales());
+  return () => {
+    listeners = listeners.filter(item => item !== listener);
+  };
 }
 
 export function getPendingSales(): PendingSale[] {
@@ -38,8 +72,20 @@ export function getPendingSales(): PendingSale[] {
 
 export function addPendingSale(sale: PendingSale): void {
   const current = getPendingSales();
-  current.push(sale);
+  const idx = current.findIndex(s => s.idempotencyKey === sale.idempotencyKey);
+  if (idx >= 0) {
+    current[idx] = {
+      ...current[idx],
+      ...sale,
+      createdAt: current[idx].createdAt,
+      attempts: current[idx].attempts,
+      lastAttemptAt: current[idx].lastAttemptAt,
+    };
+  } else {
+    current.push(sale);
+  }
   setJSON(storage, KEYS.PENDING_SALES, current);
+  notifyPendingSalesChanged();
 }
 
 export function updatePendingSale(
@@ -51,6 +97,7 @@ export function updatePendingSale(
   if (idx >= 0) {
     current[idx] = { ...current[idx], ...updates };
     setJSON(storage, KEYS.PENDING_SALES, current);
+    notifyPendingSalesChanged();
   }
 }
 
@@ -59,4 +106,5 @@ export function removePendingSale(idempotencyKey: string): void {
     s => s.idempotencyKey !== idempotencyKey,
   );
   setJSON(storage, KEYS.PENDING_SALES, current);
+  notifyPendingSalesChanged();
 }

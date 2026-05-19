@@ -11,7 +11,8 @@ import {
   Animated,
   BackHandler,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { CommonActions, useNavigation } from '@react-navigation/native';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useCartStore,
   selectSubtotal,
@@ -22,15 +23,22 @@ import {
   selectLineCount,
   type PaymentEntry,
 } from '@/stores/cart-store';
-import { useCheckout } from '@/hooks/use-checkout';
-import { apiFetch } from '@/services/api-client';
+import { useCheckout, type CheckoutOverrideApproval } from '@/hooks/use-checkout';
+import { apiFetch, ApiError } from '@/services/api-client';
 import { getPendingSales } from '@/storage/pending-sales';
 import { usePrinter } from '@/hardware/printer/context';
+import { printReceiptSafely } from '@/hardware/printer/settings';
 import type { ReceiptData } from '@/hardware/printer/types';
 import { useAuth } from '@/hooks/use-auth';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, radius, fonts, fontSize, touchTarget } from '@/theme';
-import { Button } from '@/components/ui';
+import { Button, Icon, type IconName } from '@/components/ui';
+import { ManagerPinModal, type ManagerAuthorization } from '@/components/ManagerPinModal';
+import { ReceiptDataPreviewModal } from '@/components/ReceiptDataPreviewModal';
+import { getLockedLocationId } from '@/config/device-binding';
+import { buildPaymentActionPreflight } from '@/utils/checkout-preflight';
+import { formatPosError } from '@/utils/pos-error-messages';
+import type { PaymentIntent } from '@/app/MainTabs';
 
 /* ────────────────────────────────────────────────── */
 /*  Helpers                                            */
@@ -40,14 +48,43 @@ function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-const STANDARD_METHODS = [
-  { key: 'CASH', label: 'Cash', needsRef: false },
-  { key: 'GCASH', label: 'GCash', needsRef: true },
-  { key: 'CREDIT_CARD', label: 'Card', needsRef: true },
-  { key: 'DEBIT_CARD', label: 'Debit', needsRef: true },
-  { key: 'QRPH', label: 'QRPH', needsRef: true },
-  { key: 'MAYA', label: 'Maya', needsRef: true },
-  { key: 'BANK_TRANSFER', label: 'Bank', needsRef: true },
+const MONEY_EPSILON = 0.005;
+
+function getCashTendered(payments: PaymentEntry[]): number {
+  return payments
+    .filter(p => p.method === 'CASH')
+    .reduce((sum, p) => sum + (p.cashTendered ?? p.amount), 0);
+}
+
+function getCashChange(payments: PaymentEntry[]): number {
+  const cashApplied = payments
+    .filter(p => p.method === 'CASH')
+    .reduce((sum, p) => sum + p.amount, 0);
+  return Math.max(0, getCashTendered(payments) - cashApplied);
+}
+
+function hasCashPayment(payments: PaymentEntry[]): boolean {
+  return payments.some(p => p.method === 'CASH' && p.amount > 0);
+}
+
+interface PaymentMethodOption {
+  key: string;
+  label: string;
+  needsRef: boolean;
+  icon: IconName;
+}
+
+type ReceiptPrintState = 'idle' | 'printed' | 'failed';
+type DrawerCommandState = 'idle' | 'sent' | 'skipped' | 'failed';
+
+const STANDARD_METHODS: PaymentMethodOption[] = [
+  { key: 'CASH', label: 'Cash', needsRef: false, icon: 'cash' },
+  { key: 'GCASH', label: 'GCash', needsRef: true, icon: 'receipt' },
+  { key: 'CREDIT_CARD', label: 'Card', needsRef: true, icon: 'card' },
+  { key: 'DEBIT_CARD', label: 'Debit', needsRef: true, icon: 'card' },
+  { key: 'QRPH', label: 'QRPH', needsRef: true, icon: 'barcode' },
+  { key: 'MAYA', label: 'Maya', needsRef: true, icon: 'receipt' },
+  { key: 'BANK_TRANSFER', label: 'Bank', needsRef: true, icon: 'sync' },
 ];
 
 const INSTALLMENT_TERMS = [
@@ -61,9 +98,33 @@ const METHODS_NEEDING_REF = new Set(
   STANDARD_METHODS.filter(m => m.needsRef).map(m => m.key),
 );
 
+interface AccountOverrideState extends CheckoutOverrideApproval {
+  approverName: string;
+  credential: string;
+  method: 'pin' | 'barcode' | 'card';
+}
+
+interface AccountCreditCheckResult {
+  customerId: string;
+  customerName: string;
+  canCharge: boolean;
+  requiresOverride: boolean;
+  unlimited: boolean;
+  currentBalance: string;
+  creditLimit: string;
+  chargeAmount: string;
+  newBalance: string;
+  overage: string;
+}
+
 function methodLabel(key: string): string {
   if (key === 'CHARGE') return 'Charge';
   return STANDARD_METHODS.find(m => m.key === key)?.label || key;
+}
+
+function receiptPaymentLabel(key: string): string {
+  if (key === 'CHARGE') return 'CHARGE TO ACCOUNT';
+  return key;
 }
 
 function installmentLabel(key: string): string {
@@ -76,10 +137,12 @@ function installmentLabel(key: string): string {
 
 interface PaymentScreenProps {
   onBack?: () => void;
+  initialMethod?: PaymentIntent;
 }
 
-export default function PaymentScreen({ onBack }: PaymentScreenProps) {
+export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: PaymentScreenProps) {
   const navigation = useNavigation();
+  const queryClient = useQueryClient();
   const { isTablet, screenPadding } = useLayout();
   const { user, locations, locationId } = useAuth();
   const printer = usePrinter();
@@ -104,8 +167,18 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   const remaining = useCartStore(selectRemainingBalance);
   const lineCount = useCartStore(selectLineCount);
 
-  const { status, error, result, checkout, reset } = useCheckout();
+  const { status, error, lastApiError, result, checkout, reset } = useCheckout();
   const isProcessing = status === 'creating' || status === 'completing';
+  const isRegisterLocked = !!getLockedLocationId();
+  const [creditOverrideVisible, setCreditOverrideVisible] = useState(false);
+  const [accountOverride, setAccountOverride] = useState<AccountOverrideState | null>(null);
+  const [accountCreditCheck, setAccountCreditCheck] = useState<AccountCreditCheckResult | null>(null);
+  const [receiptModalVisible, setReceiptModalVisible] = useState(false);
+  const [receiptPrinting, setReceiptPrinting] = useState(false);
+  const [receiptPrintState, setReceiptPrintState] = useState<ReceiptPrintState>('idle');
+  const [drawerCommandState, setDrawerCommandState] = useState<DrawerCommandState>('idle');
+  const [completedReceiptData, setCompletedReceiptData] = useState<ReceiptData | null>(null);
+  const [completedChange, setCompletedChange] = useState(0);
 
   // ── Unit count ──
   const unitCount = useMemo(() => lines.reduce((s, l) => s + l.quantity, 0), [lines]);
@@ -124,6 +197,10 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   const [receiptLoading, setReceiptLoading] = useState(true);
 
   const fetchNextReceiptNumber = useCallback(async () => {
+    if (receiptNumber.trim()) {
+      setReceiptLoading(false);
+      return;
+    }
     try {
       const data = await apiFetch<{ receiptNumber: string }>('/sales/next-receipt-number');
       setReceiptNumber(data.receiptNumber);
@@ -132,7 +209,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     } finally {
       setReceiptLoading(false);
     }
-  }, [setReceiptNumber]);
+  }, [receiptNumber, setReceiptNumber]);
 
   useEffect(() => {
     fetchNextReceiptNumber();
@@ -147,6 +224,9 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   const [formCashTendered, setFormCashTendered] = useState('');
   const [formReference, setFormReference] = useState('');
   const [formInstallment, setFormInstallment] = useState('STRAIGHT');
+  const [paymentFlowMode, setPaymentFlowMode] = useState<'single' | 'split'>(
+    initialMethod === 'SPLIT' ? 'split' : 'single',
+  );
 
   // ── Flash animation for tendered input ──
   const flashAnim = useRef(new Animated.Value(0)).current;
@@ -164,10 +244,34 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     }).start();
   }, [flashAnim]);
 
-  const isFullyPaid = remaining <= 0 && payments.length > 0;
+  const isFullyPaid = remaining <= MONEY_EPSILON && payments.length > 0;
   const needsRef = METHODS_NEEDING_REF.has(formMethod);
   const isCash = formMethod === 'CASH';
   const isCharge = formMethod === 'CHARGE';
+  const splitMode = paymentFlowMode === 'split';
+  const hasChargePayment = payments.some(p => p.method === 'CHARGE');
+  const chargePaymentAmount = useMemo(
+    () => payments
+      .filter(p => p.method === 'CHARGE')
+      .reduce((sum, p) => sum + p.amount, 0),
+    [payments],
+  );
+  const isCreditLimitError = lastApiError?.status === 409
+    && lastApiError.body?.code === 'CREDIT_LIMIT_EXCEEDED';
+  const apiErrorMessage = String(lastApiError?.body?.error ?? lastApiError?.message ?? '');
+  const isManagerAuthorizationError = lastApiError?.status === 400
+    && apiErrorMessage.includes('Invalid manager authorization');
+  const creditOverrideAction = useMemo(() => {
+    if (!accountCreditCheck?.requiresOverride) {
+      return 'Approve charge-to-account over the customer credit limit';
+    }
+
+    return [
+      `Approve ${fmtPHP(parseFloat(accountCreditCheck.chargeAmount))} charge to account.`,
+      `New balance ${fmtPHP(parseFloat(accountCreditCheck.newBalance))}`,
+      `exceeds limit by ${fmtPHP(parseFloat(accountCreditCheck.overage))}.`,
+    ].join(' ');
+  }, [accountCreditCheck]);
 
   const parsedCashTendered = parseFloat(formCashTendered) || 0;
 
@@ -180,22 +284,73 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   const parsedAmount = isCash
     ? Math.min(parsedCashTendered, remaining > 0 ? remaining : parsedCashTendered)
     : parseFloat(formAmount || defaultAmount) || 0;
+  const nonCashOverpay = !isCash && parsedAmount > remaining + MONEY_EPSILON;
 
   // Cash change — real-time as the cashier enters tendered
-  const cashChange = isCash && parsedCashTendered > remaining && remaining > 0
+  const cashChange = isCash && parsedCashTendered > remaining && remaining > MONEY_EPSILON
     ? parsedCashTendered - remaining
     : 0;
+  const paymentProgressRatio = grandTotal > MONEY_EPSILON
+    ? Math.min(1, Math.max(0, paidTotal / grandTotal))
+    : 0;
+  const paymentGuidance = useMemo(() => {
+    if (isFullyPaid) return 'Ready to complete the sale.';
+    if (splitMode) return 'Add each tender as a separate payment until the balance reaches zero.';
+    if (isCharge) return customerId ? 'Charge the remaining balance to the selected customer account.' : 'Add a customer before charging this sale.';
+    if (isCash) return 'Enter cash tendered, then complete the sale or add it as one split tender.';
+    if (needsRef) return 'Reference or approval number is required before adding this payment.';
+    return 'Enter the payment amount to continue.';
+  }, [customerId, isCash, isCharge, isFullyPaid, needsRef, splitMode]);
+  const activeMethodLabel = isCharge ? 'Charge' : methodLabel(formMethod);
+  const displayError = error ? formatPosError(error, 'Checkout failed') : null;
 
   // Can the cashier add a payment right now?
-  const canAddPayment = isCash ? parsedCashTendered > 0 : parsedAmount > 0;
+  const canAddPayment = isCash
+    ? parsedCashTendered > 0
+    : parsedAmount > 0 && !nonCashOverpay;
 
   // Single payment covers entire remaining? Skip Add Payment → go straight to Complete
-  const singlePaymentCoversAll = payments.length === 0 && (
+  const singlePaymentCoversAll = !splitMode && payments.length === 0 && (
     (isCash && parsedCashTendered >= remaining && parsedCashTendered > 0) ||
-    (!isCash && parsedAmount >= remaining && parsedAmount > 0)
+    (!isCash && !nonCashOverpay && parsedAmount >= remaining - MONEY_EPSILON && parsedAmount > 0)
   );
 
   const receiptMissing = !receiptNumber.trim();
+  const paymentPreflight = useMemo(() => buildPaymentActionPreflight({
+    registerLocked: isRegisterLocked,
+    receiptMissing,
+    isProcessing,
+    isFullyPaid,
+    remaining,
+    isCash,
+    cashTendered: parsedCashTendered,
+    parsedAmount,
+    nonCashOverpay,
+    needsReference: needsRef,
+    hasReference: !!formReference.trim(),
+    customerRequired: isCharge,
+    hasCustomer: !!customerId,
+  }), [
+    customerId,
+    formReference,
+    isCash,
+    isCharge,
+    isFullyPaid,
+    isProcessing,
+    isRegisterLocked,
+    needsRef,
+    nonCashOverpay,
+    parsedAmount,
+    parsedCashTendered,
+    receiptMissing,
+    remaining,
+  ]);
+  const paymentActionBlocked = paymentPreflight.blockingIssues.length > 0;
+  const paymentPreflightColor = paymentPreflight.ready
+    ? colors.status.success
+    : paymentPreflight.requiresApproval
+      ? colors.status.warning
+      : colors.status.danger;
 
   // ── Auto-checkout after single payment covers all ──
   const [pendingAutoCheckout, setPendingAutoCheckout] = useState(false);
@@ -203,6 +358,8 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   // Note: handleCheckout is defined below via useCallback. React evaluates all hooks
   // in order on each render, so the ref is stable by the time the effect runs.
   const autoCheckoutRef = useRef<(() => void) | undefined>(undefined);
+  const checkoutInFlightRef = useRef(false);
+  const paymentActionLockedRef = useRef(false);
 
   // ── Undo state for Clear ──
   const [undoAmount, setUndoAmount] = useState<number | null>(null);
@@ -214,6 +371,38 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     setFormReference('');
     setFormInstallment('STRAIGHT');
   }, []);
+
+  useEffect(() => {
+    if (payments.length > 0) return;
+    setPaymentFlowMode(initialMethod === 'SPLIT' ? 'split' : 'single');
+
+    if (initialMethod === 'CHARGE' && customerId) {
+      setFormMethod('CHARGE');
+      setFormAmount(remaining > 0 ? remaining.toFixed(2) : '');
+      return;
+    }
+
+    setFormMethod('CASH');
+    setFormAmount('');
+    setFormCashTendered('');
+  }, [customerId, initialMethod, payments.length, remaining]);
+
+  useEffect(() => {
+    if (payments.length > 1) {
+      setPaymentFlowMode('split');
+    }
+  }, [payments.length]);
+
+  useEffect(() => {
+    if (isManagerAuthorizationError && hasChargePayment) {
+      setAccountOverride(null);
+      setCreditOverrideVisible(true);
+      return;
+    }
+    if (isCreditLimitError && hasChargePayment && !accountOverride) {
+      setCreditOverrideVisible(true);
+    }
+  }, [accountOverride, hasChargePayment, isCreditLimitError, isManagerAuthorizationError]);
 
   // ── Add Payment handler ──
   const handleAddPayment = useCallback(() => {
@@ -231,22 +420,35 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
         Alert.alert('Invalid Amount', 'Please enter a valid payment amount.');
         return;
       }
+      if (nonCashOverpay) {
+        Alert.alert('Amount Too High', 'Non-cash payments cannot exceed the remaining balance.');
+        return;
+      }
     }
     if (needsRef && !formReference.trim()) {
       Alert.alert('Reference Required', 'Please enter a reference / approval number.');
       return;
     }
+    if (paymentActionLockedRef.current) return;
+    paymentActionLockedRef.current = true;
 
     addPayment({
       method: formMethod,
       amount: parsedAmount,
+      cashTendered: isCash ? parsedCashTendered : undefined,
       reference: formReference.trim(),
       installmentTerm: formMethod === 'CREDIT_CARD' ? formInstallment : 'STRAIGHT',
     });
+    if (parsedAmount < remaining - MONEY_EPSILON) {
+      setPaymentFlowMode('split');
+    }
 
     // Reset form for next payment
     resetForm();
-  }, [receiptMissing, isCash, parsedAmount, parsedCashTendered, needsRef, formReference, formMethod, formInstallment, addPayment, resetForm]);
+    setTimeout(() => {
+      paymentActionLockedRef.current = false;
+    }, 250);
+  }, [receiptMissing, isCash, parsedAmount, parsedCashTendered, nonCashOverpay, needsRef, formReference, formMethod, formInstallment, remaining, addPayment, resetForm]);
 
   // ── Single payment complete (skip Add Payment step) ──
   const handleSinglePaymentComplete = useCallback(() => {
@@ -256,21 +458,31 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
     }
     if (isCash && parsedCashTendered <= 0) return;
     if (!isCash && parsedAmount <= 0) return;
+    if (nonCashOverpay) {
+      Alert.alert('Amount Too High', 'Non-cash payments cannot exceed the remaining balance.');
+      return;
+    }
     if (needsRef && !formReference.trim()) {
       Alert.alert('Reference Required', 'Please enter a reference / approval number.');
       return;
     }
+    if (paymentActionLockedRef.current) return;
+    paymentActionLockedRef.current = true;
 
     // Add the payment first, then auto-checkout via useEffect
     addPayment({
       method: formMethod,
       amount: parsedAmount,
+      cashTendered: isCash ? parsedCashTendered : undefined,
       reference: formReference.trim(),
       installmentTerm: formMethod === 'CREDIT_CARD' ? formInstallment : 'STRAIGHT',
     });
     resetForm();
     setPendingAutoCheckout(true);
-  }, [receiptMissing, isCash, parsedCashTendered, parsedAmount, needsRef, formReference, formMethod, formInstallment, addPayment, resetForm]);
+    setTimeout(() => {
+      paymentActionLockedRef.current = false;
+    }, 250);
+  }, [receiptMissing, isCash, parsedCashTendered, parsedAmount, nonCashOverpay, needsRef, formReference, formMethod, formInstallment, addPayment, resetForm]);
 
   const handleRemovePayment = useCallback((id: string) => {
     removePayment(id);
@@ -353,10 +565,15 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   }, [undoAmount]);
 
   // ── Build receipt data ──
-  const buildReceiptData = useCallback((saleNo: string): ReceiptData => {
+  const buildReceiptData = useCallback((
+    receiptLabel: string,
+    footerMessage = 'Thank you for your purchase!',
+  ): ReceiptData => {
     const location = locations.find(l => l.id === locationId);
     const primaryPayment = payments[0];
-    const primaryMethod = primaryPayment?.method || 'CASH';
+    const primaryMethod = receiptPaymentLabel(primaryPayment?.method || 'CASH');
+    const cashTendered = getCashTendered(payments);
+    const cashChange = getCashChange(payments);
 
     return {
       header: {
@@ -364,64 +581,165 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
         address: location?.address || undefined,
       },
       transaction: {
-        receiptNumber: saleNo,
+        receiptNumber: receiptLabel,
         date: new Date().toLocaleString(),
         cashier: user?.fullName || 'Cashier',
         lines: lines.map(l => ({
           name: l.name,
           qty: l.quantity,
-          unitPrice: l.unitPrice,
+          unitPrice: l.overridePrice ?? l.unitPrice,
           total: l.lineTotal,
         })),
         subtotal,
         discount,
         grandTotal,
-        paymentMethod: primaryMethod,
-        cashTendered: primaryMethod === 'CASH' ? payments.filter(p => p.method === 'CASH').reduce((s, p) => s + p.amount, 0) : undefined,
-        change: primaryMethod === 'CASH' && paidTotal > grandTotal ? paidTotal - grandTotal : undefined,
+        paymentMethod: payments.length > 1 ? 'SPLIT' : primaryMethod,
+        cashTendered: cashTendered > 0 ? cashTendered : undefined,
+        change: cashChange > 0 ? cashChange : undefined,
         payments: payments.map(p => ({
-          method: p.method,
+          method: receiptPaymentLabel(p.method),
           amount: p.amount,
           reference: p.reference || undefined,
           installmentTerm: p.method === 'CREDIT_CARD' && p.installmentTerm !== 'STRAIGHT' ? p.installmentTerm : undefined,
         })),
       },
-      footer: { message: 'Thank you for your purchase!' },
+      footer: { message: footerMessage },
     };
-  }, [locations, locationId, payments, lines, subtotal, discount, grandTotal, paidTotal, user]);
+  }, [locations, locationId, payments, lines, subtotal, discount, grandTotal, user]);
+
+  const ensureAccountChargeApproved = useCallback(async (
+    overrideApproval?: CheckoutOverrideApproval,
+  ): Promise<boolean> => {
+    if (!hasChargePayment || overrideApproval || accountOverride) return true;
+    if (!customerId) {
+      Alert.alert('Customer Required', 'Charge payments require a customer on the order.');
+      return false;
+    }
+    if (chargePaymentAmount <= MONEY_EPSILON) return true;
+
+    try {
+      const check = await apiFetch<AccountCreditCheckResult>(
+        `/customers/${encodeURIComponent(customerId)}/credit-check`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ amount: chargePaymentAmount.toFixed(2) }),
+        },
+      );
+      setAccountCreditCheck(check);
+      if (check.requiresOverride) {
+        setCreditOverrideVisible(true);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 0) {
+        return true;
+      }
+      Alert.alert(
+        'Account Check Failed',
+        formatPosError(err, 'Unable to verify this customer account.'),
+      );
+      return false;
+    }
+  }, [accountOverride, chargePaymentAmount, customerId, hasChargePayment]);
 
   // ── Checkout ──
-  const handleCheckout = useCallback(async () => {
+  const runCheckout = useCallback(async (overrideApproval?: CheckoutOverrideApproval) => {
+    if (checkoutInFlightRef.current) return;
+    checkoutInFlightRef.current = true;
     const MAX_RETRIES = 3;
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      const res = await checkout({ allowNegativeStock: allowNegativeStock || undefined });
-      if (res) {
-        const receiptData = buildReceiptData(res.saleNo);
-        if (!printer.isConnected) {
-          Alert.alert('Printer Offline', 'Receipt was not printed — no printer connected.');
-        } else {
-          const printResult = await printer.printReceipt(receiptData).catch(() => ({ success: false, error: 'Print failed' }));
-          if (printResult.success) {
-            printer.openCashDrawer().catch(() => {});
+    try {
+      const accountApproved = await ensureAccountChargeApproved(overrideApproval);
+      if (!accountApproved) return;
+      setReceiptPrintState('idle');
+      setDrawerCommandState('idle');
+
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const res = await checkout({
+          allowNegativeStock: allowNegativeStock || undefined,
+          overrideApproval,
+        });
+        if (res) {
+          void queryClient.invalidateQueries({ queryKey: ['sales', 'list'] });
+          if (res.saleId) {
+            void queryClient.invalidateQueries({ queryKey: ['sales', 'detail', res.saleId] });
+          }
+          const receiptData = buildReceiptData(res.receiptNumber || res.saleNo);
+          setCompletedReceiptData(receiptData);
+          setCompletedChange(getCashChange(payments));
+          const printResult = await printReceiptSafely(printer, receiptData).catch(() => ({ success: false, error: 'Print failed' }));
+          setReceiptPrintState(printResult.success ? 'printed' : 'failed');
+          if (hasCashPayment(payments)) {
+            try {
+              await printer.openCashDrawer();
+              setDrawerCommandState('sent');
+            } catch {
+              setDrawerCommandState('failed');
+            }
           } else {
-            Alert.alert('Print Notice', printResult.error || 'Receipt could not be printed.');
+            setDrawerCommandState('skipped');
+          }
+          if (!printResult.success) {
+            Alert.alert(
+              'Print Notice',
+              printResult.error || 'Receipt could not be printed.',
+              [
+                { text: 'View Receipt', onPress: () => setReceiptModalVisible(true) },
+                { text: 'OK', style: 'cancel' },
+              ],
+            );
+          }
+          setAccountOverride(null);
+          setAccountCreditCheck(null);
+          clear();
+          return;
+        }
+        if (status === 'error' && error?.includes('409')) {
+          try {
+            const data = await apiFetch<{ receiptNumber: string }>('/sales/next-receipt-number');
+            setReceiptNumber(data.receiptNumber);
+            reset();
+            continue;
+          } catch {
+            break;
           }
         }
-        return;
+        break;
       }
-      if (status === 'error' && error?.includes('409')) {
-        try {
-          const data = await apiFetch<{ receiptNumber: string }>('/sales/next-receipt-number');
-          setReceiptNumber(data.receiptNumber);
-          reset();
-          continue;
-        } catch {
-          break;
-        }
-      }
-      break;
+    } finally {
+      checkoutInFlightRef.current = false;
     }
-  }, [checkout, buildReceiptData, printer, status, error, setReceiptNumber, reset, allowNegativeStock]);
+  }, [checkout, allowNegativeStock, buildReceiptData, printer, payments, status, error, setReceiptNumber, reset, ensureAccountChargeApproved, queryClient, clear]);
+
+  const handleCheckout = useCallback(() => {
+    void runCheckout(accountOverride ?? undefined);
+  }, [accountOverride, runCheckout]);
+
+  const handleCreditOverrideApprove = useCallback((
+    approverName: string,
+    approval?: ManagerAuthorization,
+  ) => {
+    if (!approval?.credential) {
+      Alert.alert('Authorization Needed', 'Please enter a manager PIN, scan a barcode, or swipe a card.');
+      return;
+    }
+    const override: AccountOverrideState = {
+      approverName,
+      credential: approval.credential,
+      method: approval.method,
+      pin: approval.method === 'pin' ? approval.credential : undefined,
+    };
+    setAccountOverride(override);
+    setCreditOverrideVisible(false);
+    reset();
+    void runCheckout(override);
+  }, [reset, runCheckout]);
+
+  const handleCreditOverrideCancel = useCallback(() => {
+    setCreditOverrideVisible(false);
+    setAccountOverride(null);
+    setAccountCreditCheck(null);
+  }, []);
 
   // Keep ref in sync for auto-checkout effect
   autoCheckoutRef.current = handleCheckout;
@@ -434,70 +752,217 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
   }, [pendingAutoCheckout, isFullyPaid, isProcessing]);
 
   const handlePrintReceipt = useCallback(async () => {
-    if (!result) return;
-    const receiptData = buildReceiptData(result.saleNo);
-    if (!printer.isConnected) {
-      Alert.alert('Printer Offline', 'No printer connected.');
-      return;
+    if (!result || receiptPrinting) return;
+    const receiptData = completedReceiptData ?? buildReceiptData(result.receiptNumber || result.saleNo);
+    setReceiptPrinting(true);
+    try {
+      const printResult = await printReceiptSafely(printer, receiptData).catch(() => ({ success: false, error: 'Print failed' }));
+      setReceiptPrintState(printResult.success ? 'printed' : 'failed');
+      if (!printResult.success) {
+        Alert.alert(
+          'Print Notice',
+          printResult.error || 'Receipt could not be printed.',
+          [
+            { text: 'View Receipt', onPress: () => setReceiptModalVisible(true) },
+            { text: 'OK', style: 'cancel' },
+          ],
+        );
+      }
+    } finally {
+      setReceiptPrinting(false);
     }
-    const printResult = await printer.printReceipt(receiptData).catch(() => ({ success: false, error: 'Print failed' }));
-    if (printResult.success) {
-      printer.openCashDrawer().catch(() => {});
-    } else {
-      Alert.alert('Print Notice', printResult.error || 'Receipt could not be printed.');
-    }
-  }, [result, buildReceiptData, printer]);
+  }, [result, receiptPrinting, completedReceiptData, buildReceiptData, printer]);
 
   const handleNewSale = useCallback(() => {
+    setReceiptModalVisible(false);
     clear();
     reset();
+    setAccountOverride(null);
+    setAccountCreditCheck(null);
+    setCompletedReceiptData(null);
+    setCompletedChange(0);
+    setReceiptPrintState('idle');
+    setDrawerCommandState('idle');
     if (onBack) onBack();
     else navigation.navigate('Catalog' as never);
   }, [clear, reset, onBack, navigation]);
+
+  const handleViewTransactions = useCallback(() => {
+    setReceiptModalVisible(false);
+    clear();
+    void queryClient.invalidateQueries({ queryKey: ['sales', 'list'] });
+    navigation.dispatch(CommonActions.navigate({
+      name: 'More',
+      params: { screen: 'Transactions' },
+    }));
+  }, [clear, navigation, queryClient]);
 
   const s = styles;
 
   /* ── Success state ── */
   if (status === 'success' && result) {
-    const totalChange = paidTotal > grandTotal ? paidTotal - grandTotal : 0;
+    const totalChange = completedChange;
+    const receiptData = completedReceiptData ?? buildReceiptData(result.receiptNumber || result.saleNo);
+    const receiptStepTone = receiptPrintState === 'printed'
+      ? 'success'
+      : receiptPrintState === 'failed'
+        ? 'warning'
+        : 'neutral';
+    const receiptStepDetail = receiptPrintState === 'printed'
+      ? 'Printed successfully'
+      : receiptPrintState === 'failed'
+        ? 'Print failed; receipt preview is available'
+        : 'Ready to print or preview';
+    const drawerStepDetail = drawerCommandState === 'sent'
+      ? 'Drawer command sent'
+      : drawerCommandState === 'failed'
+        ? 'Drawer did not respond'
+        : 'No cash drawer needed';
+    const drawerStepTone = drawerCommandState === 'failed' ? 'warning' : 'success';
     return (
-      <SafeAreaView style={s.container}>
-        <View style={s.successContainer}>
-          <Text style={s.successIcon}>{'\u2713'}</Text>
-          <Text style={s.successTitle}>Sale Complete</Text>
-          <Text style={s.successReceipt}>{result.saleNo}</Text>
-          <Text style={s.successTotal}>{fmtPHP(parseFloat(result.grandTotal))}</Text>
-          {totalChange > 0 && (
-            <Text style={s.successChange}>Change: {fmtPHP(totalChange)}</Text>
-          )}
-          <View style={s.successActions}>
-            <Button title="Print Receipt" variant="secondary" fullWidth onPress={handlePrintReceipt} />
-            <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} style={{ marginTop: 8 }} />
+      <>
+        <SafeAreaView style={s.container}>
+          <View style={s.successContainer}>
+            <View style={s.successIcon}>
+              <Icon name="check" size={46} color={colors.status.success} strokeWidth={2.8} />
+            </View>
+            <Text style={s.successTitle}>Sale Complete</Text>
+            <Text style={s.successReceipt}>{result.receiptNumber || result.saleNo}</Text>
+            <Text style={s.successTotal}>{fmtPHP(parseFloat(result.grandTotal))}</Text>
+            {totalChange > 0 && (
+              <Text style={s.successChange}>Change: {fmtPHP(totalChange)}</Text>
+            )}
+            <View style={s.afterSalePanel}>
+              <View style={s.afterSaleStep}>
+                <View style={[s.afterSaleIcon, s.afterSaleIconSuccess]}>
+                  <Icon name="check" size={17} color={colors.status.success} />
+                </View>
+                <View style={s.afterSaleCopy}>
+                  <Text style={s.afterSaleLabel}>Sale posted</Text>
+                  <Text style={s.afterSaleDetail}>{result.saleNo || result.saleId} is ready in transaction history</Text>
+                </View>
+              </View>
+              <View style={s.afterSaleStep}>
+                <View style={[
+                  s.afterSaleIcon,
+                  receiptStepTone === 'success' ? s.afterSaleIconSuccess : receiptStepTone === 'warning' ? s.afterSaleIconWarning : s.afterSaleIconNeutral,
+                ]}>
+                  <Icon
+                    name="receipt"
+                    size={17}
+                    color={receiptStepTone === 'success' ? colors.status.success : receiptStepTone === 'warning' ? colors.status.warning : colors.text.muted}
+                  />
+                </View>
+                <View style={s.afterSaleCopy}>
+                  <Text style={s.afterSaleLabel}>Receipt</Text>
+                  <Text style={s.afterSaleDetail}>{receiptStepDetail}</Text>
+                </View>
+              </View>
+              <View style={s.afterSaleStep}>
+                <View style={[
+                  s.afterSaleIcon,
+                  drawerStepTone === 'warning' ? s.afterSaleIconWarning : s.afterSaleIconSuccess,
+                ]}>
+                  <Icon
+                    name="cash"
+                    size={17}
+                    color={drawerStepTone === 'warning' ? colors.status.warning : colors.status.success}
+                  />
+                </View>
+                <View style={s.afterSaleCopy}>
+                  <Text style={s.afterSaleLabel}>Cash drawer</Text>
+                  <Text style={s.afterSaleDetail}>{drawerStepDetail}</Text>
+                </View>
+              </View>
+              <View style={s.afterSaleStep}>
+                <View style={[s.afterSaleIcon, s.afterSaleIconSuccess]}>
+                  <Icon name="cart" size={17} color={colors.status.success} />
+                </View>
+                <View style={s.afterSaleCopy}>
+                  <Text style={s.afterSaleLabel}>Register</Text>
+                  <Text style={s.afterSaleDetail}>Active cart cleared for the next sale</Text>
+                </View>
+              </View>
+            </View>
+            <View style={s.successActions}>
+              <Button
+                title={receiptPrinting ? 'Printing...' : 'Print Receipt'}
+                variant="secondary"
+                fullWidth
+                onPress={handlePrintReceipt}
+                loading={receiptPrinting}
+                disabled={receiptPrinting}
+              />
+              <Button
+                title="View Receipt"
+                variant="secondary"
+                fullWidth
+                onPress={() => setReceiptModalVisible(true)}
+                style={{ marginTop: 8 }}
+              />
+              <Button
+                title="View Transactions"
+                variant="secondary"
+                fullWidth
+                onPress={handleViewTransactions}
+                style={{ marginTop: 8 }}
+              />
+              <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} style={{ marginTop: 8 }} />
+            </View>
           </View>
-        </View>
-      </SafeAreaView>
+        </SafeAreaView>
+        <ReceiptDataPreviewModal
+          visible={receiptModalVisible}
+          receipt={receiptData}
+          onClose={() => setReceiptModalVisible(false)}
+          onPrint={handlePrintReceipt}
+          printing={receiptPrinting}
+        />
+      </>
     );
   }
 
   /* ── Pending offline state ── */
   if (status === 'pending_offline') {
     const pendingCount = getPendingSales().length;
+    const pendingReceiptData = buildReceiptData(
+      receiptNumber.trim() || 'PENDING',
+      'PENDING SYNC - VERIFY BEFORE RELEASE',
+    );
     return (
-      <SafeAreaView style={s.container}>
-        <View style={s.successContainer}>
-          <Text style={s.pendingIcon}>{'\u23F3'}</Text>
-          <Text style={s.pendingTitle}>Sale Saved Offline</Text>
-          <Text style={s.pendingText}>
-            Sale saved locally. It will sync when back online.
-          </Text>
-          {pendingCount > 0 && (
-            <Text style={s.pendingCount}>
-              {pendingCount} pending sale{pendingCount !== 1 ? 's' : ''} queued
+      <>
+        <SafeAreaView style={s.container}>
+          <View style={s.successContainer}>
+            <View style={s.pendingIcon}>
+              <Icon name="sync" size={42} color={colors.status.warning} strokeWidth={2.6} />
+            </View>
+            <Text style={s.pendingTitle}>Sale Saved Offline</Text>
+            <Text style={s.pendingText}>
+              Sale saved locally. It will sync when back online.
             </Text>
-          )}
-          <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} />
-        </View>
-      </SafeAreaView>
+            {pendingCount > 0 && (
+              <Text style={s.pendingCount}>
+                {pendingCount} pending sale{pendingCount !== 1 ? 's' : ''} queued
+              </Text>
+            )}
+            <View style={s.successActions}>
+              <Button
+                title="View Pending Slip"
+                variant="secondary"
+                fullWidth
+                onPress={() => setReceiptModalVisible(true)}
+              />
+              <Button title="New Sale" variant="primary" fullWidth onPress={handleNewSale} style={{ marginTop: 8 }} />
+            </View>
+          </View>
+        </SafeAreaView>
+        <ReceiptDataPreviewModal
+          visible={receiptModalVisible}
+          receipt={pendingReceiptData}
+          onClose={() => setReceiptModalVisible(false)}
+          statusLabel="Pending sync"
+        />
+      </>
     );
   }
 
@@ -551,6 +1016,60 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
         </View>
 
         {/* ── 2. Applied Payments (split entries) ── */}
+        <View style={s.workflowPanel}>
+          <View style={s.workflowHeader}>
+            <View style={s.workflowTitleRow}>
+              <Icon
+                name={splitMode ? 'card' : 'cash'}
+                size={18}
+                color={splitMode ? colors.accent.primary : colors.status.success}
+              />
+              <Text style={s.workflowTitle}>
+                {splitMode ? 'Split tender' : 'Quick payment'}
+              </Text>
+              <View style={s.activeMethodPill}>
+                <Text style={s.activeMethodText}>{activeMethodLabel}</Text>
+              </View>
+            </View>
+            <View style={s.modeToggle}>
+              <Pressable
+                style={[s.modeToggleBtn, !splitMode && s.modeToggleBtnActive]}
+                onPress={() => setPaymentFlowMode('single')}
+                disabled={payments.length > 1}
+              >
+                <Text style={[s.modeToggleText, !splitMode && s.modeToggleTextActive]}>
+                  Quick
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[s.modeToggleBtn, splitMode && s.modeToggleBtnActive]}
+                onPress={() => setPaymentFlowMode('split')}
+              >
+                <Text style={[s.modeToggleText, splitMode && s.modeToggleTextActive]}>
+                  Split
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+          <Text style={s.workflowHint}>{paymentGuidance}</Text>
+          <View style={s.progressTrack}>
+            <View style={[s.progressFill, { width: `${paymentProgressRatio * 100}%` as any }]} />
+          </View>
+          <View style={s.workflowBalanceRow}>
+            <Text style={s.workflowBalanceText}>Paid {fmtPHP(paidTotal)}</Text>
+            <Text style={[
+              s.workflowBalanceText,
+              isFullyPaid ? s.workflowReadyText : s.workflowDueText,
+            ]}>
+              {isFullyPaid
+                ? getCashChange(payments) > 0
+                  ? `Change ${fmtPHP(getCashChange(payments))}`
+                  : 'Ready to complete'
+                : `Remaining ${fmtPHP(remaining)}`}
+            </Text>
+          </View>
+        </View>
+
         {payments.length > 0 && (
           <View style={s.appliedPayments}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -595,7 +1114,7 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
                 return (
                   <Pressable
                     key={m.key}
-                    style={[s.methodBtn, active && s.methodBtnActive]}
+                    style={[s.methodBtn, isTablet && s.methodBtnTablet, active && s.methodBtnActive]}
                     onPress={() => {
                       setFormMethod(m.key);
                       if (m.key !== 'CASH') {
@@ -606,7 +1125,12 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
                     }}
                     android_ripple={{ color: colors.accent.glow }}
                   >
-                    <Text style={[s.methodBtnText, active && s.methodBtnTextActive]}>
+                    <Icon
+                      name={m.icon}
+                      size={20}
+                      color={active ? colors.accent.primary : colors.text.muted}
+                    />
+                    <Text style={[s.methodBtnText, isTablet && s.methodBtnTextTablet, active && s.methodBtnTextActive]}>
                       {m.label}
                     </Text>
                   </Pressable>
@@ -616,14 +1140,20 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
               <Pressable
                 style={[
                   s.chargeMethodBtn,
+                  isTablet && s.chargeMethodBtnTablet,
                   isCharge && s.chargeMethodBtnActive,
                   !customerId && s.chargeMethodBtnDisabled,
                 ]}
                 onPress={handleChargeSelect}
                 android_ripple={{ color: colors.accent.glow }}
               >
-                <Text style={[s.chargeMethodText, isCharge && s.chargeMethodTextActive]}>
-                  {'\u26A0'} Charge
+                <Icon
+                  name="receipt"
+                  size={20}
+                  color={isCharge ? colors.text.primary : colors.status.warning}
+                />
+                <Text style={[s.chargeMethodText, isTablet && s.methodBtnTextTablet, isCharge && s.chargeMethodTextActive]}>
+                  Charge
                 </Text>
               </Pressable>
             </View>
@@ -724,6 +1254,16 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
                 Charging to: {customerName || 'No customer'}
               </Text>
               <Text style={s.chargeAmountDisplay}>{fmtPHP(remaining)}</Text>
+              {accountCreditCheck?.requiresOverride ? (
+                <Text style={s.chargeApprovalText}>
+                  Over limit by {fmtPHP(parseFloat(accountCreditCheck.overage))}; manager approval required
+                </Text>
+              ) : null}
+              {accountOverride ? (
+                <Text style={s.chargeApprovalText}>
+                  Approved by {accountOverride.approverName} via {accountOverride.method}
+                </Text>
+              ) : null}
             </View>
           </View>
         )}
@@ -770,21 +1310,57 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
         <View style={{ flex: 1 }} />
 
         {/* ── Error ── */}
-        {error && <Text style={s.errorText}>{error}</Text>}
+        {displayError && <Text style={s.errorText}>{displayError}</Text>}
 
         {/* ── 6. Action Button — pinned at bottom ── */}
+        <View style={[
+          s.preflightPanel,
+          paymentPreflight.ready && s.preflightPanelReady,
+          paymentActionBlocked && s.preflightPanelBlocked,
+        ]}>
+          <View style={s.preflightHeader}>
+            <Icon
+              name={paymentPreflight.ready ? 'check' : 'alert'}
+              size={18}
+              color={paymentPreflightColor}
+            />
+            <View style={s.preflightCopy}>
+              <Text style={s.preflightTitle}>{paymentPreflight.title}</Text>
+              <Text style={s.preflightDetail}>{paymentPreflight.detail}</Text>
+            </View>
+          </View>
+          {paymentPreflight.issues.length > 0 && (
+            <View style={s.preflightIssueList}>
+              {paymentPreflight.issues.map(issue => (
+                <View key={issue.code} style={s.preflightIssueRow}>
+                  <View style={[
+                    s.preflightIssueDot,
+                    issue.severity === 'blocking'
+                      ? s.preflightIssueDotDanger
+                      : s.preflightIssueDotWarning,
+                  ]} />
+                  <View style={s.preflightIssueCopy}>
+                    <Text style={s.preflightIssueLabel}>{issue.label}</Text>
+                    <Text style={s.preflightIssueText}>{issue.detail}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
         <View style={s.actionSection}>
           {isFullyPaid ? (
             /* Fully paid via split payments → Complete Sale */
             <Pressable
-              style={[s.completeSaleBtn, (isProcessing || receiptMissing) && { opacity: 0.5 }]}
+              style={[s.completeSaleBtn, paymentActionBlocked && { opacity: 0.5 }]}
               onPress={handleCheckout}
-              disabled={isProcessing || receiptMissing}
+              disabled={paymentActionBlocked}
             >
               <Text style={s.completeSaleBtnText}>
                 {isProcessing ? 'Processing...' : (
-                  paidTotal > grandTotal
-                    ? `COMPLETE SALE · Change: ${fmtPHP(paidTotal - grandTotal)}`
+                  getCashChange(payments) > 0
+                    ? `COMPLETE SALE · Change: ${fmtPHP(getCashChange(payments))}`
                     : 'COMPLETE SALE'
                 )}
               </Text>
@@ -792,11 +1368,11 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
           ) : singlePaymentCoversAll ? (
             /* Single payment covers everything → Complete Sale shortcut */
             <Pressable
-              style={[s.completeSaleBtn, (isProcessing || receiptMissing) && { opacity: 0.5 }]}
+              style={[s.completeSaleBtn, paymentActionBlocked && { opacity: 0.5 }]}
               onPress={() => {
                 handleSinglePaymentComplete();
               }}
-              disabled={isProcessing || receiptMissing}
+              disabled={paymentActionBlocked}
             >
               <Text style={s.completeSaleBtnText}>
                 {isProcessing ? 'Processing...' : (
@@ -812,29 +1388,36 @@ export default function PaymentScreen({ onBack }: PaymentScreenProps) {
               <Pressable
                 style={[
                   s.addPaymentBtn,
-                  !canAddPayment && s.addPaymentBtnDisabled,
+                  paymentActionBlocked && s.addPaymentBtnDisabled,
                 ]}
                 onPress={handleAddPayment}
-                disabled={!canAddPayment || receiptMissing}
+                disabled={paymentActionBlocked}
               >
                 <Text style={[
                   s.addPaymentBtnText,
-                  !canAddPayment && s.addPaymentBtnTextDisabled,
+                  paymentActionBlocked && s.addPaymentBtnTextDisabled,
                 ]}>
                   {canAddPayment
-                    ? `ADD PAYMENT · ${fmtPHP(parsedAmount)}`
+                    ? `${splitMode && payments.length === 0 ? 'ADD FIRST PAYMENT' : 'ADD PAYMENT'} · ${fmtPHP(parsedAmount)}`
                     : 'ADD PAYMENT'}
                 </Text>
               </Pressable>
-              {remaining > 0 && !canAddPayment && (
+              {paymentActionBlocked && paymentPreflight.primaryIssue && (
                 <Text style={s.remainingHint}>
-                  {fmtPHP(remaining)} remaining
+                  {paymentPreflight.primaryIssue.detail}
                 </Text>
               )}
             </>
           )}
         </View>
       </View>
+      <ManagerPinModal
+        visible={creditOverrideVisible}
+        action={creditOverrideAction}
+        requiredLevel={2}
+        onApprove={handleCreditOverrideApprove}
+        onCancel={handleCreditOverrideCancel}
+      />
     </SafeAreaView>
   );
 }
@@ -854,8 +1437,9 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'column',
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
     paddingBottom: spacing.md,
+    backgroundColor: colors.bg.surface,
   },
 
   /* ── 1. Order Summary (compressed) ── */
@@ -922,6 +1506,104 @@ const styles = StyleSheet.create({
   },
 
   /* ── 2. Applied Payments ── */
+  workflowPanel: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.primary,
+    gap: 6,
+  },
+  workflowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  workflowTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: spacing.xs,
+  },
+  workflowTitle: {
+    fontFamily: fonts.display.bold,
+    fontSize: fontSize.base,
+    color: colors.text.primary,
+  },
+  activeMethodPill: {
+    borderRadius: radius.pill,
+    backgroundColor: colors.bg.surface,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  activeMethodText: {
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.xs,
+    color: colors.text.secondary,
+  },
+  modeToggle: {
+    flexDirection: 'row',
+    borderRadius: radius.md,
+    backgroundColor: colors.bg.input,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    overflow: 'hidden' as any,
+  },
+  modeToggleBtn: {
+    minWidth: 58,
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  modeToggleBtnActive: {
+    backgroundColor: colors.accent.primary,
+  },
+  modeToggleText: {
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.xs,
+    color: colors.text.secondary,
+  },
+  modeToggleTextActive: {
+    color: colors.text.inverse,
+  },
+  workflowHint: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    color: colors.text.muted,
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.border.subtle,
+    overflow: 'hidden' as any,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.status.success,
+  },
+  workflowBalanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  workflowBalanceText: {
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+    color: colors.text.secondary,
+  },
+  workflowDueText: {
+    color: colors.status.warning,
+  },
+  workflowReadyText: {
+    color: colors.status.success,
+  },
+
   appliedPayments: {
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,
@@ -998,24 +1680,33 @@ const styles = StyleSheet.create({
   methodBtn: {
     width: '48%' as any,
     flexGrow: 1,
-    minHeight: 80,
-    borderRadius: radius.lg,
-    borderWidth: 2,
+    minHeight: 66,
+    borderRadius: radius.md,
+    borderWidth: 1,
     borderColor: colors.border.default,
     backgroundColor: colors.bg.surface,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing.md,
+    gap: spacing.xs,
     overflow: 'hidden' as any,
   },
+  methodBtnTablet: {
+    width: '23%' as any,
+    minHeight: 58,
+    paddingVertical: spacing.sm,
+  },
   methodBtnActive: {
-    backgroundColor: colors.accent.glow,
+    backgroundColor: colors.accent.muted,
     borderColor: colors.accent.primary,
   },
   methodBtnText: {
     fontFamily: fonts.display.semiBold,
-    fontSize: fontSize.lg,
+    fontSize: fontSize.base,
     color: colors.text.secondary,
+  },
+  methodBtnTextTablet: {
+    fontSize: fontSize.sm,
   },
   methodBtnTextActive: {
     color: colors.accent.primary,
@@ -1024,9 +1715,9 @@ const styles = StyleSheet.create({
   chargeMethodBtn: {
     width: '48%' as any,
     flexGrow: 1,
-    minHeight: 80,
-    borderRadius: radius.lg,
-    borderWidth: 2,
+    minHeight: 66,
+    borderRadius: radius.md,
+    borderWidth: 1,
     borderColor: colors.status.warning,
     borderStyle: 'dashed' as any,
     backgroundColor: colors.bg.surface,
@@ -1034,6 +1725,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: spacing.md,
     overflow: 'hidden' as any,
+  },
+  chargeMethodBtnTablet: {
+    width: '23%' as any,
+    minHeight: 58,
+    paddingVertical: spacing.sm,
   },
   chargeMethodBtnActive: {
     borderStyle: 'solid' as any,
@@ -1044,7 +1740,7 @@ const styles = StyleSheet.create({
   },
   chargeMethodText: {
     fontFamily: fonts.display.semiBold,
-    fontSize: fontSize.lg,
+    fontSize: fontSize.base,
     color: colors.status.warning,
   },
   chargeMethodTextActive: {
@@ -1059,18 +1755,18 @@ const styles = StyleSheet.create({
   tenderedInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.bg.overlay,
-    borderRadius: radius.lg,
-    borderWidth: 2,
+    backgroundColor: colors.bg.input,
+    borderRadius: radius.md,
+    borderWidth: 1,
     paddingHorizontal: spacing.lg,
     height: 64,
   },
   tenderedInputRowStatic: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.bg.overlay,
-    borderRadius: radius.lg,
-    borderWidth: 2,
+    backgroundColor: colors.bg.input,
+    borderRadius: radius.md,
+    borderWidth: 1,
     borderColor: colors.border.medium,
     paddingHorizontal: spacing.lg,
     height: 64,
@@ -1159,7 +1855,7 @@ const styles = StyleSheet.create({
     fontFamily: fonts.body.medium,
     fontSize: fontSize.base,
     color: colors.text.primary,
-    backgroundColor: colors.bg.overlay,
+    backgroundColor: colors.bg.input,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border.default,
@@ -1189,6 +1885,12 @@ const styles = StyleSheet.create({
     fontFamily: fonts.display.bold,
     fontSize: fontSize['3xl'],
     color: colors.text.primary,
+  },
+  chargeApprovalText: {
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    color: colors.status.successText,
+    marginTop: 4,
   },
 
   /* ── 5. Quick Amount Buttons ── */
@@ -1258,6 +1960,78 @@ const styles = StyleSheet.create({
   },
 
   /* ── Error ── */
+  preflightPanel: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: spacing.xs,
+  },
+  preflightPanelReady: {
+    borderColor: colors.status.success,
+    backgroundColor: colors.status.successBg,
+  },
+  preflightPanelBlocked: {
+    borderColor: colors.status.danger,
+    backgroundColor: colors.status.dangerBg,
+  },
+  preflightHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  preflightCopy: {
+    flex: 1,
+  },
+  preflightTitle: {
+    fontFamily: fonts.display.semiBold,
+    fontSize: fontSize.base,
+    color: colors.text.primary,
+  },
+  preflightDetail: {
+    marginTop: 2,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    color: colors.text.secondary,
+  },
+  preflightIssueList: {
+    gap: spacing.xs,
+    paddingLeft: 26,
+  },
+  preflightIssueRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  preflightIssueDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    marginTop: 6,
+  },
+  preflightIssueDotDanger: {
+    backgroundColor: colors.status.danger,
+  },
+  preflightIssueDotWarning: {
+    backgroundColor: colors.status.warning,
+  },
+  preflightIssueCopy: {
+    flex: 1,
+  },
+  preflightIssueLabel: {
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.xs,
+    color: colors.text.primary,
+  },
+  preflightIssueText: {
+    marginTop: 1,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    color: colors.text.muted,
+  },
+
   errorText: {
     fontFamily: fonts.body.medium,
     fontSize: fontSize.sm,
@@ -1275,25 +2049,21 @@ const styles = StyleSheet.create({
   completeSaleBtn: {
     backgroundColor: colors.accent.primary,
     height: 64,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.accent.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 8,
+    elevation: 2,
   },
   completeSaleBtnText: {
     fontFamily: fonts.display.bold,
     fontSize: fontSize['2xl'],
     color: '#FFFFFF',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   addPaymentBtn: {
     backgroundColor: colors.accent.primary,
     height: 64,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1305,7 +2075,7 @@ const styles = StyleSheet.create({
     fontFamily: fonts.display.bold,
     fontSize: fontSize['2xl'],
     color: colors.text.inverse,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   addPaymentBtnTextDisabled: {
     color: colors.text.muted,
@@ -1326,8 +2096,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
   },
   successIcon: {
-    fontSize: 64,
-    color: colors.status.success,
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    backgroundColor: colors.status.successBg,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: spacing.lg,
   },
   successTitle: {
@@ -1350,15 +2124,67 @@ const styles = StyleSheet.create({
     fontFamily: fonts.display.bold,
     fontSize: fontSize['2xl'],
     color: colors.status.success,
-    marginBottom: spacing['2xl'],
+    marginBottom: spacing.md,
+  },
+  afterSalePanel: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    padding: spacing.md,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  afterSaleStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  afterSaleIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  afterSaleIconSuccess: {
+    backgroundColor: colors.status.successBg,
+  },
+  afterSaleIconWarning: {
+    backgroundColor: colors.status.warningBg,
+  },
+  afterSaleIconNeutral: {
+    backgroundColor: colors.bg.elevated,
+  },
+  afterSaleCopy: {
+    flex: 1,
+  },
+  afterSaleLabel: {
+    fontFamily: fonts.display.semiBold,
+    fontSize: fontSize.sm,
+    color: colors.text.primary,
+  },
+  afterSaleDetail: {
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.xs,
+    color: colors.text.muted,
+    marginTop: 2,
   },
   successActions: {
     width: '100%',
-    marginTop: spacing.xl,
+    maxWidth: 520,
+    marginTop: spacing.lg,
     gap: spacing.sm,
   },
   pendingIcon: {
-    fontSize: 64,
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    backgroundColor: colors.status.warningBg,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: spacing.lg,
   },
   pendingTitle: {

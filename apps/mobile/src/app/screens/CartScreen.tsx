@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -28,27 +28,60 @@ import { CustomerLookup } from '@/components/CustomerLookup';
 import { SerialInput } from '@/components/SerialInput';
 import { WarrantyPhotoCapture } from '@/components/WarrantyPhotoCapture';
 import { HeldCartsSheet } from '@/components/HeldCartsSheet';
-import { ManagerPinModal } from '@/components/ManagerPinModal';
+import { ManagerPinModal, type ManagerAuthorization } from '@/components/ManagerPinModal';
 import { getHeldCartCount } from '@/storage/held-carts';
 import type { Customer, Vehicle } from '@/hooks/use-customer-search';
 import { useLayout } from '@/hooks/use-layout';
 import { useAuth } from '@/hooks/use-auth';
 import { usePosPermission } from '@/hooks/use-pos-permission';
 import { useRequireElevation } from '@/hooks/use-require-elevation';
+import { getDiscountPermissionLevel, type PosPermission } from '@/config/pos-permissions';
 import { logElevation } from '@/services/audit-logger';
+import { buildCartCheckoutPreflight } from '@/utils/checkout-preflight';
 import { formatDotAllocation } from '@/utils/dot-fifo-allocate';
 import { colors, textStyles, spacing, radius, layout, fonts, fontSize, touchTarget } from '@/theme';
+import type { PaymentIntent } from '@/app/MainTabs';
+import { Icon } from '@/components/ui';
 
 function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 interface CartScreenProps {
-  onProceedToPayment?: () => void;
+  onProceedToPayment?: (intent?: PaymentIntent) => void;
+}
+
+type DiscountMode = 'percentage' | 'fixed';
+
+type DiscountTarget =
+  | { type: 'line'; line: CartLine }
+  | { type: 'cart' };
+
+function getLineGross(line: CartLine): number {
+  return (line.overridePrice ?? line.unitPrice) * line.quantity;
+}
+
+function getLineDiscountAmount(line: CartLine): number {
+  return Math.max(0, getLineGross(line) - line.lineTotal);
+}
+
+function permissionForLineDiscount(percentage: number): PosPermission {
+  const level = getDiscountPermissionLevel(percentage);
+  if (level <= 1) return 'applyLineDiscount5';
+  if (level <= 2) return 'applyLineDiscount15';
+  return 'applyLineDiscountAny';
+}
+
+function authorizationAuditMetadata(approval?: ManagerAuthorization): Record<string, string | undefined> {
+  return {
+    authorizationMethod: approval?.method ?? 'session',
+    authorizationUserId: approval?.userId,
+    authorizationRole: approval?.role,
+  };
 }
 
 export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const { isTablet, screenPadding } = useLayout();
   const { can } = usePosPermission();
   const { user } = useAuth();
@@ -58,6 +91,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const customerId = useCartStore(s => s.customerId);
   const customerName = useCartStore(s => s.customerName);
   const vehicleId = useCartStore(s => s.vehicleId);
+  const allowNegativeStock = useCartStore(s => s.allowNegativeStock);
   const updateQuantity = useCartStore(s => s.updateQuantity);
   const removeLine = useCartStore(s => s.removeLine);
   const setAllowNegativeStock = useCartStore(s => s.setAllowNegativeStock);
@@ -65,6 +99,10 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const setLineSerials = useCartStore(s => s.setLineSerials);
   const setLineWarrantyPhoto = useCartStore(s => s.setLineWarrantyPhoto);
   const setLinePriceOverride = useCartStore(s => s.setLinePriceOverride);
+  const setLineDiscount = useCartStore(s => s.setLineDiscount);
+  const setCartDiscount = useCartStore(s => s.setCartDiscount);
+  const cartDiscountType = useCartStore(s => s.discountType);
+  const cartDiscountValue = useCartStore(s => s.discountValue);
   const incompleteSerials = useCartStore(useShallow(selectIncompleteSerials));
 
   const subtotal = useCartStore(selectSubtotal);
@@ -72,6 +110,10 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const grandTotal = useCartStore(selectGrandTotal);
   const unitCount = useCartStore(selectLineCount);
   const productCount = lines.length;
+  const lowStockLines = useMemo(
+    () => lines.filter(l => l.availableStock !== null && l.availableStock < l.quantity),
+    [lines],
+  );
 
   // Serial input modal state
   const [serialModalLine, setSerialModalLine] = useState<CartLine | null>(null);
@@ -80,8 +122,15 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const [priceOverrideTarget, setPriceOverrideTarget] = useState<CartLine | null>(null);
   const [priceOverrideValue, setPriceOverrideValue] = useState('');
 
+  // Discount modal state
+  const [discountTarget, setDiscountTarget] = useState<DiscountTarget | null>(null);
+  const [discountMode, setDiscountMode] = useState<DiscountMode>('percentage');
+  const [discountValueInput, setDiscountValueInput] = useState('');
+
   const attachCustomer = useCartStore(s => s.attachCustomer);
   const detachCustomer = useCartStore(s => s.detachCustomer);
+  const note = useCartStore(s => s.note);
+  const setNote = useCartStore(s => s.setNote);
 
   const [customerLookupVisible, setCustomerLookupVisible] = useState(false);
   const [heldCartsSheetVisible, setHeldCartsSheetVisible] = useState(false);
@@ -119,32 +168,159 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
     guard(
       'priceOverride',
       `Override price on ${item.name}\n${fmtPHP(oldPrice)} \u2192 ${fmtPHP(newPrice)}`,
-      (approverName) => {
+      (approverName, approval) => {
         setLinePriceOverride(item.id, newPrice, approverName);
         logElevation({
           action: 'price_override',
           description: `Price override on ${item.name} ${fmtPHP(oldPrice)} \u2192 ${fmtPHP(newPrice)}`,
           approvedBy: approverName,
           performedBy: user?.fullName ?? 'Unknown',
-          metadata: { lineId: item.id, productId: item.productId, oldPrice, newPrice },
+          metadata: {
+            lineId: item.id,
+            productId: item.productId,
+            oldPrice,
+            newPrice,
+            ...authorizationAuditMetadata(approval),
+          },
         });
       },
     );
   }, [priceOverrideTarget, priceOverrideValue, guard, setLinePriceOverride, user?.fullName]);
 
+  const closeDiscountModal = useCallback(() => {
+    setDiscountTarget(null);
+    setDiscountValueInput('');
+    setDiscountMode('percentage');
+  }, []);
+
+  const handleLineDiscount = useCallback((line: CartLine) => {
+    setDiscountTarget({ type: 'line', line });
+    setDiscountMode(line.discountType === 'fixed' ? 'fixed' : 'percentage');
+    setDiscountValueInput(line.discountType === 'none' ? '' : String(line.discountValue));
+  }, []);
+
+  const handleCartDiscount = useCallback(() => {
+    setDiscountTarget({ type: 'cart' });
+    setDiscountMode(cartDiscountType === 'fixed' ? 'fixed' : 'percentage');
+    setDiscountValueInput(cartDiscountType === 'none' ? '' : String(cartDiscountValue));
+  }, [cartDiscountType, cartDiscountValue]);
+
+  const handleClearCartDiscount = useCallback(() => {
+    setCartDiscount('none', 0);
+  }, [setCartDiscount]);
+
+  const handleDiscountSubmit = useCallback(() => {
+    if (!discountTarget) return;
+
+    const rawValue = parseFloat(discountValueInput.replace(/,/g, ''));
+    if (Number.isNaN(rawValue) || rawValue < 0) {
+      Alert.alert('Invalid Discount', 'Enter a valid discount amount.');
+      return;
+    }
+
+    const baseAmount = discountTarget.type === 'line'
+      ? getLineGross(discountTarget.line)
+      : subtotal;
+    if (baseAmount <= 0) {
+      Alert.alert('Invalid Discount', 'There is no amount available to discount.');
+      return;
+    }
+
+    if (rawValue === 0) {
+      if (discountTarget.type === 'line') {
+        setLineDiscount(discountTarget.line.id, 'none', 0);
+      } else {
+        setCartDiscount('none', 0);
+      }
+      closeDiscountModal();
+      return;
+    }
+
+    if (discountMode === 'percentage' && rawValue > 100) {
+      Alert.alert('Invalid Discount', 'Percentage discounts cannot exceed 100%.');
+      return;
+    }
+
+    const discountAmount = discountMode === 'percentage'
+      ? baseAmount * (rawValue / 100)
+      : rawValue;
+    if (discountAmount > baseAmount) {
+      Alert.alert('Invalid Discount', 'Discount cannot exceed the eligible total.');
+      return;
+    }
+
+    const effectivePercentage = baseAmount > 0 ? (discountAmount / baseAmount) * 100 : 0;
+    const permission = discountTarget.type === 'cart'
+      ? 'applyCartDiscount'
+      : permissionForLineDiscount(effectivePercentage);
+    const targetLabel = discountTarget.type === 'line'
+      ? discountTarget.line.name
+      : 'cart total';
+    const displayValue = discountMode === 'percentage'
+      ? `${rawValue}%`
+      : fmtPHP(rawValue);
+
+    closeDiscountModal();
+    guard(
+      permission,
+      `Apply ${displayValue} discount to ${targetLabel}`,
+      (approverName, approval) => {
+        if (discountTarget.type === 'line') {
+          setLineDiscount(discountTarget.line.id, discountMode, rawValue);
+        } else {
+          setCartDiscount(discountMode, rawValue);
+        }
+
+        logElevation({
+          action: 'manual_discount',
+          description: `Applied ${displayValue} discount to ${targetLabel}`,
+          approvedBy: approverName,
+          performedBy: user?.fullName ?? 'Unknown',
+          metadata: {
+            target: discountTarget.type,
+            lineId: discountTarget.type === 'line' ? discountTarget.line.id : undefined,
+            productId: discountTarget.type === 'line' ? discountTarget.line.productId : undefined,
+            discountType: discountMode,
+            discountValue: rawValue,
+            discountAmount,
+            ...authorizationAuditMetadata(approval),
+          },
+        });
+      },
+    );
+  }, [
+    closeDiscountModal,
+    discountMode,
+    discountTarget,
+    discountValueInput,
+    guard,
+    setCartDiscount,
+    setLineDiscount,
+    subtotal,
+    user?.fullName,
+  ]);
+
   const handleSelectCustomer = useCallback((customer: Customer, vehicle?: Vehicle) => {
     attachCustomer(customer.id, customer.name, vehicle?.id);
   }, [attachCustomer]);
 
-  const proceedToPayment = useCallback(() => {
+  const proceedToPayment = useCallback((intent: PaymentIntent = 'CASH') => {
     if (onProceedToPayment) {
-      onProceedToPayment();
+      onProceedToPayment(intent);
     } else {
-      navigation.navigate('Payment' as never);
+      navigation.navigate('Payment', { initialMethod: intent });
     }
   }, [onProceedToPayment, navigation]);
 
-  const handleProceedToPayment = useCallback(() => {
+  const handleProceedToPayment = useCallback((intent: PaymentIntent = 'CASH') => {
+    if (intent === 'CHARGE' && !customerId) {
+      Alert.alert(
+        'Customer Required',
+        'Add a customer before charging the sale to an account.',
+      );
+      return;
+    }
+
     // Block checkout if any serialized items have incomplete serials
     if (incompleteSerials.length > 0) {
       const itemList = incompleteSerials
@@ -158,10 +334,6 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
       return;
     }
 
-    const lowStockLines = lines.filter(
-      l => l.availableStock !== null && l.availableStock < l.quantity,
-    );
-
     if (lowStockLines.length > 0) {
       const itemList = lowStockLines
         .map(l => {
@@ -174,26 +346,63 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         .join('\n');
 
       Alert.alert(
-        'Insufficient Stock',
-        `The following items will go into negative inventory:\n\n${itemList}\n\nProceed anyway?`,
+        'Manager Authorization Required',
+        `The following items will go into negative inventory:\n\n${itemList}\n\nA manager must approve before checkout.`,
         [
           { text: 'Go Back', style: 'cancel' },
-          { text: 'Proceed', style: 'destructive', onPress: () => {
-            setAllowNegativeStock(true);
-            proceedToPayment();
-          }},
+          {
+            text: 'Authorize',
+            style: 'destructive',
+            onPress: () => {
+              guard(
+                'overrideNegativeStock',
+                `Approve negative inventory checkout\n${itemList}`,
+                (approverName, approval) => {
+                  logElevation({
+                    action: 'negative_stock_override',
+                    description: `Negative inventory checkout approved by ${approverName}`,
+                    approvedBy: approverName,
+                    performedBy: user?.fullName ?? 'Unknown',
+                    metadata: {
+                      items: lowStockLines.map(l => ({
+                        lineId: l.id,
+                        productId: l.productId,
+                        name: l.name,
+                        quantity: l.quantity,
+                        availableStock: l.availableStock,
+                      })),
+                      ...authorizationAuditMetadata(approval),
+                    },
+                  });
+                  setAllowNegativeStock(true);
+                  proceedToPayment(intent);
+                },
+              );
+            },
+          },
         ],
       );
       return;
     }
 
     setAllowNegativeStock(false);
-    proceedToPayment();
-  }, [lines, proceedToPayment, setAllowNegativeStock]);
+    proceedToPayment(intent);
+  }, [customerId, guard, incompleteSerials, lowStockLines, proceedToPayment, setAllowNegativeStock, user?.fullName]);
 
-  const hasStockWarnings = lines.some(
-    l => l.availableStock !== null && l.availableStock < l.quantity,
-  );
+  const hasStockWarnings = lowStockLines.length > 0;
+  const checkoutPreflight = buildCartCheckoutPreflight({
+    lineCount: productCount,
+    unitCount,
+    customerId,
+    incompleteSerialCount: incompleteSerials.length,
+    stockWarningCount: lowStockLines.length,
+    hasNegativeStockApproval: allowNegativeStock,
+  });
+  const checkoutPrepColor = checkoutPreflight.ready
+    ? colors.status.success
+    : checkoutPreflight.blockingIssues.length > 0
+      ? colors.status.danger
+      : colors.status.warning;
 
   // VAT calculation (12% inclusive)
   const vatAmount = grandTotal - (grandTotal / 1.12);
@@ -211,6 +420,20 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
     }
   }, [updateQuantity, removeLine]);
 
+  const handlePlusPress = useCallback((item: CartLine) => {
+    if (item.availableStock !== null && item.quantity >= item.availableStock) {
+      Alert.alert(
+        'Insufficient Stock',
+        item.availableStock <= 0
+          ? `${item.name} has no stock at this branch.`
+          : `${item.name} has only ${item.availableStock} available.`,
+      );
+      return;
+    }
+
+    updateQuantity(item.id, item.quantity + 1);
+  }, [updateQuantity]);
+
   const renderRightActions = useCallback((lineId: string, lineName: string) => (
     <Pressable
       style={styles.swipeDelete}
@@ -225,6 +448,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const renderLine = ({ item }: { item: CartLine }) => {
     const isLowStock = item.availableStock !== null && item.availableStock < item.quantity;
     const isOutOfStock = item.availableStock !== null && item.availableStock <= 0;
+    const lineDiscountAmount = getLineDiscountAmount(item);
     return (
       <Swipeable
         ref={(ref) => { if (ref) swipeableRefs.current.set(item.id, ref); }}
@@ -243,7 +467,38 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             </View>
             <Text style={styles.lineName} numberOfLines={2}>{item.name}</Text>
             <View style={styles.lineMetaRow}>
-              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} × {item.quantity}</Text>
+              <Text style={styles.lineUnitPrice}>{fmtPHP(item.unitPrice)} x {item.quantity}</Text>
+              {item.availableStock !== null && (
+                <Text style={styles.lineStockMeta}>{item.availableStock} available</Text>
+              )}
+            </View>
+            <View style={styles.lineActionRow}>
+              <Pressable
+                style={styles.lineActionButton}
+                onPress={() => handleLineDiscount(item)}
+                hitSlop={6}
+              >
+                <Icon name="tag" size={13} color={colors.accent.primary} />
+                <Text style={styles.lineActionText}>
+                  {lineDiscountAmount > 0 ? `-${fmtPHP(lineDiscountAmount)}` : 'Discount'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={styles.lineActionButton}
+                onPress={() => handlePriceOverride(item)}
+                hitSlop={6}
+              >
+                <Icon name="cash" size={13} color={colors.accent.primary} />
+                <Text style={styles.lineActionText}>Price</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.lineActionButton, styles.lineRemoveAction]}
+                onPress={() => removeLine(item.id)}
+                hitSlop={6}
+              >
+                <Icon name="trash" size={13} color={colors.status.danger} />
+                <Text style={styles.lineRemoveActionText}>Remove</Text>
+              </Pressable>
             </View>
             {isOutOfStock && (
               <View style={[styles.stockBadgeOut, { marginTop: 4 }]}>
@@ -289,7 +544,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
               <View style={{ marginTop: 4 }}>
                 {item.dotAllocation.map((alloc, i) => (
                   <Text key={i} style={{ fontSize: 10, color: colors.text.muted, fontFamily: 'JetBrainsMono-Regular' }}>
-                    {formatDotAllocation(alloc)} ×{alloc.quantity}
+                    {formatDotAllocation(alloc)} x{alloc.quantity}
                   </Text>
                 ))}
                 {can('overrideDotFIFO') && (
@@ -310,6 +565,11 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
                 )}
               </View>
             )}
+            {lineDiscountAmount > 0 && (
+              <Text style={styles.discountNote}>
+                Discount applied: {item.discountType === 'percentage' ? `${item.discountValue}%` : fmtPHP(item.discountValue)}
+              </Text>
+            )}
           </View>
           <View style={styles.qtyControls}>
             <Pressable
@@ -322,7 +582,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             <Text style={styles.qtyText}>{item.quantity}</Text>
             <Pressable
               style={styles.qtyBtn}
-              onPress={() => updateQuantity(item.id, item.quantity + 1)}
+              onPress={() => handlePlusPress(item)}
               hitSlop={8}
             >
               <Text style={styles.qtyBtnText}>+</Text>
@@ -332,6 +592,13 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
       </Swipeable>
     );
   };
+
+  const discountTargetLabel = discountTarget?.type === 'line'
+    ? discountTarget.line.name
+    : 'Cart total';
+  const discountEligibleAmount = discountTarget?.type === 'line'
+    ? getLineGross(discountTarget.line)
+    : subtotal;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -355,6 +622,17 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
           </View>
         )}
         <View style={styles.headerActions}>
+          {heldCartCount > 0 && (
+            <Pressable
+              onPress={() => setHeldCartsSheetVisible(true)}
+              hitSlop={8}
+              style={styles.heldHeaderButton}
+              android_ripple={{ color: colors.accent.glow }}
+            >
+              <Icon name="hold" size={15} color={colors.accent.primary} />
+              <Text style={styles.heldHeaderText}>{heldCartCount}</Text>
+            </Pressable>
+          )}
           {lines.length > 0 && (
             <Pressable
               onPress={handleHoldCart}
@@ -362,7 +640,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
               style={styles.holdButton}
               android_ripple={{ color: colors.status.warningBg }}
             >
-              <Text style={styles.holdIcon}>{'\u23F8'}</Text>
+              <Icon name="hold" size={16} color={colors.status.warning} />
               <Text style={styles.holdText}>Hold</Text>
             </Pressable>
           )}
@@ -423,9 +701,59 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         keyExtractor={item => item.id}
         renderItem={renderLine}
         style={styles.cartList}
+        ListFooterComponent={lines.length > 0 ? (
+          <View style={styles.checkoutPrepPanel}>
+            <View style={styles.checkoutPrepHeader}>
+              <View style={styles.checkoutPrepTitleRow}>
+                <Icon
+                  name={checkoutPreflight.ready ? 'check' : 'alert'}
+                  size={17}
+                  color={checkoutPrepColor}
+                />
+                <Text style={styles.checkoutPrepTitle}>
+                  {checkoutPreflight.title}
+                </Text>
+              </View>
+              <Text style={styles.checkoutPrepMeta}>
+                {productCount} product{productCount === 1 ? '' : 's'} / {unitCount} unit{unitCount === 1 ? '' : 's'}
+              </Text>
+            </View>
+            {checkoutPreflight.issues.length > 0 ? (
+              <View style={styles.checkoutIssueList}>
+                {checkoutPreflight.issues.map(issue => (
+                  <View key={issue.code} style={styles.checkoutIssueRow}>
+                    <View style={[
+                      styles.checkoutIssueDot,
+                      issue.severity === 'blocking'
+                        ? styles.checkoutIssueDotDanger
+                        : styles.checkoutIssueDotWarning,
+                    ]} />
+                    <View style={styles.checkoutIssueCopy}>
+                      <Text style={styles.checkoutIssueLabel}>{issue.label}</Text>
+                      <Text style={styles.checkoutIssueDetail}>{issue.detail}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.checkoutPrepIssues}>{checkoutPreflight.detail}</Text>
+            )}
+            <TextInput
+              value={note}
+              onChangeText={setNote}
+              placeholder="Sale note, install detail, or pickup instruction"
+              placeholderTextColor={colors.text.muted}
+              style={styles.saleNoteInput}
+              multiline
+              returnKeyType="done"
+            />
+          </View>
+        ) : null}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>{'\uD83D\uDED2'}</Text>
+            <View style={styles.emptyIcon}>
+              <Icon name="cart" size={34} color={colors.text.muted} />
+            </View>
             <Text style={styles.emptyTitle}>No items in cart</Text>
             <Text style={styles.emptySubtitle}>Tap a product or scan a barcode to start</Text>
             {heldCartCount > 0 && (
@@ -444,6 +772,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         }
         contentContainerStyle={[
           lines.length === 0 ? { flex: 1 } : undefined,
+          lines.length > 0 ? styles.cartListContent : undefined,
         ]}
       />
 
@@ -471,6 +800,28 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             </>
           )}
 
+          <View style={styles.discountControlRow}>
+            <Pressable
+              style={styles.cartDiscountButton}
+              onPress={handleCartDiscount}
+              android_ripple={{ color: colors.accent.glow }}
+            >
+              <Icon name="tag" size={15} color={colors.accent.primary} />
+              <Text style={styles.cartDiscountButtonText}>
+                {discount > 0 ? 'Edit Cart Discount' : 'Add Cart Discount'}
+              </Text>
+            </Pressable>
+            {discount > 0 && (
+              <Pressable
+                style={styles.cartDiscountClear}
+                onPress={handleClearCartDiscount}
+                hitSlop={8}
+              >
+                <Icon name="close" size={15} color={colors.status.danger} />
+              </Pressable>
+            )}
+          </View>
+
           {/* VAT row */}
           <View style={styles.vatRow}>
             <Text style={styles.vatLabel}>VAT (12% inclusive)</Text>
@@ -486,31 +837,35 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
           {/* Payment action buttons — matches Base44 layout */}
           <Pressable
             style={styles.cashButton}
-            onPress={handleProceedToPayment}
+            onPress={() => handleProceedToPayment('CASH')}
             android_ripple={{ color: 'rgba(0,0,0,0.2)' }}
           >
-            <Text style={styles.cashButtonText}>{'\uD83D\uDCB5'} Cash</Text>
+            <Icon name="cash" size={20} color={colors.white} />
+            <Text style={styles.cashButtonText}>Cash</Text>
           </Pressable>
           <Pressable
             style={styles.chargeButton}
-            onPress={handleProceedToPayment}
+            onPress={() => handleProceedToPayment('CHARGE')}
             android_ripple={{ color: 'rgba(22,163,74,0.15)' }}
           >
-            <Text style={styles.chargeButtonText}>{'\uD83D\uDCCB'} Charge to Account</Text>
+            <Icon name="receipt" size={18} color={colors.status.success} />
+            <Text style={styles.chargeButtonText}>Charge to Account</Text>
           </Pressable>
           <Pressable
             style={styles.splitButton}
-            onPress={handleProceedToPayment}
+            onPress={() => handleProceedToPayment('SPLIT')}
             android_ripple={{ color: 'rgba(255,255,255,0.05)' }}
           >
-            <Text style={styles.splitButtonText}>{'\u2702'} Split Payment</Text>
+            <Icon name="card" size={18} color={colors.text.secondary} />
+            <Text style={styles.splitButtonText}>Split Payment</Text>
           </Pressable>
           <Pressable
             style={styles.holdParkButton}
             onPress={handleHoldCart}
             android_ripple={{ color: 'rgba(255,255,255,0.05)' }}
           >
-            <Text style={styles.holdParkButtonText}>{'\u23F8'} Hold / Park</Text>
+            <Icon name="hold" size={15} color={colors.text.muted} />
+            <Text style={styles.holdParkButtonText}>Hold / Park</Text>
           </Pressable>
         </View>
       )}
@@ -594,6 +949,65 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         </Pressable>
       </Modal>
 
+      {/* Discount modal */}
+      <Modal
+        visible={discountTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDiscountModal}
+      >
+        <Pressable style={styles.priceOverrideOverlay} onPress={closeDiscountModal}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <Pressable style={styles.priceOverrideContainer} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.priceOverrideTitle}>Discount</Text>
+              <Text style={styles.priceOverrideProduct} numberOfLines={2}>
+                {discountTargetLabel}
+              </Text>
+              <Text style={styles.priceOverrideOriginal}>
+                Eligible total: {fmtPHP(discountEligibleAmount)}
+              </Text>
+
+              <View style={styles.discountModeToggle}>
+                <Pressable
+                  style={[styles.discountModeButton, discountMode === 'percentage' && styles.discountModeButtonActive]}
+                  onPress={() => setDiscountMode('percentage')}
+                >
+                  <Text style={[styles.discountModeText, discountMode === 'percentage' && styles.discountModeTextActive]}>%</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.discountModeButton, discountMode === 'fixed' && styles.discountModeButtonActive]}
+                  onPress={() => setDiscountMode('fixed')}
+                >
+                  <Text style={[styles.discountModeText, discountMode === 'fixed' && styles.discountModeTextActive]}>PHP</Text>
+                </Pressable>
+              </View>
+
+              <TextInput
+                style={styles.priceOverrideInput}
+                value={discountValueInput}
+                onChangeText={setDiscountValueInput}
+                keyboardType="decimal-pad"
+                placeholder={discountMode === 'percentage' ? 'Percent' : 'Amount'}
+                placeholderTextColor={colors.text.muted}
+                autoFocus
+                selectTextOnFocus
+              />
+              <View style={styles.priceOverrideActions}>
+                <Pressable style={styles.priceOverrideCancelBtn} onPress={closeDiscountModal}>
+                  <Text style={styles.priceOverrideCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable style={styles.discountClearBtn} onPress={() => setDiscountValueInput('0')}>
+                  <Text style={styles.priceOverrideCancelText}>Clear</Text>
+                </Pressable>
+                <Pressable style={styles.priceOverrideConfirmBtn} onPress={handleDiscountSubmit}>
+                  <Text style={styles.priceOverrideConfirmText}>Apply</Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Modal>
+
       {/* Manager PIN elevation modal */}
       <ManagerPinModal {...elevationProps} />
     </SafeAreaView>
@@ -608,22 +1022,26 @@ const createStyles = () => StyleSheet.create({
   cartList: {
     flex: 1,
   },
+  cartListContent: {
+    paddingBottom: spacing.sm,
+  },
 
   // Cart Header
   cartHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
+    borderBottomColor: colors.border.default,
+    backgroundColor: colors.bg.surface,
   },
   cartHeaderTitle: {
     fontSize: 18,
     fontFamily: 'Outfit-Bold',
     color: colors.text.primary,
-    letterSpacing: -0.3,
+    letterSpacing: 0,
   },
   cartHeaderCount: {
     fontSize: 13,
@@ -646,31 +1064,53 @@ const createStyles = () => StyleSheet.create({
     fontSize: 18,
     fontFamily: 'Outfit-Bold',
     color: colors.text.primary,
-    letterSpacing: -0.3,
+    letterSpacing: 0,
   },
   clearButton: {
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,59,48,0.1)',
+    borderRadius: radius.md,
+    backgroundColor: colors.status.dangerBg,
+    borderWidth: 1,
+    borderColor: colors.status.danger,
   },
   clearText: {
     fontSize: 13,
     fontFamily: 'Outfit-SemiBold',
-    color: '#FF3B30',
+    color: colors.status.danger,
   },
   headerActions: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     gap: 8,
   },
+  heldHeaderButton: {
+    minWidth: 42,
+    minHeight: 36,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center',
+    gap: 4,
+    borderRadius: radius.md,
+    backgroundColor: colors.accent.muted,
+    borderWidth: 1,
+    borderColor: colors.accent.primary,
+    paddingHorizontal: spacing.sm,
+  },
+  heldHeaderText: {
+    fontSize: fontSize.sm,
+    fontFamily: fonts.display.bold,
+    color: colors.accent.primary,
+  },
   holdButton: {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: radius.md,
     backgroundColor: colors.status.warningBg,
+    borderWidth: 1,
+    borderColor: colors.status.warning,
     gap: 4,
   },
   holdIcon: {
@@ -708,7 +1148,7 @@ const createStyles = () => StyleSheet.create({
   // Customer bar
   customerSelected: {
     backgroundColor: colors.bg.surface,
-    borderRadius: 10,
+    borderRadius: radius.md,
     paddingVertical: 10,
     paddingHorizontal: 16,
     marginHorizontal: 20,
@@ -716,6 +1156,8 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
   },
   detachText: {
     fontSize: 14,
@@ -726,13 +1168,14 @@ const createStyles = () => StyleSheet.create({
   addCustomerButton: {
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: colors.border.light,
-    borderRadius: 10,
+    borderColor: colors.border.medium,
+    borderRadius: radius.md,
     paddingVertical: 12,
     paddingHorizontal: 16,
     marginHorizontal: 20,
     marginTop: 12,
     alignItems: 'center',
+    backgroundColor: colors.bg.surface,
   },
   addCustomerText: {
     fontSize: 13,
@@ -750,6 +1193,93 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.muted,
     marginTop: 2,
   },
+  checkoutPrepPanel: {
+    marginHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 4,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    padding: spacing.sm,
+    gap: spacing.xs,
+  },
+  checkoutPrepHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  checkoutPrepTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flex: 1,
+  },
+  checkoutPrepTitle: {
+    fontSize: fontSize.base,
+    fontFamily: fonts.display.semiBold,
+    color: colors.text.primary,
+  },
+  checkoutPrepMeta: {
+    fontSize: fontSize.xs,
+    fontFamily: fonts.body.medium,
+    color: colors.text.muted,
+  },
+  checkoutPrepIssues: {
+    fontSize: fontSize.sm,
+    fontFamily: fonts.body.medium,
+    color: colors.text.secondary,
+  },
+  checkoutIssueList: {
+    gap: spacing.xs,
+  },
+  checkoutIssueRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingVertical: 2,
+  },
+  checkoutIssueDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 6,
+  },
+  checkoutIssueDotDanger: {
+    backgroundColor: colors.status.danger,
+  },
+  checkoutIssueDotWarning: {
+    backgroundColor: colors.status.warning,
+  },
+  checkoutIssueCopy: {
+    flex: 1,
+  },
+  checkoutIssueLabel: {
+    fontSize: fontSize.sm,
+    fontFamily: fonts.body.semiBold,
+    color: colors.text.primary,
+  },
+  checkoutIssueDetail: {
+    fontSize: fontSize.xs,
+    fontFamily: fonts.body.medium,
+    color: colors.text.muted,
+    marginTop: 1,
+  },
+  saleNoteInput: {
+    minHeight: 42,
+    maxHeight: 72,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.input,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text.primary,
+    fontFamily: fonts.body.regular,
+    fontSize: fontSize.base,
+    textAlignVertical: 'top',
+  },
 
   // Cart Line Items
   cartLine: {
@@ -760,6 +1290,7 @@ const createStyles = () => StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
   },
   cartLineSKU: {
     fontSize: 13,
@@ -793,7 +1324,7 @@ const createStyles = () => StyleSheet.create({
     fontFamily: fonts.display.bold,
     fontSize: fontSize.xs,
     color: colors.status.danger,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   stockBadgeLow: {
     backgroundColor: colors.status.warningBg,
@@ -812,15 +1343,76 @@ const createStyles = () => StyleSheet.create({
     fontFamily: 'DMSans-Regular',
     color: colors.text.muted,
   },
+  lineStockMeta: {
+    fontSize: 12,
+    fontFamily: fonts.body.medium,
+    color: colors.text.muted,
+  },
+  lineActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: 6,
+  },
+  lineActionButton: {
+    minHeight: 30,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+  },
+  lineActionText: {
+    fontSize: fontSize.xs,
+    fontFamily: fonts.body.semiBold,
+    color: colors.accent.primary,
+  },
+  lineRemoveAction: {
+    backgroundColor: colors.status.dangerBg,
+    borderColor: colors.status.danger,
+  },
+  lineRemoveActionText: {
+    fontSize: fontSize.xs,
+    fontFamily: fonts.body.semiBold,
+    color: colors.status.danger,
+  },
+  lineDiscountButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
+    minHeight: 28,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    paddingHorizontal: spacing.sm,
+  },
+  lineDiscountButtonText: {
+    fontSize: fontSize.xs,
+    fontFamily: fonts.body.semiBold,
+    color: colors.accent.primary,
+  },
+  discountNote: {
+    marginTop: 4,
+    fontSize: fontSize.xs,
+    fontFamily: fonts.body.medium,
+    color: colors.status.danger,
+  },
   qtyControls: {
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: spacing.md,
   },
   qtyBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
     backgroundColor: colors.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
@@ -851,9 +1443,13 @@ const createStyles = () => StyleSheet.create({
     paddingHorizontal: 32,
   },
   emptyIcon: {
-    fontSize: 48,
+    width: 64,
+    height: 64,
+    borderRadius: radius.lg,
+    backgroundColor: colors.bg.elevated,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 16,
-    opacity: 0.3,
   },
   emptyTitle: {
     fontSize: 16,
@@ -874,8 +1470,8 @@ const createStyles = () => StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border.default,
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: colors.bg.elevated,
+    paddingVertical: 12,
+    backgroundColor: colors.bg.surface,
   },
   vatRow: {
     flexDirection: 'row',
@@ -907,18 +1503,49 @@ const createStyles = () => StyleSheet.create({
     fontFamily: 'Outfit-Medium',
     color: colors.text.primary,
   },
+  discountControlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  cartDiscountButton: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  cartDiscountButtonText: {
+    fontSize: fontSize.sm,
+    fontFamily: fonts.body.semiBold,
+    color: colors.accent.primary,
+  },
+  cartDiscountClear: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.dangerBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   grandTotalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.lg,
-    paddingTop: spacing.sm,
+    marginBottom: spacing.md,
+    paddingTop: spacing.xs,
   },
   grandTotalLabel: {
     ...textStyles.label,
     color: colors.text.muted,
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 0,
   },
   grandTotalValue: {
     ...textStyles.priceLarge,
@@ -927,8 +1554,8 @@ const createStyles = () => StyleSheet.create({
 
   // Payment action buttons — Base44 style (Cash=green filled, Charge=green outlined, Split=neutral outlined, Hold=text)
   cashButton: {
-    backgroundColor: '#16A34A',
-    height: 52,
+    backgroundColor: colors.status.success,
+    height: 48,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -940,27 +1567,27 @@ const createStyles = () => StyleSheet.create({
     fontFamily: fonts.display.semiBold,
     fontSize: fontSize.lg,
     color: '#FFFFFF',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   chargeButton: {
-    height: 44,
+    height: 42,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 8,
     borderWidth: 1.5,
-    borderColor: '#22C55E',
-    backgroundColor: 'transparent',
+    borderColor: colors.status.warning,
+    backgroundColor: colors.status.warningBg,
     marginBottom: 8,
   },
   chargeButtonText: {
     fontFamily: fonts.body.medium,
     fontSize: fontSize.base,
-    color: '#22C55E',
+    color: colors.status.warning,
   },
   splitButton: {
-    height: 44,
+    height: 42,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
@@ -968,7 +1595,7 @@ const createStyles = () => StyleSheet.create({
     gap: 8,
     borderWidth: 1,
     borderColor: colors.border.medium,
-    backgroundColor: 'transparent',
+    backgroundColor: colors.bg.surface,
     marginBottom: 8,
   },
   splitButtonText: {
@@ -977,7 +1604,7 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.secondary,
   },
   holdParkButton: {
-    height: 36,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -1064,6 +1691,32 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
   },
+  discountModeToggle: {
+    flexDirection: 'row',
+    backgroundColor: colors.bg.elevated,
+    borderRadius: radius.sm,
+    padding: 4,
+    gap: 4,
+    marginBottom: spacing.md,
+  },
+  discountModeButton: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: radius.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  discountModeButtonActive: {
+    backgroundColor: colors.accent.primary,
+  },
+  discountModeText: {
+    fontSize: fontSize.sm,
+    fontFamily: fonts.body.semiBold,
+    color: colors.text.secondary,
+  },
+  discountModeTextActive: {
+    color: colors.text.inverse,
+  },
   priceOverrideCancelBtn: {
     flex: 1,
     paddingVertical: spacing.md,
@@ -1081,6 +1734,13 @@ const createStyles = () => StyleSheet.create({
     paddingVertical: spacing.md,
     borderRadius: radius.lg,
     backgroundColor: colors.accent.primary,
+    alignItems: 'center',
+  },
+  discountClearBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.bg.elevated,
     alignItems: 'center',
   },
   priceOverrideConfirmText: {

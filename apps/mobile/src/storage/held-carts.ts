@@ -1,6 +1,8 @@
 import { storage, getJSON, setJSON } from './mmkv';
+import { KEYS } from './keys';
+import { getLockedLocationId } from '@/config/device-binding';
 
-const KEY = 'held_carts';
+const KEY_PREFIX = 'held_carts';
 const MAX_HELD = 5;
 
 export interface HeldCart {
@@ -12,16 +14,41 @@ export interface HeldCart {
   vehicleId: string | null;
   discountType: string;
   discountValue: number;
+  note?: string;
   heldAt: string;            // ISO timestamp
   totalAmount: number;
+}
+
+function currentLocationId(): string | null {
+  return getLockedLocationId() ?? storage.getString(KEYS.AUTH_LOCATION_ID) ?? null;
+}
+
+function heldCartKey(): string {
+  const locationId = currentLocationId();
+  return locationId ? `${KEY_PREFIX}.${locationId}` : KEY_PREFIX;
+}
+
+function sortHeldCarts(carts: HeldCart[]): HeldCart[] {
+  return [...carts].sort((a, b) => new Date(b.heldAt).getTime() - new Date(a.heldAt).getTime());
 }
 
 /**
  * Get all held carts, sorted newest first.
  */
 export function getHeldCarts(): HeldCart[] {
-  const carts = getJSON<HeldCart[]>(storage, KEY) ?? [];
-  return carts.sort((a, b) => new Date(b.heldAt).getTime() - new Date(a.heldAt).getTime());
+  const key = heldCartKey();
+  const carts = getJSON<HeldCart[]>(storage, key);
+  if (carts) return sortHeldCarts(carts);
+
+  const locationId = currentLocationId();
+  const legacyCarts = locationId ? getJSON<HeldCart[]>(storage, KEY_PREFIX) : null;
+  if (legacyCarts?.length) {
+    setJSON(storage, key, legacyCarts);
+    storage.delete(KEY_PREFIX);
+    return sortHeldCarts(legacyCarts);
+  }
+
+  return [];
 }
 
 /**
@@ -32,7 +59,7 @@ export function addHeldCart(cart: HeldCart): boolean {
   const current = getHeldCarts();
   if (current.length >= MAX_HELD) return false;
   current.push(cart);
-  setJSON(storage, KEY, current);
+  setJSON(storage, heldCartKey(), current);
   return true;
 }
 
@@ -41,14 +68,14 @@ export function addHeldCart(cart: HeldCart): boolean {
  */
 export function removeHeldCart(id: string): void {
   const current = getHeldCarts().filter(c => c.id !== id);
-  setJSON(storage, KEY, current);
+  setJSON(storage, heldCartKey(), current);
 }
 
 /**
  * Get count of held carts.
  */
 export function getHeldCartCount(): number {
-  return (getJSON<HeldCart[]>(storage, KEY) ?? []).length;
+  return getHeldCarts().length;
 }
 
 /**

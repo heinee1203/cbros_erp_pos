@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, Pressable, StyleSheet, Alert } from 'react-native';
 import { BottomSheet } from '@/components/ui/BottomSheet';
 import { getHeldCarts, type HeldCart } from '@/storage/held-carts';
-import { useCartStore } from '@/stores/cart-store';
+import { selectGrandTotal, selectLineCount, useCartStore } from '@/stores/cart-store';
 import { colors, spacing, radius, fonts, fontSize } from '@/theme';
 
 interface HeldCartsSheetProps {
@@ -28,6 +28,8 @@ function timeAgo(isoDate: string): string {
 
 export function HeldCartsSheet({ visible, onClose }: HeldCartsSheetProps) {
   const [refreshKey, setRefreshKey] = useState(0);
+  const activeLineCount = useCartStore(selectLineCount);
+  const activeTotal = useCartStore(selectGrandTotal);
   const styles = createStyles();
 
   // Re-read held carts on every render / refresh
@@ -37,10 +39,33 @@ export function HeldCartsSheet({ visible, onClose }: HeldCartsSheetProps) {
     setRefreshKey(k => k + 1);
   }, []);
 
-  const handleResume = useCallback((id: string) => {
-    useCartStore.getState().restoreHeldCart(id);
-    onClose();
+  const resumeCart = useCallback((cart: HeldCart) => {
+    const restored = useCartStore.getState().restoreHeldCart(cart.id);
+    if (restored) {
+      onClose();
+      return;
+    }
+    Alert.alert(
+      'Could Not Resume Cart',
+      'Your current cart could not be held first. Resume or delete another held cart, then try again.',
+    );
   }, [onClose]);
+
+  const handleResume = useCallback((cart: HeldCart) => {
+    if (activeLineCount === 0) {
+      resumeCart(cart);
+      return;
+    }
+
+    Alert.alert(
+      'Swap Active Cart?',
+      `Your current cart (${activeLineCount} item${activeLineCount === 1 ? '' : 's'}, ${fmtPHP(activeTotal)}) will be parked before resuming "${cart.label}".`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Resume', onPress: () => resumeCart(cart) },
+      ],
+    );
+  }, [activeLineCount, activeTotal, resumeCart]);
 
   const handleDelete = useCallback((cart: HeldCart) => {
     Alert.alert(
@@ -72,6 +97,13 @@ export function HeldCartsSheet({ visible, onClose }: HeldCartsSheetProps) {
         </View>
       ) : (
         <View style={styles.list}>
+          {activeLineCount > 0 && (
+            <View style={styles.notice}>
+              <Text style={styles.noticeText}>
+                Active cart will be parked before another cart is resumed.
+              </Text>
+            </View>
+          )}
           {heldCarts.map((cart) => (
             <View key={cart.id} style={styles.cartRow}>
               <View style={styles.cartInfo}>
@@ -91,7 +123,7 @@ export function HeldCartsSheet({ visible, onClose }: HeldCartsSheetProps) {
               <View style={styles.cartActions}>
                 <Pressable
                   style={styles.resumeButton}
-                  onPress={() => handleResume(cart.id)}
+                  onPress={() => handleResume(cart)}
                   android_ripple={{ color: 'rgba(0,0,0,0.2)' }}
                 >
                   <Text style={styles.resumeText}>Resume</Text>
@@ -117,6 +149,20 @@ const createStyles = () =>
     list: {
       gap: 8,
       paddingBottom: spacing.lg,
+    },
+    notice: {
+      minHeight: 42,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.status.warning,
+      backgroundColor: colors.status.warningBg,
+      justifyContent: 'center',
+      paddingHorizontal: spacing.md,
+    },
+    noticeText: {
+      fontSize: fontSize.xs,
+      fontFamily: fonts.body.medium,
+      color: colors.text.primary,
     },
     cartRow: {
       flexDirection: 'row',
