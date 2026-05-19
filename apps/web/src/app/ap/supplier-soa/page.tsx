@@ -67,6 +67,22 @@ interface Invoice {
   billedSoaId?: string | null;
 }
 
+function moneyValue(value: string | number | null | undefined): number {
+  const numeric = typeof value === "number" ? value : parseFloat(value || "0");
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function toSupplierSOAInvoiceLines(rows: Invoice[]) {
+  return rows.map((i) => ({
+    invoiceNumber: i.invoiceNumber,
+    invoiceDate: i.invoiceDate,
+    dueDate: i.dueDate,
+    totalAmount: moneyValue(i.totalAmount),
+    paidAmount: moneyValue(i.paidAmount),
+    balance: moneyValue(i.balance || i.totalAmount),
+  }));
+}
+
 /** Shape returned by GET /ap/suppliers/:id/soa-history */
 interface SupplierSOAHistoryRow {
   id: string;
@@ -228,9 +244,15 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
     }
   };
 
-  const selectedTotal = invoices
-    .filter((i) => selected.has(i.id))
-    .reduce((s, i) => s + parseFloat(i.balance || i.totalAmount), 0);
+  const selectedInvoices = useMemo(
+    () => invoices.filter((i) => selected.has(i.id)),
+    [invoices, selected],
+  );
+
+  const selectedTotal = selectedInvoices.reduce(
+    (s, i) => s + moneyValue(i.balance || i.totalAmount),
+    0,
+  );
 
   // ── Preview (all invoices, no persistence) ──
   // Ephemeral print of the current outstanding list. Does NOT mark invoices
@@ -238,14 +260,17 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   const handlePreviewAll = () => {
     const html = buildSupplierSOAHtml({
       supplierName,
-      invoices: invoices.map((i) => ({
-        invoiceNumber: i.invoiceNumber,
-        invoiceDate: i.invoiceDate,
-        dueDate: i.dueDate,
-        totalAmount: parseFloat(i.totalAmount),
-        paidAmount: parseFloat(i.paidAmount || "0"),
-        balance: parseFloat(i.balance || i.totalAmount),
-      })),
+      invoices: toSupplierSOAInvoiceLines(invoices),
+    });
+    const w = window.open("", "_blank");
+    if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
+  };
+
+  const handlePreviewSelected = () => {
+    if (selectedInvoices.length === 0) return;
+    const html = buildSupplierSOAHtml({
+      supplierName,
+      invoices: toSupplierSOAInvoiceLines(selectedInvoices),
     });
     const w = window.open("", "_blank");
     if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
@@ -506,6 +531,13 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
             className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Printer size={12} /> Preview All (no record)
+          </button>
+          <button
+            onClick={handlePreviewSelected}
+            disabled={selected.size === 0}
+            className="flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:opacity-40"
+          >
+            <Printer size={12} /> Preview Selected (no record)
           </button>
           <button
             onClick={handleGenerateSOA}
