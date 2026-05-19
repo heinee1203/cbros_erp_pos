@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   X,
   Save,
   Loader2,
@@ -185,6 +186,7 @@ export function SupplierDetailDrawer({
   // Form state
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isActive, setIsActive] = useState(true);
+  const [pendingActiveChange, setPendingActiveChange] = useState<boolean | null>(null);
 
   // Per-tab data
   const [invoices, setInvoices] = useState<InvoiceLite[]>([]);
@@ -276,11 +278,16 @@ export function SupplierDetailDrawer({
   // ── ESC to close ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !saving) onClose();
+      if (e.key !== "Escape" || saving) return;
+      if (pendingActiveChange !== null) {
+        setPendingActiveChange(null);
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, saving]);
+  }, [onClose, pendingActiveChange, saving]);
 
   // ── Handlers ──
   const setField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
@@ -338,15 +345,12 @@ export function SupplierDetailDrawer({
 
   const handleToggleActive = async () => {
     if (isNew || !supplierId) return;
-    const next = !isActive;
-    if (
-      !confirm(
-        next
-          ? "Reactivate this supplier? They will appear in new PO / invoice forms again."
-          : "Deactivate this supplier? Existing invoices and POs are preserved; the supplier will be hidden from new forms.",
-      )
-    )
-      return;
+    setPendingActiveChange(!isActive);
+  };
+
+  const confirmToggleActive = async () => {
+    if (isNew || !supplierId || pendingActiveChange === null) return;
+    const next = pendingActiveChange;
     setSaving(true);
     setError(null);
     try {
@@ -357,6 +361,7 @@ export function SupplierDetailDrawer({
         body: JSON.stringify({ isActive: next }),
       });
       setIsActive(next);
+      setPendingActiveChange(null);
       onSaved();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to update status");
@@ -512,11 +517,77 @@ export function SupplierDetailDrawer({
           </div>
         )}
       </div>
+
+      {pendingActiveChange !== null && (
+        <SupplierStatusDialog
+          supplierName={form.name || "this supplier"}
+          nextActive={pendingActiveChange}
+          saving={saving}
+          onCancel={() => setPendingActiveChange(null)}
+          onConfirm={confirmToggleActive}
+        />
+      )}
     </div>
   );
 }
 
 /* ─── Edit form subcomponent ─── */
+
+function SupplierStatusDialog({
+  supplierName,
+  nextActive,
+  saving,
+  onCancel,
+  onConfirm,
+}: {
+  supplierName: string;
+  nextActive: boolean;
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const action = nextActive ? "Reactivate" : "Deactivate";
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
+        <div className={cn("mb-3 flex items-center gap-2", nextActive ? "text-emerald-600" : "text-destructive")}>
+          <AlertTriangle size={18} />
+          <h2 className="text-lg font-semibold text-foreground">{action} Supplier</h2>
+        </div>
+        <div className="space-y-2 text-sm">
+          <div>
+            <span className="text-muted-foreground">Supplier:</span>{" "}
+            <span className="font-medium">{supplierName}</span>
+          </div>
+          <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            {nextActive
+              ? "This supplier will appear again in new PO, invoice, and payment workflows."
+              : "Existing invoices, SOAs, DVs, POs, and returns stay intact. The supplier will be hidden from new workflows."}
+          </p>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={saving}
+            className={cn(
+              "rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50",
+              nextActive ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700",
+            )}
+          >
+            {saving ? "Saving..." : `${action} Supplier`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function EditForm({
   form,
