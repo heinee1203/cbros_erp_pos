@@ -141,6 +141,7 @@ export default function NewDisbursementVoucherPage() {
   const [supplierProfile, setSupplierProfile] = useState<SupplierPaymentProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [pendingPaymentReview, setPendingPaymentReview] = useState<"draft" | "print" | null>(null);
 
   // Credit memos available for this supplier
   const [availableCMs, setAvailableCMs] = useState<Array<{ id: string; invoiceNumber: string; invoiceDate: string; totalAmount: number }>>([]);
@@ -402,7 +403,11 @@ export default function NewDisbursementVoucherPage() {
     }
   };
 
-  const handleSaveDraft = async () => {
+  const handleSaveDraft = async (skipPaymentReview = false) => {
+    if (!skipPaymentReview && paymentWarningCount > 0) {
+      setPendingPaymentReview("draft");
+      return;
+    }
     if (hasChargeError) { setError("Additional charges with an amount must have a description."); return; }
     if (isMultiSOA) { await handleMultiSave(false); return; }
     setSaving(true); setError(null);
@@ -412,7 +417,11 @@ export default function NewDisbursementVoucherPage() {
     } catch (err: unknown) { setError(err instanceof Error ? err.message : "Failed to save"); setSaving(false); }
   };
 
-  const handleSaveAndPrint = async () => {
+  const handleSaveAndPrint = async (skipPaymentReview = false) => {
+    if (!skipPaymentReview && paymentWarningCount > 0) {
+      setPendingPaymentReview("print");
+      return;
+    }
     if (hasChargeError) { setError("Additional charges with an amount must have a description."); return; }
     if (isMultiSOA) { await handleMultiSave(true); return; }
     setSaving(true); setError(null);
@@ -813,18 +822,90 @@ export default function NewDisbursementVoucherPage() {
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={() => router.back()} className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancel</button>
-          <button onClick={handleSaveDraft} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError || (!soaData && !isMultiSOA)}
+          <button onClick={() => handleSaveDraft()} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError || (!soaData && !isMultiSOA)}
             className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50">{saving ? "Saving…" : "Save Draft"}</button>
-          <button onClick={handleSaveAndPrint} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError || (!soaData && !isMultiSOA)}
+          <button onClick={() => handleSaveAndPrint()} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError || (!soaData && !isMultiSOA)}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{saving ? "Saving…" : "Save & Print"}</button>
         </div>
       </div>
+
+      {pendingPaymentReview && (
+        <PaymentReviewDialog
+          action={pendingPaymentReview}
+          warnings={paymentWarnings}
+          onCancel={() => setPendingPaymentReview(null)}
+          onContinue={() => {
+            const action = pendingPaymentReview;
+            setPendingPaymentReview(null);
+            if (action === "draft") void handleSaveDraft(true);
+            if (action === "print") void handleSaveAndPrint(true);
+          }}
+        />
+      )}
     </div>
   );
 }
 
 function termsLabel(days: number): string {
   return days === 0 ? "COD" : `Net ${days}`;
+}
+
+function PaymentReviewDialog({
+  action,
+  onCancel,
+  onContinue,
+  warnings,
+}: {
+  action: "draft" | "print";
+  onCancel: () => void;
+  onContinue: () => void;
+  warnings: string[][];
+}) {
+  const rows = warnings
+    .map((messages, index) => ({ index, messages }))
+    .filter((row) => row.messages.length > 0);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-xl">
+        <div className="mb-3 flex items-start gap-2 text-amber-700">
+          <AlertTriangle size={18} className="mt-0.5 flex-shrink-0" />
+          <div>
+            <h2 className="text-base font-semibold text-foreground">Review payment details</h2>
+            <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+              This voucher has incomplete payment references. You can go back and fill them in, or continue if the missing details are intentional.
+            </p>
+          </div>
+        </div>
+
+        <div className="max-h-64 space-y-2 overflow-auto rounded-lg border border-amber-200 bg-amber-50 p-3 text-[12px] text-amber-900">
+          {rows.map((row) => (
+            <div key={row.index}>
+              <div className="font-semibold">Payment line {row.index + 1}</div>
+              <div className="leading-5">{row.messages.join(" ")}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+          >
+            Go Back
+          </button>
+          <button
+            type="button"
+            onClick={onContinue}
+            className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+          >
+            {action === "print" ? "Save & Print Anyway" : "Save Draft Anyway"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SupplierPaymentProfileCard({
