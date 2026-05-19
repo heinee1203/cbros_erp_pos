@@ -50,6 +50,8 @@ interface Summary {
   dueThisWeek: number;
 }
 
+type SupplierSOAView = "" | "current" | "due-week" | "overdue" | "critical" | "largest-overdue";
+
 interface Invoice {
   id: string;
   invoiceNumber: string;
@@ -99,6 +101,18 @@ function dueStatus(row: SupplierRow): { label: string; color: string } {
   if (days <= 30) return { label: "Overdue", color: "text-amber-700 bg-amber-50" };
   if (days <= 90) return { label: "Seriously Overdue", color: "text-red-600 bg-red-50" };
   return { label: "Critical", color: "text-red-700 bg-red-100 font-bold" };
+}
+
+function isDueThisWeek(dateStr: string | null): boolean {
+  if (!dateStr) return false;
+  const due = new Date(dateStr);
+  if (Number.isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(today);
+  end.setDate(end.getDate() + 7);
+  end.setHours(23, 59, 59, 999);
+  return due >= today && due <= end;
 }
 
 /** Invoice-level aging text for the AGE column. Plural-aware. */
@@ -593,7 +607,7 @@ export default function SupplierSOAPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<SupplierSOAView>("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -615,17 +629,47 @@ export default function SupplierSOAPage() {
   const suppliers = data?.suppliers ?? [];
   const summary = data?.summary;
 
-  const filtered = useMemo(() => {
+  const searchedSuppliers = useMemo(() => {
     let result = [...suppliers];
     if (search.length >= 2) {
       const q = search.toLowerCase();
       result = result.filter((s) => s.supplierName.toLowerCase().includes(q));
     }
+    return result;
+  }, [suppliers, search]);
+
+  const filtered = useMemo(() => {
+    let result = [...searchedSuppliers];
     if (statusFilter === "overdue") result = result.filter((s) => s.overdueCount > 0);
     if (statusFilter === "current") result = result.filter((s) => s.overdueCount === 0);
     if (statusFilter === "critical") result = result.filter((s) => s.overdueCount > 0 && overdueDays(s.earliestDueDate) > 90);
+    if (statusFilter === "due-week") result = result.filter((s) => isDueThisWeek(s.earliestDueDate));
+    if (statusFilter === "largest-overdue") {
+      result = result
+        .filter((s) => s.overdueAmount > 0)
+        .sort((a, b) => b.overdueAmount - a.overdueAmount || b.totalBalance - a.totalBalance);
+    }
     return result;
-  }, [suppliers, search, statusFilter]);
+  }, [searchedSuppliers, statusFilter]);
+
+  const filteredTotal = useMemo(
+    () => filtered.reduce((s, r) => s + r.totalBalance, 0),
+    [filtered],
+  );
+  const filteredOverdue = useMemo(
+    () => filtered.reduce((s, r) => s + r.overdueAmount, 0),
+    [filtered],
+  );
+  const quickViews = useMemo(
+    () => [
+      { key: "" as SupplierSOAView, label: "All", count: searchedSuppliers.length },
+      { key: "due-week" as SupplierSOAView, label: "Due this week", count: searchedSuppliers.filter((s) => isDueThisWeek(s.earliestDueDate)).length },
+      { key: "overdue" as SupplierSOAView, label: "Overdue", count: searchedSuppliers.filter((s) => s.overdueCount > 0).length },
+      { key: "critical" as SupplierSOAView, label: "Critical 90+", count: searchedSuppliers.filter((s) => s.overdueCount > 0 && overdueDays(s.earliestDueDate) > 90).length },
+      { key: "largest-overdue" as SupplierSOAView, label: "Largest overdue", count: searchedSuppliers.filter((s) => s.overdueAmount > 0).length },
+    ],
+    [searchedSuppliers],
+  );
 
   const handleGenerateCV = (supplierId: string, invoiceIds: string[]) => {
     const params = new URLSearchParams();
@@ -681,22 +725,44 @@ export default function SupplierSOAPage() {
             {search && <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><X size={12} /></button>}
           </div>
 
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as SupplierSOAView)}
             className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] text-foreground outline-none focus:border-primary/40">
             <option value="">All Status</option>
             <option value="current">Current</option>
+            <option value="due-week">Due This Week</option>
             <option value="overdue">Overdue (any)</option>
             <option value="critical">Critical (90+ days)</option>
+            <option value="largest-overdue">Largest Overdue</option>
           </select>
 
           {filtered.length > 0 && (
             <button onClick={() => downloadCSV("supplier-soa",
               ["Supplier", "Invoices", "Total Balance", "Overdue", "Oldest", "Status"],
-              filtered.map((s) => [s.supplierName, String(s.invoiceCount), s.totalBalance.toFixed(2), s.overdueAmount.toFixed(2), s.oldestInvoiceDate ?? "—", s.overdueCount > 0 ? "Overdue" : "Current"])
+              filtered.map((s) => [s.supplierName, String(s.invoiceCount), s.totalBalance.toFixed(2), s.overdueAmount.toFixed(2), s.oldestInvoiceDate ?? "\u2014", s.overdueCount > 0 ? "Overdue" : "Current"])
             )} className="ml-auto flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
               <Download size={12} /> Export CSV
             </button>
           )}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {quickViews.map((view) => (
+            <button
+              key={view.key || "all"}
+              type="button"
+              onClick={() => setStatusFilter(view.key)}
+              className={cn(
+                "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                statusFilter === view.key
+                  ? "border-primary/30 bg-primary/[0.08] text-primary"
+                  : "border-border bg-background text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+            >
+              {view.label}
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                {view.count}
+              </span>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -743,7 +809,7 @@ export default function SupplierSOAPage() {
                       {s.overdueAmount > 0 ? fmtPeso(s.overdueAmount) : "\u2014"}
                     </div>
                     <div className={cn("w-24 text-right text-[11px] tabular-nums", overdueColor(overdueDays(s.earliestDueDate)))}>
-                      {s.earliestDueDate ? fmtDate(s.earliestDueDate) : "—"}
+                      {s.earliestDueDate ? fmtDate(s.earliestDueDate) : "\u2014"}
                       {s.overdueCount > 0 && s.earliestDueDate && (
                         <div className="text-[9px] opacity-70">{overdueDays(s.earliestDueDate)}d overdue</div>
                       )}
@@ -774,7 +840,8 @@ export default function SupplierSOAPage() {
             {data && filtered.length < data.suppliers.length ? ` (of ${data.suppliers.length})` : ""}
           </span>
           <span className="text-[11px] font-semibold tabular-nums text-foreground">
-            Total: {fmtPeso(filtered.reduce((s, r) => s + r.totalBalance, 0))}
+            Total: {fmtPeso(filteredTotal)}
+            {filteredOverdue > 0 && <span className="ml-3 text-red-600">Overdue: {fmtPeso(filteredOverdue)}</span>}
           </span>
         </div>
       </div>
