@@ -72,6 +72,15 @@ function moneyValue(value: string | number | null | undefined): number {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function isCreditMemoInvoice(inv: Pick<Invoice, "invoiceNumber" | "totalAmount">): boolean {
+  const invoiceNumber = inv.invoiceNumber?.trim().toUpperCase() ?? "";
+  return moneyValue(inv.totalAmount) < 0 || invoiceNumber.startsWith("CM");
+}
+
+function invoiceBalance(inv: Pick<Invoice, "balance" | "totalAmount">): number {
+  return moneyValue(inv.balance || inv.totalAmount);
+}
+
 function toSupplierSOAInvoiceLines(rows: Invoice[]) {
   return rows.map((i) => ({
     invoiceNumber: i.invoiceNumber,
@@ -249,10 +258,77 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
     [invoices, selected],
   );
 
-  const selectedTotal = selectedInvoices.reduce(
-    (s, i) => s + moneyValue(i.balance || i.totalAmount),
-    0,
-  );
+  const invoiceSummary = useMemo(() => {
+    let payableBalance = 0;
+    let currentBalance = 0;
+    let overdueBalance = 0;
+    let creditMemoAmount = 0;
+    let creditMemoCount = 0;
+    let overdueCount = 0;
+    let unbilledCount = 0;
+    let billedCount = 0;
+
+    for (const invoice of invoices) {
+      const balance = invoiceBalance(invoice);
+      if (invoice.billed) billedCount += 1;
+      else unbilledCount += 1;
+
+      if (isCreditMemoInvoice(invoice)) {
+        creditMemoCount += 1;
+        creditMemoAmount += Math.abs(balance);
+        continue;
+      }
+
+      payableBalance += balance;
+      if (overdueDays(invoice.dueDate) > 0) {
+        overdueCount += 1;
+        overdueBalance += balance;
+      } else {
+        currentBalance += balance;
+      }
+    }
+
+    return {
+      billedCount,
+      creditMemoAmount,
+      creditMemoCount,
+      currentBalance,
+      overdueBalance,
+      overdueCount,
+      payableBalance,
+      unbilledCount,
+    };
+  }, [invoices]);
+
+  const selectedSummary = useMemo(() => {
+    let creditMemoAmount = 0;
+    let creditMemoCount = 0;
+    let payableBalance = 0;
+    let overdueBalance = 0;
+    let netBalance = 0;
+
+    for (const invoice of selectedInvoices) {
+      const balance = invoiceBalance(invoice);
+      netBalance += balance;
+
+      if (isCreditMemoInvoice(invoice)) {
+        creditMemoCount += 1;
+        creditMemoAmount += Math.abs(balance);
+        continue;
+      }
+
+      payableBalance += balance;
+      if (overdueDays(invoice.dueDate) > 0) overdueBalance += balance;
+    }
+
+    return {
+      creditMemoAmount,
+      creditMemoCount,
+      netBalance,
+      overdueBalance,
+      payableBalance,
+    };
+  }, [selectedInvoices]);
 
   // ── Preview (all invoices, no persistence) ──
   // Ephemeral print of the current outstanding list. Does NOT mark invoices
@@ -419,8 +495,40 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
         </div>
       )}
 
+      {invoices.length > 0 && (
+        <div className="border-b border-border/50 bg-background px-6 py-3">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+            <SupplierDetailMetric label="Payable balance" value={fmtPeso(invoiceSummary.payableBalance)} />
+            <SupplierDetailMetric
+              label="Overdue balance"
+              value={fmtPeso(invoiceSummary.overdueBalance)}
+              tone={invoiceSummary.overdueBalance > 0 ? "danger" : "muted"}
+              detail={invoiceSummary.overdueCount > 0 ? `${invoiceSummary.overdueCount} overdue invoice${invoiceSummary.overdueCount !== 1 ? "s" : ""}` : "No overdue invoices"}
+            />
+            <SupplierDetailMetric label="Current balance" value={fmtPeso(invoiceSummary.currentBalance)} tone="muted" />
+            <SupplierDetailMetric
+              label="Credit memos"
+              value={invoiceSummary.creditMemoCount > 0 ? `(${fmtPeso(invoiceSummary.creditMemoAmount)})` : "\u2014"}
+              tone={invoiceSummary.creditMemoCount > 0 ? "credit" : "muted"}
+              detail={invoiceSummary.creditMemoCount > 0 ? `${invoiceSummary.creditMemoCount} credit row${invoiceSummary.creditMemoCount !== 1 ? "s" : ""}` : "None detected"}
+            />
+            <SupplierDetailMetric
+              label="SOA readiness"
+              value={`${invoiceSummary.unbilledCount} unbilled`}
+              tone={invoiceSummary.unbilledCount > 0 ? "default" : "muted"}
+              detail={invoiceSummary.billedCount > 0 ? `${invoiceSummary.billedCount} already billed` : "Ready to select"}
+            />
+          </div>
+          {invoiceSummary.creditMemoCount > 0 && (
+            <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] leading-5 text-emerald-800">
+              Credit memo rows are shown separately in green. Select them with the invoices they should offset before previewing an SOA or creating a voucher.
+            </div>
+          )}
+        </div>
+      )}
+
       {invoices.map((inv) => {
-        const isCreditMemo = parseFloat(inv.totalAmount) < 0 || inv.invoiceNumber.startsWith("CM");
+        const isCreditMemo = isCreditMemoInvoice(inv);
         const isOverdue = !isCreditMemo && new Date(inv.dueDate) < new Date();
         const ageDays = overdueDays(inv.dueDate);
         const age = isCreditMemo ? "\u2014" : ageText(ageDays);
@@ -436,6 +544,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
             className={cn(
               "grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_100px_70px_90px] gap-1 px-6 py-2 text-[12px] border-b border-border/30 transition-colors",
               isBilled && "opacity-50 cursor-not-allowed bg-muted/30",
+              isCreditMemo && !isBilled && !isSelected && "bg-emerald-50/30",
               !isBilled && (isSelected ? "bg-primary/[0.04] cursor-pointer" : "hover:bg-accent/30 cursor-pointer"),
             )}
           >
@@ -511,7 +620,17 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           )}
           {selected.size > 0 && (
             <span className="text-[11px] text-muted-foreground">
-              {selected.size} selected &middot; {fmtPeso(selectedTotal)}
+              {selected.size} selected &middot; Net {fmtPeso(selectedSummary.netBalance)}
+              {selectedSummary.creditMemoCount > 0 && (
+                <span className="ml-2 text-emerald-700">
+                  Credits ({fmtPeso(selectedSummary.creditMemoAmount)})
+                </span>
+              )}
+              {selectedSummary.overdueBalance > 0 && (
+                <span className="ml-2 text-red-600">
+                  Overdue {fmtPeso(selectedSummary.overdueBalance)}
+                </span>
+              )}
             </span>
           )}
           {soaHistory.length > 0 && (
@@ -932,6 +1051,35 @@ function KPICard({ icon, label, value, accent, className }: { icon: React.ReactN
     <div className={cn("rounded-xl border border-border bg-background p-3.5 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]", accent && "border-amber-200 bg-amber-50/30 dark:border-amber-800 dark:bg-amber-950/20")}>
       <div className="flex items-center gap-1.5 text-muted-foreground mb-1">{icon}<span className="text-[11px] font-medium">{label}</span></div>
       <div className={cn("text-[18px] font-bold tabular-nums text-foreground", className)}>{value}</div>
+    </div>
+  );
+}
+
+function SupplierDetailMetric({
+  detail,
+  label,
+  tone = "default",
+  value,
+}: {
+  detail?: string;
+  label: string;
+  tone?: "default" | "danger" | "credit" | "muted";
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-background px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{label}</div>
+      <div
+        className={cn(
+          "mt-1 text-[13px] font-bold tabular-nums text-foreground",
+          tone === "danger" && "text-red-600",
+          tone === "credit" && "text-emerald-700",
+          tone === "muted" && "text-muted-foreground",
+        )}
+      >
+        {value}
+      </div>
+      {detail && <div className="mt-0.5 text-[10px] text-muted-foreground">{detail}</div>}
     </div>
   );
 }

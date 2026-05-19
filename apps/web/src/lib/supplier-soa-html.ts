@@ -41,22 +41,30 @@ function ageLabel(days: number): string {
   return `${days} days`;
 }
 
-function moneyCell(value: number, options?: { strong?: boolean; danger?: boolean }): string {
+function isCreditMemoLine(inv: SupplierSOAData["invoices"][number]): boolean {
+  const invoiceNumber = inv.invoiceNumber?.trim().toUpperCase() ?? "";
+  return inv.totalAmount < 0 || inv.balance < 0 || invoiceNumber.startsWith("CM");
+}
+
+function moneyCell(value: number, options?: { strong?: boolean; danger?: boolean; credit?: boolean }): string {
   const classes = [
     "money",
     options?.strong ? "strong" : "",
     options?.danger ? "danger" : "",
+    options?.credit ? "credit" : "",
   ].filter(Boolean).join(" ");
-  return `<span class="${classes}">${fmt(value)}</span>`;
+  const rendered = options?.credit ? `(${fmt(Math.abs(value))})` : fmt(value);
+  return `<span class="${classes}">${rendered}</span>`;
 }
 
 export function buildSupplierSOAHtml(d: SupplierSOAData): string {
   const sorted = [...(d.invoices || [])].sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
-  const totalInvoiced = sorted.reduce((s, i) => s + i.totalAmount, 0);
+  const totalInvoiced = sorted.reduce((s, i) => s + (isCreditMemoLine(i) ? 0 : i.totalAmount), 0);
   const totalPaid = sorted.reduce((s, i) => s + i.paidAmount, 0);
   const totalBalance = sorted.reduce((s, i) => s + i.balance, 0);
-  const overdueBalance = sorted.reduce((s, i) => s + (daysPastDue(i.dueDate) > 0 ? i.balance : 0), 0);
-  const currentBalance = Math.max(totalBalance - overdueBalance, 0);
+  const creditMemoTotal = sorted.reduce((s, i) => s + (isCreditMemoLine(i) ? Math.abs(i.balance || i.totalAmount) : 0), 0);
+  const overdueBalance = sorted.reduce((s, i) => s + (!isCreditMemoLine(i) && daysPastDue(i.dueDate) > 0 ? i.balance : 0), 0);
+  const currentBalance = sorted.reduce((s, i) => s + (!isCreditMemoLine(i) && daysPastDue(i.dueDate) <= 0 ? i.balance : 0), 0);
 
   const dateRange = sorted.length > 0
     ? `${fmtDate(sorted[0].invoiceDate)} \u2013 ${fmtDate(sorted[sorted.length - 1].invoiceDate)}`
@@ -65,16 +73,17 @@ export function buildSupplierSOAHtml(d: SupplierSOAData): string {
   const now = new Date();
 
   const rows = sorted.map((inv) => {
+    const isCreditMemo = isCreditMemoLine(inv);
     const ageDays = daysPastDue(inv.dueDate);
-    const isOverdue = ageDays > 0;
-    return `<tr>
+    const isOverdue = !isCreditMemo && ageDays > 0;
+    return `<tr class="${isCreditMemo ? "credit-row" : ""}">
 <td>${fmtDate(inv.invoiceDate)}</td>
 <td>${fmtDate(inv.dueDate)}</td>
 <td class="mono strong">${esc(inv.invoiceNumber)}</td>
-<td class="right">${moneyCell(inv.totalAmount)}</td>
+<td class="right">${moneyCell(inv.totalAmount, { credit: isCreditMemo })}</td>
 <td class="right">${moneyCell(inv.paidAmount)}</td>
-<td class="right">${moneyCell(inv.balance, { strong: true, danger: isOverdue })}</td>
-<td class="right ${isOverdue ? "danger strong" : "muted"}">${ageLabel(ageDays)}</td>
+<td class="right">${moneyCell(inv.balance, { strong: true, danger: isOverdue, credit: isCreditMemo })}</td>
+<td class="right ${isOverdue ? "danger strong" : isCreditMemo ? "credit strong" : "muted"}">${isCreditMemo ? "Credit memo" : ageLabel(ageDays)}</td>
 </tr>`;
   }).join("\n");
 
@@ -94,11 +103,12 @@ body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; color: #1118
 .kv { display: grid; grid-template-columns: 78px 1fr; gap: 4px 10px; line-height: 1.45; }
 .kv b { color: #4b5563; font-weight: 700; }
 .mono { font-family: 'Courier New', monospace; }
-.summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.summary { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px; }
 .metric { border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 10px; }
 .metric-label { color: #6b7280; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
 .metric-value { margin-top: 3px; font-size: 11pt; font-weight: 800; font-variant-numeric: tabular-nums; }
 .danger { color: #b91c1c; }
+.credit { color: #047857; }
 .muted { color: #6b7280; }
 .strong { font-weight: 800; }
 table { width: 100%; border-collapse: collapse; font-size: 8.6pt; }
@@ -106,6 +116,7 @@ thead { display: table-header-group; }
 th { background: #f3f4f6; text-align: left; padding: 6px 7px; font-size: 7.5pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; border-top: 2px solid #111827; border-bottom: 2px solid #111827; }
 td { padding: 5px 7px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
 tbody tr:nth-child(even) td { background: #fafafa; }
+tbody tr.credit-row td { background: #f0fdf4; }
 .right { text-align: right; }
 .money { font-variant-numeric: tabular-nums; }
 .total-row td { border-top: 2px solid #111827; border-bottom: 3px double #111827; background: #fff; font-weight: 800; font-size: 9.5pt; padding-top: 8px; }
@@ -143,6 +154,7 @@ tbody tr:nth-child(even) td { background: #fafafa; }
   <div class="summary">
     <div class="metric"><div class="metric-label">Total Invoiced</div><div class="metric-value">${fmt(totalInvoiced)}</div></div>
     <div class="metric"><div class="metric-label">Paid / Applied</div><div class="metric-value">${fmt(totalPaid)}</div></div>
+    <div class="metric"><div class="metric-label">Credit Memos</div><div class="metric-value credit">${creditMemoTotal > 0 ? `(${fmt(creditMemoTotal)})` : fmt(0)}</div></div>
     <div class="metric"><div class="metric-label">Current Balance</div><div class="metric-value">${fmt(currentBalance)}</div></div>
     <div class="metric"><div class="metric-label">Overdue Balance</div><div class="metric-value danger">${fmt(overdueBalance)}</div></div>
   </div>
@@ -170,7 +182,7 @@ tbody tr:nth-child(even) td { background: #fafafa; }
   </table>
 
   <div class="notes">
-    Please verify invoices, credit memos, and any partial payments before issuing payment. This statement reflects the selected supplier invoices at the time it was generated.
+    Please verify invoices, credit memos, and any partial payments before issuing payment. Credit memos are highlighted in green and are separated from overdue payable totals. This statement reflects the selected supplier invoices at the time it was generated.
   </div>
 
   <div class="spacer"></div>
