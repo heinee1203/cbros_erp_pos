@@ -71,6 +71,7 @@ type SortCol =
   | "name"
   | "contactPerson"
   | "paymentTermsDays"
+  | "paymentProfile"
   | "creditLimit"
   | "openCount"
   | "totalPayable"
@@ -90,6 +91,10 @@ function daysAgoFromDate(iso: string | null): string {
 
 function termsLabel(days: number): string {
   return days === 0 ? "COD" : `Net ${days}`;
+}
+
+function hasPaymentProfile(s: Pick<SupplierRow, "bankName" | "bankAccountNumber" | "bankAccountName">): boolean {
+  return Boolean(s.bankName?.trim() && s.bankAccountNumber?.trim() && s.bankAccountName?.trim());
 }
 
 /* ─── Sortable column header ─── */
@@ -324,6 +329,7 @@ export default function SupplierListPage() {
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [hasOverdue, setHasOverdue] = useState(false);
+  const [missingBankOnly, setMissingBankOnly] = useState(false);
   const [sortCol, setSortCol] = useState<SortCol>("totalPayable");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
@@ -384,6 +390,7 @@ export default function SupplierListPage() {
     let rows = suppliers;
     if (!showInactive) rows = rows.filter((r) => r.isActive);
     if (hasOverdue) rows = rows.filter((r) => r.overdueCount > 0);
+    if (missingBankOnly) rows = rows.filter((r) => !hasPaymentProfile(r));
     if (search.trim().length >= 1) {
       const q = search.toLowerCase();
       rows = rows.filter(
@@ -392,7 +399,10 @@ export default function SupplierListPage() {
           (r.contactPerson ?? "").toLowerCase().includes(q) ||
           (r.contactPhone ?? "").toLowerCase().includes(q) ||
           (r.tin ?? "").toLowerCase().includes(q) ||
-          (r.mnemonicCode ?? "").toLowerCase().includes(q),
+          (r.mnemonicCode ?? "").toLowerCase().includes(q) ||
+          (r.bankName ?? "").toLowerCase().includes(q) ||
+          (r.bankAccountName ?? "").toLowerCase().includes(q) ||
+          (r.bankAccountNumber ?? "").toLowerCase().includes(q),
       );
     }
     const copy = [...rows];
@@ -407,6 +417,9 @@ export default function SupplierListPage() {
           break;
         case "paymentTermsDays":
           cmp = a.paymentTermsDays - b.paymentTermsDays;
+          break;
+        case "paymentProfile":
+          cmp = Number(hasPaymentProfile(a)) - Number(hasPaymentProfile(b));
           break;
         case "creditLimit":
           cmp = a.creditLimit - b.creditLimit;
@@ -432,7 +445,7 @@ export default function SupplierListPage() {
       return sortDir === "desc" ? -cmp : cmp;
     });
     return copy;
-  }, [suppliers, search, showInactive, hasOverdue, sortCol, sortDir]);
+  }, [suppliers, search, showInactive, hasOverdue, missingBankOnly, sortCol, sortDir]);
 
   const toggleSelectAll = () => {
     if (
@@ -460,6 +473,7 @@ export default function SupplierListPage() {
       totalSuppliers: suppliers.length,
       activeCount: activeOnly.length,
       withBalance: activeOnly.filter((s) => s.totalPayable > 0).length,
+      paymentReady: activeOnly.filter(hasPaymentProfile).length,
       totalPayable: activeOnly.reduce((sum, s) => sum + s.totalPayable, 0),
       overdueCount: activeOnly.filter((s) => s.overdueCount > 0).length,
       overdueAmount: activeOnly.reduce((sum, s) => sum + s.overdueAmount, 0),
@@ -473,6 +487,10 @@ export default function SupplierListPage() {
       "Phone",
       "Email",
       "Terms",
+      "Payment Profile",
+      "Bank",
+      "Bank Account #",
+      "Bank Account Name",
       "Credit Limit",
       "Open Invoices",
       "Total Payable",
@@ -489,6 +507,10 @@ export default function SupplierListPage() {
         s.contactPhone ?? "",
         s.contactEmail ?? "",
         termsLabel(s.paymentTermsDays),
+        hasPaymentProfile(s) ? "Ready" : "Missing bank details",
+        s.bankName ?? "",
+        s.bankAccountNumber ?? "",
+        s.bankAccountName ?? "",
         s.creditLimit.toFixed(2),
         String(s.openCount),
         s.totalPayable.toFixed(2),
@@ -542,7 +564,7 @@ export default function SupplierListPage() {
       </div>
 
       {/* Summary cards */}
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <KPICard
           icon={<Users size={14} />}
           label="Total Suppliers"
@@ -554,6 +576,13 @@ export default function SupplierListPage() {
           label="With Balance"
           value={String(summary.withBalance)}
           sub="active suppliers"
+        />
+        <KPICard
+          icon={<CheckSquare size={14} />}
+          label="Payment Ready"
+          value={`${summary.paymentReady}/${summary.activeCount}`}
+          sub={`${summary.activeCount - summary.paymentReady} missing bank`}
+          danger={summary.activeCount - summary.paymentReady > 0}
         />
         <KPICard
           icon={<DollarSign size={14} />}
@@ -602,6 +631,15 @@ export default function SupplierListPage() {
               className="rounded border-border"
             />
             Has overdue
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={missingBankOnly}
+              onChange={(e) => setMissingBankOnly(e.target.checked)}
+              className="rounded border-border"
+            />
+            Missing bank details
           </label>
           <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
             <input
@@ -681,6 +719,9 @@ export default function SupplierListPage() {
                 <th className="px-3 py-1.5 text-left">
                   <SortableHeader label="Terms" field="paymentTermsDays" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="left" />
                 </th>
+                <th className="px-3 py-1.5 text-left">
+                  <SortableHeader label="Payment Profile" field="paymentProfile" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="left" />
+                </th>
                 <th className="px-3 py-1.5 text-right">
                   <SortableHeader label="Credit Limit" field="creditLimit" activeField={sortCol} activeDir={sortDir} onSort={handleSort} align="right" />
                 </th>
@@ -702,14 +743,14 @@ export default function SupplierListPage() {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i} className="border-b border-border">
-                    <td colSpan={10} className="px-3 py-1.5">
+                    <td colSpan={11} className="px-3 py-1.5">
                       <div className="h-5 animate-pulse rounded bg-muted" />
                     </td>
                   </tr>
                 ))
               ) : filteredAndSorted.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-3 py-12 text-center text-sm text-muted-foreground">
+                  <td colSpan={11} className="px-3 py-12 text-center text-sm text-muted-foreground">
                     {suppliers.length === 0
                       ? "No suppliers yet. Click \u201cAdd Supplier\u201d to create one."
                       : "No suppliers match the filter."}
@@ -718,6 +759,7 @@ export default function SupplierListPage() {
               ) : (
                 filteredAndSorted.map((s, i) => {
                   const overdue = s.overdueAmount > 0;
+                  const paymentReady = hasPaymentProfile(s);
                   return (
                     <tr
                       key={s.id}
@@ -754,6 +796,9 @@ export default function SupplierListPage() {
                       </td>
                       <td className="px-3 py-1.5 text-[12px] text-muted-foreground">
                         {termsLabel(s.paymentTermsDays)}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <PaymentProfileBadge supplier={s} ready={paymentReady} />
                       </td>
                       <td className="px-3 py-1.5 text-right text-[12px] tabular-nums text-muted-foreground">
                         {s.creditLimit > 0 ? fmtPeso(s.creditLimit) : "Unlimited"}
@@ -842,6 +887,30 @@ export default function SupplierListPage() {
 }
 
 /* ─── KPI card (shared shape) ─── */
+
+function PaymentProfileBadge({ supplier, ready }: { supplier: SupplierRow; ready: boolean }) {
+  const missing = [
+    !supplier.bankName?.trim() && "bank",
+    !supplier.bankAccountNumber?.trim() && "account #",
+    !supplier.bankAccountName?.trim() && "account name",
+  ].filter(Boolean);
+
+  return (
+    <div className="flex min-w-[120px] flex-col items-start gap-0.5">
+      <span
+        className={cn(
+          "inline-flex rounded-md px-2 py-0.5 text-[9px] font-semibold",
+          ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700",
+        )}
+      >
+        {ready ? "Ready" : "Missing bank"}
+      </span>
+      <span className="max-w-[150px] truncate text-[10px] text-muted-foreground">
+        {ready ? supplier.bankName : `Missing ${missing.join(", ")}`}
+      </span>
+    </div>
+  );
+}
 
 function KPICard({
   icon,
