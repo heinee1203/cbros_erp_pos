@@ -149,6 +149,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   const [generating, setGenerating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [voidingHistory, setVoidingHistory] = useState<SupplierSOAHistoryRow | null>(null);
 
   // Derived: only UNBILLED invoices are checkbox-eligible
   const unbilledInvoices = useMemo(
@@ -330,8 +331,9 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   };
 
   // ── Void a historical SOA (unmarks its invoices) ──
-  const handleVoidHistory = async (row: SupplierSOAHistoryRow) => {
-    if (!confirm(`Void ${row.soaNumber}? Invoices will be unmarked and available for a new SOA.`)) return;
+  const handleVoidHistory = async () => {
+    const row = voidingHistory;
+    if (!row) return;
     setActionError(null);
     try {
       await apiFetch(`/ap/supplier-soa/${row.id}`, {
@@ -340,6 +342,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
         locationId,
         body: JSON.stringify({ status: "VOID" }),
       });
+      setVoidingHistory(null);
       await fetchAll();
       onAfterMutation?.();
     } catch (err: any) {
@@ -576,7 +579,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
                   </button>
                   {h.status !== "VOID" && (
                     <button
-                      onClick={() => handleVoidHistory(h)}
+                      onClick={() => setVoidingHistory(h)}
                       className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium text-red-600 hover:bg-red-50"
                     >
                       <Ban size={10} /> Void
@@ -585,6 +588,49 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {voidingHistory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-xl">
+            <div className="mb-3 flex items-center gap-2 text-destructive">
+              <AlertTriangle size={18} />
+              <h2 className="text-lg font-semibold">Void Supplier SOA</h2>
+            </div>
+            <div className="mb-4 space-y-2 text-sm">
+              <div>
+                <span className="text-muted-foreground">SOA:</span>{" "}
+                <span className="font-mono font-semibold">{voidingHistory.soaNumber}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Supplier:</span>{" "}
+                <span className="font-medium">{supplierName}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Amount:</span>{" "}
+                <span className="font-semibold tabular-nums">{fmtPeso(voidingHistory.totalAmount)}</span>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                This will unmark the invoices and make them available for a new supplier SOA.
+                This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setVoidingHistory(null)}
+                className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleVoidHistory}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Void SOA
+              </button>
+            </div>
           </div>
         </div>
       )}

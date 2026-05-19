@@ -11,6 +11,7 @@ import type { DVRecord, Supplier, SortField, SortDir } from "./components/dv-typ
 import { DVSummaryCards, type DVSummary } from "./components/dv-summary-cards";
 import { DVFilters } from "./components/dv-filters";
 import { DVTable } from "./components/dv-table";
+import { ConfirmPaymentDialog } from "./components/confirm-payment-dialog";
 import { VoidDialog } from "./components/void-dialog";
 import { VoucherDetailModal } from "./components/voucher-detail-modal";
 
@@ -61,8 +62,16 @@ export default function DisbursementVoucherListPage() {
   const [pageSize, setPageSize] = useState(25);
 
   // Modals
+  const [confirmingDV, setConfirmingDV] = useState<DVRecord | null>(null);
   const [voidingDV, setVoidingDV] = useState<DVRecord | null>(null);
   const [viewingDV, setViewingDV] = useState<DVRecord | null>(null);
+  const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!notification) return;
+    const timer = window.setTimeout(() => setNotification(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notification]);
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -147,13 +156,17 @@ export default function DisbursementVoucherListPage() {
     } catch {}
   };
 
-  const handleConfirm = async (r: DVRecord) => {
-    if (!confirm(`Confirm payment of ${r.amount.toLocaleString("en-PH", { style: "currency", currency: "PHP" })} to ${r.supplierName}?`)) return;
+  const handleConfirmPayment = async () => {
+    if (!confirmingDV) return;
     try {
-      await apiFetch(`/ap/disbursement-vouchers/${r.id}/confirm`, { token, locationId, method: "POST" });
+      await apiFetch(`/ap/disbursement-vouchers/${confirmingDV.id}/confirm`, { token, locationId, method: "POST" });
+      setConfirmingDV(null);
       setViewingDV(null);
+      setNotification({ type: "success", message: "Supplier payment confirmed." });
       fetchData();
-    } catch (err: any) { alert(err.message || "Failed to confirm"); }
+    } catch (err: any) {
+      setNotification({ type: "error", message: err.message || "Failed to confirm payment" });
+    }
   };
 
   const handleVoidConfirm = async (reason: string) => {
@@ -164,8 +177,11 @@ export default function DisbursementVoucherListPage() {
       });
       setVoidingDV(null);
       setViewingDV(null);
+      setNotification({ type: "success", message: "Disbursement voucher voided." });
       fetchData();
-    } catch (err: any) { alert(err.message || "Failed to void"); }
+    } catch (err: any) {
+      setNotification({ type: "error", message: err.message || "Failed to void voucher" });
+    }
   };
 
   if (authLoading) return <div className="flex items-center justify-center py-20"><div className="text-sm text-muted-foreground">Loading...</div></div>;
@@ -212,7 +228,7 @@ export default function DisbursementVoucherListPage() {
         onView={setViewingDV}
         onReprint={handleReprint}
         onVoid={setVoidingDV}
-        onConfirm={handleConfirm}
+        onConfirm={setConfirmingDV}
         onPrint={handleReprint}
         isLoading={loading}
       />
@@ -237,6 +253,15 @@ export default function DisbursementVoucherListPage() {
         onConfirm={handleVoidConfirm}
       />
 
+      <ConfirmPaymentDialog
+        open={confirmingDV !== null}
+        dvNumber={confirmingDV?.dvNumber ?? ""}
+        supplierName={confirmingDV?.supplierName ?? ""}
+        amount={confirmingDV?.amount ?? 0}
+        onClose={() => setConfirmingDV(null)}
+        onConfirm={handleConfirmPayment}
+      />
+
       <VoucherDetailModal
         open={viewingDV !== null}
         dvId={viewingDV?.id ?? null}
@@ -245,8 +270,21 @@ export default function DisbursementVoucherListPage() {
         onClose={() => setViewingDV(null)}
         onReprint={handleReprint}
         onVoid={(dv) => { setViewingDV(null); setVoidingDV(dv); }}
-        onConfirm={handleConfirm}
+        onConfirm={(dv) => { setViewingDV(null); setConfirmingDV(dv); }}
       />
+
+      {notification && (
+        <div
+          className={[
+            "fixed bottom-4 right-4 z-50 rounded-lg border px-4 py-3 text-[13px] font-medium shadow-lg",
+            notification.type === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-red-200 bg-red-50 text-red-800",
+          ].join(" ")}
+        >
+          {notification.message}
+        </div>
+      )}
     </div>
   );
 }

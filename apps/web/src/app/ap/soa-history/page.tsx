@@ -21,6 +21,8 @@ import { fmtPeso } from "@/lib/format";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { buildSupplierSOAHtml } from "@/lib/supplier-soa-html";
+import { ConfirmPaymentDialog } from "@/app/ap/disbursement-vouchers/components/confirm-payment-dialog";
+import { VoidDialog } from "@/app/ap/disbursement-vouchers/components/void-dialog";
 import { VoucherDetailModal } from "@/app/ap/disbursement-vouchers/components/voucher-detail-modal";
 import { buildDisbursementVoucherHtml } from "@/lib/disbursement-voucher-html";
 import type { DVRecord } from "@/app/ap/disbursement-vouchers/components/dv-types";
@@ -57,6 +59,13 @@ interface SupplierSOARecord {
   activeDvNumber: string | null;
   activeDvStatus: string | null;
   dvRefs?: SupplierDvRef[];
+}
+
+interface PendingDvAction {
+  id: string;
+  dvNumber: string;
+  supplierName: string;
+  amount: number;
 }
 
 // Resolve the post-SOA payment stage. The backend's `status` column only tracks
@@ -107,6 +116,8 @@ export default function SupplierSOAHistoryPage() {
   const [showVoided, setShowVoided] = useState(false);
   const [voidingSOA, setVoidingSOA] = useState<SupplierSOARecord | null>(null);
   const [viewingDvId, setViewingDvId] = useState<string | null>(null);
+  const [confirmingDv, setConfirmingDv] = useState<PendingDvAction | null>(null);
+  const [voidingDv, setVoidingDv] = useState<PendingDvAction | null>(null);
 
   // ── Multi-select state ──
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -215,21 +226,39 @@ export default function SupplierSOAHistoryPage() {
         body: JSON.stringify({ status: "VOID" }),
       });
       setVoidingSOA(null);
+      setNotification({ type: "success", message: "Supplier SOA voided and invoices released." });
       fetchData();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to void SOA");
+      setNotification({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to void SOA",
+      });
     }
   };
 
   // Inline DV confirm — reuses the same endpoint the DV modal's Confirm button
   // calls on the DV list page, so confirming from the row and confirming from
   // inside the modal produce identical results.
-  const handleConfirmDv = async (dvId: string | null) => {
-    if (!dvId || !token || !locationId) return;
-    if (!confirm("Confirm this DV? This releases cash and marks all linked invoices as PAID.")) return;
+  const requestConfirmDv = (row: SupplierSOARecord, dvId: string | null, dvNumber: string | null) => {
+    if (!dvId || !dvNumber) return;
+    setConfirmingDv({
+      id: dvId,
+      dvNumber,
+      supplierName: row.supplierName,
+      amount: row.totalBalance || row.totalAmount,
+    });
+  };
+
+  // ── Filtering ──
+  // Voided rows are hidden by default unless the "Show voided" toggle is on.
+  // The status filter applies the unified state (BILLED/PENDING/PAID/PARTIAL_NO_DV)
+  // client-side via resolveStatus — the backend returns all statuses.
+  const confirmPendingDv = async () => {
+    if (!confirmingDv || !token || !locationId) return;
     try {
-      await apiFetch(`/ap/disbursement-vouchers/${dvId}/confirm`, { token, locationId, method: "POST" });
-      setNotification({ type: "success", message: "DV confirmed — payment cascade applied" });
+      await apiFetch(`/ap/disbursement-vouchers/${confirmingDv.id}/confirm`, { token, locationId, method: "POST" });
+      setConfirmingDv(null);
+      setNotification({ type: "success", message: "DV confirmed - payment cascade applied" });
       fetchData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to confirm DV";
@@ -237,17 +266,27 @@ export default function SupplierSOAHistoryPage() {
     }
   };
 
-  const handleVoidDv = async (dvId: string | null) => {
-    if (!dvId || !token || !locationId) return;
-    // Backend requires a non-empty reason (accounts-payable/routes.ts:857).
-    const reason = prompt("Void this DV? Enter a reason — this reverses the payment and restores the SOA to billed state.");
-    if (!reason || !reason.trim()) return;
+  const requestVoidDv = (row: SupplierSOARecord, dvId: string | null, dvNumber: string | null) => {
+    if (!dvId || !dvNumber) return;
+    setVoidingDv({
+      id: dvId,
+      dvNumber,
+      supplierName: row.supplierName,
+      amount: row.totalBalance || row.totalAmount,
+    });
+  };
+
+  const confirmVoidDv = async (reason: string) => {
+    if (!voidingDv || !token || !locationId) return;
     try {
-      await apiFetch(`/ap/disbursement-vouchers/${dvId}/void`, {
-        token, locationId, method: "POST",
+      await apiFetch(`/ap/disbursement-vouchers/${voidingDv.id}/void`, {
+        token,
+        locationId,
+        method: "POST",
         body: JSON.stringify({ reason: reason.trim() }),
       });
-      setNotification({ type: "success", message: "DV voided — SOA restored" });
+      setVoidingDv(null);
+      setNotification({ type: "success", message: "DV voided - SOA restored" });
       fetchData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to void DV";
@@ -255,10 +294,6 @@ export default function SupplierSOAHistoryPage() {
     }
   };
 
-  // ── Filtering ──
-  // Voided rows are hidden by default unless the "Show voided" toggle is on.
-  // The status filter applies the unified state (BILLED/PENDING/PAID/PARTIAL_NO_DV)
-  // client-side via resolveStatus — the backend returns all statuses.
   const filteredRecords = useMemo(() => {
     let rows = records;
     if (!showVoided) rows = rows.filter((r) => r.status !== "VOID");
@@ -537,7 +572,7 @@ export default function SupplierSOAHistoryPage() {
                       )}
                       {state === "PENDING_CONFIRMATION" && (
                         <button
-                          onClick={() => handleConfirmDv(dvId)}
+                          onClick={() => requestConfirmDv(r, dvId, dvNumber)}
                           className="rounded px-2 py-0.5 text-[10px] font-medium text-emerald-600 hover:bg-emerald-50"
                           title="Confirm this DV — cash released, invoices marked PAID"
                         >
@@ -570,7 +605,7 @@ export default function SupplierSOAHistoryPage() {
                         );
                       })()}
                       {state === "PENDING_CONFIRMATION" && (
-                        <button onClick={() => handleVoidDv(dvId)}
+                        <button onClick={() => requestVoidDv(r, dvId, dvNumber)}
                           className="rounded px-2 py-0.5 text-[10px] font-medium text-red-500 hover:bg-red-50">
                           Void DV
                         </button>
@@ -623,6 +658,22 @@ export default function SupplierSOAHistoryPage() {
         </div>
       )}
 
+      <VoidDialog
+        open={voidingDv !== null}
+        dvNumber={voidingDv?.dvNumber ?? ""}
+        onClose={() => setVoidingDv(null)}
+        onConfirm={confirmVoidDv}
+      />
+
+      <ConfirmPaymentDialog
+        open={confirmingDv !== null}
+        dvNumber={confirmingDv?.dvNumber ?? ""}
+        supplierName={confirmingDv?.supplierName ?? ""}
+        amount={confirmingDv?.amount ?? 0}
+        onClose={() => setConfirmingDv(null)}
+        onConfirm={confirmPendingDv}
+      />
+
       {/* DV Detail Modal */}
       <VoucherDetailModal
         open={viewingDvId !== null}
@@ -631,8 +682,24 @@ export default function SupplierSOAHistoryPage() {
         locationId={locationId ?? ""}
         onClose={() => setViewingDvId(null)}
         onReprint={handleReprintDv}
-        onVoid={(dv) => { setViewingDvId(null); handleVoidDv(dv.id); }}
-        onConfirm={(dv) => { setViewingDvId(null); handleConfirmDv(dv.id); }}
+        onVoid={(dv) => {
+          setViewingDvId(null);
+          setVoidingDv({
+            id: dv.id,
+            dvNumber: dv.dvNumber,
+            supplierName: dv.supplierName,
+            amount: dv.amount,
+          });
+        }}
+        onConfirm={(dv) => {
+          setViewingDvId(null);
+          setConfirmingDv({
+            id: dv.id,
+            dvNumber: dv.dvNumber,
+            supplierName: dv.supplierName,
+            amount: dv.amount,
+          });
+        }}
       />
 
       {/* Toast notification */}
