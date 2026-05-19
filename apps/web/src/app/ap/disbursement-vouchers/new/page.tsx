@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FileText, ArrowLeft, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle, Copy, FileText, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtPeso, fmtDate } from "@/lib/format";
 import { useAuth } from "@/app/auth-context";
@@ -33,6 +33,15 @@ interface PaymentLine {
   transactionDate: string;
   platform: string;
   receivedBy: string;
+}
+
+interface SupplierPaymentProfile {
+  id: string;
+  name: string;
+  paymentTermsDays: number;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankAccountName: string | null;
 }
 
 const EMPTY_DEDUCTION: DeductionLine = {
@@ -100,6 +109,9 @@ export default function NewDisbursementVoucherPage() {
   const [deductions, setDeductions] = useState<DeductionLine[]>([]);
   const [charges, setCharges] = useState<AdditionalChargeLine[]>([]);
   const [payments, setPayments] = useState<PaymentLine[]>([{ ...EMPTY_PAYMENT }]);
+  const [supplierProfile, setSupplierProfile] = useState<SupplierPaymentProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   // Credit memos available for this supplier
   const [availableCMs, setAvailableCMs] = useState<Array<{ id: string; invoiceNumber: string; invoiceDate: string; totalAmount: number }>>([]);
@@ -205,6 +217,29 @@ export default function NewDisbursementVoucherPage() {
 
   useEffect(() => { if (!authLoading) fetchSOA(); }, [authLoading, fetchSOA]);
 
+  useEffect(() => {
+    if (!token || !locationId || !supplierId) {
+      setSupplierProfile(null);
+      setProfileLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setProfileLoading(true);
+    apiFetch<SupplierPaymentProfile>(`/ap/suppliers/${supplierId}`, { token, locationId })
+      .then((detail) => {
+        if (!cancelled) setSupplierProfile(detail);
+      })
+      .catch(() => {
+        if (!cancelled) setSupplierProfile(null);
+      })
+      .finally(() => {
+        if (!cancelled) setProfileLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, locationId, supplierId]);
+
   // Auto-update first payment amount when net changes
   useEffect(() => {
     if (payments.length === 1 && netAmount > 0) {
@@ -226,6 +261,29 @@ export default function NewDisbursementVoucherPage() {
   const updatePay = (i: number, f: keyof PaymentLine, v: string) => setPayments((p) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n; });
   const addPay = () => setPayments((p) => [...p, { ...EMPTY_PAYMENT }]);
   const rmPay = (i: number) => { if (payments.length > 1) setPayments((p) => p.filter((_, j) => j !== i)); };
+  const copySupplierProfileField = async (label: string, value: string | null) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(label);
+      window.setTimeout(() => setCopiedField(null), 1800);
+    } catch {
+      setCopiedField(null);
+    }
+  };
+  const applySupplierBankToFirstPayment = () => {
+    const bankName = supplierProfile?.bankName?.trim();
+    if (!bankName) return;
+    setPayments((prev) => {
+      const next = prev.length > 0 ? [...prev] : [{ ...EMPTY_PAYMENT }];
+      next[0] = {
+        ...next[0],
+        paymentMethod: next[0].paymentMethod === "CASH" ? "BANK_TRANSFER" : next[0].paymentMethod,
+        bankName,
+      };
+      return next;
+    });
+  };
 
   const buildPaymentLines = () => payments.map((p) => ({
     paymentMethod: p.paymentMethod, amount: p.amount,
@@ -444,6 +502,17 @@ export default function NewDisbursementVoucherPage() {
               </div>
             )}
           </div>
+        )}
+
+        {/* Supplier payment profile */}
+        {supplierId && (
+          <SupplierPaymentProfileCard
+            profile={supplierProfile}
+            loading={profileLoading}
+            copiedField={copiedField}
+            onCopy={copySupplierProfileField}
+            onApplyBank={applySupplierBankToFirstPayment}
+          />
         )}
 
         {/* Payment Date + Gross */}
@@ -693,6 +762,127 @@ export default function NewDisbursementVoucherPage() {
           <button onClick={handleSaveAndPrint} disabled={saving || payMismatch || netAmount <= 0 || hasChargeError || (!soaData && !isMultiSOA)}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">{saving ? "Saving…" : "Save & Print"}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function termsLabel(days: number): string {
+  return days === 0 ? "COD" : `Net ${days}`;
+}
+
+function SupplierPaymentProfileCard({
+  profile,
+  loading,
+  copiedField,
+  onCopy,
+  onApplyBank,
+}: {
+  profile: SupplierPaymentProfile | null;
+  loading: boolean;
+  copiedField: string | null;
+  onCopy: (label: string, value: string | null) => void;
+  onApplyBank: () => void;
+}) {
+  const hasBankDetails = !!(
+    profile?.bankName ||
+    profile?.bankAccountNumber ||
+    profile?.bankAccountName
+  );
+
+  if (loading) {
+    return (
+      <div className="rounded-lg border border-border bg-muted/20 p-3 text-[12px] text-muted-foreground">
+        Loading supplier payment profile...
+      </div>
+    );
+  }
+
+  if (!profile) return null;
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg border p-4 text-sm",
+        hasBankDetails
+          ? "border-emerald-200 bg-emerald-50/40"
+          : "border-amber-200 bg-amber-50/50",
+      )}
+    >
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-1.5 font-semibold text-foreground">
+            {hasBankDetails ? (
+              <CheckCircle size={14} className="text-emerald-600" />
+            ) : (
+              <AlertTriangle size={14} className="text-amber-600" />
+            )}
+            Supplier Payment Profile
+          </div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {termsLabel(profile.paymentTermsDays)}
+            {hasBankDetails
+              ? " - verify these details before releasing payment."
+              : " - no saved bank details for this supplier."}
+          </p>
+        </div>
+        {profile.bankName && (
+          <button
+            type="button"
+            onClick={onApplyBank}
+            className="rounded-lg border border-emerald-300 bg-background px-3 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50"
+          >
+            Use Bank On First Payment
+          </button>
+        )}
+      </div>
+
+      {hasBankDetails ? (
+        <div className="grid gap-2 sm:grid-cols-3">
+          <SupplierProfileField label="Bank" value={profile.bankName} copiedField={copiedField} onCopy={onCopy} />
+          <SupplierProfileField label="Account #" value={profile.bankAccountNumber} copiedField={copiedField} onCopy={onCopy} mono />
+          <SupplierProfileField label="Account Name" value={profile.bankAccountName} copiedField={copiedField} onCopy={onCopy} />
+        </div>
+      ) : (
+        <div className="text-[12px] text-amber-800">
+          Add bank details in the supplier master record before using bank transfer, or double-check the payment details manually.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SupplierProfileField({
+  label,
+  value,
+  copiedField,
+  onCopy,
+  mono,
+}: {
+  label: string;
+  value: string | null;
+  copiedField: string | null;
+  onCopy: (label: string, value: string | null) => void;
+  mono?: boolean;
+}) {
+  const isCopied = copiedField === label;
+  return (
+    <div className="rounded-lg border border-border/70 bg-background px-3 py-2">
+      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span>{label}</span>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onCopy(label, value)}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/10"
+          >
+            <Copy size={10} />
+            {isCopied ? "Copied" : "Copy"}
+          </button>
+        )}
+      </div>
+      <div className={cn("truncate text-[12px] font-medium text-foreground", mono && "font-mono")}>
+        {value || "Not saved"}
       </div>
     </div>
   );
