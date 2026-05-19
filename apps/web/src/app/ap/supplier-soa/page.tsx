@@ -654,7 +654,7 @@ export default function SupplierSOAPage() {
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.06]"><FileText size={16} className="text-primary" /></div>
           <div>
             <h1 className="text-[18px] font-semibold tracking-tight text-foreground">Supplier Statement of Account</h1>
-            <p className="text-[13px] text-muted-foreground">View outstanding balances and generate check vouchers</p>
+            <p className="text-[13px] text-muted-foreground">Review aging risk, generate supplier SOAs, and prepare payments</p>
           </div>
         </div>
 
@@ -712,6 +712,7 @@ export default function SupplierSOAPage() {
           <div className="flex-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Supplier</div>
           <div className="w-20 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Invoices</div>
           <div className="w-32 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Total Payable</div>
+          <div className="w-28 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Overdue</div>
           <div className="w-24 text-right text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Oldest Due</div>
           <div className="w-24 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground text-center">Status</div>
         </div>
@@ -738,6 +739,9 @@ export default function SupplierSOAPage() {
                     </div>
                     <div className="w-20 text-right text-[12px] tabular-nums text-foreground">{s.invoiceCount}</div>
                     <div className="w-32 text-right text-[13px] tabular-nums font-semibold text-foreground">{fmtPeso(s.totalBalance)}</div>
+                    <div className={cn("w-28 text-right text-[12px] tabular-nums", s.overdueAmount > 0 ? "font-semibold text-red-600" : "text-muted-foreground")}>
+                      {s.overdueAmount > 0 ? fmtPeso(s.overdueAmount) : "\u2014"}
+                    </div>
                     <div className={cn("w-24 text-right text-[11px] tabular-nums", overdueColor(overdueDays(s.earliestDueDate)))}>
                       {s.earliestDueDate ? fmtDate(s.earliestDueDate) : "—"}
                       {s.overdueCount > 0 && s.earliestDueDate && (
