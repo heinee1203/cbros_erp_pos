@@ -1,4 +1,6 @@
 import type { PrinterProvider, PrinterDevice, ReceiptData, PrintResult } from './types';
+import { storage } from '@/storage/mmkv';
+import { KEYS } from '@/storage/keys';
 
 export class MockPrinterAdapter implements PrinterProvider {
   readonly type = 'mock' as const;
@@ -16,11 +18,13 @@ export class MockPrinterAdapter implements PrinterProvider {
 
   async connect(_deviceId: string): Promise<void> {
     this._connected = true;
+    storage.set(KEYS.PRINTER_DEVICE_ID, _deviceId);
     console.log('[MockPrinter] Connected');
   }
 
   async disconnect(): Promise<void> {
     this._connected = false;
+    storage.delete(KEYS.PRINTER_DEVICE_ID);
     console.log('[MockPrinter] Disconnected');
   }
 

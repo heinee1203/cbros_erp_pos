@@ -1,6 +1,6 @@
 import React from 'react';
 import { Text, StyleSheet } from 'react-native';
-import { colors } from '@/theme';
+import { colors, fonts, fontSize, radius, spacing } from '@/theme';
 
 interface StockBadgeProps {
   available: number;
@@ -23,30 +23,30 @@ export default function StockBadge({ available, lowThreshold = 5, sellingUnit }:
 function createStyles() {
   return StyleSheet.create({
     out: {
-      fontSize: 11,
-      fontFamily: 'Outfit-SemiBold',
+      fontSize: fontSize.xs,
+      fontFamily: fonts.display.semiBold,
       color: colors.status.out,
       backgroundColor: colors.status.dangerBg,
-      paddingHorizontal: 8,
+      paddingHorizontal: spacing.sm,
       paddingVertical: 2,
-      borderRadius: 4,
+      borderRadius: radius.sm,
       overflow: 'hidden',
-      letterSpacing: 0.2,
+      letterSpacing: 0,
     },
     low: {
-      fontSize: 11,
-      fontFamily: 'Outfit-SemiBold',
+      fontSize: fontSize.xs,
+      fontFamily: fonts.display.semiBold,
       color: colors.status.low,
       backgroundColor: colors.status.warningBg,
-      paddingHorizontal: 8,
+      paddingHorizontal: spacing.sm,
       paddingVertical: 2,
-      borderRadius: 4,
+      borderRadius: radius.sm,
       overflow: 'hidden',
-      letterSpacing: 0.2,
+      letterSpacing: 0,
     },
     ok: {
-      fontSize: 11,
-      fontFamily: 'DMSans-Regular',
+      fontSize: fontSize.xs,
+      fontFamily: fonts.body.medium,
       color: colors.text.secondary,
     },
   });

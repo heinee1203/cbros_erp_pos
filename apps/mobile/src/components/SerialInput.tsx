@@ -207,17 +207,17 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: fontSize.lg,
-    fontFamily: fonts.heading,
+    fontFamily: fonts.display.bold,
     color: colors.text.primary,
   },
   badge: {
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: radius.full,
+    borderRadius: radius.pill,
   },
   badgeComplete: { backgroundColor: 'rgba(52,199,89,0.15)' },
   badgeIncomplete: { backgroundColor: 'rgba(245,166,35,0.15)' },
-  badgeText: { fontSize: fontSize.xs, fontFamily: fonts.bodyMedium },
+  badgeText: { fontSize: fontSize.xs, fontFamily: fonts.body.medium },
   badgeTextComplete: { color: colors.status.success },
   badgeTextIncomplete: { color: colors.status.warning },
   productName: {
@@ -249,7 +249,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     fontSize: fontSize.base,
-    fontFamily: fonts.mono,
+    fontFamily: fonts.mono.regular,
     color: colors.text.primary,
     backgroundColor: colors.bg.input,
   },
@@ -265,7 +265,7 @@ const styles = StyleSheet.create({
   addBtnText: {
     color: colors.text.inverse,
     fontSize: fontSize.sm,
-    fontFamily: fonts.bodyBold,
+    fontFamily: fonts.body.semiBold,
   },
   error: {
     color: colors.status.danger,
@@ -292,7 +292,7 @@ const styles = StyleSheet.create({
   },
   serialText: {
     flex: 1,
-    fontFamily: fonts.mono,
+    fontFamily: fonts.mono.regular,
     fontSize: fontSize.sm,
     color: colors.text.primary,
   },
@@ -311,6 +311,6 @@ const styles = StyleSheet.create({
   doneBtnText: {
     color: colors.text.primary,
     fontSize: fontSize.sm,
-    fontFamily: fonts.bodyMedium,
+    fontFamily: fonts.body.medium,
   },
 });

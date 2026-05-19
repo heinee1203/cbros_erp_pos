@@ -25,36 +25,44 @@ import { database } from '@/db/database';
 import { Product } from '@/db/models';
 import { Q } from '@nozbe/watermelondb';
 import { runFullSync } from '@/sync/sync-manager';
-import { addFavorite, isFavorite } from '@/storage/favorites';
 import { Inventory } from '@/db/models';
-import { storage } from '@/storage/mmkv';
-import { KEYS } from '@/storage/keys';
-import { Button, Chip, Toast } from '@/components/ui';
+import { Button, Chip, Toast, Icon } from '@/components/ui';
 import { useLayout } from '@/hooks/use-layout';
+import { useAuth } from '@/hooks/use-auth';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import { ProductDetailSheet } from '@/components/ProductDetailSheet';
+import { BarcodeScanModal } from '@/components/BarcodeScanModal';
 import { useTheme } from '@/theme/ThemeContext';
 import type { POSStackParamList } from '@/app/MainTabs';
 
 type Nav = StackNavigationProp<POSStackParamList, 'Catalog'>;
 
+function getAvailableQty(item: CatalogItem): number {
+  return Math.max(0, item.stockLevel - item.reservedLevel);
+}
+
 export default function CatalogScreen() {
   const navigation = useNavigation<Nav>();
   useTheme(); // Subscribe to theme changes for re-render
   const { isTablet, screenPadding } = useLayout();
+  const { locationId } = useAuth();
   const scanner = useScanner();
   const addLine = useCartStore(s => s.addLine);
+  const cartLines = useCartStore(s => s.lines);
   const lineCount = useCartStore(selectLineCount);
   const {
-    query, setQuery, results, isSearching,
+    query, setQuery, results, isSearching, error,
     category, setCategory, searchByBarcode, refresh,
   } = useCatalogSearch();
 
   const [refreshing, setRefreshing] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [scanModalVisible, setScanModalVisible] = useState(false);
 
   // ── Product family tabs (loaded from DB) ──
-  const [families, setFamilies] = useState<string[]>([]);
+  const families = useMemo(() => (
+    Array.from(new Set(results.map(item => item.familyName).filter((family): family is string => !!family))).sort()
+  ), [results]);
 
   // ── Variable price modal state ──
   const [variablePriceItem, setVariablePriceItem] = useState<CatalogItem | null>(null);
@@ -69,6 +77,7 @@ export default function CatalogScreen() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastText, setToastText] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchInputRef = useRef<TextInput>(null);
 
   const showToast = useCallback((text: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -82,25 +91,6 @@ export default function CatalogScreen() {
 
   // Dynamic styles (reads mutated colors for light/dark theme)
   const styles = createStyles();
-
-  // Load distinct product families from local DB for filter tabs
-  useEffect(() => {
-    (async () => {
-      try {
-        const productCollection = database.get<Product>('products');
-        const allProducts = await productCollection
-          .query(Q.where('parent_product_id', Q.eq(null)))
-          .fetch();
-        const familySet = new Set<string>();
-        for (const p of allProducts) {
-          if (p.familyName) familySet.add(p.familyName);
-        }
-        setFamilies(Array.from(familySet).sort());
-      } catch (err) {
-        console.error('[CatalogScreen] Failed to load families:', err);
-      }
-    })();
-  }, [results]); // re-check after results change (e.g. post-sync)
 
   // Build product map for FavoritesGrid from current results
   const productMap = useMemo(() => {
@@ -117,7 +107,47 @@ export default function CatalogScreen() {
     return map;
   }, [results]);
 
+  const canAddItemToCart = useCallback((item: CatalogItem, overridePrice?: number) => {
+    if (item.isParent) {
+      showToast('Select a variant first');
+      return false;
+    }
+    if (!item.availableForSale) {
+      Alert.alert('Not Available', `${item.name} is not available for sale at this branch.`);
+      return false;
+    }
+
+    const finalPrice = overridePrice ?? item.unitPrice;
+    if (!item.isVariablePrice && (!finalPrice || finalPrice <= 0)) {
+      showToast('Price not set - cannot add to cart');
+      return false;
+    }
+
+    if (!item.isVariablePrice) {
+      const available = getAvailableQty(item);
+      const inCart = cartLines
+        .filter(line => line.productId === item.serverId)
+        .reduce((sum, line) => sum + line.quantity, 0);
+
+      if (available <= 0) {
+        Alert.alert('Out of Stock', `${item.name} has no stock at this branch.`);
+        return false;
+      }
+      if (inCart + 1 > available) {
+        Alert.alert(
+          'Insufficient Stock',
+          `${item.name} has ${available} available and ${inCart} already in the cart.`,
+        );
+        return false;
+      }
+    }
+
+    return true;
+  }, [cartLines, showToast]);
+
   const addItemToCart = useCallback((item: CatalogItem, overridePrice?: number) => {
+    if (!canAddItemToCart(item, overridePrice)) return false;
+
     addLine({
       serverId: item.serverId,
       name: item.name,
@@ -131,9 +161,8 @@ export default function CatalogScreen() {
       warrantyMonths: item.warrantyMonths,
     });
     showToast(`Added: ${item.name}`);
-  }, [addLine, showToast]);
-
-  const locationId = storage.getString(KEYS.AUTH_LOCATION_ID);
+    return true;
+  }, [addLine, canAddItemToCart, showToast]);
 
   const loadVariants = useCallback(async (parent: CatalogItem) => {
     setVariantParent(parent);
@@ -182,12 +211,19 @@ export default function CatalogScreen() {
           isVariablePrice: p.isVariablePrice,
           isParent: false,
           parentProductId: p.parentProductId,
+          isSerialized: p.isSerialized ?? false,
+          isTire: p.isTire ?? false,
+          warrantyMonths: p.warrantyMonths ?? null,
           stockLevel: inv?.stockLevel ?? 0,
           reservedLevel: inv?.reservedLevel ?? 0,
           reorderPoint: inv?.reorderPoint ?? 10,
-          availableForSale: inv?.availableForSale ?? true,
+          availableForSale: inv?.availableForSale ?? false,
         };
-      });
+      }).filter(item =>
+        item.availableForSale &&
+        (item.isVariablePrice || getAvailableQty(item) > 0) &&
+        (item.unitPrice > 0 || item.isVariablePrice)
+      );
       setVariantChildren(items);
     } catch (err) {
       console.error('[CatalogScreen] Error loading variants:', err);
@@ -198,56 +234,65 @@ export default function CatalogScreen() {
   }, [locationId, showToast]);
 
   const handleVariantSelect = useCallback((variant: CatalogItem) => {
+    if (!variant.availableForSale) {
+      Alert.alert('Not Available', `${variant.name} is not available for sale at this branch.`);
+      return;
+    }
     if (variant.isVariablePrice) {
       setVariantParent(null);
       setVariablePriceItem(variant);
       setEnteredPrice('');
       return;
     }
-    if (!variant.unitPrice || variant.unitPrice <= 0) {
-      showToast('Price not set \u2014 cannot add to cart');
-      return;
+    if (addItemToCart(variant)) {
+      setVariantParent(null);
+      setVariantChildren([]);
     }
-    addItemToCart(variant);
-    setVariantParent(null);
-    setVariantChildren([]);
-  }, [addItemToCart, showToast]);
+  }, [addItemToCart]);
 
   const handleVariantPickerClose = useCallback(() => {
     setVariantParent(null);
     setVariantChildren([]);
   }, []);
 
+  const handleBarcodeResult = useCallback(async (barcode: string): Promise<boolean> => {
+    const trimmed = barcode.trim();
+    if (!trimmed) return false;
+
+    const product = await searchByBarcode(trimmed);
+    if (product) {
+      if (product.isParent) {
+        loadVariants(product);
+        return true;
+      }
+      if (product.isVariablePrice) {
+        setVariablePriceItem(product);
+        setEnteredPrice('');
+        return true;
+      }
+      if (!product.availableForSale) {
+        Alert.alert('Not Available', `${product.name} is not available for sale at this location.`);
+        return false;
+      }
+      return addItemToCart(product);
+    }
+
+    Alert.alert('Not Found', `No product found for barcode ${trimmed}`);
+    return false;
+  }, [searchByBarcode, loadVariants, addItemToCart]);
+
   // Start scanner listening when on this screen
   useEffect(() => {
     scanner.startListening();
     const unsub = scanner.onScan(async (result) => {
       if (result.barcode === '__OPEN_CAMERA__') return;
-      const product = await searchByBarcode(result.barcode);
-      if (product) {
-        if (product.isParent) {
-          loadVariants(product);
-          return;
-        }
-        if (product.isVariablePrice) {
-          setVariablePriceItem(product);
-          setEnteredPrice('');
-          return;
-        }
-        if (!product.unitPrice || product.unitPrice <= 0) {
-          showToast('Price not set \u2014 cannot add to cart');
-          return;
-        }
-        addItemToCart(product);
-      } else {
-        Alert.alert('Not Found', `No product found for barcode ${result.barcode}`);
-      }
+      await handleBarcodeResult(result.barcode);
     });
     return () => {
       scanner.stopListening();
       unsub();
     };
-  }, [scanner, searchByBarcode, addItemToCart, loadVariants, showToast]);
+  }, [scanner, handleBarcodeResult]);
 
   const handleProductPress = useCallback((item: CatalogItem) => {
     if (item.isParent) {
@@ -259,13 +304,8 @@ export default function CatalogScreen() {
       setEnteredPrice('');
       return;
     }
-    // Block unpriced items
-    if (!item.unitPrice || item.unitPrice <= 0) {
-      showToast('Price not set \u2014 cannot add to cart');
-      return;
-    }
     addItemToCart(item);
-  }, [addItemToCart, loadVariants, showToast]);
+  }, [addItemToCart, loadVariants]);
 
   // Product detail sheet state
   const [detailProduct, setDetailProduct] = useState<CatalogItem | null>(null);
@@ -278,6 +318,10 @@ export default function CatalogScreen() {
     // Find the full CatalogItem from results for sku/barcode info
     const item = results.find(r => r.serverId === product.id);
     if (item) {
+      if (!item.availableForSale) {
+        Alert.alert('Not Available', `${item.name} is not available for sale at this branch.`);
+        return;
+      }
       if (item.isVariablePrice) {
         setVariablePriceItem(item);
         setEnteredPrice('');
@@ -289,48 +333,56 @@ export default function CatalogScreen() {
       Alert.alert('Product Unavailable', 'Switch to "All" category to add this item.');
       return;
     }
-    showToast(`Added: ${product.name}`);
-  }, [results, addItemToCart, showToast]);
+  }, [results, addItemToCart]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await runFullSync();
-    refresh();
-    setRefreshing(false);
+    try {
+      await runFullSync();
+      await refresh();
+    } catch (err) {
+      console.error('[CatalogScreen] Sync failed:', err);
+      Alert.alert('Sync Failed', 'Catalog sync did not complete. Check the server connection and try again.');
+    } finally {
+      setRefreshing(false);
+    }
   }, [refresh]);
 
-  const handleScanButton = useCallback(async () => {
-    const result = await scanner.openCameraScanner();
-    if (result) {
-      const product = await searchByBarcode(result.barcode);
-      if (product) {
-        if (product.isParent) {
-          loadVariants(product);
-          return;
-        }
-        if (product.isVariablePrice) {
-          setVariablePriceItem(product);
-          setEnteredPrice('');
-          return;
-        }
-        if (!product.unitPrice || product.unitPrice <= 0) {
-          showToast('Price not set \u2014 cannot add to cart');
-          return;
-        }
-        addItemToCart(product);
-      } else {
-        Alert.alert('Not Found', `No product for barcode ${result.barcode}`);
-      }
-    }
-  }, [scanner, searchByBarcode, addItemToCart, loadVariants, showToast]);
+  const handleScanButton = useCallback(() => {
+    setScanModalVisible(true);
+    showToast('Scan barcode or type it in');
+  }, [showToast]);
+
+  const handleSearchSubmit = useCallback(async () => {
+    const value = query.trim();
+    if (value.length < 4) return;
+    const matched = await handleBarcodeResult(value);
+    if (matched) setQuery('');
+  }, [query, handleBarcodeResult, setQuery]);
+
+  useEffect(() => {
+    const value = query.trim();
+    if (!/^[A-Za-z0-9-]{8,}$/.test(value)) return;
+
+    const timer = setTimeout(async () => {
+      const product = await searchByBarcode(value);
+      if (!product) return;
+
+      const matched = await handleBarcodeResult(value);
+      if (matched) setQuery('');
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [query, searchByBarcode, handleBarcodeResult, setQuery]);
 
   const handleVariablePriceConfirm = useCallback(() => {
     if (!variablePriceItem) return;
     const price = parseFloat(enteredPrice);
     if (isNaN(price) || price <= 0) return;
-    addItemToCart(variablePriceItem, price);
-    setVariablePriceItem(null);
-    setEnteredPrice('');
+    if (addItemToCart(variablePriceItem, price)) {
+      setVariablePriceItem(null);
+      setEnteredPrice('');
+    }
   }, [variablePriceItem, enteredPrice, addItemToCart]);
 
   const handleVariablePriceCancel = useCallback(() => {
@@ -358,7 +410,7 @@ export default function CatalogScreen() {
             onPress={() => navigation.navigate('Cart')}
             android_ripple={{ color: colors.accent.glow }}
           >
-            <Text style={styles.cartIcon}>Cart</Text>
+            <Icon name="cart" size={18} color={colors.accent.primary} />
             {lineCount > 0 && (
               <View style={styles.cartBadge}>
                 <Text style={styles.cartBadgeText}>{lineCount}</Text>
@@ -384,8 +436,9 @@ export default function CatalogScreen() {
             searchFocused && styles.searchInputContainerFocused,
           ]}
         >
-          <Text style={styles.searchIcon}>{'\u2315'}</Text>
+          <Icon name="search" size={18} color={colors.text.muted} />
           <TextInput
+            ref={searchInputRef}
             style={styles.searchInput}
             value={query}
             onChangeText={setQuery}
@@ -398,12 +451,15 @@ export default function CatalogScreen() {
             cursorColor={colors.accent.primary}
             onFocus={() => setSearchFocused(true)}
             onBlur={() => setSearchFocused(false)}
+            onSubmitEditing={handleSearchSubmit}
+            blurOnSubmit={false}
           />
           <Pressable
             style={styles.scanButton}
             onPress={handleScanButton}
             android_ripple={{ color: colors.accent.glow, borderless: true }}
           >
+            <Icon name="barcode" size={16} color={colors.accent.primary} />
             <Text style={styles.scanButtonText}>SCAN</Text>
           </Pressable>
         </View>
@@ -441,6 +497,7 @@ export default function CatalogScreen() {
         ListHeaderComponent={
           <FavoritesGrid productMap={productMap} onAddToCart={handleFavoriteAddToCart} />
         }
+        contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -454,6 +511,29 @@ export default function CatalogScreen() {
           isSearching ? (
             <View style={styles.empty}>
               <ActivityIndicator size="large" color={colors.accent.primary} />
+              <Text style={[styles.emptyText, { marginTop: spacing.md }]}>Loading catalog...</Text>
+            </View>
+          ) : error ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>Catalog did not load</Text>
+              <Text style={styles.emptySubtitle}>{error}</Text>
+              <View style={styles.emptyActions}>
+                <Button
+                  title="Retry"
+                  variant="secondary"
+                  fullWidth
+                  onPress={() => { refresh(); }}
+                  style={{ minHeight: 52 }}
+                />
+                <Button
+                  title="Sync Now"
+                  variant="primary"
+                  fullWidth
+                  onPress={handleRefresh}
+                  loading={refreshing}
+                  style={{ minHeight: 52 }}
+                />
+              </View>
             </View>
           ) : query ? (
             <View style={styles.empty}>
@@ -611,6 +691,15 @@ export default function CatalogScreen() {
         onClose={() => setDetailProduct(null)}
         onAddToCart={addItemToCart}
       />
+
+      <BarcodeScanModal
+        visible={scanModalVisible}
+        title="Scan Item Barcode"
+        subtitle="Use the paired scanner, or type the item barcode manually."
+        actionLabel="Find Item"
+        onSubmit={handleBarcodeResult}
+        onClose={() => setScanModalVisible(false)}
+      />
     </View>
   );
 }
@@ -627,8 +716,8 @@ const createStyles = () => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: layout.screenPadding,
-    paddingTop: layout.headerPaddingTop,
-    paddingBottom: layout.headerPaddingBottom,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.sm,
     backgroundColor: colors.bg.primary,
   },
   headerTitle: {
@@ -673,16 +762,18 @@ const createStyles = () => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.bg.surface,
-    borderRadius: radius.pill,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border.default,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     marginHorizontal: spacing.lg,
-    marginVertical: spacing.md,
-    height: 56,
+    marginTop: spacing.xs,
+    marginBottom: spacing.md,
+    height: 54,
   },
   searchInputContainerFocused: {
     borderColor: colors.accent.primary,
+    backgroundColor: colors.bg.surface,
   },
   searchIcon: {
     marginRight: spacing.sm,
@@ -697,16 +788,19 @@ const createStyles = () => StyleSheet.create({
   },
   scanButton: {
     backgroundColor: colors.accent.primary,
-    paddingHorizontal: 20,
+    paddingHorizontal: spacing.lg,
     paddingVertical: 10,
-    borderRadius: 10,
-    marginLeft: 8,
+    borderRadius: radius.md,
+    marginLeft: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   scanButtonText: {
     color: colors.text.inverse,
     fontSize: 13,
     fontFamily: 'Outfit-Bold',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
 
@@ -753,11 +847,20 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.secondary,
     textAlign: 'center',
   },
+  emptyActions: {
+    width: '100%',
+    maxWidth: 280,
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  listContent: {
+    paddingBottom: spacing.lg,
+  },
 
   // ── Variable Price Modal ──
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: 'rgba(15, 23, 42, 0.46)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -765,7 +868,7 @@ const createStyles = () => StyleSheet.create({
     width: '85%',
     maxWidth: 340,
     backgroundColor: colors.bg.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.xl,
     borderWidth: 1,
     borderColor: colors.border.default,

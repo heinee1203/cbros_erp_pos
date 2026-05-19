@@ -1,3 +1,4 @@
+import { DeviceEventEmitter, Platform, type EmitterSubscription } from 'react-native';
 import type { ScanResult, ScannerProvider } from './types';
 
 /**
@@ -8,8 +9,8 @@ import type { ScanResult, ScannerProvider } from './types';
  *
  * Focus/capture rules:
  * - Only captures when explicitly listening (startListening called)
- * - Detects scanner vs manual typing by inter-keystroke speed (<50ms = scanner)
- * - Barcode must end with Enter key within 300ms of first character
+ * - Detects scanner vs manual typing by inter-keystroke speed (<120ms = scanner/card reader)
+ * - Barcode must end with Enter key within 1000ms of first character
  * - Minimum barcode length: 4 characters
  * - While listening, scanner input is captured and NOT passed to focused text fields
  */
@@ -22,9 +23,10 @@ export class HIDScannerAdapter implements ScannerProvider {
   private _lastKeyTime = 0;
   private _timeout: ReturnType<typeof setTimeout> | null = null;
   private _callbacks: Array<(result: ScanResult) => void> = [];
+  private _subscription: EmitterSubscription | null = null;
 
-  private static readonly INTER_KEY_THRESHOLD = 50;  // ms — scanner types faster than this
-  private static readonly BUFFER_TIMEOUT = 300;       // ms — max time for complete barcode
+  private static readonly INTER_KEY_THRESHOLD = 120;  // ms — scanner/card reader types faster than this
+  private static readonly BUFFER_TIMEOUT = 1000;      // ms — max time for complete barcode/card data
   private static readonly MIN_LENGTH = 4;
 
   startListening(): void {
@@ -34,12 +36,19 @@ export class HIDScannerAdapter implements ScannerProvider {
     // a transparent overlay that captures KeyEvent before TextInput.
     // This adapter provides the processing logic; native bridge
     // calls handleKeyEvent() for each hardware key press.
+    if (Platform.OS === 'android' && !this._subscription) {
+      this._subscription = DeviceEventEmitter.addListener('ApexBarcodeKey', (key: string) => {
+        this.handleKeyEvent(key, Date.now());
+      });
+    }
     console.log('[HIDScanner] Listening started');
   }
 
   stopListening(): void {
     this._listening = false;
     this._clearBuffer();
+    this._subscription?.remove();
+    this._subscription = null;
     console.log('[HIDScanner] Listening stopped');
   }
 

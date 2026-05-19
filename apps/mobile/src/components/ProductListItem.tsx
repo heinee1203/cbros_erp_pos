@@ -19,7 +19,7 @@ function ProductListItem({ item, index, onPress, onLongPress }: Props) {
   const styles = createStyles();
   const available = item.stockLevel - item.reservedLevel;
   const hasVariants = item.isParent;
-  const isOOS = available <= 0 && !hasVariants;
+  const isOOS = available <= 0 && !hasVariants && !item.isVariablePrice;
   const priceIsZero = item.unitPrice === 0;
 
   const renderPrice = () => {
@@ -67,7 +67,9 @@ function ProductListItem({ item, index, onPress, onLongPress }: Props) {
       </View>
       <View style={styles.right}>
         {renderPrice()}
-        <StockBadge available={available} sellingUnit={(item as any).sellingUnit} />
+        {!item.isVariablePrice && (
+          <StockBadge available={available} sellingUnit={(item as any).sellingUnit} />
+        )}
       </View>
     </Pressable>
   );
@@ -79,18 +81,21 @@ const createStyles = () => StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: colors.bg.surface,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    minHeight: 64,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border.subtle,
-    borderRadius: radius.lg,
+    paddingVertical: spacing.md,
+    minHeight: 70,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    borderRadius: radius.md,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
   },
   rowPressed: {
     backgroundColor: colors.accent.glow,
   },
   rowOOS: {
-    opacity: 0.5,
+    opacity: 0.58,
   },
   left: {
     flex: 1,
@@ -99,6 +104,7 @@ const createStyles = () => StyleSheet.create({
   right: {
     alignItems: 'flex-end',
     gap: spacing.xs,
+    minWidth: 118,
   },
   productName: {
     fontFamily: fonts.display.semiBold,
@@ -150,6 +156,6 @@ const createStyles = () => StyleSheet.create({
     fontSize: 11,
     fontFamily: 'Outfit-SemiBold',
     color: colors.accent.primary,
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
 });

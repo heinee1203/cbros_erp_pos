@@ -123,7 +123,7 @@ const styles = StyleSheet.create({
   captureBtnText: {
     fontSize: fontSize.xs,
     color: colors.text.secondary,
-    fontFamily: fonts.bodyMedium,
+    fontFamily: fonts.body.medium,
   },
   thumbnailContainer: {
     flexDirection: 'row',

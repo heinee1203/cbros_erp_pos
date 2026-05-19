@@ -135,7 +135,7 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.caption,
     color: colors.accent.primary,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   chevron: {
     ...textStyles.caption,

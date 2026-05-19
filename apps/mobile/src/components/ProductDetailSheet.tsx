@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
-import { BottomSheet } from '@/components/ui';
+import { Alert, View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
+import { BottomSheet, Icon } from '@/components/ui';
+import { LabelPreviewModal } from '@/components/LabelPreviewModal';
 import { apiFetch } from '@/services/api-client';
 import { useNetworkStatus } from '@/hooks/use-network-status';
 import { usePrinter } from '@/hardware/printer/context';
-import { buildShelfLabel, zplToBytes } from '@/hardware/printer/zpl-label-builder';
-import { colors, textStyles, spacing } from '@/theme';
+import { buildShelfLabel } from '@/hardware/printer/zpl-label-builder';
+import { printZplSafely } from '@/hardware/printer/settings';
+import { colors, textStyles, spacing, radius } from '@/theme';
 import { useTheme } from '@/theme/ThemeContext';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { getLockedLocationId } from '@/config/device-binding';
 import type { CatalogItem } from '@/hooks/use-catalog-search';
 
 interface StockLocation {
@@ -28,25 +31,39 @@ interface Props {
   product: CatalogItem | null;
   visible: boolean;
   onClose: () => void;
-  onAddToCart: (product: CatalogItem) => void;
+  onAddToCart: (product: CatalogItem) => boolean;
+  showAddToCart?: boolean;
+  addToCartLabel?: string;
+  footerActions?: React.ReactNode;
 }
 
 function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export function ProductDetailSheet({ product, visible, onClose, onAddToCart }: Props) {
+export function ProductDetailSheet({
+  product,
+  visible,
+  onClose,
+  onAddToCart,
+  showAddToCart = true,
+  addToCartLabel = 'Add to Cart',
+  footerActions,
+}: Props) {
   useTheme(); // Subscribe to theme changes
   const styles = createStyles();
   const { isOnline } = useNetworkStatus();
   const printer = usePrinter();
   const [stockData, setStockData] = useState<StockData | null>(null);
   const [loading, setLoading] = useState(false);
-  const currentLocationId = storage.getString(KEYS.AUTH_LOCATION_ID) || '';
+  const [printingLabel, setPrintingLabel] = useState(false);
+  const [labelPreviewVisible, setLabelPreviewVisible] = useState(false);
+  const currentLocationId = getLockedLocationId() ?? storage.getString(KEYS.AUTH_LOCATION_ID) ?? '';
 
   useEffect(() => {
     if (!visible || !product) {
       setStockData(null);
+      setLabelPreviewVisible(false);
       return;
     }
 
@@ -61,9 +78,42 @@ export function ProductDetailSheet({ product, visible, onClose, onAddToCart }: P
 
   if (!product) return null;
 
+  const labelZpl = product.barcode ? buildShelfLabel({
+    itemName: product.name,
+    barcode: product.barcode,
+    sku: product.sku || product.mnemonicSku,
+    price: product.unitPrice,
+  }) : '';
+
   const handleAdd = () => {
-    onAddToCart(product);
-    onClose();
+    if (onAddToCart(product)) {
+      onClose();
+    }
+  };
+
+  const handlePrintLabel = async () => {
+    if (!product) return;
+    if (!product.barcode) {
+      Alert.alert('No Barcode', 'This product does not have a barcode to print.');
+      return;
+    }
+
+    setPrintingLabel(true);
+    try {
+      const result = await printZplSafely(printer, labelZpl);
+      if (!result.success) {
+        Alert.alert('Label Not Printed', result.error || 'Connect a ZPL label printer before printing.', [
+          { text: 'Preview Label', onPress: () => setLabelPreviewVisible(true) },
+          { text: 'OK', style: 'cancel' },
+        ]);
+      } else {
+        Alert.alert('Label Sent', 'Barcode label was sent to the printer.');
+      }
+    } catch (err: any) {
+      Alert.alert('Print Failed', err.message || 'Label could not be printed.');
+    } finally {
+      setPrintingLabel(false);
+    }
   };
 
   // Sort: current location first, then alphabetical
@@ -76,6 +126,7 @@ export function ProductDetailSheet({ product, visible, onClose, onAddToCart }: P
     }) ?? [];
 
   return (
+    <>
     <BottomSheet visible={visible} onClose={onClose} title={product.name}>
       {/* SKU + Price */}
       <View style={styles.meta}>
@@ -141,43 +192,64 @@ export function ProductDetailSheet({ product, visible, onClose, onAddToCart }: P
         </View>
       ) : null}
 
+      {footerActions ? (
+        <View style={styles.footerActions}>
+          {footerActions}
+        </View>
+      ) : null}
+
       {/* Action buttons */}
-      <View style={{ flexDirection: 'row', gap: 8 }}>
+      <View style={styles.actions}>
+        {showAddToCart ? (
+          <Pressable
+            style={[styles.addButton, styles.primaryAction]}
+            onPress={handleAdd}
+            android_ripple={{ color: 'rgba(255,255,255,0.2)' }}
+          >
+            <Text style={styles.addButtonText}>{addToCartLabel}</Text>
+          </Pressable>
+        ) : null}
         <Pressable
-          style={[styles.addButton, { flex: 1 }]}
-          onPress={handleAdd}
+          style={[
+            styles.addButton,
+            styles.labelButton,
+            !showAddToCart && styles.labelButtonWide,
+            printingLabel && styles.buttonDisabled,
+          ]}
+          onPress={handlePrintLabel}
+          onLongPress={() => product.barcode && setLabelPreviewVisible(true)}
+          disabled={printingLabel}
           android_ripple={{ color: 'rgba(255,255,255,0.2)' }}
+          accessibilityLabel="Print barcode label"
         >
-          <Text style={styles.addButtonText}>Add to Cart</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.addButton, { flex: 0, paddingHorizontal: 16, backgroundColor: colors.bg.elevated }]}
-          onPress={async () => {
-            if (!product) return;
-            try {
-              const zpl = buildShelfLabel({
-                itemName: product.name,
-                barcode: product.barcode,
-              });
-              const data = zplToBytes(zpl);
-              const result = await printer.printRaw(data);
-              if (!result.success) {
-                // Fallback: try server-side print
-                await apiFetch('/printing/zpl/send', {
-                  method: 'POST',
-                  body: JSON.stringify({ zpl }),
-                });
-              }
-            } catch {
-              // Silent fail — label printing is best-effort
-            }
-          }}
-          android_ripple={{ color: 'rgba(255,255,255,0.2)' }}
-        >
-          <Text style={[styles.addButtonText, { color: colors.text.primary }]}>🏷️</Text>
+          {printingLabel ? (
+            <ActivityIndicator size="small" color={colors.text.primary} />
+          ) : (
+            <View style={styles.labelButtonContent}>
+              <Icon name="barcode" size={20} color={colors.text.primary} />
+              {!showAddToCart ? (
+                <Text style={styles.labelButtonText}>Print Label</Text>
+              ) : null}
+            </View>
+          )}
         </Pressable>
       </View>
     </BottomSheet>
+    {product.barcode ? (
+      <LabelPreviewModal
+        visible={labelPreviewVisible}
+        itemName={product.name}
+        sku={product.sku || product.mnemonicSku}
+        barcode={product.barcode}
+        price={product.unitPrice}
+        zpl={labelZpl}
+        onClose={() => setLabelPreviewVisible(false)}
+        onPrint={handlePrintLabel}
+        printing={printingLabel}
+        statusLabel={printer.isConnected ? undefined : 'Connect a ZPL label printer before printing.'}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -205,7 +277,7 @@ const createStyles = () => StyleSheet.create({
   sectionHeader: {
     ...textStyles.label,
     color: colors.text.muted,
-    letterSpacing: 1,
+    letterSpacing: 0,
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
   },
@@ -251,7 +323,7 @@ const createStyles = () => StyleSheet.create({
   totalLabel: {
     ...textStyles.label,
     color: colors.text.muted,
-    letterSpacing: 1,
+    letterSpacing: 0,
   },
   totalQty: {
     ...textStyles.heading,
@@ -277,13 +349,45 @@ const createStyles = () => StyleSheet.create({
     color: colors.status.warning,
     marginBottom: spacing.sm,
   },
-  addButton: {
-    backgroundColor: colors.accent.primary,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
+  footerActions: {
+    marginTop: spacing.lg,
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
     marginTop: spacing.lg,
     marginBottom: spacing.sm,
+  },
+  addButton: {
+    backgroundColor: colors.accent.primary,
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryAction: {
+    flex: 1,
+  },
+  labelButton: {
+    flex: 0,
+    paddingHorizontal: 16,
+    backgroundColor: colors.bg.elevated,
+  },
+  labelButtonWide: {
+    flex: 1,
+  },
+  labelButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  labelButtonText: {
+    ...textStyles.button,
+    color: colors.text.primary,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   addButtonText: {
     ...textStyles.button,

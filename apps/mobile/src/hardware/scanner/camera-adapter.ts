@@ -11,7 +11,7 @@ import type { ScanResult, ScannerProvider } from './types';
  */
 export class CameraScannerAdapter implements ScannerProvider {
   readonly type = 'camera' as const;
-  readonly isAvailable = true;
+  readonly isAvailable = false;
 
   private _callbacks: Array<(result: ScanResult) => void> = [];
   private _resolvePromise: ((result: ScanResult | null) => void) | null = null;
@@ -25,13 +25,7 @@ export class CameraScannerAdapter implements ScannerProvider {
   }
 
   async openCameraScanner(): Promise<ScanResult | null> {
-    return new Promise<ScanResult | null>(resolve => {
-      this._resolvePromise = resolve;
-      // The ScannerContext will detect this pending promise and show the camera modal
-      this._callbacks.forEach(cb =>
-        cb({ barcode: '__OPEN_CAMERA__', format: 'COMMAND', timestamp: Date.now() }),
-      );
-    });
+    return null;
   }
 
   /** Called by BarcodeScannerModal when a barcode is detected */

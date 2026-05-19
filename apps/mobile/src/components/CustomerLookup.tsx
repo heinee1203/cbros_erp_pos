@@ -7,7 +7,6 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
-  TextInput,
 } from 'react-native';
 import { BottomSheet, Input, Button, Divider } from '@/components/ui';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
@@ -20,9 +19,35 @@ interface CustomerLookupProps {
   onSelect: (customer: Customer, vehicle?: Vehicle) => void;
 }
 
+function toMoney(value?: string | null): number {
+  const parsed = parseFloat(value ?? '0');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function fmtPHP(amount: number): string {
+  return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function getCreditLine(customer: Customer): string {
+  const balance = toMoney(customer.currentBalance);
+  const limit = toMoney(customer.creditLimit);
+  if (limit <= 0) return `Balance ${fmtPHP(balance)} / No limit`;
+  const available = Math.max(0, limit - balance);
+  return `Balance ${fmtPHP(balance)} / Available ${fmtPHP(available)}`;
+}
+
 export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupProps) {
   const styles = createStyles();
-  const { query, results, loading, search, fetchVehicles, clear } = useCustomerSearch();
+  const {
+    query,
+    results,
+    loading,
+    error,
+    vehicleError,
+    search,
+    fetchVehicles,
+    clear,
+  } = useCustomerSearch();
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
@@ -177,6 +202,10 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
             </View>
           )}
 
+          {error && (
+            <Text style={styles.errorText}>{error}</Text>
+          )}
+
           <FlatList
             data={results}
             keyExtractor={item => item.id}
@@ -188,8 +217,16 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
                 onPress={() => handleSelectCustomer(item)}
                 android_ripple={{ color: colors.accent.glow }}
               >
-                <Text style={styles.customerName}>{item.name}</Text>
-                <Text style={styles.customerPhone}>{item.phone}</Text>
+                <View style={styles.customerHeader}>
+                  <Text style={styles.customerName} numberOfLines={1}>{item.name}</Text>
+                  {item.isOverdue ? (
+                    <Text style={styles.overdueBadge}>Overdue</Text>
+                  ) : null}
+                </View>
+                <Text style={styles.customerPhone}>
+                  {item.phone}{item.primaryPlateNo ? `  /  ${item.primaryPlateNo}` : ''}
+                </Text>
+                <Text style={styles.customerCredit}>{getCreditLine(item)}</Text>
               </Pressable>
             )}
             ItemSeparatorComponent={Divider}
@@ -205,6 +242,10 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
               <ActivityIndicator color={colors.accent.primary} />
               <Text style={styles.loadingText}>Loading vehicles...</Text>
             </View>
+          )}
+
+          {vehicleError && (
+            <Text style={styles.errorText}>{vehicleError}</Text>
           )}
 
           <View style={styles.newButtonWrap}>
@@ -233,14 +274,36 @@ const createStyles = () => StyleSheet.create({
     paddingHorizontal: layout.screenPadding,
     paddingVertical: spacing.md,
   },
+  customerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   customerName: {
     ...textStyles.bodyMedium,
     color: colors.text.primary,
+    flex: 1,
   },
   customerPhone: {
     ...textStyles.caption,
     color: colors.text.secondary,
     marginTop: 2,
+  },
+  customerCredit: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    marginTop: 3,
+  },
+  overdueBadge: {
+    ...textStyles.captionSmall,
+    color: colors.status.dangerText,
+    backgroundColor: colors.status.dangerBg,
+    borderWidth: 1,
+    borderColor: colors.status.danger,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    overflow: 'hidden',
   },
   vehicleList: {
     paddingBottom: spacing.lg,
@@ -265,6 +328,13 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.muted,
     textAlign: 'center',
     paddingVertical: spacing['2xl'],
+  },
+  errorText: {
+    ...textStyles.caption,
+    color: colors.status.danger,
+    textAlign: 'center',
+    paddingHorizontal: layout.screenPadding,
+    paddingBottom: spacing.sm,
   },
   loadingWrap: {
     flexDirection: 'row',
