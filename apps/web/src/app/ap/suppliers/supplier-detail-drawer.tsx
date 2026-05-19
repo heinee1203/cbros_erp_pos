@@ -26,6 +26,8 @@ import {
   RotateCw,
   Package,
   Undo2,
+  Copy,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
@@ -75,6 +77,10 @@ const PAYMENT_TERMS = [
   { value: 150, label: "Net 150" },
   { value: 180, label: "Net 180" },
 ];
+
+function termsLabel(days: number): string {
+  return PAYMENT_TERMS.find((t) => t.value === days)?.label ?? `Net ${days}`;
+}
 
 interface FormState {
   name: string;
@@ -602,6 +608,26 @@ function EditForm({
 }) {
   const common =
     "w-full rounded-md border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20 disabled:bg-muted/40 disabled:cursor-not-allowed";
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const missingBankFields = [
+    !form.bankName?.trim() && "bank",
+    !form.bankAccountNumber?.trim() && "account #",
+    !form.bankAccountName?.trim() && "account name",
+  ].filter(Boolean) as string[];
+  const bankReady = missingBankFields.length === 0;
+
+  const copyValue = async (field: string, value: string | null) => {
+    const text = value?.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(field);
+      window.setTimeout(() => setCopiedField((current) => (current === field ? null : current)), 1200);
+    } catch {
+      setCopiedField(null);
+    }
+  };
+
   return (
     <form onSubmit={(e) => e.preventDefault()} className="space-y-4">
       {error && (
@@ -657,6 +683,21 @@ function EditForm({
       </Section>
 
       <Section title="Bank Details" hint="Used to auto-fill disbursement vouchers">
+        <div
+          className={cn(
+            "rounded-lg border px-3 py-2 text-[11px] leading-5",
+            bankReady ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800",
+          )}
+        >
+          <div className="font-semibold">
+            {bankReady ? "Payment profile ready" : "Payment profile needs attention"}
+          </div>
+          <div>
+            {bankReady
+              ? `${termsLabel(form.paymentTermsDays)} terms and complete bank details are available for voucher prep.`
+              : `Missing ${missingBankFields.join(", ")}. Fill these before using bank transfer or releasing payment.`}
+          </div>
+        </div>
         <Field label="Bank Name">
           <input type="text" value={form.bankName ?? ""} onChange={(e) => setField("bankName", e.target.value || null)} disabled={!canEdit} className={common} />
         </Field>
@@ -668,6 +709,11 @@ function EditForm({
             <input type="text" value={form.bankAccountName ?? ""} onChange={(e) => setField("bankAccountName", e.target.value || null)} disabled={!canEdit} className={common} />
           </Field>
         </Grid2>
+        <div className="flex flex-wrap gap-2">
+          <CopyButton label="Bank" value={form.bankName} copied={copiedField === "bank"} onCopy={() => copyValue("bank", form.bankName)} />
+          <CopyButton label="Account #" value={form.bankAccountNumber} copied={copiedField === "accountNumber"} onCopy={() => copyValue("accountNumber", form.bankAccountNumber)} />
+          <CopyButton label="Account Name" value={form.bankAccountName} copied={copiedField === "accountName"} onCopy={() => copyValue("accountName", form.bankAccountName)} />
+        </div>
       </Section>
 
       <Section title="Notes">
@@ -703,6 +749,38 @@ function Field({ label, hint, required, children }: { label: string; hint?: stri
 
 function Grid2({ children }: { children: React.ReactNode }) {
   return <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{children}</div>;
+}
+
+function CopyButton({
+  copied,
+  label,
+  onCopy,
+  value,
+}: {
+  copied: boolean;
+  label: string;
+  onCopy: () => void;
+  value: string | null;
+}) {
+  const disabled = !value?.trim();
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      disabled={disabled}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] font-medium transition-colors",
+        disabled
+          ? "cursor-not-allowed text-muted-foreground/50"
+          : copied
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+      )}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? `Copied ${label}` : `Copy ${label}`}
+    </button>
+  );
 }
 
 /* ═════════════════════════════════════════════════════
