@@ -29,6 +29,7 @@
       android:allowBackup="false"
       android:theme="@style/AppTheme"
       android:supportsRtl="true"
+      android:forceDarkAllowed="false"
       android:usesCleartextTraffic="true">
       <activity
         android:name=".MainActivity"

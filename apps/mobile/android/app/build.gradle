@@ -76,6 +76,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        buildConfigField "boolean", "ENABLE_DEV_SUPPORT", "false"
     }
     signingConfigs {
         debug {
