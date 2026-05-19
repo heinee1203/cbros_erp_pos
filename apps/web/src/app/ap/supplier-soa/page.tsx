@@ -67,6 +67,18 @@ interface Invoice {
   billedSoaId?: string | null;
 }
 
+interface SupplierPaymentProfile {
+  contactPerson: string | null;
+  contactPhone: string | null;
+  contactEmail: string | null;
+  address: string | null;
+  tin: string | null;
+  paymentTermsDays: number;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankAccountName: string | null;
+}
+
 function moneyValue(value: string | number | null | undefined): number {
   const numeric = typeof value === "number" ? value : parseFloat(value || "0");
   return Number.isFinite(numeric) ? numeric : 0;
@@ -79,6 +91,16 @@ function isCreditMemoInvoice(inv: Pick<Invoice, "invoiceNumber" | "totalAmount">
 
 function invoiceBalance(inv: Pick<Invoice, "balance" | "totalAmount">): number {
   return moneyValue(inv.balance || inv.totalAmount);
+}
+
+function hasBankProfile(profile: SupplierPaymentProfile | null): boolean {
+  return Boolean(profile?.bankName?.trim() && profile?.bankAccountNumber?.trim() && profile?.bankAccountName?.trim());
+}
+
+function termsLabel(days: number | null | undefined): string {
+  if (days === 0) return "COD";
+  if (!Number.isFinite(days)) return "Net 30";
+  return `Net ${days}`;
 }
 
 function toSupplierSOAInvoiceLines(rows: Invoice[]) {
@@ -175,6 +197,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   const [actionError, setActionError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [voidingHistory, setVoidingHistory] = useState<SupplierSOAHistoryRow | null>(null);
+  const [supplierProfile, setSupplierProfile] = useState<SupplierPaymentProfile | null>(null);
 
   // Derived: only UNBILLED invoices are checkbox-eligible
   const unbilledInvoices = useMemo(
@@ -200,7 +223,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       // default fast-querystring parser turns `?status=OPEN&status=PARTIALLY_PAID`
       // into an array, which fails the `z.string().optional()` zod schema
       // and returns 400 — previously swallowed by `.catch(() => {})`.
-      const [invRes, histRes] = await Promise.all([
+      const [invRes, histRes, profileRes] = await Promise.all([
         apiFetch<{ data: Invoice[] }>(
           `/ap/invoices?supplierId=${supplierId}&status=OPEN,PARTIALLY_PAID&limit=100`,
           { token, locationId },
@@ -209,6 +232,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           `/ap/suppliers/${supplierId}/soa-history`,
           { token, locationId },
         ),
+        apiFetch<SupplierPaymentProfile>(`/ap/suppliers/${supplierId}`, { token, locationId }).catch(() => null),
       ]);
       // Sort invoices newest first (by invoiceDate descending, then id)
       const sorted = Array.isArray(invRes.data)
@@ -216,6 +240,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
         : [];
       setInvoices(sorted);
       setSoaHistory(Array.isArray(histRes.data) ? histRes.data : []);
+      setSupplierProfile(profileRes);
       // Drop any selections that are no longer eligible (e.g. after a refresh)
       setSelected((prev) => {
         const eligibleIds = new Set(
@@ -227,6 +252,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       setLoadError(err?.message || "Failed to load invoices");
       setInvoices([]);
       setSoaHistory([]);
+      setSupplierProfile(null);
     } finally {
       setLoading(false);
     }
@@ -473,6 +499,8 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
     : selected.size === unbilledInvoices.length ? <CheckSquare size={12} className="text-primary" />
     : <MinusSquare size={12} className="text-primary" />;
 
+  const bankReady = hasBankProfile(supplierProfile);
+
   return (
     <div className="bg-muted/20 border-t border-border">
       {/* Invoice table header — extra narrow 'Billed' column at the end */}
@@ -524,6 +552,47 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
               Credit memo rows are shown separately in green. Select them with the invoices they should offset before previewing an SOA or creating a voucher.
             </div>
           )}
+          <div
+            className={cn(
+              "mt-2 rounded-lg border px-3 py-2 text-[11px] leading-5",
+              bankReady
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-amber-200 bg-amber-50 text-amber-800",
+            )}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="font-semibold">Payment readiness:</span>{" "}
+                {supplierProfile ? (
+                  <>
+                    {termsLabel(supplierProfile.paymentTermsDays)}
+                    {" · "}
+                    {bankReady ? "Bank profile complete" : "Bank profile incomplete"}
+                  </>
+                ) : (
+                  "Supplier profile unavailable"
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  router.push(`/ap/suppliers?open=${encodeURIComponent(supplierId)}`);
+                }}
+                className="rounded-md border border-current/20 px-2 py-0.5 text-[10px] font-semibold hover:bg-background/60"
+              >
+                Open supplier profile
+              </button>
+            </div>
+            {supplierProfile && (
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
+                <span>Bank: <span className="font-semibold">{supplierProfile.bankName || "Missing"}</span></span>
+                <span>Account #: <span className="font-mono font-semibold">{supplierProfile.bankAccountNumber || "Missing"}</span></span>
+                <span>Account name: <span className="font-semibold">{supplierProfile.bankAccountName || "Missing"}</span></span>
+                <span>TIN: <span className="font-semibold">{supplierProfile.tin || "Missing"}</span></span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
