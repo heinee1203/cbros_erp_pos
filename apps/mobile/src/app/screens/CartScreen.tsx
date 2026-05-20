@@ -104,7 +104,8 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const updateQuantity = useCartStore(s => s.updateQuantity);
   const removeLine = useCartStore(s => s.removeLine);
   const setAllowNegativeStock = useCartStore(s => s.setAllowNegativeStock);
-  const clear = useCartStore(s => s.clear);
+  const clearWithRestoreSnapshot = useCartStore(s => s.clearWithRestoreSnapshot);
+  const restoreLastClearedCart = useCartStore(s => s.restoreLastClearedCart);
   const setLineSerials = useCartStore(s => s.setLineSerials);
   const setLineWarrantyPhoto = useCartStore(s => s.setLineWarrantyPhoto);
   const setLinePriceOverride = useCartStore(s => s.setLinePriceOverride);
@@ -453,7 +454,20 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
       return;
     }
 
-    updateQuantity(item.id, item.quantity + 1);
+    const nextQty = item.quantity + 1;
+    if (nextQty > 25) {
+      Alert.alert(
+        'Large Quantity',
+        `${item.name} will be set to ${nextQty}. Confirm the scan/count is intentional.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Continue', onPress: () => updateQuantity(item.id, nextQty) },
+        ],
+      );
+      return;
+    }
+
+    updateQuantity(item.id, nextQty);
   }, [updateQuantity]);
 
   const renderRightActions = useCallback((lineId: string, lineName: string) => (
@@ -682,13 +696,42 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
                   'voidSale',
                   `Void cart (${unitCount} items, ${fmtPHP(grandTotal)})`,
                   (approverName) => {
-                    logElevation({
-                      action: 'void_sale',
-                      description: `Voided cart with ${unitCount} items totaling ${fmtPHP(grandTotal)}`,
-                      approvedBy: approverName,
-                      performedBy: user?.fullName ?? 'Unknown',
-                    });
-                    clear();
+                    Alert.alert(
+                      'Clear Cart?',
+                      `This removes ${unitCount} item${unitCount === 1 ? '' : 's'} totaling ${fmtPHP(grandTotal)}. You can restore once if this was accidental.`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Clear Cart',
+                          style: 'destructive',
+                          onPress: () => {
+                            logElevation({
+                              action: 'void_sale',
+                              description: `Voided cart with ${unitCount} items totaling ${fmtPHP(grandTotal)}`,
+                              approvedBy: approverName,
+                              performedBy: user?.fullName ?? 'Unknown',
+                            });
+                            clearWithRestoreSnapshot();
+                            Alert.alert(
+                              'Cart Cleared',
+                              'The cart was cleared and can be restored once.',
+                              [
+                                { text: 'Dismiss', style: 'cancel' },
+                                {
+                                  text: 'Restore Cart',
+                                  onPress: () => {
+                                    const restored = restoreLastClearedCart();
+                                    if (!restored) {
+                                      Alert.alert('Restore Unavailable', 'No cleared cart snapshot is available.');
+                                    }
+                                  },
+                                },
+                              ],
+                            );
+                          },
+                        },
+                      ],
+                    );
                   },
                 );
               }}

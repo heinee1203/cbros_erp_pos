@@ -16,12 +16,12 @@ export default function RootNavigator() {
     isAuthenticated,
     needsLocationSelect,
     isLoading,
-    setLocationId,
     locations,
     locationId,
     deviceBinding,
     bindingInvalidReason,
     isDeviceBindingInvalid,
+    disabledDeviceState,
   } = useAuth();
   // Dynamic navigation theme — follows app theme
   const navigationTheme = useMemo(() => ({
@@ -42,10 +42,9 @@ export default function RootNavigator() {
     'ready',
   );
 
-  const handleLocationSelected = useCallback((locId: string) => {
-    setLocationId(locId);
+  const handleRegistrationComplete = useCallback(() => {
     setPhase('syncing');
-  }, [setLocationId]);
+  }, []);
 
   const handleSyncComplete = useCallback(() => {
     setPhase('ready');
@@ -67,6 +66,17 @@ export default function RootNavigator() {
     );
   }
 
+  if (disabledDeviceState?.disabled) {
+    return (
+      <DeviceLockedScreen
+        storeName={disabledDeviceState.locationName || deviceBinding?.locationName || 'Unknown store'}
+        storeCode={disabledDeviceState.locationCode || deviceBinding?.locationCode || 'No store code'}
+        reason={disabledDeviceState.code === 'DEVICE_LOCATION_INACTIVE' ? 'inactive' : 'disabled'}
+        supportReason={disabledDeviceState.reason}
+      />
+    );
+  }
+
   if (isDeviceBindingInvalid && deviceBinding) {
     return (
       <DeviceLockedScreen
@@ -79,7 +89,7 @@ export default function RootNavigator() {
 
   // Authenticated but no location selected → show location picker
   if (needsLocationSelect || (phase === 'location-select')) {
-    return <LocationSelectScreen onLocationSelected={handleLocationSelected} />;
+    return <LocationSelectScreen onRegistrationComplete={handleRegistrationComplete} />;
   }
 
   // Location selected, syncing data
@@ -105,14 +115,18 @@ function DeviceLockedScreen({
   storeName,
   storeCode,
   reason,
+  supportReason,
 }: {
   storeName: string;
   storeCode: string;
-  reason: 'missing' | 'inactive' | null;
+  reason: 'missing' | 'inactive' | 'disabled' | null;
+  supportReason?: string;
 }) {
   const reasonText = reason === 'inactive'
     ? 'This store is inactive in ERP.'
-    : 'This store could not be found in ERP.';
+    : reason === 'disabled'
+      ? supportReason || 'This device has been disabled in ERP.'
+      : 'This store could not be found in ERP.';
 
   return (
     <View style={lockedStyles.container}>

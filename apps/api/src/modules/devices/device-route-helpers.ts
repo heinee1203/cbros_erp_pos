@@ -5,16 +5,24 @@ export const DEVICE_REGISTER_ADMIN_REQUIRED_ERROR =
   "Admin required to register devices";
 export const DEACTIVATED_DEVICE_ERROR =
   "This device has been deactivated. Contact your manager.";
+export const DEVICE_REGISTRATION_CODE_INVALID_ERROR =
+  "Registration code is invalid, expired, or already used";
 
 export type DeviceCheckBody = {
   deviceId: string;
   appVersion?: string;
 };
 
+export type CreateRegistrationCodeBody = {
+  locationId: string;
+  expiresAt?: string;
+};
+
 export type RegisterDeviceBody = {
   deviceId: string;
   name: string;
-  locationId: string;
+  locationId?: string;
+  registrationCode?: string;
   appVersion?: string;
 };
 

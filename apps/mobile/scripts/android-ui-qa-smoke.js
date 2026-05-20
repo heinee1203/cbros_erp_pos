@@ -81,6 +81,11 @@ function tap(center) {
   return true;
 }
 
+function back() {
+  runAdb(['shell', 'input', 'keyevent', '4']);
+  sleep(700);
+}
+
 function screenshot(name) {
   fs.mkdirSync(outputDir, { recursive: true });
   const result = adbOk(['exec-out', 'screencap', '-p'], { encoding: null });
@@ -112,19 +117,55 @@ function fatalLogCount() {
     .length;
 }
 
+function tapFirst(xml, labels) {
+  for (const label of labels) {
+    const center = findNodeCenterContains(xml, label);
+    if (center && tap(center)) return true;
+  }
+  return false;
+}
+
+function captureIfReachable(prefix, xml, labels, screenshotName) {
+  if (!tapFirst(xml, labels)) {
+    console.log(`[apex-ui-smoke] skip ${screenshotName}: target not visible`);
+    return false;
+  }
+  sleep(900);
+  screenshot(`${prefix}-${screenshotName}`);
+  back();
+  return true;
+}
+
 function navigateAndCapture(prefix) {
   let xml = dumpUi();
-  screenshot(`${prefix}-start`);
+  screenshot(`${prefix}-pos`);
+
+  captureIfReachable(prefix, xml, ['Cart'], 'cart');
+  xml = dumpUi();
+  captureIfReachable(prefix, xml, ['Payment', 'Pay'], 'payment');
+  xml = dumpUi();
 
   const more = findNodeCenterContains(xml, 'More') || findNodeCenterContains(xml, 'tab-more');
   if (more && tap(more)) {
     xml = dumpUi();
     screenshot(`${prefix}-more`);
 
-    const recovery = findNodeCenterContains(xml, 'Sync') || findNodeCenterContains(xml, 'SyncManagement');
-    if (recovery && tap(recovery)) {
-      sleep(1000);
-      screenshot(`${prefix}-recovery`);
+    const moreScreens = [
+      { name: 'recovery', labels: ['Sync', 'Recovery & Diagnostics', 'SyncManagement'] },
+      { name: 'returns', labels: ['Returns'] },
+      { name: 'barcode-print', labels: ['Barcode Print'] },
+      { name: 'z-reading', labels: ['Shift History', 'Z-reading'] },
+      { name: 'settings', labels: ['Settings'] },
+    ];
+
+    for (const screen of moreScreens) {
+      xml = dumpUi();
+      captureIfReachable(prefix, xml, screen.labels, screen.name);
+      xml = dumpUi();
+      if (!findNodeCenterContains(xml, 'More')) {
+        const moreAgain = findNodeCenterContains(xml, 'More') || findNodeCenterContains(xml, 'tab-more');
+        if (moreAgain) tap(moreAgain);
+      }
     }
   }
 }

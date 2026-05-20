@@ -125,6 +125,8 @@ interface CartActions {
   deleteHeldCart: (heldCartId: string) => void;
   reloadForCurrentLocation: () => void;
   clear: () => void;
+  clearWithRestoreSnapshot: () => boolean;
+  restoreLastClearedCart: () => boolean;
 }
 
 type CartState = CartStateData & CartActions;
@@ -171,6 +173,36 @@ function computeGrandTotal(state: Pick<CartStateData, 'lines' | 'discountType' |
   return roundMoney(Math.max(0, subtotal - computeCartDiscount(subtotal, state.discountType, state.discountValue)));
 }
 
+function emptyCart(): CartStateData {
+  return {
+    lines: [],
+    customerId: null,
+    customerName: null,
+    vehicleId: null,
+    discountType: 'none',
+    discountValue: 0,
+    payments: [],
+    receiptNumber: '',
+    note: '',
+    allowNegativeStock: false,
+  };
+}
+
+function cartSnapshot(state: CartStateData): CartStateData {
+  return {
+    lines: state.lines,
+    customerId: state.customerId,
+    customerName: state.customerName,
+    vehicleId: state.vehicleId,
+    discountType: state.discountType,
+    discountValue: state.discountValue,
+    payments: state.payments,
+    receiptNumber: state.receiptNumber,
+    note: state.note,
+    allowNegativeStock: state.allowNegativeStock,
+  };
+}
+
 /**
  * Persist cart state to MMKV synchronously.
  * This ensures the cart survives app restart, crash, or process kill.
@@ -214,18 +246,7 @@ function loadPersistedCart(): CartStateData {
       allowNegativeStock: false,
     };
   }
-  return {
-    lines: [],
-    customerId: null,
-    customerName: null,
-    vehicleId: null,
-    discountType: 'none',
-    discountValue: 0,
-    payments: [],
-    receiptNumber: '',
-    note: '',
-    allowNegativeStock: false,
-  };
+  return emptyCart();
 }
 
 export const useCartStore = create<CartState>((set, get) => ({
@@ -581,20 +602,35 @@ export const useCartStore = create<CartState>((set, get) => ({
   },
 
   clear: () => {
-    const empty: CartStateData = {
-      lines: [],
-      customerId: null,
-      customerName: null,
-      vehicleId: null,
-      discountType: 'none',
-      discountValue: 0,
-      payments: [],
-      receiptNumber: '',
-      note: '',
-      allowNegativeStock: false,
-    };
+    const empty = emptyCart();
     persist(empty);
     set(empty);
+  },
+
+  clearWithRestoreSnapshot: () => {
+    const current = get();
+    if (current.lines.length === 0) return false;
+    setJSON(storage, KEYS.CART_RESTORE_SNAPSHOT, {
+      savedAt: new Date().toISOString(),
+      cart: cartSnapshot(current),
+    });
+    const empty = emptyCart();
+    persist(empty);
+    set(empty);
+    return true;
+  },
+
+  restoreLastClearedCart: () => {
+    const snapshot = getJSON<{ savedAt: string; cart: CartStateData }>(
+      storage,
+      KEYS.CART_RESTORE_SNAPSHOT,
+    );
+    if (!snapshot?.cart?.lines?.length) return false;
+    const restored = cartSnapshot(snapshot.cart);
+    persist(restored);
+    set(restored);
+    storage.delete(KEYS.CART_RESTORE_SNAPSHOT);
+    return true;
   },
 }));
 

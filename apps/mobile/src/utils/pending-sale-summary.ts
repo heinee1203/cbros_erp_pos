@@ -59,6 +59,19 @@ function statusLabel(sale: PendingSale): string {
   return 'Waiting to sync';
 }
 
+function paymentMethodsLabel(sale: PendingSale): string {
+  const methods = Array.from(new Set(sale.payload.payments.map(payment => payment.method.toUpperCase())));
+  return methods.length ? methods.join('+') : 'NO PAYMENT';
+}
+
+function retryLabel(sale: PendingSale): string {
+  if (sale.status === 'failed') return 'Retry requires manager review';
+  if (!sale.lastAttemptAt) return 'Next retry: now';
+  const nextRetry = Date.parse(sale.lastAttemptAt) + 5 * 60_000;
+  if (!Number.isFinite(nextRetry) || nextRetry <= Date.now()) return 'Next retry: now';
+  return `Next retry ${formatAgeFromTimestamp(new Date(nextRetry).toISOString()).replace('ago', 'from now')}`;
+}
+
 export function summarizePendingSales(pendingSales: PendingSale[]): PendingSaleSummary {
   const oldest = pendingSales.reduce<string | null>((current, sale) => {
     if (!sale.createdAt) return current;
@@ -90,9 +103,18 @@ export function getPendingSaleReviewRows(
       const offlineKind = sale.saleId ? 'Created sale needs completion' : 'Fully offline sale';
       const attempts = sale.attempts === 1 ? '1 attempt' : `${sale.attempts} attempts`;
       const lastAttempt = sale.lastAttemptAt ? `Last tried ${formatAgeFromTimestamp(sale.lastAttemptAt)}` : 'Not tried yet';
+      const receipt = sale.createPayload?.receiptNumber || sale.saleId || sale.idempotencyKey.slice(0, 8);
+      const baseDetail = [
+        offlineKind,
+        `receipt ${receipt}`,
+        paymentMethodsLabel(sale),
+        attempts,
+        lastAttempt,
+        retryLabel(sale),
+      ].join(' / ');
       const detail = sale.status === 'failed' && sale.failureReason
-        ? sale.failureReason
-        : `${offlineKind} / ${attempts} / ${lastAttempt}`;
+        ? `${sale.failureReason} / ${baseDetail}`
+        : baseDetail;
 
       return {
         id: sale.idempotencyKey,

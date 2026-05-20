@@ -7,7 +7,7 @@ import {
 
 export async function registerDeviceCheckRoutes(app: FastifyInstance) {
   app.post("/check", async (request, reply) => {
-    const { orgId } = request.storeContext!;
+    const orgId = request.storeContext?.orgId ?? request.user.orgId;
     const { deviceId, appVersion } = request.body as DeviceCheckBody;
 
     if (!deviceId) {
@@ -22,7 +22,31 @@ export async function registerDeviceCheckRoutes(app: FastifyInstance) {
 
     if (device.status === "DEACTIVATED") {
       return reply.status(403).send({
+        code: "DEVICE_DEACTIVATED",
         error: DEACTIVATED_DEVICE_ERROR,
+        device: {
+          id: device.id,
+          name: device.name,
+          locationId: device.locationId,
+          locationName: device.locationName,
+          locationCode: device.locationCode,
+          status: device.status,
+        },
+      });
+    }
+
+    if (!device.locationIsActive) {
+      return reply.status(403).send({
+        code: "DEVICE_LOCATION_INACTIVE",
+        error: "This device is locked to an inactive store. Contact support.",
+        device: {
+          id: device.id,
+          name: device.name,
+          locationId: device.locationId,
+          locationName: device.locationName,
+          locationCode: device.locationCode,
+          status: device.status,
+        },
       });
     }
 
@@ -33,6 +57,8 @@ export async function registerDeviceCheckRoutes(app: FastifyInstance) {
         name: device.name,
         locationId: device.locationId,
         locationName: device.locationName,
+        locationCode: device.locationCode,
+        status: device.status,
       },
     });
   });

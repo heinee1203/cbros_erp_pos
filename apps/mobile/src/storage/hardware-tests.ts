@@ -1,5 +1,8 @@
 import { getJSON, setJSON, storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { getDeviceBinding } from '@/config/device-binding';
+import { APP_BUILD_DATE, APP_VERSION } from '@/config/app-version';
+import { recordSupportLog } from '@/storage/support-logs';
 
 export type HardwareTestType =
   | 'receipt-printer'
@@ -18,6 +21,11 @@ export interface HardwareTestResult {
   operator?: string;
   note?: string;
   error?: string;
+  store?: string;
+  storeCode?: string;
+  deviceId?: string;
+  appBuild?: string;
+  hardwareType?: string;
   createdAt: string;
 }
 
@@ -28,6 +36,14 @@ let listeners: HardwareTestListener[] = [];
 
 function createId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getStoredDeviceId(): string {
+  const existing = storage.getString(KEYS.DEVICE_ID);
+  if (existing) return existing;
+  const next = `apex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  storage.set(KEYS.DEVICE_ID, next);
+  return next;
 }
 
 function notify(): void {
@@ -52,6 +68,13 @@ export function recordHardwareTestResult(input: {
   error?: string;
 }): HardwareTestResult {
   const result: HardwareTestResult = {
+    ...(() => {
+      const binding = getDeviceBinding();
+      return {
+        store: binding?.locationName,
+        storeCode: binding?.locationCode,
+      };
+    })(),
     id: createId(),
     type: input.type,
     title: input.title,
@@ -59,6 +82,9 @@ export function recordHardwareTestResult(input: {
     operator: input.operator,
     note: input.note,
     error: input.error,
+    deviceId: getStoredDeviceId(),
+    appBuild: `${APP_VERSION} (${APP_BUILD_DATE})`,
+    hardwareType: input.type,
     createdAt: new Date().toISOString(),
   };
 
@@ -66,6 +92,13 @@ export function recordHardwareTestResult(input: {
     result,
     ...getHardwareTestResults(),
   ].slice(0, MAX_HARDWARE_TEST_RESULTS));
+  recordSupportLog({
+    category: 'hardware',
+    level: input.status === 'pass' ? 'info' : 'error',
+    message: `${input.title} ${input.status}`,
+    detail: input.error || input.note,
+    context: { hardwareType: input.type },
+  });
   notify();
   return result;
 }
@@ -79,7 +112,7 @@ export function onHardwareTestResultsChanged(listener: HardwareTestListener): ()
 }
 
 export function buildHardwareTestSummaryText(results = getHardwareTestResults()): string {
-  if (results.length === 0) return 'No hardware tests recorded on this tablet.';
+  if (results.length === 0) return 'No hardware certifications recorded on this tablet.';
 
   return results.slice(0, 8).map(result => {
     const note = result.error || result.note || 'No note';
@@ -87,6 +120,8 @@ export function buildHardwareTestSummaryText(results = getHardwareTestResults())
       `${result.status.toUpperCase()}: ${result.title}`,
       note,
       result.operator ? `by ${result.operator}` : 'operator unknown',
+      result.storeCode ? `store ${result.storeCode}` : 'store unknown',
+      result.appBuild || 'build unknown',
       new Date(result.createdAt).toLocaleString('en-PH'),
     ].join(' / ');
   }).join('\n');

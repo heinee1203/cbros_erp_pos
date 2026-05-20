@@ -146,8 +146,41 @@ export default function CatalogScreen() {
     return true;
   }, [cartLines, showToast]);
 
-  const addItemToCart = useCallback((item: CatalogItem, overridePrice?: number) => {
+  const addItemToCart = useCallback((item: CatalogItem, overridePrice?: number, source: 'tap' | 'scan' | 'favorite' = 'tap') => {
     if (!canAddItemToCart(item, overridePrice)) return false;
+
+    const existingLine = !(item.isSerialized || item.isTire)
+      ? cartLines.find(line => line.productId === item.serverId)
+      : null;
+
+    if (source === 'scan' && existingLine) {
+      Alert.alert(
+        'Item Already In Cart',
+        `${item.name} is already in the cart with quantity ${existingLine.quantity}.`,
+        [
+          { text: 'View Cart', onPress: () => navigation.navigate('Cart') },
+          {
+            text: 'Increase Qty',
+            onPress: () => {
+              addLine({
+                serverId: item.serverId,
+                name: item.name,
+                sku: item.sku,
+                mnemonicSku: item.mnemonicSku,
+                barcode: item.barcode,
+                unitPrice: overridePrice ?? item.unitPrice,
+                availableStock: item.stockLevel - item.reservedLevel,
+                isSerialized: item.isSerialized,
+                isTire: item.isTire,
+                warrantyMonths: item.warrantyMonths,
+              });
+              showToast(`Quantity increased: ${item.name}`);
+            },
+          },
+        ],
+      );
+      return true;
+    }
 
     addLine({
       serverId: item.serverId,
@@ -172,7 +205,7 @@ export default function CatalogScreen() {
     });
     showToast(`Added: ${item.name}`);
     return true;
-  }, [addLine, canAddItemToCart, showToast]);
+  }, [addLine, canAddItemToCart, cartLines, navigation, showToast]);
 
   const loadVariants = useCallback(async (parent: CatalogItem) => {
     setVariantParent(parent);
@@ -284,7 +317,7 @@ export default function CatalogScreen() {
         Alert.alert('Not Available', `${product.name} is not available for sale at this location.`);
         return false;
       }
-      return addItemToCart(product);
+      return addItemToCart(product, undefined, 'scan');
     }
 
     Alert.alert('Not Found', `No product found for barcode ${trimmed}`);

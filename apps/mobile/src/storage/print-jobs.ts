@@ -2,6 +2,7 @@ import type { ReceiptData } from '@/hardware/printer/types';
 import type { PrinterLanguage } from '@/hardware/printer/settings';
 import { getJSON, setJSON, storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { recordSupportLog } from '@/storage/support-logs';
 
 export type PrintJobType = 'receipt' | 'z-reading' | 'barcode-label' | 'test-page';
 export type PrintJobStatus = 'pending' | 'printing' | 'printed' | 'failed';
@@ -99,6 +100,12 @@ export function addPrintJob(input: {
     updatedAt: now,
   };
   setJSON(storage, KEYS.PRINT_JOBS, [job, ...getPrintJobs()].slice(0, MAX_PRINT_JOBS));
+  recordSupportLog({
+    category: 'print',
+    level: 'info',
+    message: `Queued ${job.type} print job`,
+    context: { jobId: job.id, printerLanguage: job.printerLanguage },
+  });
   notify();
   return job;
 }
@@ -116,6 +123,20 @@ export function updatePrintJob(id: string, patch: Partial<PrintJob>): PrintJob |
   });
   if (!updated) return null;
   setJSON(storage, KEYS.PRINT_JOBS, jobs);
+  if (patch.status === 'failed' || patch.status === 'printed') {
+    const loggedJob: PrintJob = updated;
+    recordSupportLog({
+      category: 'print',
+      level: patch.status === 'failed' ? 'error' : 'info',
+      message: `${loggedJob.type} print job ${patch.status}`,
+      detail: loggedJob.lastError,
+      context: {
+        jobId: loggedJob.id,
+        attempts: loggedJob.attempts,
+        autoRetryCount: loggedJob.autoRetryCount,
+      },
+    });
+  }
   notify();
   return updated;
 }

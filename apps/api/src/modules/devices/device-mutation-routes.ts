@@ -9,7 +9,7 @@ import {
 export async function registerDeviceMutationRoutes(app: FastifyInstance) {
   app.patch("/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { orgId } = request.storeContext!;
+    const orgId = request.storeContext?.orgId ?? request.user.orgId;
     const { role } = request.user;
 
     if (!isDeviceAdmin(role)) {
@@ -24,7 +24,7 @@ export async function registerDeviceMutationRoutes(app: FastifyInstance) {
 
   app.delete("/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { orgId } = request.storeContext!;
+    const orgId = request.storeContext?.orgId ?? request.user.orgId;
     const { role } = request.user;
 
     if (!isDeviceAdmin(role)) {

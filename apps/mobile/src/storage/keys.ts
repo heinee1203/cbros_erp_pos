@@ -9,6 +9,8 @@ export const KEYS = {
   API_BASE_URL: 'device.apiBaseUrl',
   DEVICE_ID: 'device.id',
   THEME_MODE: 'device.themeMode',
+  DISABLED_DEVICE_STATE: 'device.disabledState',
+  REGISTRATION_METADATA: 'device.registrationMetadata',
 
   // Printer
   PRINTER_DEVICE_ID: 'printer.lastDeviceId',
@@ -16,6 +18,7 @@ export const KEYS = {
   PRINTER_LANGUAGE: 'printer.language',
   PRINT_JOBS: 'printer.printJobs',
   HARDWARE_TEST_RESULTS: 'hardware.testResults',
+  SUPPORT_LOGS: 'support.logs',
 
   // Scanner
   SCANNER_MODE: 'scanner.mode',
@@ -30,6 +33,7 @@ export const KEYS = {
 
   // Cart persistence (scoped key — see cartKey() helper)
   CART_STATE_PREFIX: 'cart.state',
+  CART_RESTORE_SNAPSHOT: 'cart.restoreSnapshot',
 
   // Receipt number auto-increment
   LAST_RECEIPT_NUMBER: 'apex.last_receipt_number',

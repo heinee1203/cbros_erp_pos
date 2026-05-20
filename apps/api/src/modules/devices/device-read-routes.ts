@@ -7,7 +7,7 @@ import {
 
 export async function registerDeviceReadRoutes(app: FastifyInstance) {
   app.get("/", async (request, reply) => {
-    const { orgId } = request.storeContext!;
+    const orgId = request.storeContext?.orgId ?? request.user.orgId;
     const { role } = request.user;
 
     if (!isDeviceAdmin(role)) {

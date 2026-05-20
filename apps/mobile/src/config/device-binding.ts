@@ -8,6 +8,8 @@ export interface DeviceBinding {
   locationCode: string;
   boundAt: string;      // ISO timestamp
   boundBy: string;      // manager name who set it up
+  registrationCodeRef?: string;
+  deviceId?: string;
 }
 
 /**
@@ -38,6 +40,7 @@ export function isLockedToLocation(locationId?: string | null): boolean {
 export function bindDeviceToLocation(
   location: { id: string; name: string; code: string },
   boundBy: string,
+  metadata?: { registrationCodeRef?: string; deviceId?: string },
 ): DeviceBinding {
   const binding: DeviceBinding = {
     locationId: location.id,
@@ -45,6 +48,8 @@ export function bindDeviceToLocation(
     locationCode: location.code,
     boundAt: new Date().toISOString(),
     boundBy,
+    registrationCodeRef: metadata?.registrationCodeRef,
+    deviceId: metadata?.deviceId,
   };
   setJSON(storage, KEY, binding);
   return binding;

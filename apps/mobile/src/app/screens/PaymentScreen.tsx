@@ -517,8 +517,17 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
   }, [receiptMissing, isCash, parsedCashTendered, parsedAmount, nonCashOverpay, needsRef, formReference, formMethod, formInstallment, addPayment, resetForm]);
 
   const handleRemovePayment = useCallback((id: string) => {
-    removePayment(id);
-  }, [removePayment]);
+    const payment = payments.find(entry => entry.id === id);
+    if (!payment) return;
+    Alert.alert(
+      'Remove Payment?',
+      `Remove ${payment.method.replace(/_/g, ' ')} payment for ${fmtPHP(payment.amount)}? The remaining balance will be recalculated.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => removePayment(id) },
+      ],
+    );
+  }, [payments, removePayment]);
 
   // ── Back navigation with confirmation ──
   const handleBack = useCallback(() => {

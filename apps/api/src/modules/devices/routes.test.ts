@@ -37,6 +37,7 @@ test("device route registration preserves public endpoint order", async () => {
 
   assert.deepEqual(routes, [
     { method: "post", path: "/check" },
+    { method: "post", path: "/registration-codes" },
     { method: "post", path: "/register" },
     { method: "get", path: "/" },
     { method: "patch", path: "/:id" },

@@ -1,5 +1,6 @@
 import { getJSON, setJSON, storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
+import { recordSupportLog } from '@/storage/support-logs';
 
 export type ScannerSource = 'hid' | 'camera' | 'manual' | 'mock' | 'barcode' | 'card';
 
@@ -101,6 +102,12 @@ export function recordScannerError(source: ScannerSource, message: string, conte
       context,
       occurredAt: new Date().toISOString(),
     },
+  });
+  recordSupportLog({
+    category: 'scanner',
+    level: 'warning',
+    message,
+    context: { source, scanContext: context },
   });
   notify();
 }

@@ -32,6 +32,7 @@ import {
   type HardwareTestType,
 } from '@/storage/hardware-tests';
 import { onScannerDiagnosticsChanged } from '@/storage/scanner-diagnostics';
+import { recordSupportLog, subscribeSupportLogs } from '@/storage/support-logs';
 import {
   buildHardwareReadinessItems,
   buildReadinessSummaryText,
@@ -51,6 +52,7 @@ import { buildShelfLabel } from '@/hardware/printer/zpl-label-builder';
 import { printEscposRawSafely, printZplSafely, retryPrintJobSafely } from '@/hardware/printer/settings';
 import { queryClient } from '@/services/query-client';
 import { apiFetch } from '@/services/api-client';
+import { APP_BUILD_DATE, APP_GIT_SHA, APP_VERSION } from '@/config/app-version';
 import { colors, fonts, fontSize, radius, spacing } from '@/theme';
 import { Button, Icon, type IconName } from '@/components/ui';
 
@@ -419,6 +421,7 @@ export function SyncManagementScreen() {
   const [printJobs, setPrintJobs] = useState(() => getPrintJobs());
   const [hardwareTestResults, setHardwareTestResults] = useState(() => getHardwareTestResults());
   const [scannerTick, setScannerTick] = useState(0);
+  const [supportLogTick, setSupportLogTick] = useState(0);
   const [retryingPrintJobId, setRetryingPrintJobId] = useState<string | null>(null);
   const [runningHardwareTest, setRunningHardwareTest] = useState<HardwareTestType | null>(null);
   const [apiHealth, setApiHealth] = useState('Not checked');
@@ -460,6 +463,7 @@ export function SyncManagementScreen() {
       printJobs.length,
       hardwareTestResults.length,
       scannerTick,
+      supportLogTick,
       syncStatus.lastCatalogSync,
       syncStatus.lastInventorySync,
     ],
@@ -519,6 +523,9 @@ export function SyncManagementScreen() {
   useEffect(() => onScannerDiagnosticsChanged(() => {
     setScannerTick(tick => tick + 1);
   }), []);
+  useEffect(() => subscribeSupportLogs(() => {
+    setSupportLogTick(tick => tick + 1);
+  }), []);
 
   useFocusEffect(useCallback(() => {
     setPendingSales(getPendingSales());
@@ -549,8 +556,19 @@ export function SyncManagementScreen() {
       const result = await runFullSync();
       setSyncStatus(result);
       if (result.error) {
+        recordSupportLog({
+          category: 'sync',
+          level: 'error',
+          message: 'Full sync failed',
+          detail: result.error,
+        });
         Alert.alert('Sync Failed', formatPosError(result.error, 'Catalog and inventory could not be updated.'));
       } else {
+        recordSupportLog({
+          category: 'sync',
+          level: 'info',
+          message: 'Full sync completed',
+        });
         Alert.alert('Sync Complete', 'Catalog and inventory are up to date.');
       }
     } finally {
@@ -566,6 +584,17 @@ export function SyncManagementScreen() {
     setReconciling(true);
     try {
       const summary = await reconcilePendingSales();
+      recordSupportLog({
+        category: 'sync',
+        level: summary.failed > 0 ? 'error' : summary.retryLater > 0 ? 'warning' : 'info',
+        message: 'Pending sale reconciliation finished',
+        context: {
+          synced: summary.synced,
+          failed: summary.failed,
+          retryLater: summary.retryLater,
+          alreadyCompleted: summary.alreadyCompleted,
+        },
+      });
       setPendingSales(getPendingSales());
 
       if (summary.failed > 0) {
@@ -591,6 +620,12 @@ export function SyncManagementScreen() {
         );
       }
     } catch (err: any) {
+      recordSupportLog({
+        category: 'checkout',
+        level: 'error',
+        message: 'Pending sale reconciliation failed',
+        detail: err?.message || String(err),
+      });
       Alert.alert('Reconciliation Failed', formatPosError(err, 'Unable to process pending sales.'));
     } finally {
       setReconciling(false);
@@ -626,6 +661,16 @@ export function SyncManagementScreen() {
         credential: approval.credential,
         method: approval.method,
       });
+      recordSupportLog({
+        category: 'drawer',
+        level: summary.failed > 0 ? 'error' : summary.retryLater > 0 ? 'warning' : 'info',
+        message: 'Drawer event sync finished',
+        context: {
+          synced: summary.synced,
+          failed: summary.failed,
+          retryLater: summary.retryLater,
+        },
+      });
       setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
 
@@ -651,6 +696,12 @@ export function SyncManagementScreen() {
         );
       }
     } catch (err: any) {
+      recordSupportLog({
+        category: 'drawer',
+        level: 'error',
+        message: 'Drawer event sync failed',
+        detail: err?.message || String(err),
+      });
       Alert.alert('Drawer Sync Failed', formatPosError(err, 'Unable to sync drawer events.'));
     } finally {
       setDrawerReconciling(false);
@@ -664,8 +715,21 @@ export function SyncManagementScreen() {
       const result = await retryPrintJobSafely(printer, job);
       setPrintJobs(getPrintJobs());
       if (result.success) {
+        recordSupportLog({
+          category: 'print',
+          level: 'info',
+          message: 'Manual print retry succeeded',
+          context: { jobId: job.id, type: job.type },
+        });
         Alert.alert('Print Job Sent', `${job.title} printed successfully.`);
       } else {
+        recordSupportLog({
+          category: 'print',
+          level: 'error',
+          message: 'Manual print retry failed',
+          detail: result.error,
+          context: { jobId: job.id, type: job.type },
+        });
         Alert.alert('Print Job Failed', result.error || 'The printer did not accept this job.');
       }
     } finally {
@@ -856,12 +920,12 @@ export function SyncManagementScreen() {
         <View
           style={styles.pendingReviewCard}
           testID="hardware-test-section"
-          accessibilityLabel="Hardware Test section"
+          accessibilityLabel="Hardware Certification section"
         >
           <View style={styles.pendingReviewHeader}>
             <View>
-              <Text style={styles.pendingReviewTitle}>Hardware Test</Text>
-              <Text style={styles.pendingReviewSubtitle}>Guided receipt, label, scanner, manager, and drawer checks.</Text>
+              <Text style={styles.pendingReviewTitle}>Hardware Certification</Text>
+              <Text style={styles.pendingReviewSubtitle}>Certify receipt, label, scanner, manager, and drawer readiness for this store.</Text>
             </View>
             <Icon name="settings" size={22} color={colors.accent.primary} />
           </View>
@@ -1141,8 +1205,8 @@ export function SyncManagementScreen() {
         <View style={styles.diagnosticsCard}>
           <View style={styles.pendingReviewHeader}>
             <View>
-              <Text style={styles.pendingReviewTitle}>Support Diagnostics</Text>
-              <Text style={styles.pendingReviewSubtitle}>Show this block to support when troubleshooting this tablet.</Text>
+              <Text style={styles.pendingReviewTitle}>Copy Support Packet</Text>
+              <Text style={styles.pendingReviewSubtitle}>Long-press and copy this packet for support; secrets are redacted before storage.</Text>
             </View>
             <Icon name="info" size={22} color={colors.accent.primary} />
           </View>
@@ -1154,6 +1218,8 @@ export function SyncManagementScreen() {
             <InfoRow label="Capture" value={healthSnapshot.scannerCapture} warning={healthSnapshot.scannerCapture !== 'Idle'} />
             <InfoRow label="Last Scan" value={healthSnapshot.lastScan} />
             <InfoRow label="App Build" value={`${healthSnapshot.appVersion} / ${healthSnapshot.build}`} />
+            <InfoRow label="Git SHA" value={healthSnapshot.gitSha} />
+            <InfoRow label="Device Status" value={healthSnapshot.disabledState} warning={healthSnapshot.disabledState !== 'Active'} />
             <InfoRow label="API Base" value={healthSnapshot.apiBaseUrl} />
           </View>
           <Text selectable style={styles.diagnosticsText}>{supportDiagnosticText}</Text>
@@ -1197,8 +1263,9 @@ export function AboutScreen() {
         <Text style={styles.aboutTitle}>APEX POS</Text>
         <Text style={styles.aboutSubtitle}>C-BROS Genuine Autoparts & Accessories, Inc.</Text>
         <View style={styles.infoCard}>
-          <InfoRow label="Version" value="1.0.0" />
-          <InfoRow label="Build" value="2026.05.13" />
+          <InfoRow label="Version" value={APP_VERSION} />
+          <InfoRow label="Build" value={APP_BUILD_DATE} />
+          <InfoRow label="Git SHA" value={APP_GIT_SHA} />
           <InfoRow label="Platform" value="Android POS" />
         </View>
       </View>

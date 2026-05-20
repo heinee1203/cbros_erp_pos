@@ -5,15 +5,21 @@ import { getUnsyncedRegisterDrawerEvents } from '@/storage/register-drawer-event
 import { getPrintJobs, getRetryablePrintJobs } from '@/storage/print-jobs';
 import { getScannerDiagnostics } from '@/storage/scanner-diagnostics';
 import { buildHardwareTestSummaryText, getHardwareTestResults } from '@/storage/hardware-tests';
+import { getDisabledDeviceState } from '@/storage/device-status';
+import { buildSupportLogText, getSupportLogs } from '@/storage/support-logs';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
 import { getSyncStatus } from '@/sync/sync-manager';
+import { APP_BUILD_DATE, APP_GIT_SHA, APP_VERSION } from '@/config/app-version';
 
 export interface RegisterHealthSnapshot {
   deviceId: string;
   apiBaseUrl: string;
   appVersion: string;
   build: string;
+  gitSha: string;
+  disabledState: string;
+  supportLogCount: number;
   boundStore: string;
   storeCode: string;
   storeLockStatus: string;
@@ -62,12 +68,18 @@ export function getRegisterHealthSnapshot(printer: PrinterProvider): RegisterHea
   const failedPrintJobs = printJobs.filter(job => job.status === 'failed').length;
   const hardwareTests = getHardwareTestResults();
   const lastHardwareTest = hardwareTests[0];
+  const disabledState = getDisabledDeviceState();
 
   return {
     deviceId: getOrCreateDeviceId(),
     apiBaseUrl: storage.getString(KEYS.API_BASE_URL) || 'http://10.0.2.2:3000',
-    appVersion: '1.0.0',
-    build: '2026.05.20',
+    appVersion: APP_VERSION,
+    build: APP_BUILD_DATE,
+    gitSha: APP_GIT_SHA,
+    disabledState: disabledState?.disabled
+      ? `${disabledState.code || 'BLOCKED'}: ${disabledState.reason || 'Device blocked'}`
+      : 'Active',
+    supportLogCount: getSupportLogs().length,
     boundStore: binding?.locationName || 'Not registered',
     storeCode: binding?.locationCode || 'None',
     storeLockStatus: binding ? `Locked since ${new Date(binding.boundAt).toLocaleDateString('en-PH')}` : 'Not locked',
@@ -140,8 +152,8 @@ export function buildHardwareReadinessItems(input: {
     {
       id: 'store-lock',
       label: 'Store lock',
-      detail: snapshot.storeLockStatus,
-      state: snapshot.boundStore === 'Not registered' ? 'blocked' : 'ready',
+      detail: snapshot.disabledState === 'Active' ? snapshot.storeLockStatus : snapshot.disabledState,
+      state: snapshot.disabledState !== 'Active' || snapshot.boundStore === 'Not registered' ? 'blocked' : 'ready',
     },
     {
       id: 'api-health',
@@ -166,6 +178,16 @@ export function buildHardwareReadinessItems(input: {
       state: snapshot.scannerLastError === 'None' ? 'ready' : 'warning',
     },
     {
+      id: 'hardware-certification',
+      label: 'Hardware certification',
+      detail: snapshot.lastHardwareTest,
+      state: snapshot.lastHardwareTest === 'None'
+        ? 'warning'
+        : snapshot.lastHardwareTest.startsWith('FAIL')
+          ? 'blocked'
+          : 'ready',
+    },
+    {
       id: 'inventory',
       label: 'Inventory freshness',
       detail: snapshot.lastInventorySync === 'Never' ? 'Inventory has not synced' : snapshot.lastInventorySync,
@@ -175,8 +197,8 @@ export function buildHardwareReadinessItems(input: {
     {
       id: 'device',
       label: 'App and device',
-      detail: `${snapshot.deviceId}; build ${snapshot.build}`,
-      state: 'ready',
+      detail: `${snapshot.deviceId}; build ${snapshot.build}; ${snapshot.disabledState}`,
+      state: snapshot.disabledState === 'Active' ? 'ready' : 'blocked',
     },
   ];
 
@@ -193,9 +215,10 @@ export function buildSupportDiagnosticText(snapshot: RegisterHealthSnapshot, api
   return [
     'APEX POS SUPPORT DIAGNOSTICS',
     `Device ID: ${snapshot.deviceId}`,
-    `App: ${snapshot.appVersion} (${snapshot.build})`,
+    `App: ${snapshot.appVersion} (${snapshot.build}; ${snapshot.gitSha})`,
     `Store: ${snapshot.boundStore} [${snapshot.storeCode}]`,
     `Store Lock: ${snapshot.storeLockStatus}`,
+    `Device Status: ${snapshot.disabledState}`,
     `API: ${snapshot.apiBaseUrl}`,
     `API Health: ${apiHealth}`,
     `Printer: ${snapshot.printerStatus} (${snapshot.printerType})`,
@@ -207,10 +230,13 @@ export function buildSupportDiagnosticText(snapshot: RegisterHealthSnapshot, api
     `Drawer Events: ${snapshot.drawerEvents}`,
     `Retryable Prints: ${snapshot.retryablePrintJobs}`,
     `Failed Prints: ${snapshot.failedPrintJobs}`,
+    `Support Log Count: ${snapshot.supportLogCount}`,
     `Catalog Sync: ${snapshot.lastCatalogSync}`,
     `Inventory Sync: ${snapshot.lastInventorySync}`,
     'Hardware Tests:',
     buildHardwareTestSummaryText(),
+    'Support Logs:',
+    buildSupportLogText(),
   ].join('\n');
 }
 

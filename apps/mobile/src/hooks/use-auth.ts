@@ -18,6 +18,11 @@ import {
   getDeviceBinding,
   type DeviceBinding,
 } from '@/config/device-binding';
+import { checkDeviceStatus, registerDeviceWithCode } from '@/services/device-registration';
+import {
+  getDisabledDeviceState,
+  type DisabledDeviceState,
+} from '@/storage/device-status';
 import { useCartStore } from '@/stores/cart-store';
 
 type BindingInvalidReason = 'missing' | 'inactive' | null;
@@ -29,6 +34,7 @@ interface AuthContextValue {
   locations: LocationInfo[];
   deviceBinding: DeviceBinding | null;
   bindingInvalidReason: BindingInvalidReason;
+  disabledDeviceState: DisabledDeviceState | null;
   isDeviceBindingInvalid: boolean;
   isAuthenticated: boolean;
   needsLocationSelect: boolean;
@@ -36,6 +42,7 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   setLocationId: (id: string) => void;
+  registerWithCode: (registrationCode: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -88,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [locationId, setLocationId] = useState<string | null>(initialAuth.locationId);
   const [locations, setLocations] = useState<LocationInfo[]>(initialAuth.locations);
   const [deviceBinding, setDeviceBindingState] = useState<DeviceBinding | null>(initialAuth.deviceBinding);
+  const [disabledDeviceState, setDisabledDeviceStateLocal] = useState<DisabledDeviceState | null>(() => getDisabledDeviceState());
   const [isLoading] = useState(false);
   const bindingInvalidReason = getBindingInvalidReason(deviceBinding, locations);
 
@@ -109,8 +117,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setLocationService(binding.locationId);
             setLocationId(binding.locationId);
             useCartStore.getState().reloadForCurrentLocation();
+            checkDeviceStatus()
+              .then(() => setDisabledDeviceStateLocal(getDisabledDeviceState()))
+              .catch(() => setDisabledDeviceStateLocal(getDisabledDeviceState()));
             return;
           }
+
+          checkDeviceStatus()
+            .then((status) => {
+              if (!isMounted || !status.registered || !status.device) return;
+              const restoredBinding = bindDeviceToLocation(
+                {
+                  id: status.device.locationId,
+                  name: status.device.locationName,
+                  code: status.device.locationCode || '',
+                },
+                'Backend device registration',
+              );
+              setDeviceBindingState(restoredBinding);
+              setLocationService(restoredBinding.locationId);
+              setLocationId(restoredBinding.locationId);
+              useCartStore.getState().reloadForCurrentLocation();
+              setDisabledDeviceStateLocal(getDisabledDeviceState());
+            })
+            .catch(() => setDisabledDeviceStateLocal(getDisabledDeviceState()));
 
           if (locationId && !activeIds.has(locationId)) {
             clearActiveLocation();
@@ -174,7 +204,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLocationService(binding.locationId);
       setLocationId(binding.locationId);
       useCartStore.getState().reloadForCurrentLocation();
+      checkDeviceStatus()
+        .then(() => setDisabledDeviceStateLocal(getDisabledDeviceState()))
+        .catch(() => setDisabledDeviceStateLocal(getDisabledDeviceState()));
       return;
+    }
+
+    try {
+      const status = await checkDeviceStatus();
+      if (status.registered && status.device) {
+        const restoredBinding = bindDeviceToLocation(
+          {
+            id: status.device.locationId,
+            name: status.device.locationName,
+            code: status.device.locationCode || '',
+          },
+          result.user.fullName || result.user.email || 'Backend device registration',
+        );
+        setDeviceBindingState(restoredBinding);
+        setLocationService(restoredBinding.locationId);
+        setLocationId(restoredBinding.locationId);
+        useCartStore.getState().reloadForCurrentLocation();
+        setDisabledDeviceStateLocal(getDisabledDeviceState());
+        return;
+      }
+    } catch {
+      setDisabledDeviceStateLocal(getDisabledDeviceState());
     }
 
     clearActiveLocation();
@@ -189,6 +244,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLocationId(null);
     setLocations([]);
     setDeviceBindingState(getDeviceBinding());
+    setDisabledDeviceStateLocal(getDisabledDeviceState());
     useCartStore.getState().reloadForCurrentLocation();
   }, []);
 
@@ -219,6 +275,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     useCartStore.getState().reloadForCurrentLocation();
   }, [deviceBinding, locations, user?.email, user?.fullName]);
 
+  const registerWithCode = useCallback(async (registrationCode: string) => {
+    const binding = await registerDeviceWithCode({
+      registrationCode,
+      operator: user?.fullName ?? user?.email ?? 'Unknown user',
+    });
+    setDeviceBindingState(binding);
+    setLocationService(binding.locationId);
+    setLocationId(binding.locationId);
+    setDisabledDeviceStateLocal(getDisabledDeviceState());
+    useCartStore.getState().reloadForCurrentLocation();
+  }, [user?.email, user?.fullName]);
+
   const value: AuthContextValue = {
     token,
     user,
@@ -226,6 +294,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     locations,
     deviceBinding,
     bindingInvalidReason,
+    disabledDeviceState,
     isDeviceBindingInvalid: bindingInvalidReason !== null,
     isAuthenticated: !!token && !!user,
     needsLocationSelect: !!token && !!user && !deviceBinding,
@@ -233,6 +302,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     login,
     logout,
     setLocationId: handleSetLocation,
+    registerWithCode,
   };
 
   return React.createElement(AuthContext.Provider, { value }, children);
