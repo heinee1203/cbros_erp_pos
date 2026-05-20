@@ -150,7 +150,11 @@ export function TransactionDetailPane({ saleId, onRefunded, onRefundPress, onVoi
 
     setReprinting(true);
     try {
-      const result = await printReceiptSafely(printer, receiptData);
+      const result = await printReceiptSafely(printer, receiptData, {
+        type: 'receipt',
+        title: `Receipt ${sale.saleNo}`,
+        sourceId: sale.id,
+      });
       if (!result.success) {
         Alert.alert(
           'Print Failed',

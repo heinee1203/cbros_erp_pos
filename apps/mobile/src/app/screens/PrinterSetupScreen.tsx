@@ -91,7 +91,11 @@ export default function PrinterSetupScreen() {
     setTestPrinting(true);
     try {
       const result = printerLanguage === 'zpl'
-        ? await printZplSafely(printer, testLabelZpl)
+        ? await printZplSafely(printer, testLabelZpl, {
+          type: 'test-page',
+          title: 'ZPL Test Label',
+          sourceId: 'printer-test',
+        })
         : await printReceiptSafely(printer, {
           header: { storeName: 'CBROS GENUINE AUTOPARTS', address: 'Printer Test' },
           transaction: {
@@ -105,6 +109,10 @@ export default function PrinterSetupScreen() {
             paymentMethod: 'CASH',
           },
           footer: { message: 'Printer test successful' },
+        }, {
+          type: 'test-page',
+          title: 'Receipt Test Page',
+          sourceId: 'printer-test',
         });
 
       if (!result.success) {

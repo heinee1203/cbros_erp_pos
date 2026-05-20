@@ -40,6 +40,7 @@ type Step = 'select-items' | 'select-reason' | 'confirm' | 'pin';
 
 const REASONS = ['Defective', 'Wrong Part', 'Customer Changed Mind', 'Other'] as const;
 const PIN_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'DEL'];
+const MIN_REFUND_NOTE_LENGTH = 5;
 type Reason = (typeof REASONS)[number];
 type RefundSubmitter = (authorizationOverride?: RefundAuthorizationResult | null) => Promise<void>;
 
@@ -280,6 +281,10 @@ export function RefundFlow({
       Alert.alert('Reason required', 'Please enter a refund reason.');
       return;
     }
+    if (finalNote.length < MIN_REFUND_NOTE_LENGTH) {
+      Alert.alert('Inspection Note Required', 'Add a short note for the refund audit trail.');
+      return;
+    }
 
     const selectedAuthorization = authorizationOverride ?? authorization;
     const authorizationNote = selectedAuthorization
@@ -463,11 +468,11 @@ export function RefundFlow({
             <Input
               value={reasonNote}
               onChangeText={setReasonNote}
-              placeholder="Optional condition, receipt note, or customer instruction"
+              placeholder="Required condition, receipt note, or customer instruction"
               multiline
             />
             <Text style={styles.auditHint}>
-              This note is saved with the refund audit and backend sale notes.
+              Required. This note is saved with the refund audit and backend sale notes.
             </Text>
           </View>
           <View style={styles.buttonRow}>
@@ -481,7 +486,7 @@ export function RefundFlow({
               title="Review"
               onPress={() => setStep('confirm')}
               style={styles.btnPrimary}
-              disabled={reason === 'Other' && !otherReason.trim()}
+              disabled={(reason === 'Other' && !otherReason.trim()) || reasonNote.trim().length < MIN_REFUND_NOTE_LENGTH}
             />
           </View>
         </View>

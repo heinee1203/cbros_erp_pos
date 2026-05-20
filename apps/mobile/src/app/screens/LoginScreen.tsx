@@ -42,6 +42,8 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
+      testID="login-screen"
+      accessibilityLabel="Login screen"
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
@@ -51,7 +53,7 @@ export default function LoginScreen() {
           const binding = getDeviceBinding();
           return binding ? (
             <Text style={[styles.subtitle, { marginBottom: 4 }]}>
-              {'\uD83D\uDCCD'} {binding.locationName} ({binding.locationCode})
+              Locked store: {binding.locationName} ({binding.locationCode})
             </Text>
           ) : null;
         })()}
@@ -67,6 +69,8 @@ export default function LoginScreen() {
           returnKeyType="next"
           onSubmitEditing={() => passwordRef.current?.focus()}
           style={styles.inputSpacing}
+          testID="login-email"
+          accessibilityLabel="Login email"
         />
 
         <Text style={styles.label}>Password</Text>
@@ -79,6 +83,8 @@ export default function LoginScreen() {
           returnKeyType="go"
           onSubmitEditing={handleLogin}
           style={styles.inputSpacing}
+          testID="login-password"
+          accessibilityLabel="Login password"
         />
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -95,6 +101,8 @@ export default function LoginScreen() {
               variant="primary"
               disabled={loading}
               fullWidth
+              testID="login-submit"
+              accessibilityLabel="Sign In"
             />
           </View>
         )}

@@ -22,6 +22,9 @@ interface InputProps {
   multiline?: boolean;
   returnKeyType?: ReturnKeyTypeOptions;
   onSubmitEditing?: () => void;
+  testID?: string;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }
 
 export const Input = forwardRef<TextInput, InputProps>(function Input({
@@ -37,6 +40,9 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
   multiline,
   returnKeyType,
   onSubmitEditing,
+  testID,
+  accessibilityLabel,
+  accessibilityHint,
 }, ref) {
   const styles = createStyles();
   const [focused, setFocused] = useState(false);
@@ -55,6 +61,9 @@ export const Input = forwardRef<TextInput, InputProps>(function Input({
       {leftIcon && <View style={styles.iconLeft}>{leftIcon}</View>}
       <TextInput
         ref={ref}
+        testID={testID}
+        accessibilityLabel={accessibilityLabel}
+        accessibilityHint={accessibilityHint}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}

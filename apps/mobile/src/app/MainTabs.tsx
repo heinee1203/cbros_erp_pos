@@ -197,6 +197,8 @@ export default function MainTabs() {
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: false,
+          tabBarAccessibilityLabel: `${route.name} tab`,
+          tabBarTestID: `tab-${route.name.toLowerCase()}`,
           tabBarIcon: ({ color }) => (
             <Icon name={TAB_ICONS[route.name] ?? 'more'} size={22} color={color} strokeWidth={2.3} />
           ),

@@ -100,7 +100,11 @@ export function ProductDetailSheet({
 
     setPrintingLabel(true);
     try {
-      const result = await printZplSafely(printer, labelZpl);
+      const result = await printZplSafely(printer, labelZpl, {
+        type: 'barcode-label',
+        title: `Label ${product.sku || product.name}`,
+        sourceId: product.serverId,
+      });
       if (!result.success) {
         Alert.alert('Label Not Printed', result.error || 'Connect a ZPL label printer before printing.', [
           { text: 'Preview Label', onPress: () => setLabelPreviewVisible(true) },

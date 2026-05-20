@@ -42,6 +42,7 @@ export interface ReceiptData {
 export interface PrintResult {
   success: boolean;
   error?: string;
+  jobId?: string;
 }
 
 export interface PrinterProvider {

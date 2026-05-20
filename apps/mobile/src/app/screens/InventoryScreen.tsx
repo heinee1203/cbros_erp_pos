@@ -722,7 +722,11 @@ export default function InventoryScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      testID="inventory-screen"
+      accessibilityLabel="Inventory screen"
+    >
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Inventory</Text>

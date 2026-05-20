@@ -1,4 +1,5 @@
 import type { ScanResult, ScannerProvider } from './types';
+import { recordScannerScan, setScannerCaptureActive } from '@/storage/scanner-diagnostics';
 
 /**
  * Camera Scanner Adapter
@@ -25,12 +26,15 @@ export class CameraScannerAdapter implements ScannerProvider {
   }
 
   async openCameraScanner(): Promise<ScanResult | null> {
+    setScannerCaptureActive(true, 'Camera scanner');
     return null;
   }
 
   /** Called by BarcodeScannerModal when a barcode is detected */
   handleCameraResult(barcode: string, format: string): void {
     const result: ScanResult = { barcode, format, timestamp: Date.now() };
+    recordScannerScan('camera', barcode, format);
+    setScannerCaptureActive(false);
     if (this._resolvePromise) {
       this._resolvePromise(result);
       this._resolvePromise = null;
@@ -41,6 +45,7 @@ export class CameraScannerAdapter implements ScannerProvider {
 
   /** Called when camera modal is dismissed without scanning */
   handleCameraCancel(): void {
+    setScannerCaptureActive(false);
     if (this._resolvePromise) {
       this._resolvePromise(null);
       this._resolvePromise = null;

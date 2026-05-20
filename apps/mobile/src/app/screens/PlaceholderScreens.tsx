@@ -13,7 +13,31 @@ import { reconcileRegisterDrawerEvents } from '@/sync/register-drawer-sync';
 import { useCatalogSearch, type CatalogItem } from '@/hooks/use-catalog-search';
 import { useSaleDetailQuery, useSalesListQuery, type SaleListItem } from '@/hooks/use-transactions';
 import { useNetworkStatus } from '@/hooks/use-network-status';
+import { useAuth } from '@/hooks/use-auth';
 import { getSyncStatus, onSyncStatus, runFullSync, type SyncStatus } from '@/sync/sync-manager';
+import {
+  getAutoRetryPrintJobs,
+  getPrintJobs,
+  getRetryablePrintJobs,
+  onPrintJobsChanged,
+  clearPrintedPrintJobs,
+  type PrintJob,
+} from '@/storage/print-jobs';
+import {
+  buildHardwareTestSummaryText,
+  getHardwareTestResults,
+  onHardwareTestResultsChanged,
+  recordHardwareTestResult,
+  type HardwareTestResult,
+  type HardwareTestType,
+} from '@/storage/hardware-tests';
+import { onScannerDiagnosticsChanged } from '@/storage/scanner-diagnostics';
+import {
+  buildHardwareReadinessItems,
+  buildReadinessSummaryText,
+  buildSupportDiagnosticText,
+  getRegisterHealthSnapshot,
+} from '@/utils/register-health';
 import { RefundFlow } from '@/components/RefundFlow';
 import { LabelPreviewModal } from '@/components/LabelPreviewModal';
 import { BarcodeScanModal } from '@/components/BarcodeScanModal';
@@ -24,8 +48,9 @@ import { getPendingSaleReviewRows, summarizePendingSales } from '@/utils/pending
 import { getRegisterDrawerRecoveryRows, summarizeRegisterDrawerRecovery } from '@/utils/register-drawer-summary';
 import { usePrinter } from '@/hardware/printer/context';
 import { buildShelfLabel } from '@/hardware/printer/zpl-label-builder';
-import { printZplSafely } from '@/hardware/printer/settings';
+import { printEscposRawSafely, printZplSafely, retryPrintJobSafely } from '@/hardware/printer/settings';
 import { queryClient } from '@/services/query-client';
+import { apiFetch } from '@/services/api-client';
 import { colors, fonts, fontSize, radius, spacing } from '@/theme';
 import { Button, Icon, type IconName } from '@/components/ui';
 
@@ -102,6 +127,47 @@ function fmtAttemptTime(ts: string | null): string {
   if (ago === 'Unknown') return ago;
   if (ago.includes('/')) return ago;
   return `${ago} ago`;
+}
+
+function fmtRetryAt(ts?: string): string {
+  if (!ts) return 'Ready now';
+  const target = new Date(ts).getTime();
+  const diff = target - Date.now();
+  if (!Number.isFinite(target) || diff <= 0) return 'Ready now';
+  const minutes = Math.ceil(diff / 60_000);
+  if (minutes <= 1) return 'Retry in 1m';
+  if (minutes < 60) return `Retry in ${minutes}m`;
+  return `Retry at ${new Date(ts).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function asciiBytes(text: string): Uint8Array {
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    bytes[i] = code > 127 ? 0x3f : code;
+  }
+  return bytes;
+}
+
+function hardwareTestTitle(type: HardwareTestType): string {
+  switch (type) {
+    case 'receipt-printer': return 'Receipt printer test';
+    case 'label-printer': return 'ZPL label printer test';
+    case 'scanner': return 'Scanner/manual barcode test';
+    case 'manager-authorization': return 'Manager authorization test';
+    case 'cash-drawer': return 'Cash drawer kick test';
+    default: return 'Hardware test';
+  }
+}
+
+function hardwareStatusLabel(result: HardwareTestResult | null): string {
+  if (!result) return 'Not run';
+  return result.status === 'pass' ? 'Pass' : 'Fail';
+}
+
+function hardwareStatusTone(result: HardwareTestResult | null): 'success' | 'warning' | 'danger' {
+  if (!result) return 'warning';
+  return result.status === 'pass' ? 'success' : 'danger';
 }
 
 function fmtTxnTime(ts: string | null): string {
@@ -340,18 +406,40 @@ export function ParkedOrdersScreen() {
 }
 
 export function SyncManagementScreen() {
+  const navigation = useNavigation<any>();
+  const { user } = useAuth();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => getSyncStatus());
   const [reconciling, setReconciling] = useState(false);
   const [drawerReconciling, setDrawerReconciling] = useState(false);
   const [drawerAuthorizationVisible, setDrawerAuthorizationVisible] = useState(false);
+  const [scannerTestVisible, setScannerTestVisible] = useState(false);
+  const [managerTestVisible, setManagerTestVisible] = useState(false);
   const [pendingSales, setPendingSales] = useState(() => getPendingSales());
   const [pendingDrawerEvents, setPendingDrawerEvents] = useState(() => getUnsyncedRegisterDrawerEvents());
+  const [printJobs, setPrintJobs] = useState(() => getPrintJobs());
+  const [hardwareTestResults, setHardwareTestResults] = useState(() => getHardwareTestResults());
+  const [scannerTick, setScannerTick] = useState(0);
+  const [retryingPrintJobId, setRetryingPrintJobId] = useState<string | null>(null);
+  const [runningHardwareTest, setRunningHardwareTest] = useState<HardwareTestType | null>(null);
+  const [apiHealth, setApiHealth] = useState('Not checked');
+  const [checkingApiHealth, setCheckingApiHealth] = useState(false);
   const network = useNetworkStatus();
+  const printer = usePrinter();
   const styles = createStyles();
   const pendingRetryCount = pendingSales.filter(sale => sale.status !== 'failed').length;
   const pendingFailedCount = pendingSales.length - pendingRetryCount;
+  const retryablePrintJobs = getRetryablePrintJobs();
+  const autoRetryPrintJobs = getAutoRetryPrintJobs();
+  const failedPrintJobs = printJobs.filter(job => job.status === 'failed');
   const pendingSummary = React.useMemo(() => summarizePendingSales(pendingSales), [pendingSales]);
   const pendingRows = React.useMemo(() => getPendingSaleReviewRows(pendingSales, 5), [pendingSales]);
+  const lastHardwareTests = React.useMemo(() => ({
+    receipt: hardwareTestResults.find(result => result.type === 'receipt-printer') ?? null,
+    label: hardwareTestResults.find(result => result.type === 'label-printer') ?? null,
+    scanner: hardwareTestResults.find(result => result.type === 'scanner') ?? null,
+    manager: hardwareTestResults.find(result => result.type === 'manager-authorization') ?? null,
+    drawer: hardwareTestResults.find(result => result.type === 'cash-drawer') ?? null,
+  }), [hardwareTestResults]);
   const drawerSummary = React.useMemo(
     () => summarizeRegisterDrawerRecovery(pendingDrawerEvents),
     [pendingDrawerEvents],
@@ -362,6 +450,52 @@ export function SyncManagementScreen() {
   );
   const inventoryFreshness = getInventoryFreshness(syncStatus.lastInventorySync);
   const inventoryTone = syncFreshnessTone(inventoryFreshness);
+  const healthSnapshot = React.useMemo(
+    () => getRegisterHealthSnapshot(printer),
+    [
+      printer,
+      printer.isConnected,
+      pendingSales.length,
+      pendingDrawerEvents.length,
+      printJobs.length,
+      hardwareTestResults.length,
+      scannerTick,
+      syncStatus.lastCatalogSync,
+      syncStatus.lastInventorySync,
+    ],
+  );
+  const hardwareReadinessItems = React.useMemo(
+    () => buildHardwareReadinessItems({
+      snapshot: healthSnapshot,
+      apiHealth,
+      networkOnline: network.isOnline,
+      inventoryFreshness,
+      syncError: syncStatus.error,
+      pendingSaleReviewCount: pendingFailedCount,
+      drawerReviewCount: drawerSummary.failed,
+    }),
+    [
+      apiHealth,
+      drawerSummary.failed,
+      healthSnapshot,
+      inventoryFreshness,
+      network.isOnline,
+      pendingFailedCount,
+      syncStatus.error,
+    ],
+  );
+  const supportDiagnosticText = React.useMemo(
+    () => [
+      buildSupportDiagnosticText(healthSnapshot, apiHealth),
+      '',
+      'HARDWARE READINESS',
+      buildReadinessSummaryText(hardwareReadinessItems),
+      '',
+      'HARDWARE TESTS',
+      buildHardwareTestSummaryText(hardwareTestResults),
+    ].join('\n'),
+    [apiHealth, hardwareReadinessItems, hardwareTestResults, healthSnapshot],
+  );
   const canRunSync = network.isOnline && !syncStatus.isSyncing;
   const canReconcile = network.isOnline && !reconciling && pendingRetryCount > 0;
   const canReconcileDrawer = network.isOnline && !drawerReconciling && pendingDrawerEvents.length > 0;
@@ -380,11 +514,31 @@ export function SyncManagementScreen() {
   useEffect(() => onRegisterDrawerEventsChanged(() => {
     setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
   }), []);
+  useEffect(() => onPrintJobsChanged(setPrintJobs), []);
+  useEffect(() => onHardwareTestResultsChanged(setHardwareTestResults), []);
+  useEffect(() => onScannerDiagnosticsChanged(() => {
+    setScannerTick(tick => tick + 1);
+  }), []);
 
   useFocusEffect(useCallback(() => {
     setPendingSales(getPendingSales());
     setPendingDrawerEvents(getUnsyncedRegisterDrawerEvents());
+    setPrintJobs(getPrintJobs());
+    setHardwareTestResults(getHardwareTestResults());
   }, []));
+
+  const handleApiHealthCheck = useCallback(async () => {
+    setCheckingApiHealth(true);
+    setApiHealth('Checking...');
+    try {
+      await apiFetch('/health', { skipAuth: true });
+      setApiHealth('OK');
+    } catch (err: any) {
+      setApiHealth(formatPosError(err, 'Unavailable'));
+    } finally {
+      setCheckingApiHealth(false);
+    }
+  }, []);
 
   const handleFullSync = useCallback(async () => {
     if (!network.isOnline) {
@@ -504,9 +658,144 @@ export function SyncManagementScreen() {
     }
   }, []);
 
+  const handleRetryPrintJob = useCallback(async (job: PrintJob) => {
+    setRetryingPrintJobId(job.id);
+    try {
+      const result = await retryPrintJobSafely(printer, job);
+      setPrintJobs(getPrintJobs());
+      if (result.success) {
+        Alert.alert('Print Job Sent', `${job.title} printed successfully.`);
+      } else {
+        Alert.alert('Print Job Failed', result.error || 'The printer did not accept this job.');
+      }
+    } finally {
+      setRetryingPrintJobId(null);
+      setPrintJobs(getPrintJobs());
+    }
+  }, [printer]);
+
+  const handleClearPrinted = useCallback(() => {
+    clearPrintedPrintJobs();
+    setPrintJobs(getPrintJobs());
+  }, []);
+
+  const recordHardwareResult = useCallback((
+    type: HardwareTestType,
+    status: 'pass' | 'fail',
+    note?: string,
+    error?: string,
+  ) => {
+    const result = recordHardwareTestResult({
+      type,
+      title: hardwareTestTitle(type),
+      status,
+      operator: user?.fullName ?? user?.email ?? 'Unknown operator',
+      note,
+      error,
+    });
+    setHardwareTestResults(getHardwareTestResults());
+    return result;
+  }, [user?.email, user?.fullName]);
+
+  const handleReceiptHardwareTest = useCallback(async () => {
+    setRunningHardwareTest('receipt-printer');
+    try {
+      const body = [
+        '',
+        'APEX POS HARDWARE TEST',
+        `Receipt printer ${new Date().toLocaleString('en-PH')}`,
+        `Operator ${user?.fullName ?? user?.email ?? 'Unknown'}`,
+        '',
+      ].join('\n');
+      const result = await printEscposRawSafely(printer, asciiBytes(body), {
+        type: 'test-page',
+        title: hardwareTestTitle('receipt-printer'),
+        sourceId: 'hardware-receipt-test',
+      });
+      recordHardwareResult(
+        'receipt-printer',
+        result.success ? 'pass' : 'fail',
+        result.success ? 'Receipt test page sent.' : undefined,
+        result.error,
+      );
+      Alert.alert(result.success ? 'Receipt Test Sent' : 'Receipt Test Failed', result.error || 'The receipt test was recorded.');
+    } finally {
+      setRunningHardwareTest(null);
+    }
+  }, [printer, recordHardwareResult, user?.email, user?.fullName]);
+
+  const handleLabelHardwareTest = useCallback(async () => {
+    setRunningHardwareTest('label-printer');
+    try {
+      const zpl = [
+        '^XA',
+        '^FO40,36^A0N,36,36^FDAPEX POS TEST^FS',
+        '^FO40,86^A0N,24,24^FDZPL label printer ready^FS',
+        '^FO40,126^BY2^BCN,70,Y,N,N^FDAPEX-HW-TEST^FS',
+        '^XZ',
+      ].join('');
+      const result = await printZplSafely(printer, zpl, {
+        type: 'test-page',
+        title: hardwareTestTitle('label-printer'),
+        sourceId: 'hardware-label-test',
+      });
+      recordHardwareResult(
+        'label-printer',
+        result.success ? 'pass' : 'fail',
+        result.success ? 'ZPL label test sent.' : undefined,
+        result.error,
+      );
+      Alert.alert(result.success ? 'Label Test Sent' : 'Label Test Failed', result.error || 'The label test was recorded.');
+    } finally {
+      setRunningHardwareTest(null);
+    }
+  }, [printer, recordHardwareResult]);
+
+  const handleDrawerHardwareTest = useCallback(async () => {
+    setRunningHardwareTest('cash-drawer');
+    try {
+      if (!printer.isConnected) {
+        recordHardwareResult('cash-drawer', 'fail', undefined, 'Printer is not connected.');
+        Alert.alert('Cash Drawer Test Failed', 'Connect the receipt printer before testing the drawer kick.');
+        return;
+      }
+      await printer.openCashDrawer();
+      recordHardwareResult('cash-drawer', 'pass', 'Cash drawer kick command sent.');
+      Alert.alert('Cash Drawer Test Sent', 'Confirm the drawer opened, then record any physical issue for support.');
+    } catch (err: any) {
+      const message = err?.message || 'Cash drawer command failed.';
+      recordHardwareResult('cash-drawer', 'fail', undefined, message);
+      Alert.alert('Cash Drawer Test Failed', message);
+    } finally {
+      setRunningHardwareTest(null);
+    }
+  }, [printer, recordHardwareResult]);
+
+  const handleScannerHardwareSubmit = useCallback((barcode: string) => {
+    recordHardwareResult('scanner', 'pass', `Captured ${barcode.slice(0, 24)}.`);
+    setScannerTestVisible(false);
+    return true;
+  }, [recordHardwareResult]);
+
+  const handleManagerHardwareApproved = useCallback((
+    _approverName: string,
+    approval?: ManagerAuthorization,
+  ) => {
+    recordHardwareResult(
+      'manager-authorization',
+      'pass',
+      `Approved by ${approval?.approverName ?? _approverName} using ${approval?.method ?? 'credential'}.`,
+    );
+    setManagerTestVisible(false);
+  }, [recordHardwareResult]);
+
   return (
-    <View style={styles.container}>
-      <ScreenHeader title="Sync" />
+    <View
+      style={styles.container}
+      testID="recovery-diagnostics-screen"
+      accessibilityLabel="Recovery and Diagnostics screen"
+    >
+      <ScreenHeader title="Recovery & Diagnostics" />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.syncHealthCard, styles[`syncHealth_${inventoryTone}`]]}>
           <View style={styles.syncHealthHeader}>
@@ -542,36 +831,98 @@ export function SyncManagementScreen() {
         </View>
 
         <View style={styles.syncChecklistCard}>
-          <Text style={styles.syncChecklistTitle}>Recovery Checklist</Text>
-          <SyncCheckRow
-            label="Server connection"
-            detail={network.isOnline ? 'Register can reach the network' : 'Connect before syncing'}
-            ready={network.isOnline}
-          />
-          <SyncCheckRow
-            label="Pending sales"
-            detail={pendingSales.length === 0 ? 'No local sales waiting' : `${pendingSales.length} sale${pendingSales.length === 1 ? '' : 's'} need reconciliation`}
-            ready={pendingSales.length === 0}
-            warning={pendingRetryCount > 0 && pendingFailedCount === 0}
-          />
-          <SyncCheckRow
-            label="Drawer events"
-            detail={pendingDrawerEvents.length === 0 ? 'No local drawer events waiting' : `${pendingDrawerEvents.length} event${pendingDrawerEvents.length === 1 ? '' : 's'} need manager sync`}
-            ready={pendingDrawerEvents.length === 0}
-            warning={drawerSummary.retryable > 0 && drawerSummary.failed === 0}
-          />
-          <SyncCheckRow
-            label="Inventory freshness"
-            detail={syncStatus.lastInventorySync ? `${fmtSyncTime(syncStatus.lastInventorySync)} old` : 'Inventory has not synced'}
-            ready={inventoryFreshness === 'fresh'}
-            warning={inventoryFreshness === 'stale'}
-          />
-          <SyncCheckRow
-            label="Last sync attempt"
-            detail={syncStatus.error ? 'Failed, retry needed' : syncStatus.lastAttemptFinishedAt ? 'Completed this session' : 'No attempt this session'}
-            ready={!syncStatus.error}
-            warning={!syncStatus.error && !syncStatus.lastAttemptFinishedAt}
-          />
+          <View style={styles.syncChecklistHeader}>
+            <View>
+              <Text style={styles.syncChecklistTitle}>Hardware Readiness</Text>
+              <Text style={styles.syncChecklistSubtitle}>Blocked items are sorted first for support and shift leads.</Text>
+            </View>
+            <View style={styles.readinessCountPill}>
+              <Text style={styles.readinessCountText}>
+                {hardwareReadinessItems.filter(item => item.state === 'blocked').length} Blocked
+              </Text>
+            </View>
+          </View>
+          {hardwareReadinessItems.map(item => (
+            <SyncCheckRow
+              key={item.id}
+              label={item.label}
+              detail={item.actionLabel ? `${item.detail} / ${item.actionLabel}` : item.detail}
+              ready={item.state === 'ready'}
+              warning={item.state === 'warning'}
+            />
+          ))}
+        </View>
+
+        <View
+          style={styles.pendingReviewCard}
+          testID="hardware-test-section"
+          accessibilityLabel="Hardware Test section"
+        >
+          <View style={styles.pendingReviewHeader}>
+            <View>
+              <Text style={styles.pendingReviewTitle}>Hardware Test</Text>
+              <Text style={styles.pendingReviewSubtitle}>Guided receipt, label, scanner, manager, and drawer checks.</Text>
+            </View>
+            <Icon name="settings" size={22} color={colors.accent.primary} />
+          </View>
+          <View style={styles.pendingReviewMetrics}>
+            <SyncMetric label="Receipt" value={hardwareStatusLabel(lastHardwareTests.receipt)} tone={hardwareStatusTone(lastHardwareTests.receipt)} />
+            <SyncMetric label="Label" value={hardwareStatusLabel(lastHardwareTests.label)} tone={hardwareStatusTone(lastHardwareTests.label)} />
+            <SyncMetric label="Scanner" value={hardwareStatusLabel(lastHardwareTests.scanner)} tone={hardwareStatusTone(lastHardwareTests.scanner)} />
+            <SyncMetric label="Manager" value={hardwareStatusLabel(lastHardwareTests.manager)} tone={hardwareStatusTone(lastHardwareTests.manager)} />
+          </View>
+          <View style={styles.hardwareButtonGrid}>
+            <HardwareTestButton
+              label={runningHardwareTest === 'receipt-printer' ? 'Testing Receipt' : 'Receipt Test'}
+              onPress={() => { void handleReceiptHardwareTest(); }}
+              disabled={runningHardwareTest !== null}
+            />
+            <HardwareTestButton
+              label={runningHardwareTest === 'label-printer' ? 'Testing Label' : 'Label Test'}
+              onPress={() => { void handleLabelHardwareTest(); }}
+              disabled={runningHardwareTest !== null}
+            />
+            <HardwareTestButton
+              label="Scanner Test"
+              onPress={() => setScannerTestVisible(true)}
+              disabled={runningHardwareTest !== null}
+            />
+            <HardwareTestButton
+              label="Manager Auth"
+              onPress={() => setManagerTestVisible(true)}
+              disabled={runningHardwareTest !== null}
+            />
+            <HardwareTestButton
+              label={runningHardwareTest === 'cash-drawer' ? 'Testing Drawer' : 'Drawer Kick'}
+              onPress={() => { void handleDrawerHardwareTest(); }}
+              disabled={runningHardwareTest !== null}
+            />
+          </View>
+          {hardwareTestResults.length === 0 ? (
+            <Text style={styles.emptyInlineText}>No hardware tests have been recorded on this tablet.</Text>
+          ) : (
+            <View style={styles.pendingReviewRows}>
+              {hardwareTestResults.slice(0, 5).map(result => (
+                <View key={result.id} style={styles.hardwareResultRow}>
+                  <View style={[
+                    styles.pendingSaleDot,
+                    result.status === 'pass' ? styles.pendingSaleDotInfo : styles.pendingSaleDotDanger,
+                  ]} />
+                  <View style={styles.pendingSaleCopy}>
+                    <Text style={styles.pendingSaleTitle} numberOfLines={1}>{result.title}</Text>
+                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>
+                      {result.status.toUpperCase()} / {new Date(result.createdAt).toLocaleTimeString('en-PH')} / {result.operator || 'Unknown operator'}
+                    </Text>
+                    {(result.error || result.note) ? (
+                      <Text style={result.error ? styles.printJobError : styles.printJobMeta} numberOfLines={1}>
+                        {result.error || result.note}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         {pendingSales.length > 0 && (
@@ -654,12 +1005,76 @@ export function SyncManagementScreen() {
           </View>
         )}
 
+        <View style={styles.pendingReviewCard}>
+          <View style={styles.pendingReviewHeader}>
+            <View>
+              <Text style={styles.pendingReviewTitle}>Printer Queue</Text>
+              <Text style={styles.pendingReviewSubtitle}>
+                {printer.isConnected ? 'Printer connected' : 'Printer not connected'} / {retryablePrintJobs.length} retryable
+              </Text>
+            </View>
+            <View style={styles.pendingReviewBadge}>
+              <Text style={styles.pendingReviewBadgeText}>{printJobs.length}</Text>
+            </View>
+          </View>
+          <View style={styles.pendingReviewMetrics}>
+            <SyncMetric label="Failed" value={String(failedPrintJobs.length)} tone={failedPrintJobs.length > 0 ? 'danger' : 'success'} />
+            <SyncMetric label="Retryable" value={String(retryablePrintJobs.length)} tone={retryablePrintJobs.length > 0 ? 'warning' : 'success'} />
+            <SyncMetric label="Auto Due" value={String(autoRetryPrintJobs.length)} tone={autoRetryPrintJobs.length > 0 ? 'warning' : 'success'} />
+            <SyncMetric label="Mode" value={healthSnapshot.printerType} />
+          </View>
+          {printJobs.length === 0 ? (
+            <Text style={styles.emptyInlineText}>No print jobs have been recorded on this tablet.</Text>
+          ) : (
+            <View style={styles.pendingReviewRows}>
+              {printJobs.slice(0, 5).map(job => (
+                <View key={job.id} style={styles.printJobRow}>
+                  <View style={styles.pendingSaleCopy}>
+                    <Text style={styles.pendingSaleTitle} numberOfLines={1}>{job.title}</Text>
+                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>
+                      {job.type.replace('-', ' ')} / {job.status} / {job.attempts} attempt{job.attempts === 1 ? '' : 's'} / {fmtRetryAt(job.nextRetryAt)}
+                    </Text>
+                    {job.lastAttemptReason ? (
+                      <Text style={styles.printJobMeta} numberOfLines={1}>
+                        Last attempt: {job.lastAttemptReason}; auto retries: {job.autoRetryCount ?? 0}
+                      </Text>
+                    ) : null}
+                    {job.lastError ? (
+                      <Text style={styles.printJobError} numberOfLines={1}>{job.lastError}</Text>
+                    ) : null}
+                  </View>
+                  {(job.status === 'failed' || job.status === 'pending') && (
+                    <Pressable
+                      style={[styles.retryPrintButton, retryingPrintJobId === job.id && styles.retryPrintButtonDisabled]}
+                      onPress={() => { void handleRetryPrintJob(job); }}
+                      disabled={retryingPrintJobId === job.id}
+                      android_ripple={{ color: colors.accent.glow }}
+                    >
+                      <Text style={styles.retryPrintButtonText}>
+                        {retryingPrintJobId === job.id ? 'Retrying' : 'Retry'}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+          {printJobs.some(job => job.status === 'printed') && (
+            <Pressable style={styles.clearPrintedButton} onPress={handleClearPrinted} hitSlop={8}>
+              <Text style={styles.clearPrintedText}>Clear printed jobs</Text>
+            </Pressable>
+          )}
+        </View>
+
         <View style={styles.infoCard}>
           <InfoRow label="Status" value={syncStatus.isSyncing ? 'Syncing' : 'Idle'} />
           <InfoRow label="Catalog" value={fmtSyncTime(syncStatus.lastCatalogSync)} />
           <InfoRow label="Inventory" value={fmtSyncTime(syncStatus.lastInventorySync)} tone={inventoryTone} />
           <InfoRow label="Pending Sales" value={String(pendingSales.length)} warning={pendingSales.length > 0} />
           <InfoRow label="Drawer Events" value={String(pendingDrawerEvents.length)} warning={pendingDrawerEvents.length > 0} />
+          <InfoRow label="Print Queue" value={String(retryablePrintJobs.length)} warning={retryablePrintJobs.length > 0} />
+          <InfoRow label="Store" value={healthSnapshot.boundStore} warning={healthSnapshot.boundStore === 'Not registered'} />
+          <InfoRow label="API Health" value={apiHealth} warning={apiHealth !== 'OK'} />
           {pendingSales.length > 0 && (
             <InfoRow
               label="Needs Review"
@@ -685,6 +1100,20 @@ export function SyncManagementScreen() {
 
         <View style={styles.actionStack}>
           <Button
+            title={checkingApiHealth ? 'Checking API...' : 'Check API Health'}
+            onPress={handleApiHealthCheck}
+            loading={checkingApiHealth}
+            disabled={checkingApiHealth}
+            variant="secondary"
+            fullWidth
+          />
+          <Button
+            title="Open Printer Setup"
+            onPress={() => navigation.navigate('PrinterSetup')}
+            variant="secondary"
+            fullWidth
+          />
+          <Button
             title={syncStatus.isSyncing ? 'Syncing...' : 'Run Full Sync'}
             onPress={handleFullSync}
             loading={syncStatus.isSyncing}
@@ -708,6 +1137,27 @@ export function SyncManagementScreen() {
             fullWidth
           />
         </View>
+
+        <View style={styles.diagnosticsCard}>
+          <View style={styles.pendingReviewHeader}>
+            <View>
+              <Text style={styles.pendingReviewTitle}>Support Diagnostics</Text>
+              <Text style={styles.pendingReviewSubtitle}>Show this block to support when troubleshooting this tablet.</Text>
+            </View>
+            <Icon name="info" size={22} color={colors.accent.primary} />
+          </View>
+          <View style={styles.diagnosticsGrid}>
+            <InfoRow label="Device ID" value={healthSnapshot.deviceId} />
+            <InfoRow label="Store Code" value={healthSnapshot.storeCode} />
+            <InfoRow label="Printer" value={healthSnapshot.printerStatus} warning={!printer.isConnected} />
+            <InfoRow label="Scanner" value={healthSnapshot.scannerMode} />
+            <InfoRow label="Capture" value={healthSnapshot.scannerCapture} warning={healthSnapshot.scannerCapture !== 'Idle'} />
+            <InfoRow label="Last Scan" value={healthSnapshot.lastScan} />
+            <InfoRow label="App Build" value={`${healthSnapshot.appVersion} / ${healthSnapshot.build}`} />
+            <InfoRow label="API Base" value={healthSnapshot.apiBaseUrl} />
+          </View>
+          <Text selectable style={styles.diagnosticsText}>{supportDiagnosticText}</Text>
+        </View>
       </ScrollView>
       <ManagerPinModal
         visible={drawerAuthorizationVisible}
@@ -715,6 +1165,21 @@ export function SyncManagementScreen() {
         requiredLevel={2}
         onApprove={handleDrawerAuthorization}
         onCancel={() => setDrawerAuthorizationVisible(false)}
+      />
+      <BarcodeScanModal
+        visible={scannerTestVisible}
+        title="Hardware Scanner Test"
+        subtitle="Scan with the paired scanner or type a barcode manually. This records a local support test only."
+        actionLabel="Record Scanner Test"
+        onSubmit={handleScannerHardwareSubmit}
+        onClose={() => setScannerTestVisible(false)}
+      />
+      <ManagerPinModal
+        visible={managerTestVisible}
+        action="Hardware manager authorization test"
+        requiredLevel={2}
+        onApprove={handleManagerHardwareApproved}
+        onCancel={() => setManagerTestVisible(false)}
       />
     </View>
   );
@@ -744,6 +1209,7 @@ export function AboutScreen() {
 export function ReturnsScreen() {
   const [searchText, setSearchText] = useState('');
   const [refundSaleId, setRefundSaleId] = useState<string | null>(null);
+  const [scanModalVisible, setScanModalVisible] = useState(false);
   const { data: sales, isLoading, refetch } = useSalesListQuery(searchText || undefined);
   const { data: refundSale } = useSaleDetailQuery(refundSaleId ?? '');
   const styles = createStyles();
@@ -761,6 +1227,13 @@ export function ReturnsScreen() {
     setRefundSaleId(null);
     refetch();
   }, [refetch]);
+
+  const handleReceiptScan = useCallback((barcode: string) => {
+    const value = barcode.trim();
+    setSearchText(value);
+    setScanModalVisible(false);
+    return true;
+  }, []);
 
   return (
     <View style={styles.container}>
@@ -783,6 +1256,9 @@ export function ReturnsScreen() {
               <Icon name="close" size={17} color={colors.text.secondary} />
             </Pressable>
           )}
+          <Pressable onPress={() => setScanModalVisible(true)} hitSlop={8} style={styles.searchScanButton}>
+            <Icon name="barcode" size={18} color={colors.accent.primary} />
+          </Pressable>
         </View>
 
         <Text style={styles.returnHint}>
@@ -857,6 +1333,15 @@ export function ReturnsScreen() {
           verifyAuthorization={verifyRefundAuthorizationCredential}
         />
       )}
+      <BarcodeScanModal
+        visible={scanModalVisible}
+        title="Scan Receipt"
+        subtitle="Scan a receipt barcode or type the sale number to start a return."
+        placeholder="Receipt or sale number"
+        actionLabel="Find Sale"
+        onSubmit={handleReceiptScan}
+        onClose={() => setScanModalVisible(false)}
+      />
     </View>
   );
 }
@@ -888,7 +1373,11 @@ export function BarcodePrintScreen() {
 
     setPrintingId(item.serverId);
     try {
-      const result = await printZplSafely(printer, buildItemLabelZpl(item));
+      const result = await printZplSafely(printer, buildItemLabelZpl(item), {
+        type: 'barcode-label',
+        title: `Label ${item.sku || item.name}`,
+        sourceId: item.serverId,
+      });
 
       if (!result.success) {
         Alert.alert('Label Not Printed', result.error || 'Connect a ZPL label printer before printing.', [
@@ -1148,6 +1637,29 @@ function SyncCheckRow({
   );
 }
 
+function HardwareTestButton({
+  label,
+  onPress,
+  disabled,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  const styles = createStyles();
+  return (
+    <Pressable
+      style={[styles.hardwareTestButton, disabled && styles.hardwareTestButtonDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+      android_ripple={{ color: colors.accent.glow }}
+      accessibilityLabel={label}
+    >
+      <Text style={styles.hardwareTestButtonText} numberOfLines={1}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function InfoRow({
   label,
   value,
@@ -1267,6 +1779,14 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.primary,
     fontFamily: fonts.body.regular,
     fontSize: fontSize.base,
+  },
+  searchScanButton: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent.muted,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   returnHint: {
     color: colors.text.muted,
@@ -2047,7 +2567,34 @@ const createStyles = () => StyleSheet.create({
     color: colors.text.primary,
     fontFamily: fonts.display.bold,
     fontSize: fontSize.lg,
+  },
+  syncChecklistHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
     marginBottom: spacing.xs,
+  },
+  syncChecklistSubtitle: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    marginTop: 2,
+  },
+  readinessCountPill: {
+    minHeight: 30,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.status.danger,
+    backgroundColor: colors.status.dangerBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  readinessCountText: {
+    color: colors.status.dangerText,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.xs,
   },
   syncCheckRow: {
     minHeight: 52,
@@ -2128,6 +2675,43 @@ const createStyles = () => StyleSheet.create({
   pendingReviewRows: {
     gap: spacing.sm,
   },
+  hardwareButtonGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  hardwareTestButton: {
+    minHeight: 40,
+    minWidth: '31%',
+    flexGrow: 1,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.elevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  hardwareTestButtonDisabled: {
+    opacity: 0.45,
+  },
+  hardwareTestButtonText: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  hardwareResultRow: {
+    minHeight: 58,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.elevated,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
   pendingSaleRow: {
     minHeight: 54,
     borderRadius: radius.sm,
@@ -2184,6 +2768,64 @@ const createStyles = () => StyleSheet.create({
     fontSize: fontSize.xs,
     marginTop: 2,
   },
+  emptyInlineText: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    textAlign: 'center',
+    paddingVertical: spacing.md,
+  },
+  printJobRow: {
+    minHeight: 64,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    backgroundColor: colors.bg.elevated,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  printJobError: {
+    color: colors.status.dangerText,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    marginTop: 2,
+  },
+  printJobMeta: {
+    color: colors.text.muted,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    marginTop: 2,
+  },
+  retryPrintButton: {
+    minWidth: 78,
+    minHeight: 38,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.accent.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  retryPrintButtonDisabled: {
+    opacity: 0.5,
+  },
+  retryPrintButtonText: {
+    color: colors.accent.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  clearPrintedButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+  },
+  clearPrintedText: {
+    color: colors.accent.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
   infoCard: {
     backgroundColor: colors.bg.surface,
     borderRadius: radius.md,
@@ -2234,6 +2876,27 @@ const createStyles = () => StyleSheet.create({
   actionStack: {
     marginTop: spacing.lg,
     gap: spacing.md,
+  },
+  diagnosticsCard: {
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    padding: spacing.lg,
+    gap: spacing.md,
+    marginTop: spacing.lg,
+  },
+  diagnosticsGrid: {
+    gap: spacing.xs,
+  },
+  diagnosticsText: {
+    color: colors.text.secondary,
+    fontFamily: fonts.mono.regular,
+    fontSize: fontSize.xs,
+    lineHeight: 18,
+    backgroundColor: colors.bg.elevated,
+    borderRadius: radius.sm,
+    padding: spacing.md,
   },
   emptyState: {
     minHeight: 280,

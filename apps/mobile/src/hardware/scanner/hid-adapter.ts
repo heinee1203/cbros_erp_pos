@@ -1,5 +1,9 @@
 import { DeviceEventEmitter, Platform, type EmitterSubscription } from 'react-native';
 import type { ScanResult, ScannerProvider } from './types';
+import {
+  recordScannerScan,
+  setScannerCaptureActive,
+} from '@/storage/scanner-diagnostics';
 
 /**
  * HID Scanner Adapter
@@ -41,6 +45,7 @@ export class HIDScannerAdapter implements ScannerProvider {
         this.handleKeyEvent(key, Date.now());
       });
     }
+    setScannerCaptureActive(true, 'HID scanner');
     console.log('[HIDScanner] Listening started');
   }
 
@@ -49,6 +54,7 @@ export class HIDScannerAdapter implements ScannerProvider {
     this._clearBuffer();
     this._subscription?.remove();
     this._subscription = null;
+    setScannerCaptureActive(false);
     console.log('[HIDScanner] Listening stopped');
   }
 
@@ -97,6 +103,7 @@ export class HIDScannerAdapter implements ScannerProvider {
       format: this._detectFormat(barcode),
       timestamp: Date.now(),
     };
+    recordScannerScan('hid', result.barcode, result.format);
     this._callbacks.forEach(cb => cb(result));
   }
 

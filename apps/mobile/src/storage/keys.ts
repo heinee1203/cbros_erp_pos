@@ -14,9 +14,15 @@ export const KEYS = {
   PRINTER_DEVICE_ID: 'printer.lastDeviceId',
   PRINTER_PAPER_WIDTH: 'printer.paperWidth',
   PRINTER_LANGUAGE: 'printer.language',
+  PRINT_JOBS: 'printer.printJobs',
+  HARDWARE_TEST_RESULTS: 'hardware.testResults',
 
   // Scanner
   SCANNER_MODE: 'scanner.mode',
+  SCANNER_DIAGNOSTICS: 'scanner.diagnostics',
+
+  // Protected action session
+  PROTECTED_ACTION_LAST_AUTH: 'security.protectedActionLastAuth',
 
   // Sync
   LAST_CATALOG_SYNC: 'sync.lastCatalogSync',
@@ -33,4 +39,7 @@ export const KEYS = {
 
   // Register drawer events
   REGISTER_DRAWER_EVENTS: 'register.drawerEvents',
+
+  // Cashier speed
+  RECENT_PRODUCTS: 'catalog.recentProducts',
 } as const;

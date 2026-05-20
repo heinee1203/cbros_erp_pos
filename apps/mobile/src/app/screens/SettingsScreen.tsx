@@ -221,7 +221,11 @@ export default function SettingsScreen() {
     if (!requireBadgePin() || !badgeZpl) return;
     setBadgePrinting(true);
     try {
-      const result = await printZplSafely(printer, badgeZpl);
+      const result = await printZplSafely(printer, badgeZpl, {
+        type: 'barcode-label',
+        title: 'Manager Badge Test Label',
+        sourceId: 'settings-badge-test',
+      });
       if (!result.success) {
         Alert.alert('Badge Printer Not Ready', result.error || 'Unable to print the manager badge.', [
           { text: 'Preview Badge', onPress: () => setBadgePreviewVisible(true) },
@@ -249,7 +253,11 @@ export default function SettingsScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+      testID="settings-screen"
+      accessibilityLabel="Settings screen"
+    >
       <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
         <Text style={styles.headerTitle}>Settings</Text>
       </View>

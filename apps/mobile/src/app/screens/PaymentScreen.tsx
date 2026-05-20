@@ -117,6 +117,12 @@ interface AccountCreditCheckResult {
   overage: string;
 }
 
+interface CashTenderOption {
+  label: string;
+  amount: number;
+  exact?: boolean;
+}
+
 function methodLabel(key: string): string {
   if (key === 'CHARGE') return 'Charge';
   return STANDARD_METHODS.find(m => m.key === key)?.label || key;
@@ -129,6 +135,28 @@ function receiptPaymentLabel(key: string): string {
 
 function installmentLabel(key: string): string {
   return INSTALLMENT_TERMS.find(t => t.key === key)?.label || key;
+}
+
+function buildCashTenderOptions(due: number, total: number): CashTenderOption[] {
+  const base = due > MONEY_EPSILON ? due : total;
+  if (base <= MONEY_EPSILON) return [];
+
+  const roundTo = (step: number) => Math.ceil(base / step) * step;
+  const options: CashTenderOption[] = [
+    { label: 'Exact', amount: Math.round(base * 100) / 100, exact: true },
+    { label: 'Round 50', amount: roundTo(50) },
+    { label: 'Round 100', amount: roundTo(100) },
+    { label: 'Round 500', amount: roundTo(500) },
+    { label: 'Round 1K', amount: roundTo(1000) },
+  ];
+
+  const seen = new Set<string>();
+  return options.filter(option => {
+    const key = option.amount.toFixed(2);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return option.amount > 0;
+  });
 }
 
 /* ────────────────────────────────────────────────── */
@@ -301,6 +329,10 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
     if (needsRef) return 'Reference or approval number is required before adding this payment.';
     return 'Enter the payment amount to continue.';
   }, [customerId, isCash, isCharge, isFullyPaid, needsRef, splitMode]);
+  const cashTenderOptions = useMemo(
+    () => buildCashTenderOptions(remaining, grandTotal),
+    [grandTotal, remaining],
+  );
   const activeMethodLabel = isCharge ? 'Charge' : methodLabel(formMethod);
   const displayError = error ? formatPosError(error, 'Checkout failed') : null;
 
@@ -541,11 +573,10 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
   }, [customerId, remaining]);
 
   // ── Quick amount helpers ──
-  const addToTendered = useCallback((amount: number) => {
-    const newAmount = parsedCashTendered + amount;
-    setFormCashTendered(String(newAmount));
+  const setTenderedAmount = useCallback((amount: number) => {
+    setFormCashTendered(amount.toFixed(2));
     flashTenderedInput();
-  }, [parsedCashTendered, flashTenderedInput]);
+  }, [flashTenderedInput]);
 
   const handleClearTendered = useCallback(() => {
     if (parsedCashTendered === 0) return;
@@ -667,7 +698,11 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
           const receiptData = buildReceiptData(res.receiptNumber || res.saleNo);
           setCompletedReceiptData(receiptData);
           setCompletedChange(getCashChange(payments));
-          const printResult = await printReceiptSafely(printer, receiptData).catch(() => ({ success: false, error: 'Print failed' }));
+          const printResult = await printReceiptSafely(printer, receiptData, {
+            type: 'receipt',
+            title: `Receipt ${res.receiptNumber || res.saleNo}`,
+            sourceId: res.saleId,
+          }).catch(() => ({ success: false, error: 'Print failed' }));
           setReceiptPrintState(printResult.success ? 'printed' : 'failed');
           if (hasCashPayment(payments)) {
             try {
@@ -756,7 +791,11 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
     const receiptData = completedReceiptData ?? buildReceiptData(result.receiptNumber || result.saleNo);
     setReceiptPrinting(true);
     try {
-      const printResult = await printReceiptSafely(printer, receiptData).catch(() => ({ success: false, error: 'Print failed' }));
+      const printResult = await printReceiptSafely(printer, receiptData, {
+        type: 'receipt',
+        title: `Receipt ${result.receiptNumber || result.saleNo}`,
+        sourceId: result.saleId,
+      }).catch(() => ({ success: false, error: 'Print failed' }));
       setReceiptPrintState(printResult.success ? 'printed' : 'failed');
       if (!printResult.success) {
         Alert.alert(
@@ -970,7 +1009,11 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
   /*  MAIN PAYMENT FORM — NO SCROLL LAYOUT           */
   /* ════════════════════════════════════════════════ */
   return (
-    <SafeAreaView style={s.container}>
+    <SafeAreaView
+      style={s.container}
+      testID="payment-screen"
+      accessibilityLabel="Payment screen"
+    >
       <View style={s.paymentContainer}>
 
         {/* ── 1. Order Summary (compressed) ── */}
@@ -1271,31 +1314,20 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
         {/* ── 5. Quick Amount Buttons (CASH only) ── */}
         {!isFullyPaid && isCash && (
           <View style={s.quickRow}>
-            <Pressable
-              style={s.quickBtnExact}
-              onPress={() => {
-                const exactAmt = remaining > 0 ? remaining : grandTotal;
-                setFormCashTendered(exactAmt.toFixed(2));
-                flashTenderedInput();
-              }}
-            >
-              <Text style={s.quickBtnExactText}>Exact</Text>
-            </Pressable>
-            <Pressable style={s.quickBtnLg} onPress={() => addToTendered(1000)}>
-              <Text style={s.quickBtnText}>+1K</Text>
-            </Pressable>
-            <Pressable style={s.quickBtnLg} onPress={() => addToTendered(500)}>
-              <Text style={s.quickBtnText}>+500</Text>
-            </Pressable>
-            <Pressable style={s.quickBtnSm} onPress={() => addToTendered(200)}>
-              <Text style={s.quickBtnText}>+200</Text>
-            </Pressable>
-            <Pressable style={s.quickBtnSm} onPress={() => addToTendered(100)}>
-              <Text style={s.quickBtnText}>+100</Text>
-            </Pressable>
-            <Pressable style={s.quickBtnSm} onPress={() => addToTendered(50)}>
-              <Text style={s.quickBtnText}>+50</Text>
-            </Pressable>
+            {cashTenderOptions.map(option => (
+              <Pressable
+                key={`${option.label}-${option.amount}`}
+                style={option.exact ? s.quickBtnExact : s.quickBtnLg}
+                onPress={() => setTenderedAmount(option.amount)}
+              >
+                <Text style={option.exact ? s.quickBtnExactText : s.quickBtnText}>
+                  {option.label}
+                </Text>
+                {!option.exact && (
+                  <Text style={s.quickBtnAmount}>{fmtPHP(option.amount)}</Text>
+                )}
+              </Pressable>
+            ))}
             <Pressable
               style={[s.quickBtnClear, parsedCashTendered === 0 && { opacity: 0.3 }]}
               onPress={handleClearTendered}
@@ -1896,11 +1928,13 @@ const styles = StyleSheet.create({
   /* ── 5. Quick Amount Buttons ── */
   quickRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     paddingVertical: spacing.xs,
   },
   quickBtnLg: {
-    flex: 1.5,
+    flex: 1,
+    minWidth: 104,
     paddingVertical: spacing.sm,
     borderRadius: radius.pill,
     backgroundColor: colors.bg.surface,
@@ -1926,8 +1960,15 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: colors.text.secondary,
   },
+  quickBtnAmount: {
+    fontFamily: fonts.mono.medium,
+    fontSize: fontSize.xs,
+    color: colors.text.muted,
+    marginTop: 2,
+  },
   quickBtnExact: {
-    flex: 1.2,
+    flex: 1,
+    minWidth: 92,
     paddingVertical: spacing.sm,
     borderRadius: radius.pill,
     backgroundColor: colors.accent.glow,

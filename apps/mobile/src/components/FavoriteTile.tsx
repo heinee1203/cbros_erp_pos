@@ -8,7 +8,7 @@ interface FavoriteTileProps {
   stockLevel: number;
   reorderPoint: number;
   onPress: () => void;
-  onLongPress: () => void;
+  onLongPress?: () => void;
 }
 
 function FavoriteTileInner({

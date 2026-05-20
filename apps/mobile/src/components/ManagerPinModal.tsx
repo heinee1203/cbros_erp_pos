@@ -4,6 +4,7 @@ import { PinPad } from './PinPad';
 import { apiFetch } from '@/services/api-client';
 import { formatPosError } from '@/utils/pos-error-messages';
 import { getAuthorizationMethodLabel } from '@/utils/authorization-credentials';
+import { recordProtectedActionAuth } from '@/storage/protected-session';
 import { colors, spacing, radius, fonts, fontSize } from '@/theme';
 import { Icon } from '@/components/ui';
 
@@ -71,20 +72,28 @@ export function ManagerPinModal({
       }
 
       const approverName = result.fullName ?? 'Manager';
-      setError(null);
-      onApprove(approverName, {
+      const approval: ManagerAuthorization = {
         approverName,
         userId: result.userId,
         role: result.role,
         credential,
         method,
+      };
+      setError(null);
+      recordProtectedActionAuth({
+        approverName,
+        userId: result.userId,
+        role: result.role,
+        method,
+        action,
       });
+      onApprove(approverName, approval);
       return true;
     } catch (err: any) {
       setError(formatPosError(err, 'Authorization failed'));
       return false;
     }
-  }, [requiredLevel, onApprove]);
+  }, [action, requiredLevel, onApprove]);
 
   const verifyPin = useCallback((pin: string) =>
     verifyAuthorization(pin, 'pin'),
@@ -106,6 +115,7 @@ export function ManagerPinModal({
       visible={visible}
       transparent
       animationType="fade"
+      accessibilityLabel="Manager authorization modal"
       onRequestClose={handleCancel}
     >
       <Pressable style={styles.overlay} onPress={handleCancel}>

@@ -3,6 +3,7 @@ import { View, Text, Pressable, StyleSheet, Alert } from 'react-native';
 import { colors, textStyles, spacing } from '@/theme';
 import { useLayout } from '@/hooks/use-layout';
 import { getFavoriteIds, removeFavorite } from '@/storage/favorites';
+import { getRecentProducts } from '@/storage/recent-products';
 import { FavoriteTile } from './FavoriteTile';
 import { storage } from '@/storage/mmkv';
 
@@ -14,6 +15,8 @@ interface Product {
   retailPrice: number;
   available: number;
   reorderPoint: number;
+  sku?: string | null;
+  barcode?: string | null;
 }
 
 interface FavoritesGridProps {
@@ -26,6 +29,7 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
   const styles = createStyles();
   const { favoriteColumns, favoriteMax, screenPadding } = useLayout();
   const favoriteIds = getFavoriteIds();
+  const recentProducts = getRecentProducts();
   const [collapsed, setCollapsed] = useState(
     () => storage.getBoolean(COLLAPSED_KEY) ?? false,
   );
@@ -40,15 +44,18 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
     });
   }, []);
 
-  if (favoriteIds.length === 0) return null;
-
   // Resolve products, filter out any that no longer exist
   const favorites = favoriteIds
     .map(id => productMap.get(id))
     .filter((p): p is Product => p != null)
     .slice(0, favoriteMax);
+  const favoriteIdSet = new Set(favorites.map(product => product.id));
+  const recents = recentProducts
+    .map(recent => productMap.get(recent.id) ?? recent)
+    .filter((product): product is Product => !!product && !favoriteIdSet.has(product.id))
+    .slice(0, favoriteMax);
 
-  if (favorites.length === 0) return null;
+  if (favorites.length === 0 && recents.length === 0) return null;
 
   const handleFavoriteTap = (product: Product) => {
     // Validate required fields before adding to cart
@@ -80,11 +87,13 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
     );
   };
 
-  // Build rows using adaptive column count
-  const rows: Product[][] = [];
-  for (let i = 0; i < favorites.length; i += favoriteColumns) {
-    rows.push(favorites.slice(i, i + favoriteColumns));
-  }
+  const buildRows = (products: Product[]) => {
+    const rows: Product[][] = [];
+    for (let i = 0; i < products.length; i += favoriteColumns) {
+      rows.push(products.slice(i, i + favoriteColumns));
+    }
+    return rows;
+  };
 
   return (
     <View style={[styles.container, { paddingHorizontal: screenPadding }]}>
@@ -95,27 +104,64 @@ export function FavoritesGrid({ productMap, onAddToCart }: FavoritesGridProps) {
 
       {!collapsed && (
         <View style={styles.grid}>
-          {rows.map((row, ri) => (
-            <View key={ri} style={styles.row}>
-              {row.map(product => (
-                <FavoriteTile
-                  key={product.id}
-                  name={product.name}
-                  price={product.retailPrice}
-                  stockLevel={product.available}
-                  reorderPoint={product.reorderPoint}
-                  onPress={() => handleFavoriteTap(product)}
-                  onLongPress={() => handleLongPress(product)}
-                />
-              ))}
-              {/* Fill empty slots to maintain grid alignment */}
-              {row.length < favoriteColumns && Array.from({ length: favoriteColumns - row.length }).map((_, i) => (
-                <View key={`empty-${i}`} style={styles.emptySlot} />
-              ))}
-            </View>
-          ))}
+          {favorites.length > 0 && (
+            <ProductTileSection
+              label="Favorites"
+              rows={buildRows(favorites)}
+              favoriteColumns={favoriteColumns}
+              onTap={handleFavoriteTap}
+              onLongPress={handleLongPress}
+            />
+          )}
+          {recents.length > 0 && (
+            <ProductTileSection
+              label="Recent"
+              rows={buildRows(recents)}
+              favoriteColumns={favoriteColumns}
+              onTap={handleFavoriteTap}
+            />
+          )}
         </View>
       )}
+    </View>
+  );
+}
+
+function ProductTileSection({
+  label,
+  rows,
+  favoriteColumns,
+  onTap,
+  onLongPress,
+}: {
+  label: string;
+  rows: Product[][];
+  favoriteColumns: number;
+  onTap: (product: Product) => void;
+  onLongPress?: (product: Product) => void;
+}) {
+  const styles = createStyles();
+  return (
+    <View style={styles.tileSection}>
+      <Text style={styles.sectionLabel}>{label}</Text>
+      {rows.map((row, ri) => (
+        <View key={`${label}-${ri}`} style={styles.row}>
+          {row.map(product => (
+            <FavoriteTile
+              key={product.id}
+              name={product.name}
+              price={product.retailPrice}
+              stockLevel={product.available}
+              reorderPoint={product.reorderPoint}
+              onPress={() => onTap(product)}
+              onLongPress={onLongPress ? () => onLongPress(product) : undefined}
+            />
+          ))}
+          {row.length < favoriteColumns && Array.from({ length: favoriteColumns - row.length }).map((_, i) => (
+            <View key={`empty-${i}`} style={styles.emptySlot} />
+          ))}
+        </View>
+      ))}
     </View>
   );
 }
@@ -143,6 +189,15 @@ const createStyles = () => StyleSheet.create({
   },
   grid: {
     gap: spacing.sm,
+  },
+  tileSection: {
+    gap: spacing.sm,
+  },
+  sectionLabel: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
   },
   row: {
     flexDirection: 'row',

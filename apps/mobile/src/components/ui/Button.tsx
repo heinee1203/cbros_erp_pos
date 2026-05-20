@@ -22,6 +22,9 @@ interface ButtonProps {
   icon?: React.ReactNode;
   style?: ViewStyle;
   textStyle?: TextStyle;
+  testID?: string;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }
 
 const getVariantStyles = (): Record<
@@ -63,6 +66,9 @@ export function Button({
   icon,
   style,
   textStyle: textStyleOverride,
+  testID,
+  accessibilityLabel,
+  accessibilityHint,
 }: ButtonProps) {
   const styles = createStyles();
   const variantStyles = getVariantStyles();
@@ -118,6 +124,9 @@ export function Button({
       ]}
     >
       <Pressable
+        testID={testID}
+        accessibilityLabel={accessibilityLabel ?? title}
+        accessibilityHint={accessibilityHint}
         onPress={onPress}
         onPressIn={handlePressIn}
         onPressOut={handlePressOut}

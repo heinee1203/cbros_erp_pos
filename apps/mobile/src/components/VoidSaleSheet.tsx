@@ -7,6 +7,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { apiFetch } from '@/services/api-client';
 import { queryClient } from '@/services/query-client';
 import { logElevation } from '@/services/audit-logger';
+import { getProtectedActionFreshnessLabel, isProtectedActionFresh } from '@/storage/protected-session';
 import { formatPosError } from '@/utils/pos-error-messages';
 import { colors, layout, spacing, textStyles } from '@/theme';
 
@@ -20,6 +21,7 @@ interface VoidSaleSheetProps {
 
 const VOID_CONFIRMATION = 'VOID';
 const MIN_VOID_REASON_LENGTH = 8;
+const MIN_VOID_NOTE_LENGTH = 5;
 const VOID_REASON_PRESETS = [
   'Customer cancelled',
   'Duplicate sale',
@@ -38,17 +40,22 @@ export function VoidSaleSheet({
   const { can, requiredLevel } = usePosPermission();
   const { user } = useAuth();
   const [reason, setReason] = useState('');
+  const [auditNote, setAuditNote] = useState('');
   const [confirmText, setConfirmText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [authorizationVisible, setAuthorizationVisible] = useState(false);
   const trimmedReason = reason.trim();
+  const trimmedAuditNote = auditNote.trim();
   const reasonReady = trimmedReason.length >= MIN_VOID_REASON_LENGTH;
+  const noteReady = trimmedAuditNote.length >= MIN_VOID_NOTE_LENGTH;
   const confirmationReady = confirmText.trim().toUpperCase() === VOID_CONFIRMATION;
-  const canSubmitVoid = reasonReady && confirmationReady && !submitting;
+  const canSubmitVoid = reasonReady && noteReady && confirmationReady && !submitting;
+  const canVoidWithFreshSession = can('voidSale') && isProtectedActionFresh();
 
   useEffect(() => {
     if (visible) {
       setReason('');
+      setAuditNote('');
       setConfirmText('');
       setAuthorizationVisible(false);
       setSubmitting(false);
@@ -66,6 +73,10 @@ export function VoidSaleSheet({
       Alert.alert('Reason Required', 'Enter a clear reason before voiding this sale.');
       return;
     }
+    if (!noteReady) {
+      Alert.alert('Audit Note Required', 'Add a short free-text note before voiding this sale.');
+      return;
+    }
     if (!confirmationReady) {
       Alert.alert('Confirm Void', 'Type VOID before voiding this sale.');
       return;
@@ -77,7 +88,7 @@ export function VoidSaleSheet({
         method: 'POST',
         requireLockedLocation: true,
         body: JSON.stringify({
-          notes: trimmedReason,
+          notes: `${trimmedReason} | Note: ${trimmedAuditNote}`,
           authorizationCredential: approval?.credential,
           authorizationMethod: approval?.method,
         }),
@@ -92,6 +103,7 @@ export function VoidSaleSheet({
           saleId,
           saleNo,
           reason: trimmedReason,
+          note: trimmedAuditNote,
           authorizationMethod: approval?.method ?? 'session',
           authorizationUserId: approval?.userId ?? user?.id,
           authorizationRole: approval?.role ?? user?.role,
@@ -109,8 +121,10 @@ export function VoidSaleSheet({
     confirmationReady,
     onVoided,
     reasonReady,
+    noteReady,
     saleId,
     saleNo,
+    trimmedAuditNote,
     trimmedReason,
     user?.fullName,
     user?.id,
@@ -122,18 +136,22 @@ export function VoidSaleSheet({
       Alert.alert('Reason Required', 'Enter a clear reason before voiding this sale.');
       return;
     }
+    if (!noteReady) {
+      Alert.alert('Audit Note Required', 'Add a short free-text note before voiding this sale.');
+      return;
+    }
     if (!confirmationReady) {
       Alert.alert('Confirm Void', 'Type VOID before voiding this sale.');
       return;
     }
 
-    if (can('voidSale')) {
+    if (canVoidWithFreshSession) {
       void submitVoid();
       return;
     }
 
     setAuthorizationVisible(true);
-  }, [can, confirmationReady, reasonReady, submitVoid]);
+  }, [canVoidWithFreshSession, confirmationReady, noteReady, reasonReady, submitVoid]);
 
   const handleAuthorizationApproved = useCallback((
     _approverName: string,
@@ -155,7 +173,7 @@ export function VoidSaleSheet({
             <View style={styles.guardrailRow}>
               <Text style={styles.guardrailLabel}>Authorization</Text>
               <Text style={styles.guardrailValue}>
-                {can('voidSale') ? 'Current session' : 'Manager required'}
+                {can('voidSale') ? getProtectedActionFreshnessLabel() : 'Manager required'}
               </Text>
             </View>
             <View style={styles.guardrailRow}>
@@ -163,9 +181,9 @@ export function VoidSaleSheet({
               <Text style={styles.guardrailValue}>Type {VOID_CONFIRMATION}</Text>
             </View>
           </View>
-          {!can('voidSale') && (
+          {!canVoidWithFreshSession && (
             <Text style={styles.authorizationHint}>
-              Manager authorization will be required after the reason is entered.
+              Fresh manager authorization will be required after the reason is entered.
             </Text>
           )}
           <View style={styles.reasonPresetRow}>
@@ -204,6 +222,20 @@ export function VoidSaleSheet({
               : `Enter at least ${MIN_VOID_REASON_LENGTH} characters for the audit reason.`}
           </Text>
           <Input
+            value={auditNote}
+            onChangeText={setAuditNote}
+            placeholder="Required audit note..."
+            multiline
+          />
+          <Text style={[
+            styles.readinessHint,
+            noteReady ? styles.readinessHintReady : styles.readinessHintBlocked,
+          ]}>
+            {noteReady
+              ? 'Audit note is ready.'
+              : `Add at least ${MIN_VOID_NOTE_LENGTH} characters explaining the void.`}
+          </Text>
+          <Input
             value={confirmText}
             onChangeText={(value) => setConfirmText(value.toUpperCase())}
             placeholder={`Type ${VOID_CONFIRMATION} to confirm`}
@@ -218,7 +250,7 @@ export function VoidSaleSheet({
           <View style={styles.actions}>
             <Button title="Cancel" variant="secondary" onPress={closeSheet} style={styles.actionButton} />
             <Button
-              title={can('voidSale') ? 'Void Sale' : 'Authorize Void'}
+              title={canVoidWithFreshSession ? 'Void Sale' : 'Authorize Void'}
               variant="danger"
               onPress={handleVoid}
               loading={submitting}

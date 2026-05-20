@@ -15,6 +15,11 @@ import { Icon } from '@/components/ui';
 import {
   parseAuthorizationCredentialInput,
 } from '@/utils/authorization-credentials';
+import {
+  recordScannerError,
+  recordScannerScan,
+  setScannerCaptureActive,
+} from '@/storage/scanner-diagnostics';
 
 interface PinPadProps {
   visible: boolean;
@@ -81,7 +86,10 @@ export function PinPad({
   const verifyScannedCredential = useCallback(async (credential: string) => {
     if (!verifyCredential || verifyingRef.current) return;
     const parsed = parseAuthorizationCredentialInput(credential);
-    if (!parsed?.credential) return;
+    if (!parsed?.credential) {
+      recordScannerError('manual', 'Authorization credential could not be parsed.', 'Manager authorization');
+      return;
+    }
 
     verifyingRef.current = true;
     setVerifying(true);
@@ -89,8 +97,10 @@ export function PinPad({
     setCredentialStatus(`${parsed.label} detected`);
     try {
       const valid = await verifyCredential(parsed.credential, parsed.method);
+      recordScannerScan(parsed.method, parsed.credential, undefined, 'Manager authorization');
       finishVerification(valid, `${parsed.label} not authorized`);
     } catch {
+      recordScannerError(parsed.method, 'Authorization verification failed.', 'Manager authorization');
       finishVerification(false, 'Verification failed');
     } finally {
       verifyingRef.current = false;
@@ -114,6 +124,7 @@ export function PinPad({
     if (!visible || !verifyCredential) return;
 
     setCredentialInput('');
+    setScannerCaptureActive(true, 'Manager authorization');
     const focusTimer = setTimeout(focusCredentialInput, 100);
     const refocusTimer = setInterval(focusCredentialInput, 1500);
     scanner.startListening();
@@ -126,6 +137,7 @@ export function PinPad({
       clearInterval(refocusTimer);
       unsubscribe();
       scanner.stopListening();
+      setScannerCaptureActive(false);
     };
   }, [focusCredentialInput, scanner, verifyCredential, verifyScannedCredential, visible]);
 

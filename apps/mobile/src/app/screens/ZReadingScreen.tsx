@@ -197,6 +197,7 @@ export default function ZReadingScreen() {
   const [cashTendered, setCashTendered] = useState('');
   const [closing, setClosing] = useState(false);
   const [printing, setPrinting] = useState(false);
+  const [printStatus, setPrintStatus] = useState<'not_printed' | 'printed' | 'failed'>('not_printed');
   const [reconcilingPending, setReconcilingPending] = useState(false);
   const [reconcilingDrawer, setReconcilingDrawer] = useState(false);
   const [drawerAuthorizationVisible, setDrawerAuthorizationVisible] = useState(false);
@@ -481,11 +482,17 @@ export default function ZReadingScreen() {
         },
       };
       const receiptData = buildZReadingReceipt(printData, mode === 'view' ? 'view' : 'close', paperWidth);
-      const result = await printEscposRawSafely(printer, receiptData);
+      const result = await printEscposRawSafely(printer, receiptData, {
+        type: 'z-reading',
+        title: `Z-Reading ${shiftId.slice(0, 8)}`,
+        sourceId: shiftId,
+      });
+      setPrintStatus(result.success ? 'printed' : 'failed');
       if (!result.success) {
         Alert.alert('Print Error', result.error || 'Failed to print');
       }
     } catch (err: any) {
+      setPrintStatus('failed');
       Alert.alert('Print Error', err.message || 'Unexpected error');
     } finally {
       setPrinting(false);
@@ -674,6 +681,12 @@ export default function ZReadingScreen() {
                 label="Closeout notes"
                 detail={needsCloseoutNotes ? 'Required for exceptions' : 'Optional'}
                 ready={!needsCloseoutNotes || notes.trim().length >= 3}
+              />
+              <ReadinessRow
+                label="Z-reading print"
+                detail={printStatus === 'printed' ? 'Printed successfully' : printStatus === 'failed' ? 'Queued for retry in diagnostics' : 'Print before or after closeout'}
+                ready={printStatus === 'printed'}
+                tone={printStatus === 'failed' ? 'warning' : 'default'}
               />
             </View>
             {hasAuditExceptions && (

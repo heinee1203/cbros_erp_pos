@@ -50,6 +50,9 @@ export interface CartLine {
   // Price override
   overridePrice: number | null;     // null = no override, use unitPrice
   overrideApprovedBy: string | null; // manager name who approved
+  overrideAuthorizationMethod?: 'pin' | 'barcode' | 'card' | 'session' | null;
+  overrideApprovedAt?: string | null;
+  overrideNote?: string | null;
   // Technician assignment (labor items)
   technicianId: string | null;
 }
@@ -106,7 +109,15 @@ interface CartActions {
   setLineSerials: (lineId: string, serials: string[]) => void;
   setLineDotAllocation: (lineId: string, allocation: { dotBatchId: string; dotCode: string; quantity: number }[]) => void;
   setLineWarrantyPhoto: (lineId: string, uri: string | null) => void;
-  setLinePriceOverride: (lineId: string, newPrice: number, approvedBy: string) => void;
+  setLinePriceOverride: (
+    lineId: string,
+    newPrice: number,
+    approvedBy: string,
+    audit?: {
+      authorizationMethod?: 'pin' | 'barcode' | 'card' | 'session';
+      note?: string;
+    },
+  ) => void;
   clearLinePriceOverride: (lineId: string) => void;
   setLineTechnician: (lineId: string, technicianId: string | null) => void;
   holdCurrentCart: () => boolean;            // save current cart, clear, return success
@@ -260,6 +271,9 @@ export const useCartStore = create<CartState>((set, get) => ({
           dotAllocation: null,
           overridePrice: null,
           overrideApprovedBy: null,
+          overrideAuthorizationMethod: null,
+          overrideApprovedAt: null,
+          overrideNote: null,
           technicianId: null,
         };
         newLines = [...state.lines, newLine];
@@ -432,11 +446,18 @@ export const useCartStore = create<CartState>((set, get) => ({
     });
   },
 
-  setLinePriceOverride: (lineId, newPrice, approvedBy) => {
+  setLinePriceOverride: (lineId, newPrice, approvedBy, audit) => {
     set(state => {
       const newLines = state.lines.map(l => {
         if (l.id !== lineId) return l;
-        const overridden = { ...l, overridePrice: newPrice, overrideApprovedBy: approvedBy };
+        const overridden = {
+          ...l,
+          overridePrice: newPrice,
+          overrideApprovedBy: approvedBy,
+          overrideAuthorizationMethod: audit?.authorizationMethod ?? 'session',
+          overrideApprovedAt: new Date().toISOString(),
+          overrideNote: audit?.note ?? null,
+        };
         overridden.lineTotal = computeLineTotal({ ...overridden, unitPrice: newPrice });
         return overridden;
       });
@@ -450,7 +471,14 @@ export const useCartStore = create<CartState>((set, get) => ({
     set(state => {
       const newLines = state.lines.map(l => {
         if (l.id !== lineId) return l;
-        const restored = { ...l, overridePrice: null, overrideApprovedBy: null };
+        const restored = {
+          ...l,
+          overridePrice: null,
+          overrideApprovedBy: null,
+          overrideAuthorizationMethod: null,
+          overrideApprovedAt: null,
+          overrideNote: null,
+        };
         restored.lineTotal = computeLineTotal(restored);
         return restored;
       });

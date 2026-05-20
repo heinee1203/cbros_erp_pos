@@ -33,6 +33,7 @@ import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import { ProductDetailSheet } from '@/components/ProductDetailSheet';
 import { BarcodeScanModal } from '@/components/BarcodeScanModal';
 import { useTheme } from '@/theme/ThemeContext';
+import { recordRecentProduct } from '@/storage/recent-products';
 import type { POSStackParamList } from '@/app/MainTabs';
 
 type Nav = StackNavigationProp<POSStackParamList, 'Catalog'>;
@@ -159,6 +160,15 @@ export default function CatalogScreen() {
       isSerialized: item.isSerialized,
       isTire: item.isTire,
       warrantyMonths: item.warrantyMonths,
+    });
+    recordRecentProduct({
+      id: item.serverId,
+      name: item.name,
+      sku: item.sku || item.mnemonicSku,
+      barcode: item.barcode,
+      retailPrice: overridePrice ?? item.unitPrice,
+      available: item.stockLevel - item.reservedLevel,
+      reorderPoint: item.reorderPoint,
     });
     showToast(`Added: ${item.name}`);
     return true;
@@ -400,7 +410,11 @@ export default function CatalogScreen() {
   ), [handleProductPress, handleProductLongPress]);
 
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      testID="pos-catalog-screen"
+      accessibilityLabel="POS catalog screen"
+    >
       {/* Header — hide Cart button on tablet (cart panel is visible) */}
       <View style={[styles.header, { paddingHorizontal: screenPadding }]}>
         <Text style={styles.headerTitle}>Catalog</Text>
@@ -439,6 +453,8 @@ export default function CatalogScreen() {
           <Icon name="search" size={18} color={colors.text.muted} />
           <TextInput
             ref={searchInputRef}
+            testID="catalog-search-input"
+            accessibilityLabel="Catalog search"
             style={styles.searchInput}
             value={query}
             onChangeText={setQuery}
@@ -455,6 +471,8 @@ export default function CatalogScreen() {
             blurOnSubmit={false}
           />
           <Pressable
+            testID="catalog-scan-button"
+            accessibilityLabel="Scan catalog barcode"
             style={styles.scanButton}
             onPress={handleScanButton}
             android_ripple={{ color: colors.accent.glow, borderless: true }}

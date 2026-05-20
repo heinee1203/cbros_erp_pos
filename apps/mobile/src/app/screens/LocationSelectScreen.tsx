@@ -59,7 +59,11 @@ export default function LocationSelectScreen({ onLocationSelected }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+      testID="store-registration-screen"
+      accessibilityLabel="Store registration screen"
+    >
       <View style={styles.header}>
         <Text style={styles.greeting}>
           Welcome, {user?.fullName?.split(' ')[0] || 'User'}
@@ -78,6 +82,8 @@ export default function LocationSelectScreen({ onLocationSelected }: Props) {
           const isSelected = selectedId === item.id;
           return (
             <Pressable
+              testID={`store-option-${item.code || item.id}`}
+              accessibilityLabel={`Store option ${item.code || item.name}`}
               style={[styles.locationCard, isSelected && styles.locationCardActive]}
               onPress={() => handleSelect(item)}
               disabled={isSelected}

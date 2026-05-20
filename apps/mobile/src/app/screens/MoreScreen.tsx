@@ -102,7 +102,12 @@ export default function MoreScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      testID="more-menu-screen"
+      accessibilityLabel="More menu"
+    >
       <View style={styles.metrics}>
         <Metric label="Held" value={String(heldCount)} />
         <Metric label="Pending Sync" value={String(pendingCount)} tone={pendingCount > 0 ? 'warning' : 'default'} />
@@ -115,6 +120,8 @@ export default function MoreScreen() {
           return (
             <Pressable
               key={item.route}
+              testID={`more-menu-${item.route}`}
+              accessibilityLabel={`${item.label} menu item`}
               style={({ pressed }) => [
                 styles.card,
                 !item.enabled && styles.cardDisabled,

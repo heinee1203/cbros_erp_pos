@@ -116,7 +116,11 @@ function DeviceLockedScreen({
 
   return (
     <View style={lockedStyles.container}>
-      <View style={lockedStyles.card}>
+      <View
+        style={lockedStyles.card}
+        testID="device-locked-screen"
+        accessibilityLabel="Device locked to store"
+      >
         <View style={lockedStyles.badge}>
           <Text style={lockedStyles.badgeText}>A</Text>
         </View>

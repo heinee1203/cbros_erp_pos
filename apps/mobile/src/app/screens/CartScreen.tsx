@@ -57,6 +57,8 @@ type DiscountTarget =
   | { type: 'line'; line: CartLine }
   | { type: 'cart' };
 
+const MIN_PRICE_OVERRIDE_NOTE_LENGTH = 5;
+
 function getLineGross(line: CartLine): number {
   return (line.overridePrice ?? line.unitPrice) * line.quantity;
 }
@@ -78,6 +80,13 @@ function authorizationAuditMetadata(approval?: ManagerAuthorization): Record<str
     authorizationUserId: approval?.userId,
     authorizationRole: approval?.role,
   };
+}
+
+function authorizationMethodLabel(method?: string | null): string {
+  if (method === 'pin') return 'PIN';
+  if (method === 'barcode') return 'Barcode';
+  if (method === 'card') return 'Card';
+  return 'Session';
 }
 
 export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
@@ -121,6 +130,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   // Price override modal state
   const [priceOverrideTarget, setPriceOverrideTarget] = useState<CartLine | null>(null);
   const [priceOverrideValue, setPriceOverrideValue] = useState('');
+  const [priceOverrideNote, setPriceOverrideNote] = useState('');
 
   // Discount modal state
   const [discountTarget, setDiscountTarget] = useState<DiscountTarget | null>(null);
@@ -152,6 +162,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
   const handlePriceOverride = useCallback((item: CartLine) => {
     setPriceOverrideTarget(item);
     setPriceOverrideValue(String(item.overridePrice ?? item.unitPrice));
+    setPriceOverrideNote('');
   }, []);
 
   const handlePriceOverrideSubmit = useCallback(() => {
@@ -161,15 +172,24 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
       Alert.alert('Invalid Price', 'Please enter a valid price.');
       return;
     }
+    const auditNote = priceOverrideNote.trim();
+    if (auditNote.length < MIN_PRICE_OVERRIDE_NOTE_LENGTH) {
+      Alert.alert('Audit Note Required', 'Add a short note before overriding this line price.');
+      return;
+    }
     const item = priceOverrideTarget;
     const oldPrice = item.overridePrice ?? item.unitPrice;
     setPriceOverrideTarget(null);
     setPriceOverrideValue('');
+    setPriceOverrideNote('');
     guard(
       'priceOverride',
       `Override price on ${item.name}\n${fmtPHP(oldPrice)} \u2192 ${fmtPHP(newPrice)}`,
       (approverName, approval) => {
-        setLinePriceOverride(item.id, newPrice, approverName);
+        setLinePriceOverride(item.id, newPrice, approverName, {
+          authorizationMethod: approval?.method ?? 'session',
+          note: auditNote,
+        });
         logElevation({
           action: 'price_override',
           description: `Price override on ${item.name} ${fmtPHP(oldPrice)} \u2192 ${fmtPHP(newPrice)}`,
@@ -180,12 +200,14 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             productId: item.productId,
             oldPrice,
             newPrice,
+            note: auditNote,
+            capturedAt: new Date().toISOString(),
             ...authorizationAuditMetadata(approval),
           },
         });
       },
     );
-  }, [priceOverrideTarget, priceOverrideValue, guard, setLinePriceOverride, user?.fullName]);
+  }, [priceOverrideNote, priceOverrideTarget, priceOverrideValue, guard, setLinePriceOverride, user?.fullName]);
 
   const closeDiscountModal = useCallback(() => {
     setDiscountTarget(null);
@@ -554,10 +576,15 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
             )}
             {/* Price override display */}
             {item.overridePrice != null && (
-              <View style={{ marginTop: 4, flexDirection: 'row', gap: 4, alignItems: 'center' }}>
+              <View style={{ marginTop: 4, flexDirection: 'row', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Text style={{ fontSize: 10, color: colors.status.warning, fontFamily: 'Outfit-Medium' }}>
                   Override: {fmtPHP(item.overridePrice)}
                 </Text>
+                <View style={styles.authorizationBadge}>
+                  <Text style={styles.authorizationBadgeText}>
+                    {authorizationMethodLabel(item.overrideAuthorizationMethod)}
+                  </Text>
+                </View>
                 {item.overrideApprovedBy && (
                   <Text style={{ fontSize: 9, color: colors.text.muted }}>
                     by {item.overrideApprovedBy}
@@ -601,7 +628,11 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
     : subtotal;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+      testID="pos-cart-screen"
+      accessibilityLabel="POS cart screen"
+    >
       {/* Header */}
       <View style={styles.cartHeader}>
         {!isTablet ? (
@@ -901,11 +932,11 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
         visible={priceOverrideTarget !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); }}
+        onRequestClose={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); setPriceOverrideNote(''); }}
       >
         <Pressable
           style={styles.priceOverrideOverlay}
-          onPress={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); }}
+          onPress={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); setPriceOverrideNote(''); }}
         >
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -933,7 +964,7 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
               <View style={styles.priceOverrideActions}>
                 <Pressable
                   style={styles.priceOverrideCancelBtn}
-                  onPress={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); }}
+                  onPress={() => { setPriceOverrideTarget(null); setPriceOverrideValue(''); setPriceOverrideNote(''); }}
                 >
                   <Text style={styles.priceOverrideCancelText}>Cancel</Text>
                 </Pressable>
@@ -992,6 +1023,22 @@ export default function CartScreen({ onProceedToPayment }: CartScreenProps) {
                 autoFocus
                 selectTextOnFocus
               />
+              <TextInput
+                style={[styles.priceOverrideInput, styles.priceOverrideNoteInput]}
+                value={priceOverrideNote}
+                onChangeText={setPriceOverrideNote}
+                placeholder="Required audit note"
+                placeholderTextColor={colors.text.muted}
+                multiline
+              />
+              <Text style={[
+                styles.priceOverrideAuditHint,
+                priceOverrideNote.trim().length >= MIN_PRICE_OVERRIDE_NOTE_LENGTH && styles.priceOverrideAuditHintReady,
+              ]}>
+                {priceOverrideNote.trim().length >= MIN_PRICE_OVERRIDE_NOTE_LENGTH
+                  ? 'Audit note ready.'
+                  : `Add at least ${MIN_PRICE_OVERRIDE_NOTE_LENGTH} characters for manager review.`}
+              </Text>
               <View style={styles.priceOverrideActions}>
                 <Pressable style={styles.priceOverrideCancelBtn} onPress={closeDiscountModal}>
                   <Text style={styles.priceOverrideCancelText}>Cancel</Text>
@@ -1404,6 +1451,20 @@ const createStyles = () => StyleSheet.create({
     fontFamily: fonts.body.medium,
     color: colors.status.danger,
   },
+  authorizationBadge: {
+    minHeight: 18,
+    borderRadius: radius.xs,
+    borderWidth: 1,
+    borderColor: colors.accent.primary,
+    backgroundColor: colors.accent.muted,
+    paddingHorizontal: 5,
+    justifyContent: 'center',
+  },
+  authorizationBadgeText: {
+    fontSize: 9,
+    fontFamily: fonts.body.semiBold,
+    color: colors.accent.primary,
+  },
   qtyControls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1686,6 +1747,23 @@ const createStyles = () => StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border.light,
     marginBottom: spacing.lg,
+  },
+  priceOverrideNoteInput: {
+    minHeight: 72,
+    textAlign: 'left',
+    textAlignVertical: 'top',
+    fontSize: fontSize.base,
+    fontFamily: fonts.body.medium,
+    marginBottom: spacing.xs,
+  },
+  priceOverrideAuditHint: {
+    fontSize: fontSize.xs,
+    fontFamily: fonts.body.medium,
+    color: colors.text.muted,
+    marginBottom: spacing.lg,
+  },
+  priceOverrideAuditHintReady: {
+    color: colors.status.success,
   },
   priceOverrideActions: {
     flexDirection: 'row',

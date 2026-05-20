@@ -2,6 +2,8 @@ import { useState, useCallback } from 'react';
 import { usePosPermission } from './use-pos-permission';
 import type { PosPermission } from '@/config/pos-permissions';
 import type { ManagerAuthorization } from '@/components/ManagerPinModal';
+import { useAuth } from '@/hooks/use-auth';
+import { isProtectedActionFresh } from '@/storage/protected-session';
 
 interface ElevationRequest {
   permission: PosPermission;
@@ -11,22 +13,12 @@ interface ElevationRequest {
 }
 
 /**
- * Hook that gates an action behind manager PIN verification
- * when the current user lacks the required permission level.
- *
- * Usage:
- *   const { guard, elevationProps } = useRequireElevation();
- *
- *   // In handler:
- *   guard('priceOverride', 'Override price on Brake Pad', (approverName, approval) => {
- *     store.setLinePriceOverride(lineId, newPrice, approverName);
- *   });
- *
- *   // In JSX:
- *   <ManagerPinModal {...elevationProps} />
+ * Gates protected POS actions behind manager approval.
+ * A privileged cashier may continue only while the recent approval window is fresh.
  */
 export function useRequireElevation() {
   const { can, requiredLevel: getRequiredLevel } = usePosPermission();
+  const { user } = useAuth();
   const [request, setRequest] = useState<ElevationRequest | null>(null);
 
   const guard = useCallback((
@@ -34,12 +26,11 @@ export function useRequireElevation() {
     actionDescription: string,
     onApproved: (approverName: string, approval?: ManagerAuthorization) => void,
   ) => {
-    if (can(permission)) {
-      // User has permission — execute immediately with their own name
-      onApproved('Self');
+    if (can(permission) && isProtectedActionFresh()) {
+      onApproved(user?.fullName ?? user?.email ?? 'Self');
       return;
     }
-    // Need elevation — show PIN modal
+
     setRequest({
       permission,
       action: actionDescription,
@@ -49,7 +40,7 @@ export function useRequireElevation() {
         setRequest(null);
       },
     });
-  }, [can, getRequiredLevel]);
+  }, [can, getRequiredLevel, user?.email, user?.fullName]);
 
   const cancel = useCallback(() => setRequest(null), []);
 

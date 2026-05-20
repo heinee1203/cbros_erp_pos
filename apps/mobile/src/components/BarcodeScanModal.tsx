@@ -12,6 +12,11 @@ import {
 } from 'react-native';
 import { colors, fonts, fontSize, radius, spacing } from '@/theme';
 import { Icon } from '@/components/ui';
+import {
+  recordScannerError,
+  recordScannerScan,
+  setScannerCaptureActive,
+} from '@/storage/scanner-diagnostics';
 
 interface BarcodeScanModalProps {
   visible: boolean;
@@ -43,17 +48,22 @@ export function BarcodeScanModal({
 
     setValue('');
     setMessage(null);
+    setScannerCaptureActive(true, title);
     const timer = setTimeout(() => {
       inputRef.current?.focus();
     }, 180);
 
-    return () => clearTimeout(timer);
-  }, [visible]);
+    return () => {
+      clearTimeout(timer);
+      setScannerCaptureActive(false);
+    };
+  }, [title, visible]);
 
   const handleSubmit = useCallback(async () => {
     const barcode = value.trim();
     if (barcode.length < 4) {
       setMessage('Enter or scan at least 4 characters.');
+      recordScannerError('manual', 'Barcode input shorter than 4 characters.', title);
       inputRef.current?.focus();
       return;
     }
@@ -61,9 +71,11 @@ export function BarcodeScanModal({
     setSubmitting(true);
     setMessage(null);
     try {
+      recordScannerScan('manual', barcode, undefined, title);
       const accepted = await onSubmit(barcode);
       if (accepted === false) {
         setMessage('Barcode was not accepted. Try another code.');
+        recordScannerError('manual', 'Barcode was not accepted.', title);
         inputRef.current?.focus();
         return;
       }
@@ -73,7 +85,7 @@ export function BarcodeScanModal({
     } finally {
       setSubmitting(false);
     }
-  }, [onClose, onSubmit, value]);
+  }, [onClose, onSubmit, title, value]);
 
   const disabled = submitting || value.trim().length < 4;
 
@@ -82,6 +94,7 @@ export function BarcodeScanModal({
       visible={visible}
       transparent
       animationType="fade"
+      accessibilityLabel="Barcode scan modal"
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
@@ -103,6 +116,8 @@ export function BarcodeScanModal({
             <Text style={styles.inputLabel}>Barcode Input</Text>
             <TextInput
               ref={inputRef}
+              testID="barcode-scan-input"
+              accessibilityLabel="Barcode scan input"
               style={styles.input}
               value={value}
               onChangeText={setValue}
@@ -128,6 +143,8 @@ export function BarcodeScanModal({
 
           <View style={styles.actions}>
             <Pressable
+              testID="barcode-scan-cancel"
+              accessibilityLabel="Cancel barcode scan"
               style={styles.cancelButton}
               onPress={onClose}
               disabled={submitting}
@@ -136,6 +153,8 @@ export function BarcodeScanModal({
               <Text style={styles.cancelText}>Cancel</Text>
             </Pressable>
             <Pressable
+              testID="barcode-scan-submit"
+              accessibilityLabel={actionLabel}
               style={[styles.submitButton, disabled && styles.submitButtonDisabled]}
               onPress={handleSubmit}
               disabled={disabled}
