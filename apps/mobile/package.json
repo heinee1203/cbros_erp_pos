@@ -7,6 +7,8 @@
     "ios": "react-native run-ios",
     "start": "react-native start",
     "typecheck": "tsc --noEmit",
+    "smoke:android:auth": "node scripts/android-auth-smoke.js",
+    "smoke:android:ui": "node scripts/android-ui-qa-smoke.js",
     "clean": "cd android && ./gradlew clean && cd .."
   },
   "dependencies": {
