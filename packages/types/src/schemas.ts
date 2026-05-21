@@ -343,6 +343,8 @@ export const createTransferSchema = z.object({
   sourceLocationId: z.string().uuid(),
   destinationLocationId: z.string().uuid(),
   notes: z.string().max(1000).optional(),
+  authorizationCredential: z.string().min(1).max(255).optional(),
+  authorizationMethod: z.enum(["pin", "barcode", "card"]).optional(),
   items: z
     .array(
       z.object({
@@ -447,6 +449,8 @@ export const createAdjustmentSchema = z.object({
   direction: z.enum(["IN", "OUT"]),
   reasonCode: z.enum(ADJUSTMENT_REASON_CODES),
   notes: z.string().max(500).optional(),
+  authorizationCredential: z.string().min(1).max(255).optional(),
+  authorizationMethod: z.enum(["pin", "barcode", "card"]).optional(),
   effectiveAt: z.string().datetime().optional(),
   idempotencyKey: z.string().min(1).max(255),
 });
@@ -510,15 +514,24 @@ export const completeSaleSchema = z.object({
     )
     .optional(),
   allowNegativeStock: z.boolean().optional(),
-  overrideApproval: z.object({
-    pin: z.string().length(4),
-  }).optional(),
+  overrideApproval: z
+    .object({
+      pin: z.string().length(4).optional(),
+      credential: z.string().min(1).max(255).optional(),
+      method: z.enum(["pin", "barcode", "card"]).optional(),
+    })
+    .refine((approval) => Boolean(approval.pin || approval.credential), {
+      message: "Manager authorization credential is required",
+    })
+    .optional(),
 });
 export type CompleteSaleInput = z.infer<typeof completeSaleSchema>;
 
 // ── Sale: Void ──
 export const voidSaleSchema = z.object({
   notes: z.string().max(1000).optional(),
+  authorizationCredential: z.string().min(1).max(255).optional(),
+  authorizationMethod: z.enum(["pin", "barcode", "card"]).optional(),
 });
 export type VoidSaleInput = z.infer<typeof voidSaleSchema>;
 
@@ -533,6 +546,8 @@ export const refundSaleSchema = z.object({
     }),
   ).min(1, "At least one line must be selected for refund"),
   notes: z.string().max(1000).optional(),
+  authorizationCredential: z.string().min(1).max(255).optional(),
+  authorizationMethod: z.enum(["pin", "barcode", "card"]).optional(),
 });
 export type RefundSaleInput = z.infer<typeof refundSaleSchema>;
 
