@@ -46,6 +46,173 @@ const TYPE_BADGES: Record<string, string> = {
 
 const TYPE_OPTIONS = ["INDIVIDUAL", "SHOP", "FLEET", "WHOLESALE"] as const;
 
+type CustomerRiskTone = "danger" | "warning" | "muted" | "credit";
+
+interface DuplicateIndex {
+  byName: Map<string, number>;
+  byPhone: Map<string, number>;
+  byTin: Map<string, number>;
+}
+
+function parseAmount(value: string | number | null | undefined) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const parsed = Number.parseFloat(value ?? "0");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeCustomerKey(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function buildCustomerDuplicateIndex(customers: Customer[]): DuplicateIndex {
+  const index: DuplicateIndex = {
+    byName: new Map(),
+    byPhone: new Map(),
+    byTin: new Map(),
+  };
+
+  for (const customer of customers) {
+    const name = normalizeCustomerKey(customer.name);
+    const phone = normalizeCustomerKey(customer.phone);
+    const tin = normalizeCustomerKey(customer.tin);
+
+    if (name) index.byName.set(name, (index.byName.get(name) ?? 0) + 1);
+    if (phone) index.byPhone.set(phone, (index.byPhone.get(phone) ?? 0) + 1);
+    if (tin) index.byTin.set(tin, (index.byTin.get(tin) ?? 0) + 1);
+  }
+
+  return index;
+}
+
+function customerMissingFields(customer: Customer) {
+  if (customer.safetySummary?.missingFields) return customer.safetySummary.missingFields;
+  const missing: string[] = [];
+  const balance = parseAmount(customer.currentBalance);
+  const creditLimit = parseAmount(customer.creditLimit);
+
+  if (!customer.phone?.trim()) missing.push("phone/code");
+  if (!customer.address?.trim()) missing.push("address");
+  if (!customer.tin?.trim()) missing.push("TIN");
+  if (customer.customerType !== "INDIVIDUAL" && !customer.contactPerson?.trim()) missing.push("contact");
+  if (balance > 0.01 && creditLimit <= 0.01) missing.push("credit limit");
+
+  return missing;
+}
+
+function customerDuplicateWarnings(customer: Customer, index: DuplicateIndex) {
+  if (customer.safetySummary?.duplicateWarnings) {
+    return customer.safetySummary.duplicateWarnings.map((warning) => warning.message);
+  }
+  const warnings: string[] = [];
+  const name = normalizeCustomerKey(customer.name);
+  const phone = normalizeCustomerKey(customer.phone);
+  const tin = normalizeCustomerKey(customer.tin);
+
+  if (tin && (index.byTin.get(tin) ?? 0) > 1) warnings.push("Duplicate TIN");
+  if (phone && (index.byPhone.get(phone) ?? 0) > 1) warnings.push("Duplicate code");
+  if (name && (index.byName.get(name) ?? 0) > 1) warnings.push("Similar name");
+
+  return warnings;
+}
+
+function hasRecentPaymentDate(date: string | null | undefined, maxAgeDays = 60) {
+  if (!date) return false;
+  const timestamp = new Date(date).getTime();
+  if (Number.isNaN(timestamp)) return false;
+  return (Date.now() - timestamp) / 86_400_000 <= maxAgeDays;
+}
+
+function isCustomerOverCreditLimit(customer: Customer) {
+  if (customer.safetySummary?.creditLimitStatus === "over_limit") return true;
+  const balance = parseAmount(customer.currentBalance);
+  const creditLimit = parseAmount(customer.creditLimit);
+  return creditLimit > 0.01 && balance > creditLimit + 0.01;
+}
+
+function customerRiskBadges(customer: Customer, index: DuplicateIndex) {
+  const balance = parseAmount(customer.currentBalance);
+  const missing = customerMissingFields(customer);
+  const badges: Array<{ label: string; tone: CustomerRiskTone }> = [];
+
+  for (const warning of customerDuplicateWarnings(customer, index)) {
+    badges.push({ label: warning, tone: warning === "Similar name" ? "muted" : "danger" });
+  }
+
+  const profileMissing = missing.filter((field) => field !== "credit limit");
+  if (profileMissing.length > 0) {
+    const label = `Missing ${profileMissing.slice(0, 2).join(", ")}${profileMissing.length > 2 ? ` +${profileMissing.length - 2}` : ""}`;
+    badges.push({ label, tone: "warning" });
+  }
+
+  if (missing.includes("credit limit")) badges.push({ label: "No credit limit", tone: "credit" });
+  if (isCustomerOverCreditLimit(customer)) badges.push({ label: "Over credit limit", tone: "danger" });
+  if (customer.creditControl?.blocksBilling) badges.push({ label: "Billing blocked", tone: "danger" });
+  else if (customer.creditControl?.holdType === "WATCHLIST") badges.push({ label: "Credit watchlist", tone: "warning" });
+  if ((customer.disputeSummary?.openCount ?? 0) > 0) badges.push({ label: `${customer.disputeSummary?.openCount} dispute${customer.disputeSummary?.openCount === 1 ? "" : "s"}`, tone: "danger" });
+  if ((customer.paymentRiskSummary?.openCount ?? 0) > 0) badges.push({ label: "Payment risk", tone: "danger" });
+  if (balance > 0.01 && !hasRecentPaymentDate(customer.lastPaymentDate)) badges.push({ label: "No recent payment", tone: "muted" });
+  if ((customer.collectionSummary?.dueFollowUpCount ?? 0) > 0) badges.push({ label: "Follow-up due", tone: "danger" });
+  if (customer.collectionSummary?.promiseToPayDate) badges.push({ label: "Promise to pay", tone: "credit" });
+  if ((customer.agingBuckets?.days90plus?.amount ?? 0) > 0) badges.push({ label: "90+ overdue", tone: "danger" });
+
+  return badges;
+}
+
+function customerAgingAmount(customer: Customer, bucket: keyof NonNullable<Customer["agingBuckets"]>) {
+  return customer.agingBuckets?.[bucket]?.amount ?? 0;
+}
+
+function customerRiskBadgeClasses(tone: CustomerRiskTone) {
+  if (tone === "danger") return "border-red-300 bg-red-100 text-red-900 dark:border-red-700 dark:bg-red-950/60 dark:text-red-100";
+  if (tone === "credit") return "border-orange-300 bg-orange-100 text-orange-950 dark:border-orange-700 dark:bg-orange-950/60 dark:text-orange-100";
+  if (tone === "warning") return "border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-100";
+  return "border-slate-300 bg-slate-200 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
+}
+
+function safetyFilterClasses(label: string, active: boolean) {
+  const key = label.toLowerCase();
+  const base = "rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2";
+
+  if (key.includes("over credit")) {
+    return cn(
+      base,
+      active
+        ? "border-red-500 bg-red-100 text-red-950 shadow-sm focus-visible:ring-red-500"
+        : "border-red-200 bg-red-50 text-red-900 hover:border-red-400 hover:bg-red-100 focus-visible:ring-red-500",
+    );
+  }
+  if (key.includes("incomplete")) {
+    return cn(
+      base,
+      active
+        ? "border-amber-500 bg-amber-100 text-amber-950 shadow-sm focus-visible:ring-amber-500"
+        : "border-amber-200 bg-amber-50 text-amber-950 hover:border-amber-400 hover:bg-amber-100 focus-visible:ring-amber-500",
+    );
+  }
+  if (key.includes("duplicate")) {
+    return cn(
+      base,
+      active
+        ? "border-sky-500 bg-sky-100 text-sky-950 shadow-sm focus-visible:ring-sky-500"
+        : "border-sky-200 bg-sky-50 text-sky-950 hover:border-sky-400 hover:bg-sky-100 focus-visible:ring-sky-500",
+    );
+  }
+  return cn(
+    base,
+    active
+      ? "border-slate-500 bg-slate-200 text-slate-950 shadow-sm focus-visible:ring-slate-500"
+      : "border-slate-300 bg-slate-100 text-slate-900 hover:border-slate-500 hover:bg-slate-200 focus-visible:ring-slate-500",
+  );
+}
+
+function safetyValueClass(label: string) {
+  const key = label.toLowerCase();
+  if (key.includes("over credit")) return "text-red-900 dark:text-red-100";
+  if (key.includes("incomplete")) return "text-amber-950 dark:text-amber-100";
+  if (key.includes("duplicate")) return "text-sky-950 dark:text-sky-100";
+  return "text-slate-950 dark:text-slate-100";
+}
+
 const PAYMENT_TERMS_OPTIONS = [
   { value: 0, label: "COD" },
   { value: 7, label: "Net 7" },
@@ -126,28 +293,46 @@ export default function CustomersPage() {
   const allCustomers = customerQuery.data?.data ?? [];
   const summary = summaryQuery.data;
   const tiers = tiersQuery.data?.data ?? [];
+  const duplicateIndex = useMemo(() => buildCustomerDuplicateIndex(allCustomers), [allCustomers]);
+  const safetySummary = useMemo(() => ({
+    incomplete: allCustomers.filter((c) => customerMissingFields(c).length > 0).length,
+    duplicates: allCustomers.filter((c) => customerDuplicateWarnings(c, duplicateIndex).length > 0).length,
+    overLimit: allCustomers.filter((c) => isCustomerOverCreditLimit(c)).length,
+    noRecentPayment: allCustomers.filter((c) => parseAmount(c.currentBalance) > 0.01 && !hasRecentPaymentDate(c.lastPaymentDate)).length,
+    followUpDue: allCustomers.filter((c) => (c.collectionSummary?.dueFollowUpCount ?? 0) > 0).length,
+    promiseToPay: allCustomers.filter((c) => Boolean(c.collectionSummary?.promiseToPayDate)).length,
+    aging90Plus: allCustomers.filter((c) => customerAgingAmount(c, "days90plus") > 0).length,
+  }), [allCustomers, duplicateIndex]);
 
   // Client-side filter + sort
   const customers = useMemo(() => {
     let result = [...allCustomers];
-    if (balanceFilter === "no_balance") result = result.filter((c) => parseFloat(c.currentBalance) === 0);
-    else if (balanceFilter === "with_balance") result = result.filter((c) => parseFloat(c.currentBalance) > 0);
+    if (balanceFilter === "no_balance") result = result.filter((c) => parseAmount(c.currentBalance) === 0);
+    else if (balanceFilter === "with_balance") result = result.filter((c) => parseAmount(c.currentBalance) > 0);
     else if (balanceFilter === "unbilled") result = result.filter((c) => c.unbilledCount > 0);
     else if (balanceFilter === "fully_billed") result = result.filter((c) => c.totalChargeCount > 0 && c.unbilledCount === 0);
     else if (balanceFilter === "no_charges") result = result.filter((c) => c.totalChargeCount === 0);
     else if (balanceFilter === "overdue") result = result.filter((c) => c.isOverdue);
+    else if (balanceFilter === "incomplete") result = result.filter((c) => customerMissingFields(c).length > 0);
+    else if (balanceFilter === "duplicates") result = result.filter((c) => customerDuplicateWarnings(c, duplicateIndex).length > 0);
+    else if (balanceFilter === "over_limit") result = result.filter((c) => isCustomerOverCreditLimit(c));
+    else if (balanceFilter === "no_recent_payment") result = result.filter((c) => parseAmount(c.currentBalance) > 0.01 && !hasRecentPaymentDate(c.lastPaymentDate));
+    else if (balanceFilter === "followup_due") result = result.filter((c) => (c.collectionSummary?.dueFollowUpCount ?? 0) > 0);
+    else if (balanceFilter === "promise_to_pay") result = result.filter((c) => Boolean(c.collectionSummary?.promiseToPayDate));
+    else if (balanceFilter === "aging_90_plus") result = result.filter((c) => customerAgingAmount(c, "days90plus") > 0);
+    else if (balanceFilter === "aging_31_60") result = result.filter((c) => customerAgingAmount(c, "days31to60") + customerAgingAmount(c, "days61to90") > 0);
 
     result.sort((a, b) => {
       let va: string | number, vb: string | number;
       switch (sortBy) {
-        case "currentBalance": va = parseFloat(a.currentBalance); vb = parseFloat(b.currentBalance); break;
+        case "currentBalance": va = parseAmount(a.currentBalance); vb = parseAmount(b.currentBalance); break;
         default: va = a.name.toLowerCase(); vb = b.name.toLowerCase();
       }
       if (typeof va === "string") return sortDir === "asc" ? va.localeCompare(vb as string) : (vb as string).localeCompare(va);
       return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
     });
     return result;
-  }, [allCustomers, balanceFilter, sortBy, sortDir]);
+  }, [allCustomers, balanceFilter, duplicateIndex, sortBy, sortDir]);
 
   const handleSort = (field: SortField) => {
     if (field === sortBy) setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -216,29 +401,6 @@ export default function CustomersPage() {
   };
 
   /* ── Batch SOA generation ── */
-  const [batchSoaLoading, setBatchSoaLoading] = useState(false);
-  const handleBatchSOA = async () => {
-    const unbilledCustomers = customers.filter((c) => c.unbilledCount > 0);
-    if (unbilledCustomers.length === 0) return;
-    if (!confirm(`Generate SOAs for ${unbilledCustomers.length} customer${unbilledCustomers.length !== 1 ? "s" : ""} with unbilled charges?`)) return;
-
-    setBatchSoaLoading(true);
-    try {
-      const now = new Date();
-      const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-      const to = now.toISOString().slice(0, 10);
-      const res = await apiFetch<{ generated: number; errors: string[] }>("/customers/soa/batch-generate", {
-        method: "POST", token, locationId,
-        body: JSON.stringify({ customerIds: unbilledCustomers.map((c) => c.id), from, to, unbilledOnly: true }),
-      });
-      setNotification({ type: "success", message: `Generated ${res.generated} SOA${res.generated !== 1 ? "s" : ""}${res.errors?.length ? ` (${res.errors.length} failed)` : ""}` });
-      customerQuery.refetch(); summaryQuery.refetch();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to generate SOAs";
-      setNotification({ type: "error", message: msg });
-    } finally { setBatchSoaLoading(false); }
-  };
-
   /* ── Collection list export ── */
   const handleCollectionList = () => {
     const withBalance = customers.filter((c) => parseFloat(c.currentBalance) > 0);
@@ -332,6 +494,53 @@ export default function CustomersPage() {
           <KPICard icon={<FileText size={12} />} label="Unbilled" value={`${fmtNum(unbilledCustomerCount)} customers`}
             subtitle={unbilledCustomerCount > 0 ? "Need SOA generation" : undefined} />
         </div>
+
+        {(safetySummary.incomplete > 0 || safetySummary.duplicates > 0 || safetySummary.overLimit > 0 || safetySummary.noRecentPayment > 0 || safetySummary.followUpDue > 0 || safetySummary.promiseToPay > 0 || safetySummary.aging90Plus > 0) && (
+          <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-50/80 p-2 shadow-sm dark:border-slate-700 dark:bg-slate-900/40 sm:grid-cols-7">
+            <SafetyFilterButton
+              label="Incomplete profiles"
+              value={safetySummary.incomplete}
+              active={balanceFilter === "incomplete"}
+              onClick={() => setBalanceFilter(balanceFilter === "incomplete" ? "" : "incomplete")}
+            />
+            <SafetyFilterButton
+              label="Duplicate warnings"
+              value={safetySummary.duplicates}
+              active={balanceFilter === "duplicates"}
+              onClick={() => setBalanceFilter(balanceFilter === "duplicates" ? "" : "duplicates")}
+            />
+            <SafetyFilterButton
+              label="Over credit limit"
+              value={safetySummary.overLimit}
+              active={balanceFilter === "over_limit"}
+              onClick={() => setBalanceFilter(balanceFilter === "over_limit" ? "" : "over_limit")}
+            />
+            <SafetyFilterButton
+              label="No recent payment"
+              value={safetySummary.noRecentPayment}
+              active={balanceFilter === "no_recent_payment"}
+              onClick={() => setBalanceFilter(balanceFilter === "no_recent_payment" ? "" : "no_recent_payment")}
+            />
+            <SafetyFilterButton
+              label="Follow-up due"
+              value={safetySummary.followUpDue}
+              active={balanceFilter === "followup_due"}
+              onClick={() => setBalanceFilter(balanceFilter === "followup_due" ? "" : "followup_due")}
+            />
+            <SafetyFilterButton
+              label="Promise to pay"
+              value={safetySummary.promiseToPay}
+              active={balanceFilter === "promise_to_pay"}
+              onClick={() => setBalanceFilter(balanceFilter === "promise_to_pay" ? "" : "promise_to_pay")}
+            />
+            <SafetyFilterButton
+              label="90+ aging"
+              value={safetySummary.aging90Plus}
+              active={balanceFilter === "aging_90_plus"}
+              onClick={() => setBalanceFilter(balanceFilter === "aging_90_plus" ? "" : "aging_90_plus")}
+            />
+          </div>
+        )}
       </div>
 
       {/* Filters */}
@@ -377,6 +586,14 @@ export default function CustomersPage() {
             <option value="unbilled">{"\u26A0"} Unbilled</option>
             <option value="fully_billed">{"\u2713"} Fully Billed</option>
             <option value="no_charges">No Charges</option>
+            <option value="incomplete">Missing profile info</option>
+            <option value="duplicates">Duplicate warning</option>
+            <option value="over_limit">Over credit limit</option>
+            <option value="no_recent_payment">No recent payment</option>
+            <option value="followup_due">Follow-up due</option>
+            <option value="promise_to_pay">Promise to pay</option>
+            <option value="aging_31_60">31-90 day aging</option>
+            <option value="aging_90_plus">90+ day aging</option>
           </select>
 
           <DateRangePicker startDate={dateFrom} endDate={dateTo} onChange={(s, e) => { setDateFrom(s); setDateTo(e); }} />
@@ -385,10 +602,14 @@ export default function CustomersPage() {
 
           {/* Export actions */}
           <div className="ml-auto flex items-center gap-1.5">
+            <button onClick={() => router.push("/customers/collections")}
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-800 shadow-sm transition-colors hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800">
+              <AlertTriangle size={12} /> Collections Queue
+            </button>
             {isManager && unbilledCustomerCount > 0 && (
-              <button onClick={handleBatchSOA} disabled={batchSoaLoading}
-                className="flex h-8 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-400">
-                <FileText size={12} /> {batchSoaLoading ? "Generating..." : `Generate ${unbilledCustomerCount} SOAs`}
+              <button onClick={() => router.push("/customers/soa?view=unbilled")}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-900 bg-slate-900 px-3 text-[11px] font-bold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-200 disabled:text-slate-500 dark:border-slate-100 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white">
+                <FileText size={12} /> Review {unbilledCustomerCount} SOAs
               </button>
             )}
             {customers.length > 0 && (
@@ -398,13 +619,14 @@ export default function CustomersPage() {
                   <FileDown size={12} /> Collection List
                 </button>
                 <button onClick={() => downloadCSV("customers",
-                  ["Name", "Type", "Code", "Balance", "Last Payment", "Status", "Terms"],
+                  ["Name", "Type", "Code", "Balance", "Last Payment", "Status", "Terms", "Risk Flags"],
                   customers.map((c) => [
                     c.name, c.customerType, c.phone,
                     c.currentBalance,
                     c.lastPaymentDate ? fmtDate(c.lastPaymentDate) : "Never",
                     c.isOverdue ? "Overdue" : c.unbilledCount > 0 ? `${c.unbilledCount} unbilled` : c.totalChargeCount > 0 ? "Billed" : "—",
                     `${c.paymentTermsDays} days`,
+                    customerRiskBadges(c, duplicateIndex).map((badge) => badge.label).join("; "),
                   ])
                 )} className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
                   <Download size={12} /> CSV
@@ -440,7 +662,8 @@ export default function CustomersPage() {
         ) : (
           <div className="divide-y divide-border">
             {customers.map((c) => {
-              const balance = parseFloat(c.currentBalance);
+              const balance = parseAmount(c.currentBalance);
+              const riskBadges = customerRiskBadges(c, duplicateIndex);
               return (
                 <div key={c.id} className="flex w-full items-center px-3 py-1.5 text-left transition-colors hover:bg-accent/40">
                   <button onClick={() => {
@@ -450,6 +673,20 @@ export default function CustomersPage() {
                   }} className="flex-1 min-w-0 text-left">
                     <span className="block truncate text-[13px] font-medium text-foreground">{c.name}</span>
                     {c.contactPerson && !c.matchedRef && <span className="block truncate text-[11px] text-muted-foreground">{c.contactPerson}</span>}
+                    {riskBadges.length > 0 && (
+                      <span className="mt-1 flex flex-wrap gap-1">
+                        {riskBadges.slice(0, 3).map((badge) => (
+                          <span key={badge.label} className={cn("inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold shadow-[0_1px_1px_rgba(0,0,0,0.06)]", customerRiskBadgeClasses(badge.tone))}>
+                            {badge.label}
+                          </span>
+                        ))}
+                        {riskBadges.length > 3 && (
+                          <span className="inline-flex rounded-full border border-slate-300 bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-900 shadow-[0_1px_1px_rgba(0,0,0,0.06)] dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">
+                            +{riskBadges.length - 3}
+                          </span>
+                        )}
+                      </span>
+                    )}
                     {c.matchedRef && (() => {
                       try {
                         const ref = JSON.parse(c.matchedRef);
@@ -483,7 +720,7 @@ export default function CustomersPage() {
                     ) : c.isOverdue ? (
                       <span className="inline-flex items-center gap-0.5 rounded-md bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold text-red-600">{"\u26A0"} Overdue</span>
                     ) : c.unbilledCount > 0 ? (
-                      <span className="inline-flex items-center gap-0.5 rounded-md bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600">{"\u26A0"} {c.unbilledCount} unbilled</span>
+                      <span className="inline-flex items-center gap-0.5 rounded-md border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-950">{"\u26A0"} {c.unbilledCount} unbilled</span>
                     ) : c.totalChargeCount > 0 ? (
                       <span className="inline-flex items-center gap-0.5 rounded-md bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-600">{"\u2713"} Billed</span>
                     ) : (
@@ -645,6 +882,22 @@ function KPICard({ icon, label, value, accent, className, subtitle, href }: {
 }
 
 /* ── Row Action Dropdown ── */
+function SafetyFilterButton({ label, value, active, onClick }: {
+  label: string; value: number; active: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={safetyFilterClasses(label, active)}
+    >
+      <span className="block text-[10px] font-bold uppercase tracking-[0.08em] opacity-80">{label}</span>
+      <span className={cn("mt-0.5 block text-lg font-bold tabular-nums", value > 0 ? safetyValueClass(label) : "text-slate-500 dark:text-slate-400")}>{fmtNum(value)}</span>
+    </button>
+  );
+}
+
 function CustomerRowActions({ customer, onEdit, onNavigate }: {
   customer: Customer; onEdit: () => void; onNavigate: (path: string) => void;
 }) {
@@ -692,9 +945,9 @@ function CustomerRowActions({ customer, onEdit, onNavigate }: {
             <DollarSign size={13} /> Record Payment
           </button>
           {customer.unbilledCount > 0 && (
-            <button onClick={(e) => { e.stopPropagation(); onNavigate(`/customers/${customer.id}?tab=statement`); setOpen(false); }}
+            <button onClick={(e) => { e.stopPropagation(); onNavigate(`/customers/soa?customerId=${customer.id}`); setOpen(false); }}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-accent">
-              <FileText size={13} /> Generate SOA
+              <FileText size={13} /> Open SOA Workspace
             </button>
           )}
           <div className="my-1 border-t border-border" />
