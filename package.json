@@ -3,12 +3,12 @@
   "private": true,
   "scripts": {
     "dev": "pnpm --filter @apex/api dev",
-    "build": "pnpm --filter @apex/api build",
+    "build": "pnpm --filter @apex/types build && pnpm --filter @apex/database build && pnpm --filter @apex/api build && pnpm --filter @apex/web build",
     "db:generate": "pnpm --filter @apex/database generate",
     "db:migrate": "pnpm --filter @apex/database migrate",
     "db:seed": "pnpm --filter @apex/database seed",
     "db:studio": "pnpm --filter @apex/database studio",
-    "typecheck": "tsc --build",
+    "typecheck": "pnpm --filter @apex/types typecheck && pnpm --filter @apex/database typecheck && pnpm --filter @apex/api typecheck && pnpm --filter @apex/web typecheck && pnpm --filter @apex/mobile typecheck",
     "web:dev": "pnpm --filter @apex/web dev",
     "web:build": "pnpm --filter @apex/web build",
     "loyverse:import": "pnpm --filter @apex/loyverse-import run-import",
@@ -16,6 +16,13 @@
   },
   "devDependencies": {
     "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "19.0.0",
+      "react-dom": "19.0.0",
+      "@types/react": "19.2.14"
+    }
   },
   "engines": {
     "node": ">=20.0.0",
