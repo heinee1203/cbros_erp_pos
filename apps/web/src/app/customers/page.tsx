@@ -60,6 +60,10 @@ function parseAmount(value: string | number | null | undefined) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function queryErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 function normalizeCustomerKey(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -171,46 +175,46 @@ function customerRiskBadgeClasses(tone: CustomerRiskTone) {
 
 function safetyFilterClasses(label: string, active: boolean) {
   const key = label.toLowerCase();
-  const base = "rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2";
+  const base = "rounded-lg border px-4 py-3 text-left shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2";
 
   if (key.includes("over credit")) {
     return cn(
       base,
       active
-        ? "border-red-500 bg-red-100 text-red-950 shadow-sm focus-visible:ring-red-500"
-        : "border-red-200 bg-red-50 text-red-900 hover:border-red-400 hover:bg-red-100 focus-visible:ring-red-500",
+        ? "border-red-800 bg-red-700 text-white focus-visible:ring-red-600"
+        : "border-red-300 bg-red-50 text-red-950 hover:border-red-500 hover:bg-red-100 focus-visible:ring-red-600",
     );
   }
   if (key.includes("incomplete")) {
     return cn(
       base,
       active
-        ? "border-amber-500 bg-amber-100 text-amber-950 shadow-sm focus-visible:ring-amber-500"
-        : "border-amber-200 bg-amber-50 text-amber-950 hover:border-amber-400 hover:bg-amber-100 focus-visible:ring-amber-500",
+        ? "border-amber-800 bg-amber-700 text-white focus-visible:ring-amber-600"
+        : "border-amber-300 bg-amber-50 text-amber-950 hover:border-amber-600 hover:bg-amber-100 focus-visible:ring-amber-600",
     );
   }
   if (key.includes("duplicate")) {
     return cn(
       base,
       active
-        ? "border-sky-500 bg-sky-100 text-sky-950 shadow-sm focus-visible:ring-sky-500"
-        : "border-sky-200 bg-sky-50 text-sky-950 hover:border-sky-400 hover:bg-sky-100 focus-visible:ring-sky-500",
+        ? "border-sky-800 bg-sky-700 text-white focus-visible:ring-sky-600"
+        : "border-sky-300 bg-sky-50 text-sky-950 hover:border-sky-600 hover:bg-sky-100 focus-visible:ring-sky-600",
     );
   }
   return cn(
     base,
     active
-      ? "border-slate-500 bg-slate-200 text-slate-950 shadow-sm focus-visible:ring-slate-500"
-      : "border-slate-300 bg-slate-100 text-slate-900 hover:border-slate-500 hover:bg-slate-200 focus-visible:ring-slate-500",
+      ? "border-slate-900 bg-slate-800 text-white focus-visible:ring-slate-700"
+      : "border-slate-300 bg-white text-slate-950 hover:border-slate-600 hover:bg-slate-100 focus-visible:ring-slate-700",
   );
 }
 
 function safetyValueClass(label: string) {
   const key = label.toLowerCase();
-  if (key.includes("over credit")) return "text-red-900 dark:text-red-100";
-  if (key.includes("incomplete")) return "text-amber-950 dark:text-amber-100";
-  if (key.includes("duplicate")) return "text-sky-950 dark:text-sky-100";
-  return "text-slate-950 dark:text-slate-100";
+  if (key.includes("over credit")) return "text-red-800";
+  if (key.includes("incomplete")) return "text-amber-900";
+  if (key.includes("duplicate")) return "text-sky-800";
+  return "text-slate-900";
 }
 
 const PAYMENT_TERMS_OPTIONS = [
@@ -496,7 +500,7 @@ export default function CustomersPage() {
         </div>
 
         {(safetySummary.incomplete > 0 || safetySummary.duplicates > 0 || safetySummary.overLimit > 0 || safetySummary.noRecentPayment > 0 || safetySummary.followUpDue > 0 || safetySummary.promiseToPay > 0 || safetySummary.aging90Plus > 0) && (
-          <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-50/80 p-2 shadow-sm dark:border-slate-700 dark:bg-slate-900/40 sm:grid-cols-7">
+          <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-border bg-background p-3 shadow-sm sm:grid-cols-7">
             <SafetyFilterButton
               label="Incomplete profiles"
               value={safetySummary.incomplete}
@@ -654,6 +658,23 @@ export default function CustomersPage() {
 
         {customerQuery.isLoading ? (
           <div>{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-14 animate-pulse border-b border-border bg-muted/20" />)}</div>
+        ) : customerQuery.isError ? (
+          <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <AlertTriangle size={16} />
+            </div>
+            <p className="mt-3 text-[13px] font-semibold text-foreground">Could not load customers</p>
+            <p className="mt-1 max-w-md text-[12px] text-muted-foreground">
+              {queryErrorMessage(customerQuery.error, "Customer list request failed.")}
+            </p>
+            <button
+              type="button"
+              onClick={() => customerQuery.refetch()}
+              className="mt-4 rounded-lg border border-border px-3 py-1.5 text-[12px] font-semibold text-foreground hover:bg-muted"
+            >
+              Retry
+            </button>
+          </div>
         ) : customers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted"><Users size={16} className="text-muted-foreground" /></div>
@@ -870,13 +891,13 @@ function KPICard({ icon, label, value, accent, className, subtitle, href }: {
       onClick={href ? () => router.push(href) : undefined}
       className={cn(
         "rounded-xl border border-border bg-background p-3 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]",
-        accent && "border-amber-200 bg-amber-50/30 dark:border-amber-800 dark:bg-amber-950/20",
+        accent && "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30",
         href && "cursor-pointer hover:border-primary/30 hover:shadow-md transition-all",
       )}
     >
-      <div className="flex items-center gap-1.5 text-muted-foreground">{icon}<span className="text-[11px] font-medium">{label}</span></div>
+      <div className="flex items-center gap-1.5 text-muted-foreground">{icon}<span className="text-[11px] font-semibold">{label}</span></div>
       <div className={cn("mt-1 text-xl font-semibold tabular-nums text-foreground", className)}>{value}</div>
-      {subtitle && <div className="text-[10px] text-muted-foreground/70">{subtitle}</div>}
+      {subtitle && <div className="text-[10px] font-medium text-muted-foreground">{subtitle}</div>}
     </div>
   );
 }
@@ -892,8 +913,8 @@ function SafetyFilterButton({ label, value, active, onClick }: {
       aria-pressed={active}
       className={safetyFilterClasses(label, active)}
     >
-      <span className="block text-[10px] font-bold uppercase tracking-[0.08em] opacity-80">{label}</span>
-      <span className={cn("mt-0.5 block text-lg font-bold tabular-nums", value > 0 ? safetyValueClass(label) : "text-slate-500 dark:text-slate-400")}>{fmtNum(value)}</span>
+      <span className="block text-[11px] font-extrabold uppercase tracking-[0.08em]">{label}</span>
+      <span className={cn("mt-1 block text-2xl font-extrabold tabular-nums", active ? "text-white" : value > 0 ? safetyValueClass(label) : "text-slate-600")}>{fmtNum(value)}</span>
     </button>
   );
 }

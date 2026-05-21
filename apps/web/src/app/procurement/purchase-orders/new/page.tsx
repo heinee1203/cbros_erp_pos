@@ -76,11 +76,12 @@ function NewPurchaseOrderInner() {
     const qQty = searchParams.get("qty");
     const qSupplierId = searchParams.get("supplierId");
     const qUnitCost = searchParams.get("unitCost");
-    if (!qProductId) return;
+    if (!qProductId && !qSupplierId) return;
     prefillDone.current = true;
 
     // Pre-select supplier immediately (don't wait for product fetch)
     if (qSupplierId) setSupplierId(qSupplierId);
+    if (!qProductId) return;
 
     (async () => {
       try {
