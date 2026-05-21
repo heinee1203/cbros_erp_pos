@@ -1,5 +1,5 @@
 import { db, type DbOrTx } from "@apex/database";
-import { customers, customerTransactions, customerTiers, arPaymentAllocations } from "@apex/database/schema";
+import { auditLogs, customers, customerTransactions, customerTiers, arPaymentAllocations } from "@apex/database/schema";
 import { eq, and, or, sql, desc, asc, ilike, gt, lt, gte, lte, type SQL } from "drizzle-orm";
 import type {
   CreateCustomerInput,
@@ -14,6 +14,7 @@ import {
   resolveSoaPaymentStatus,
   summarizeSoaTransactions,
 } from "./accounting-helpers";
+import { enrichCustomersWithSafety } from "./customer-safety-service";
 
 // ── Custom Errors ──
 
@@ -181,6 +182,12 @@ export async function listCustomers(
       address: customers.address,
       tin: customers.tin,
       creditLimit: customers.creditLimit,
+      creditStatus: customers.creditStatus,
+      creditHoldType: customers.creditHoldType,
+      creditHoldReason: customers.creditHoldReason,
+      creditHoldNote: customers.creditHoldNote,
+      creditHoldApprovedBy: customers.creditHoldApprovedBy,
+      creditHoldApprovedAt: customers.creditHoldApprovedAt,
       paymentTermsDays: customers.paymentTermsDays,
       currentBalance: customers.currentBalance,
       totalPurchases: periodPurchases,
@@ -231,7 +238,7 @@ export async function listCustomers(
   const data = hasMore ? rows.slice(0, opts.limit) : rows;
   const nextCursor = hasMore ? data[data.length - 1].id : null;
 
-  return { data, nextCursor, hasMore };
+  return { data: await enrichCustomersWithSafety(orgId, data), nextCursor, hasMore };
 }
 
 /**
@@ -258,7 +265,8 @@ export async function getCustomer(customerId: string, orgId: string) {
     .orderBy(desc(customerTransactions.recordedAt), desc(customerTransactions.id))
     .limit(10);
 
-  return { customer, recentTransactions };
+  const [enrichedCustomer] = await enrichCustomersWithSafety(orgId, [customer]);
+  return { customer: enrichedCustomer ?? customer, recentTransactions };
 }
 
 /**
@@ -992,6 +1000,289 @@ export async function editTransactionAmount(
   });
 }
 
+export type CustomerPaymentReversalMode = "preview" | "apply";
+
+export interface CustomerPaymentReversalPreview {
+  mode: CustomerPaymentReversalMode;
+  canApply: boolean;
+  payment: {
+    id: string;
+    paymentNumber: string | null;
+    referenceNumber: string | null;
+    amount: number;
+    paymentMethod: string | null;
+    paymentLines: unknown;
+    recordedAt: string | null;
+    notes: string | null;
+  };
+  customer: {
+    id: string;
+    name: string;
+    oldBalance: number;
+    newBalance: number;
+  };
+  allocations: Array<{
+    chargeTransactionId: string;
+    referenceNumber: string | null;
+    chargeAmount: number;
+    chargeDate: string | null;
+    amount: number;
+    soaId: string | null;
+    soaNumber: string | null;
+  }>;
+  affectedSoas: Array<{
+    id: string;
+    soaNumber: string;
+    status: string | null;
+    totalPayable: number;
+    paidAmount: number;
+  }>;
+  warnings: string[];
+  applied?: {
+    reversed: boolean;
+    newBalance: number;
+    recomputedSoas: Array<unknown>;
+  };
+}
+
+export async function reversePaymentTransaction(
+  customerId: string,
+  paymentTxnId: string,
+  mode: CustomerPaymentReversalMode,
+  reason: string | undefined,
+  orgId: string,
+  userId: string,
+): Promise<CustomerPaymentReversalPreview> {
+  if (mode !== "preview" && mode !== "apply") throw new Error("Invalid reversal mode");
+  if (mode === "apply" && !reason?.trim()) throw new Error("Reason is required to reverse a payment");
+
+  return db.transaction(async (tx) => {
+    const [custRow] = await tx.execute(sql`
+      SELECT id, name, current_balance
+      FROM customers
+      WHERE id = ${customerId} AND org_id = ${orgId}
+      ${mode === "apply" ? sql`FOR UPDATE` : sql``}
+    `) as any[];
+    if (!custRow) throw new Error("Customer not found");
+
+    const [payment] = await tx.execute(sql`
+      SELECT id, type, amount, reference_number, payment_number, payment_method, payment_lines, notes, recorded_at
+      FROM customer_transactions
+      WHERE id = ${paymentTxnId}
+        AND customer_id = ${customerId}
+        AND org_id = ${orgId}
+    `) as any[];
+    if (!payment) throw new Error("Payment transaction not found");
+    if (payment.type !== "PAYMENT") throw new Error("Only PAYMENT transactions can be reversed through this flow");
+
+    const allocations = (await tx.execute(sql`
+      SELECT
+        pa.charge_transaction_id,
+        pa.allocated_amount,
+        ct.reference_number,
+        ct.amount AS charge_amount,
+        ct.recorded_at AS charge_date,
+        ct.billed_soa_id,
+        sr.soa_number
+      FROM ar_payment_allocations pa
+      JOIN customer_transactions ct ON ct.id = pa.charge_transaction_id
+      LEFT JOIN soa_records sr ON sr.id = ct.billed_soa_id
+      WHERE pa.payment_transaction_id = ${paymentTxnId}
+        AND pa.org_id = ${orgId}
+      ORDER BY ct.recorded_at ASC, ct.id ASC
+    `)) as any[];
+
+    const affectedSoaIds = Array.from(new Set(allocations.map((row) => row.billed_soa_id).filter(Boolean))) as string[];
+    const affectedSoaIdList = sql.join(affectedSoaIds.map((id) => sql`${id}::uuid`), sql`, `);
+    const affectedSoas = affectedSoaIds.length > 0
+      ? (await tx.execute(sql`
+          SELECT id, soa_number, status, total_payable, paid_amount
+          FROM soa_records
+          WHERE org_id = ${orgId}
+            AND id IN (${affectedSoaIdList})
+          ORDER BY generated_at ASC
+        `)) as any[]
+      : [];
+
+    const paymentAmount = Math.abs(parseFloat(payment.amount || "0"));
+    const oldBalance = parseFloat(custRow.current_balance ?? "0");
+    const newBalance = oldBalance + paymentAmount;
+    const warnings: string[] = [];
+    if (allocations.length === 0) {
+      warnings.push("No invoice-level allocations were found. This will reverse only the payment balance effect.");
+    }
+    if (affectedSoas.some((row) => ["PAID", "PARTIAL"].includes(String(row.status || "").toUpperCase()))) {
+      warnings.push("Affected SOA statuses will be recomputed after the reversal.");
+    }
+
+    const preview: CustomerPaymentReversalPreview = {
+      mode,
+      canApply: true,
+      payment: {
+        id: payment.id,
+        paymentNumber: payment.payment_number ?? null,
+        referenceNumber: payment.reference_number ?? null,
+        amount: paymentAmount,
+        paymentMethod: payment.payment_method ?? null,
+        paymentLines: payment.payment_lines ?? null,
+        recordedAt: payment.recorded_at ? new Date(payment.recorded_at).toISOString() : null,
+        notes: payment.notes ?? null,
+      },
+      customer: {
+        id: custRow.id,
+        name: custRow.name,
+        oldBalance,
+        newBalance,
+      },
+      allocations: allocations.map((row) => ({
+        chargeTransactionId: row.charge_transaction_id,
+        referenceNumber: row.reference_number ?? null,
+        chargeAmount: parseFloat(row.charge_amount || "0"),
+        chargeDate: row.charge_date ? new Date(row.charge_date).toISOString() : null,
+        amount: parseFloat(row.allocated_amount || "0"),
+        soaId: row.billed_soa_id ?? null,
+        soaNumber: row.soa_number ?? null,
+      })),
+      affectedSoas: affectedSoas.map((row) => ({
+        id: row.id,
+        soaNumber: row.soa_number,
+        status: row.status ?? null,
+        totalPayable: parseFloat(row.total_payable || "0"),
+        paidAmount: parseFloat(row.paid_amount || "0"),
+      })),
+      warnings,
+    };
+
+    if (mode === "preview") return preview;
+
+    await tx.execute(sql`
+      DELETE FROM ar_payment_allocations
+      WHERE payment_transaction_id = ${paymentTxnId}
+        AND org_id = ${orgId}
+    `);
+    await tx.execute(sql`
+      DELETE FROM customer_transactions
+      WHERE id = ${paymentTxnId}
+        AND customer_id = ${customerId}
+        AND org_id = ${orgId}
+    `);
+
+    const recalculatedBalance = await recalcCustomer(tx, customerId, orgId);
+    const recomputedSoas = [];
+    for (const soaId of affectedSoaIds) {
+      recomputedSoas.push(await recomputeSOAStatus(tx, orgId, soaId));
+    }
+
+    await tx.insert(auditLogs).values({
+      orgId,
+      userId,
+      action: "CUSTOMER_PAYMENT_REVERSE",
+      entityType: "CUSTOMER",
+      entityId: customerId,
+      details: {
+        paymentTransactionId: paymentTxnId,
+        paymentNumber: payment.payment_number ?? null,
+        referenceNumber: payment.reference_number ?? null,
+        amount: paymentAmount,
+        reason: reason?.trim(),
+        oldBalance,
+        newBalance: recalculatedBalance,
+        allocationCount: allocations.length,
+        affectedSoaNumbers: affectedSoas.map((row) => row.soa_number),
+      },
+    });
+
+    return {
+      ...preview,
+      customer: { ...preview.customer, newBalance: recalculatedBalance },
+      applied: {
+        reversed: true,
+        newBalance: recalculatedBalance,
+        recomputedSoas,
+      },
+    };
+  });
+}
+
+export async function repairChargeTransactionInfo(
+  customerId: string,
+  transactionId: string,
+  input: {
+    referenceNumber?: string | null;
+    dueDate?: string | null;
+    notes?: string | null;
+    reviewed?: boolean;
+    reason?: string;
+  },
+  orgId: string,
+  userId: string,
+) {
+  return db.transaction(async (tx) => {
+    const [custRow] = await tx.execute(sql`
+      SELECT id
+      FROM customers
+      WHERE id = ${customerId} AND org_id = ${orgId}
+      FOR UPDATE
+    `) as any[];
+    if (!custRow) throw new Error("Customer not found");
+
+    const [txn] = await tx.execute(sql`
+      SELECT id, type, reference_number, due_date, notes
+      FROM customer_transactions
+      WHERE id = ${transactionId}
+        AND customer_id = ${customerId}
+        AND org_id = ${orgId}
+    `) as any[];
+    if (!txn) throw new Error("Transaction not found");
+    if (txn.type !== "CHARGE") throw new Error("Can only repair CHARGE transaction info");
+
+    const oldReference = txn.reference_number ?? null;
+    const oldDueDate = txn.due_date ?? null;
+    const oldNotes = txn.notes ?? "";
+    const nextReference = input.referenceNumber !== undefined ? (input.referenceNumber?.trim() || null) : oldReference;
+    const nextDueDate = input.dueDate !== undefined ? (input.dueDate || null) : oldDueDate;
+    const baseNotes = input.notes !== undefined ? (input.notes ?? "") : oldNotes;
+
+    const changes: string[] = [];
+    if (nextReference !== oldReference) changes.push(`Reference: ${oldReference ?? "(none)"} -> ${nextReference ?? "(none)"}`);
+    if (nextDueDate !== oldDueDate) changes.push(`Due date: ${oldDueDate ?? "(none)"} -> ${nextDueDate ?? "(none)"}`);
+    if (baseNotes !== oldNotes) changes.push("Notes edited");
+    if (input.reviewed) changes.push("Marked reviewed");
+    if (changes.length === 0) return { id: transactionId, updated: false };
+
+    const auditNote = `Invoice info repaired: ${changes.join("; ")}. Reason: ${input.reason?.trim() || "Reviewed by admin"}`;
+    const mergedNotes = baseNotes ? `${baseNotes} | ${auditNote}` : auditNote;
+
+    await tx.execute(sql`
+      UPDATE customer_transactions
+      SET reference_number = ${nextReference},
+          due_date = ${nextDueDate},
+          notes = ${mergedNotes}
+      WHERE id = ${transactionId}
+    `);
+
+    await tx.insert(auditLogs).values({
+      orgId,
+      userId,
+      action: "CUSTOMER_INVOICE_INFO_REPAIR",
+      entityType: "CUSTOMER",
+      entityId: customerId,
+      details: {
+        transactionId,
+        changes,
+        reason: input.reason?.trim() || null,
+      },
+    });
+
+    return {
+      id: transactionId,
+      updated: true,
+      referenceNumber: nextReference,
+      dueDate: nextDueDate,
+    };
+  });
+}
+
 /**
  * Delete a CHARGE transaction (must not be billed).
  */
@@ -1235,6 +1526,12 @@ export async function recordManualCharge(
 
     const row = rows[0] as any;
     if (!row.is_active) throw new Error("Customer account is inactive");
+    if (row.credit_hold_type === "BLOCK_BILLING") {
+      throw Object.assign(
+        new Error(row.credit_hold_reason || "Customer account is on billing hold"),
+        { statusCode: 423, code: "CUSTOMER_BILLING_HOLD" },
+      );
+    }
 
     const currentBalance = parseFloat(row.current_balance);
     const creditLimit = parseFloat(row.credit_limit);
@@ -1337,6 +1634,12 @@ export async function recordManualChargeBatch(
     if (rows.length === 0) throw new Error("Customer not found");
     const row = rows[0] as any;
     if (!row.is_active) throw new Error("Customer account is inactive");
+    if (row.credit_hold_type === "BLOCK_BILLING") {
+      throw Object.assign(
+        new Error(row.credit_hold_reason || "Customer account is on billing hold"),
+        { statusCode: 423, code: "CUSTOMER_BILLING_HOLD" },
+      );
+    }
 
     const startBalance = parseFloat(row.current_balance);
     const creditLimit = parseFloat(row.credit_limit);
@@ -1514,16 +1817,19 @@ export async function generateSOA(
   userId?: string,
   unbilledOnly?: boolean,
   transactionIds?: string[],
+  options?: { includeDisputed?: boolean },
 ) {
-  // Get the next SOA number
-  const year = new Date().getFullYear();
-  const [seq] = await db.execute(sql`
-    INSERT INTO soa_number_sequence (org_id, year, last_number)
-    VALUES (${orgId}, ${year}, 1)
-    ON CONFLICT (org_id, year) DO UPDATE SET last_number = soa_number_sequence.last_number + 1
-    RETURNING last_number
+  const [customerControl] = await db.execute(sql`
+    SELECT credit_hold_type, credit_hold_reason
+    FROM customers
+    WHERE id = ${customerId}
+      AND org_id = ${orgId}
+    LIMIT 1
   `) as any[];
-  const soaNumber = `SOA-${year}-${String(seq.last_number).padStart(4, "0")}`;
+  if (!customerControl) throw new Error("Customer not found");
+  if (customerControl.credit_hold_type === "BLOCK_BILLING") {
+    throw new Error(customerControl.credit_hold_reason || "Customer account is on billing hold");
+  }
 
   // Fetch transactions — if specific IDs provided, use those; otherwise use date range
   let txns;
@@ -1539,6 +1845,17 @@ export async function generateSOA(
       .orderBy(asc(customerTransactions.recordedAt));
     const idSet = new Set(transactionIds);
     txns = allTxns.filter((t) => idSet.has(t.id));
+    if (txns.length !== idSet.size) {
+      throw new Error("Selected transaction(s) not found for this customer");
+    }
+    const invalidTypes = txns.filter((t) => t.type !== "CHARGE" && t.type !== "CREDIT_NOTE");
+    if (invalidTypes.length > 0) {
+      throw new Error("SOA generation only accepts charge rows and credit memos");
+    }
+    const unavailableCredits = txns.filter((t) => t.type === "CREDIT_NOTE" && t.billed);
+    if (unavailableCredits.length > 0) {
+      throw new Error("Selected credit memo is already applied to an SOA");
+    }
   } else {
     const conditions = [
       eq(customerTransactions.customerId, customerId),
@@ -1558,7 +1875,33 @@ export async function generateSOA(
       .orderBy(asc(customerTransactions.recordedAt));
   }
 
+  const selectedChargeIds = txns.filter((txn) => txn.type === "CHARGE").map((txn) => txn.id);
+  if (!options?.includeDisputed && selectedChargeIds.length > 0) {
+    const selectedIdList = sql.join(selectedChargeIds.map((id) => sql`${id}::uuid`), sql`, `);
+    const [dispute] = await db.execute(sql`
+      SELECT COUNT(*)::int AS count
+      FROM customer_disputes
+      WHERE org_id = ${orgId}
+        AND customer_id = ${customerId}
+        AND status NOT IN ('RESOLVED', 'CANCELLED')
+        AND transaction_id IN (${selectedIdList})
+    `) as any[];
+    if ((dispute?.count ?? 0) > 0) {
+      throw new Error("Selected rows include open disputes. Resolve them or explicitly include disputed charges.");
+    }
+  }
+
   const { charges, credits } = summarizeSoaTransactions(txns);
+
+  // Get the next SOA number only after validation so blocked attempts do not consume a sequence.
+  const year = new Date().getFullYear();
+  const [seq] = await db.execute(sql`
+    INSERT INTO soa_number_sequence (org_id, year, last_number)
+    VALUES (${orgId}, ${year}, 1)
+    ON CONFLICT (org_id, year) DO UPDATE SET last_number = soa_number_sequence.last_number + 1
+    RETURNING last_number
+  `) as any[];
+  const soaNumber = `SOA-${year}-${String(seq.last_number).padStart(4, "0")}`;
 
   // Create SOA record
   const [soa] = await db.execute(sql`
@@ -1589,15 +1932,40 @@ export async function generateSOA(
  */
 export async function getPaymentSettledInvoices(paymentTxnId: string, orgId: string) {
   const rows = await db.execute(sql`
-    SELECT ct.reference_number, pa.allocated_amount
+    SELECT
+      ct.id AS charge_transaction_id,
+      ct.reference_number,
+      ct.amount AS charge_amount,
+      ct.recorded_at AS charge_date,
+      ct.billed_soa_id,
+      sr.soa_number,
+      pa.allocated_amount,
+      GREATEST(
+        ABS(ct.amount::numeric) - COALESCE((
+          SELECT SUM(pa2.allocated_amount::numeric)
+          FROM ar_payment_allocations pa2
+          WHERE pa2.charge_transaction_id = ct.id
+            AND pa2.created_at <= pa.created_at
+        ), 0),
+        0
+      ) AS remaining_after_allocation
     FROM ar_payment_allocations pa
     JOIN customer_transactions ct ON ct.id = pa.charge_transaction_id
+    LEFT JOIN soa_records sr ON sr.id = ct.billed_soa_id
     WHERE pa.payment_transaction_id = ${paymentTxnId}
+      AND pa.org_id = ${orgId}
+      AND ct.org_id = ${orgId}
     ORDER BY ct.recorded_at ASC
   `) as any[];
   return rows.map((r: any) => ({
+    chargeTransactionId: r.charge_transaction_id,
     referenceNumber: r.reference_number || "N/A",
     amount: parseFloat(r.allocated_amount),
+    chargeAmount: parseFloat(r.charge_amount),
+    chargeDate: r.charge_date,
+    soaId: r.billed_soa_id,
+    soaNumber: r.soa_number,
+    remainingAfterAllocation: parseFloat(r.remaining_after_allocation),
   }));
 }
 

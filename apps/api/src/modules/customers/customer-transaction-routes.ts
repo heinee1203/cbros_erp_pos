@@ -5,11 +5,14 @@ import {
   editTransactionAmount,
   getPaymentSettledInvoices,
   listTransactions,
+  repairChargeTransactionInfo,
   reassignTransaction,
   recordAdjustment,
   recordManualCharge,
   recordPayment,
+  reversePaymentTransaction,
 } from "./customer-transaction-service";
+import { recordCustomerPaymentRiskEvent } from "./customer-safety-service";
 import { assertAdmin, assertArRole } from "./route-support";
 
 export function registerCustomerTransactionRoutes(app: FastifyInstance) {
@@ -150,6 +153,106 @@ export function registerCustomerTransactionRoutes(app: FastifyInstance) {
         txnId,
         newCustomerId,
         reason,
+        orgId,
+        userId,
+      );
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  app.post("/:id/transactions/:txnId/reverse", async (request, reply) => {
+    const { id, txnId } = request.params as { id: string; txnId: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    const { mode = "preview", reason } = (request.body as {
+      mode?: "preview" | "apply";
+      reason?: string;
+    }) || {};
+
+    assertArRole(role);
+    if (mode === "apply") assertAdmin(role);
+
+    try {
+      const result = await reversePaymentTransaction(
+        id,
+        txnId,
+        mode,
+        reason,
+        orgId,
+        userId,
+      );
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  app.post("/:id/transactions/:txnId/bounce", async (request, reply) => {
+    const { id, txnId } = request.params as { id: string; txnId: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    const { mode = "preview", reason } = (request.body as {
+      mode?: "preview" | "apply";
+      reason?: string;
+    }) || {};
+
+    assertArRole(role);
+    if (mode === "apply") assertAdmin(role);
+
+    try {
+      const result = await reversePaymentTransaction(
+        id,
+        txnId,
+        mode,
+        reason,
+        orgId,
+        userId,
+      );
+      if (mode === "apply") {
+        await recordCustomerPaymentRiskEvent(id, orgId, userId, {
+          // The reversal flow removes the payment transaction; keep the risk
+          // event as the durable audit record without pointing at a deleted row.
+          paymentTransactionId: null,
+          eventType: "BOUNCED_CHECK",
+          referenceNumber: result.payment.referenceNumber || result.payment.paymentNumber,
+          amount: result.payment.amount,
+          reason,
+        });
+      }
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  app.patch("/:id/transactions/:txnId/repair-info", async (request, reply) => {
+    const { id, txnId } = request.params as { id: string; txnId: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+    assertAdmin(role);
+    const body = (request.body as {
+      referenceNumber?: string | null;
+      dueDate?: string | null;
+      notes?: string | null;
+      reviewed?: boolean;
+      reason?: string;
+    }) || {};
+    if (
+      body.dueDate !== undefined &&
+      body.dueDate !== null &&
+      !/^\d{4}-\d{2}-\d{2}$/.test(body.dueDate)
+    ) {
+      return reply
+        .status(400)
+        .send({ error: "dueDate must be YYYY-MM-DD or null" });
+    }
+    try {
+      const result = await repairChargeTransactionInfo(
+        id,
+        txnId,
+        body,
         orgId,
         userId,
       );

@@ -19,6 +19,7 @@ export function registerCustomerSoaRoutes(app: FastifyInstance) {
       to: string;
       unbilledOnly?: boolean;
       transactionIds?: string[];
+      includeDisputed?: boolean;
     };
     if (!body?.from || !body?.to) {
       return reply.status(400).send({ error: "from and to are required" });
@@ -32,6 +33,7 @@ export function registerCustomerSoaRoutes(app: FastifyInstance) {
         userId,
         body.unbilledOnly,
         body.transactionIds,
+        { includeDisputed: body.includeDisputed === true },
       );
       return reply.status(201).send(result);
     } catch (err: any) {

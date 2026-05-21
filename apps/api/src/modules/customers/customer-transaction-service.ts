@@ -3,8 +3,10 @@ export {
   editTransactionAmount,
   getPaymentSettledInvoices,
   listTransactions,
+  repairChargeTransactionInfo,
   reassignTransaction,
   recordAdjustment,
   recordManualCharge,
   recordPayment,
+  reversePaymentTransaction,
 } from "./service";
