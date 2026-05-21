@@ -6,24 +6,53 @@ type RegisteredRoute = {
   path: string;
 };
 
+type RouteHandler = (request: any, reply: any) => unknown;
+
 function createRouteRecorder() {
   const routes: RegisteredRoute[] = [];
+  const handlers = new Map<string, RouteHandler>();
+  const record = (
+    method: RegisteredRoute["method"],
+    path: string,
+    args: unknown[],
+  ) => {
+    routes.push({ method, path });
+    const handler = [...args].reverse().find((arg) => typeof arg === "function");
+    if (handler) {
+      handlers.set(`${method} ${path}`, handler as RouteHandler);
+    }
+  };
   const app = {
-    delete(path: string) {
-      routes.push({ method: "delete", path });
+    delete(path: string, ...args: unknown[]) {
+      record("delete", path, args);
     },
-    get(path: string) {
-      routes.push({ method: "get", path });
+    get(path: string, ...args: unknown[]) {
+      record("get", path, args);
     },
-    patch(path: string) {
-      routes.push({ method: "patch", path });
+    patch(path: string, ...args: unknown[]) {
+      record("patch", path, args);
     },
-    post(path: string) {
-      routes.push({ method: "post", path });
+    post(path: string, ...args: unknown[]) {
+      record("post", path, args);
     },
   };
 
-  return { app, routes };
+  return { app, routes, handlers };
+}
+
+function createReply() {
+  return {
+    statusCode: 200,
+    payload: undefined as unknown,
+    status(code: number) {
+      this.statusCode = code;
+      return this;
+    },
+    send(payload: unknown) {
+      this.payload = payload;
+      return payload;
+    },
+  };
 }
 
 test("accounts payable route registration keeps extracted AP route groups first", async () => {
@@ -33,7 +62,7 @@ test("accounts payable route registration keeps extracted AP route groups first"
 
   await accountsPayableRoutes(app as any, {} as any);
 
-  assert.deepEqual(routes.slice(0, 48), [
+  assert.deepEqual(routes.slice(0, 53), [
     { method: "get", path: "/invoices" },
     { method: "get", path: "/invoices/:id" },
     { method: "post", path: "/invoices" },
@@ -67,8 +96,13 @@ test("accounts payable route registration keeps extracted AP route groups first"
     { method: "post", path: "/disbursement-vouchers/:id/confirm" },
     { method: "post", path: "/disbursement-vouchers/:id/void" },
     { method: "get", path: "/suppliers" },
+    { method: "get", path: "/suppliers/:id/overview" },
+    { method: "get", path: "/suppliers/:id/activity" },
     { method: "get", path: "/suppliers/:id" },
+    { method: "get", path: "/suppliers/:id/audit-log" },
     { method: "post", path: "/suppliers" },
+    { method: "post", path: "/suppliers/:id/verify-bank" },
+    { method: "post", path: "/suppliers/:id/merge" },
     { method: "patch", path: "/suppliers/bulk-terms" },
     { method: "patch", path: "/suppliers/:id" },
     { method: "get", path: "/reports/summary" },
@@ -104,11 +138,67 @@ test("accounts payable route registration preserves static-before-dynamic AP pat
   const supplierPatchIndex = routes.findIndex(
     (route) => route.method === "patch" && route.path === "/suppliers/:id",
   );
+  const supplierOverviewIndex = routes.findIndex(
+    (route) => route.method === "get" && route.path === "/suppliers/:id/overview",
+  );
+  const supplierActivityIndex = routes.findIndex(
+    (route) => route.method === "get" && route.path === "/suppliers/:id/activity",
+  );
+  const supplierDetailIndex = routes.findIndex(
+    (route) => route.method === "get" && route.path === "/suppliers/:id",
+  );
 
   assert.ok(soaHistoryIndex > -1);
   assert.ok(soaDetailIndex > -1);
   assert.ok(supplierBulkTermsIndex > -1);
   assert.ok(supplierPatchIndex > -1);
+  assert.ok(supplierOverviewIndex > -1);
+  assert.ok(supplierActivityIndex > -1);
+  assert.ok(supplierDetailIndex > -1);
   assert.ok(soaHistoryIndex < soaDetailIndex);
   assert.ok(supplierBulkTermsIndex < supplierPatchIndex);
+  assert.ok(supplierOverviewIndex < supplierDetailIndex);
+  assert.ok(supplierActivityIndex < supplierDetailIndex);
+});
+
+test("supplier verify-bank and merge routes guard AP role and malformed merge input", async () => {
+  process.env.DATABASE_URL ??= "postgres://apex:apex@localhost:5432/apex_test";
+  const { accountsPayableRoutes } = await import("./routes");
+  const { app, handlers } = createRouteRecorder();
+
+  await accountsPayableRoutes(app as any, {} as any);
+
+  const verifyBank = handlers.get("post /suppliers/:id/verify-bank");
+  const merge = handlers.get("post /suppliers/:id/merge");
+  assert.ok(verifyBank);
+  assert.ok(merge);
+
+  const forbiddenReply = createReply();
+  await verifyBank(
+    {
+      user: { userId: "user-1", role: "CASHIER" },
+      storeContext: { orgId: "org-1" },
+      params: { id: "supplier-1" },
+      ip: "127.0.0.1",
+    },
+    forbiddenReply,
+  );
+
+  assert.equal(forbiddenReply.statusCode, 403);
+  assert.deepEqual(forbiddenReply.payload, { error: "Insufficient role for AP operations" });
+
+  const malformedReply = createReply();
+  await merge(
+    {
+      user: { userId: "user-1", role: "MANAGER" },
+      storeContext: { orgId: "org-1" },
+      params: { id: "supplier-1" },
+      body: {},
+      ip: "127.0.0.1",
+    },
+    malformedReply,
+  );
+
+  assert.equal(malformedReply.statusCode, 400);
+  assert.deepEqual(malformedReply.payload, { error: "sourceSupplierId is required" });
 });

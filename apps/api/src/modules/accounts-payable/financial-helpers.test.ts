@@ -54,7 +54,7 @@ test("check voucher totals preserve amount, deduction, and net formatting", () =
   );
 });
 
-test("invoice payment helpers preserve status thresholds and rounded payload text", () => {
+test("invoice payment helpers require full supplier invoice settlement", () => {
   assert.deepEqual(
     calculateInvoicePaymentApplication({
       paidAmount: "20.00",
@@ -71,37 +71,41 @@ test("invoice payment helpers preserve status thresholds and rounded payload tex
     },
   );
 
-  assert.deepEqual(
-    calculateInvoicePaymentApplication({
+  assert.throws(
+    () => calculateInvoicePaymentApplication({
       paidAmount: "20.00",
       totalAmount: "100.00",
       rtvCreditAmount: "0.00",
       allocation: 70,
       paidThreshold: 0,
     }),
-    {
-      newPaid: 90,
-      newBalance: 10,
-      status: "PARTIALLY_PAID",
-      paidAmountText: "90.00",
-      balanceText: "10.00",
-    },
+    /partial payments are not allowed/,
   );
 
   assert.deepEqual(
     calculateInvoicePaymentReversal({
+      paidAmount: "95.00",
+      totalAmount: "100.00",
+      rtvCreditAmount: "5.00",
+      reversal: 95,
+    }),
+    {
+      newPaid: 0,
+      newBalance: 95,
+      status: "OPEN",
+      paidAmountText: "0.00",
+      balanceText: "95.00",
+    },
+  );
+
+  assert.throws(
+    () => calculateInvoicePaymentReversal({
       paidAmount: "100.00",
       totalAmount: "125.00",
       rtvCreditAmount: "5.00",
       reversal: 25,
     }),
-    {
-      newPaid: 75,
-      newBalance: 45,
-      status: "PARTIALLY_PAID",
-      paidAmountText: "75.00",
-      balanceText: "45.00",
-    },
+    /partial reversals are not allowed/,
   );
 
   assert.deepEqual(

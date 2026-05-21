@@ -206,6 +206,26 @@ export function validateDisbursementVoucherSoaRow({
   return parseAmount(soa.total_balance);
 }
 
+export function assertDisbursementVoucherSoaAllocationsSettleBalances({
+  resolvedSoaIds,
+  allocationMap,
+  soaBalances,
+}: {
+  resolvedSoaIds: string[];
+  allocationMap: Record<string, number>;
+  soaBalances: Record<string, number>;
+}) {
+  for (const soaId of resolvedSoaIds) {
+    const allocatedAmount = allocationMap[soaId] ?? 0;
+    const soaBalance = soaBalances[soaId] ?? 0;
+    if (Math.abs(allocatedAmount - soaBalance) <= 0.01) continue;
+
+    throw new Error(
+      `SOA ${soaId} must be paid in full (${soaBalance.toFixed(2)}); partial supplier invoice payments are not allowed`,
+    );
+  }
+}
+
 export function buildDisbursementVoucherInsertValues({
   orgId,
   dvNumber,

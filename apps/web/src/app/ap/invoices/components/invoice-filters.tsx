@@ -89,7 +89,7 @@ export function InvoiceFilters({
       >
         <option value="">All Statuses</option>
         <option value="OPEN">Open</option>
-        <option value="PARTIALLY_PAID">Partially Paid</option>
+        <option value="PARTIALLY_PAID">Partial (legacy)</option>
         <option value="PAID">Paid</option>
         <option value="VOIDED">Void</option>
       </select>

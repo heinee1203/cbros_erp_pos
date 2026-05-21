@@ -31,6 +31,7 @@ import {
   CheckSquare,
   Square,
   MinusSquare,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
@@ -65,6 +66,12 @@ interface SupplierRow {
   overdueCount: number;
   overdueAmount: number;
   oldestOverdueDate: string | null;
+  lastBankChangeAt: string | null;
+  bankChangeCount: number;
+  hasBankChangeHistory: boolean;
+  safety?: SupplierSafetyMetadata;
+  duplicateWarnings?: SupplierDuplicateWarning[];
+  riskBadges?: SupplierRiskBadge[];
 }
 
 type SortCol =
@@ -78,6 +85,32 @@ type SortCol =
   | "oldestOverdueDate"
   | "status";
 type SortDir = "asc" | "desc";
+
+interface SupplierCompletenessMissingField {
+  key: string;
+  label: string;
+}
+
+interface SupplierSafetyMetadata {
+  score: number;
+  isComplete: boolean;
+  paymentReady: boolean;
+  missingFields: SupplierCompletenessMissingField[];
+}
+
+interface SupplierDuplicateWarning {
+  field: string;
+  label: string;
+  severity: "warning" | "critical";
+  matchedSupplierId: string;
+  matchedSupplierName: string;
+}
+
+interface SupplierRiskBadge {
+  code: string;
+  label: string;
+  severity: "info" | "warning" | "critical";
+}
 
 /* ─── Helpers ─── */
 
@@ -95,6 +128,17 @@ function termsLabel(days: number): string {
 
 function hasPaymentProfile(s: Pick<SupplierRow, "bankName" | "bankAccountNumber" | "bankAccountName">): boolean {
   return Boolean(s.bankName?.trim() && s.bankAccountNumber?.trim() && s.bankAccountName?.trim());
+}
+
+function hasMissingField(s: SupplierRow, keys: string[]): boolean {
+  const missingKeys = new Set(s.safety?.missingFields.map((field) => field.key) ?? []);
+  return keys.some((key) => missingKeys.has(key));
+}
+
+function riskBadgeClass(severity: SupplierRiskBadge["severity"]) {
+  if (severity === "critical") return "border-red-200 bg-red-50 text-red-700";
+  if (severity === "warning") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-blue-200 bg-blue-50 text-blue-700";
 }
 
 /* ─── Sortable column header ─── */
@@ -330,6 +374,12 @@ export default function SupplierListPage() {
   const [showInactive, setShowInactive] = useState(false);
   const [hasOverdue, setHasOverdue] = useState(false);
   const [missingBankOnly, setMissingBankOnly] = useState(false);
+  const [incompleteOnly, setIncompleteOnly] = useState(false);
+  const [missingTinOnly, setMissingTinOnly] = useState(false);
+  const [missingAddressContactOnly, setMissingAddressContactOnly] = useState(false);
+  const [duplicateOnly, setDuplicateOnly] = useState(false);
+  const [inactiveWithBalanceOnly, setInactiveWithBalanceOnly] = useState(false);
+  const [bankChangeOnly, setBankChangeOnly] = useState(false);
   const [sortCol, setSortCol] = useState<SortCol>("totalPayable");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
@@ -391,6 +441,16 @@ export default function SupplierListPage() {
     if (!showInactive) rows = rows.filter((r) => r.isActive);
     if (hasOverdue) rows = rows.filter((r) => r.overdueCount > 0);
     if (missingBankOnly) rows = rows.filter((r) => !hasPaymentProfile(r));
+    if (incompleteOnly) rows = rows.filter((r) => (r.safety?.score ?? 0) < 100);
+    if (missingTinOnly) rows = rows.filter((r) => hasMissingField(r, ["tin"]));
+    if (missingAddressContactOnly) {
+      rows = rows.filter((r) =>
+        hasMissingField(r, ["address", "contactPerson", "contactPhoneOrEmail"]),
+      );
+    }
+    if (duplicateOnly) rows = rows.filter((r) => (r.duplicateWarnings?.length ?? 0) > 0);
+    if (inactiveWithBalanceOnly) rows = rows.filter((r) => !r.isActive && r.totalPayable > 0);
+    if (bankChangeOnly) rows = rows.filter((r) => r.hasBankChangeHistory);
     if (search.trim().length >= 1) {
       const q = search.toLowerCase();
       rows = rows.filter(
@@ -445,7 +505,21 @@ export default function SupplierListPage() {
       return sortDir === "desc" ? -cmp : cmp;
     });
     return copy;
-  }, [suppliers, search, showInactive, hasOverdue, missingBankOnly, sortCol, sortDir]);
+  }, [
+    suppliers,
+    search,
+    showInactive,
+    hasOverdue,
+    missingBankOnly,
+    incompleteOnly,
+    missingTinOnly,
+    missingAddressContactOnly,
+    duplicateOnly,
+    inactiveWithBalanceOnly,
+    bankChangeOnly,
+    sortCol,
+    sortDir,
+  ]);
 
   const toggleSelectAll = () => {
     if (
@@ -474,6 +548,8 @@ export default function SupplierListPage() {
       activeCount: activeOnly.length,
       withBalance: activeOnly.filter((s) => s.totalPayable > 0).length,
       paymentReady: activeOnly.filter(hasPaymentProfile).length,
+      safetyIssues: activeOnly.filter((s) => (s.riskBadges?.length ?? 0) > 0).length,
+      duplicates: activeOnly.filter((s) => (s.duplicateWarnings?.length ?? 0) > 0).length,
       totalPayable: activeOnly.reduce((sum, s) => sum + s.totalPayable, 0),
       overdueCount: activeOnly.filter((s) => s.overdueCount > 0).length,
       overdueAmount: activeOnly.reduce((sum, s) => sum + s.overdueAmount, 0),
@@ -488,6 +564,10 @@ export default function SupplierListPage() {
       "Email",
       "Terms",
       "Payment Profile",
+      "Completeness",
+      "Risk Badges",
+      "Duplicate Warnings",
+      "Last Bank Change",
       "Bank",
       "Bank Account #",
       "Bank Account Name",
@@ -508,6 +588,10 @@ export default function SupplierListPage() {
         s.contactEmail ?? "",
         termsLabel(s.paymentTermsDays),
         hasPaymentProfile(s) ? "Ready" : "Missing bank details",
+        `${s.safety?.score ?? 0}%`,
+        (s.riskBadges ?? []).map((badge) => badge.label).join("; "),
+        (s.duplicateWarnings ?? []).map((warning) => `${warning.label}: ${warning.matchedSupplierName}`).join("; "),
+        s.lastBankChangeAt ?? "",
         s.bankName ?? "",
         s.bankAccountNumber ?? "",
         s.bankAccountName ?? "",
@@ -578,11 +662,11 @@ export default function SupplierListPage() {
           sub="active suppliers"
         />
         <KPICard
-          icon={<CheckSquare size={14} />}
+          icon={<ShieldCheck size={14} />}
           label="Payment Ready"
           value={`${summary.paymentReady}/${summary.activeCount}`}
-          sub={`${summary.activeCount - summary.paymentReady} missing bank`}
-          danger={summary.activeCount - summary.paymentReady > 0}
+          sub={`${summary.safetyIssues} safety issue${summary.safetyIssues === 1 ? "" : "s"} · ${summary.duplicates} duplicate flag${summary.duplicates === 1 ? "" : "s"}`}
+          danger={summary.safetyIssues > 0}
         />
         <KPICard
           icon={<DollarSign size={14} />}
@@ -640,6 +724,60 @@ export default function SupplierListPage() {
               className="rounded border-border"
             />
             Missing bank details
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={incompleteOnly}
+              onChange={(e) => setIncompleteOnly(e.target.checked)}
+              className="rounded border-border"
+            />
+            Incomplete profile
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={missingTinOnly}
+              onChange={(e) => setMissingTinOnly(e.target.checked)}
+              className="rounded border-border"
+            />
+            Missing TIN
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={missingAddressContactOnly}
+              onChange={(e) => setMissingAddressContactOnly(e.target.checked)}
+              className="rounded border-border"
+            />
+            Missing address/contact
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={duplicateOnly}
+              onChange={(e) => setDuplicateOnly(e.target.checked)}
+              className="rounded border-border"
+            />
+            Duplicate warning
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={inactiveWithBalanceOnly}
+              onChange={(e) => setInactiveWithBalanceOnly(e.target.checked)}
+              className="rounded border-border"
+            />
+            Inactive with balance
+          </label>
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={bankChangeOnly}
+              onChange={(e) => setBankChangeOnly(e.target.checked)}
+              className="rounded border-border"
+            />
+            Bank changed
           </label>
           <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
             <input
@@ -786,7 +924,45 @@ export default function SupplierListPage() {
                         </button>
                       </td>
                       <td className="px-3 py-1.5 text-[13px] font-medium text-foreground">
-                        {s.name}
+                        <div className="flex min-w-[220px] flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <span>{s.name}</span>
+                            {typeof s.safety?.score === "number" && (
+                              <span
+                                className={cn(
+                                  "rounded-md px-1.5 py-0.5 text-[9px] font-semibold",
+                                  s.safety.score >= 90
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : s.safety.score >= 70
+                                    ? "bg-amber-50 text-amber-700"
+                                    : "bg-red-50 text-red-700",
+                                )}
+                              >
+                                {s.safety.score}%
+                              </span>
+                            )}
+                          </div>
+                          {(s.riskBadges?.length ?? 0) > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {s.riskBadges!.slice(0, 4).map((badge) => (
+                                <span
+                                  key={badge.code}
+                                  className={cn(
+                                    "rounded-full border px-1.5 py-px text-[9px] font-semibold",
+                                    riskBadgeClass(badge.severity),
+                                  )}
+                                >
+                                  {badge.label}
+                                </span>
+                              ))}
+                              {s.riskBadges!.length > 4 && (
+                                <span className="rounded-full border border-border bg-muted px-1.5 py-px text-[9px] font-semibold text-muted-foreground">
+                                  +{s.riskBadges!.length - 4}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-1.5 text-[12px] text-muted-foreground">
                         {s.contactPerson ?? "—"}

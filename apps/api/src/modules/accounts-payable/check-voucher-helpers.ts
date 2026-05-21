@@ -81,15 +81,26 @@ export function validateCheckVoucherInvoiceLines({
     if (invoice.supplierId !== supplierId) {
       throw new Error(`Invoice ${invoice.invoiceNumber} belongs to a different supplier`);
     }
-    if (!["OPEN", "PARTIALLY_PAID"].includes(invoice.status)) {
+    if (invoice.status !== "OPEN") {
       throw new Error(`Invoice ${invoice.invoiceNumber} is not payable (status: ${invoice.status})`);
     }
 
     const lineAmount = Number.parseFloat(line.amount);
     const balance = Number.parseFloat(invoice.balance);
+    if (!Number.isFinite(lineAmount) || lineAmount <= 0) {
+      throw new Error(`Amount must be > 0 for invoice ${invoice.invoiceNumber}`);
+    }
+    if (!Number.isFinite(balance) || balance <= 0) {
+      throw new Error(`Invoice ${invoice.invoiceNumber} has no payable balance`);
+    }
     if (lineAmount > balance) {
       throw new Error(
         `Amount ${line.amount} exceeds balance ${invoice.balance} for invoice ${invoice.invoiceNumber}`,
+      );
+    }
+    if (Math.abs(lineAmount - balance) > 0.01) {
+      throw new Error(
+        `Amount ${line.amount} must equal full balance ${invoice.balance} for invoice ${invoice.invoiceNumber}; partial payments are not allowed`,
       );
     }
   }

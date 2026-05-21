@@ -4,6 +4,7 @@ export type AuditLogQuery = {
   userId?: string;
   action?: string;
   entityType?: string;
+  entityId?: string;
   from?: string;
   to?: string;
   cursor?: string;
@@ -24,6 +25,7 @@ export function buildAuditLogQuery(orgId: string, query: AuditLogQuery) {
     userId: query.userId,
     action: query.action,
     entityType: query.entityType,
+    entityId: query.entityId,
     from: query.from,
     to: query.to,
     cursor: query.cursor,

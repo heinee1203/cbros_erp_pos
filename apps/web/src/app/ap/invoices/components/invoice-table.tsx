@@ -64,7 +64,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   OPEN: "Open",
-  PARTIALLY_PAID: "Partially Paid",
+  PARTIALLY_PAID: "Partial (legacy)",
   PAID: "Paid",
   VOIDED: "Void",
   OVERDUE: "Overdue",

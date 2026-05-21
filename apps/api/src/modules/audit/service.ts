@@ -38,6 +38,7 @@ export interface AuditQueryParams {
   userId?: string;
   action?: string;
   entityType?: string;
+  entityId?: string;
   from?: string;
   to?: string;
   cursor?: string;
@@ -73,6 +74,9 @@ export async function queryAuditLog(params: AuditQueryParams): Promise<{
   if (params.entityType) {
     conditions.push(eq(auditLogs.entityType, params.entityType));
   }
+  if (params.entityId) {
+    conditions.push(eq(auditLogs.entityId, params.entityId));
+  }
   if (params.from) {
     conditions.push(sql`${auditLogs.createdAt} >= ${params.from}`);
   }
@@ -87,7 +91,7 @@ export async function queryAuditLog(params: AuditQueryParams): Promise<{
     SELECT
       al.id,
       al.user_id,
-      u.name AS user_name,
+      u.full_name AS user_name,
       al.action,
       al.entity_type,
       al.entity_id,

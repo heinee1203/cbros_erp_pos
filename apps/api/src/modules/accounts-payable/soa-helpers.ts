@@ -28,15 +28,37 @@ export type SupplierSoaRtvCreditLike = {
 export type SupplierSoaOverviewRow = {
   supplier_id: string;
   supplier_name: string;
+  contact_person: string | null;
   contact_email: string | null;
   contact_phone: string | null;
   address: string | null;
+  tin: string | null;
+  payment_terms_days: number | null;
+  bank_name: string | null;
+  bank_account_number: string | null;
+  bank_account_name: string | null;
   invoice_count: number;
   total_balance: string;
   oldest_invoice_date: string | null;
   earliest_due_date: string | null;
   overdue_count: number;
   overdue_amount: string;
+  current_count: number;
+  current_amount: string;
+  days_1_30_count: number;
+  days_1_30_amount: string;
+  days_31_60_count: number;
+  days_31_60_amount: string;
+  days_61_90_count: number;
+  days_61_90_amount: string;
+  days_90_plus_count: number;
+  days_90_plus_amount: string;
+  available_credit_memo_count: number;
+  available_credit_memo_amount: string;
+  last_payment_date: string | null;
+  last_soa_date: string | null;
+  paid_this_month: string;
+  open_voucher_count: number;
 };
 
 export type SupplierSoaGenerationInvoiceLike = {
@@ -78,9 +100,12 @@ export type SupplierSoaSearchRow = SupplierSoaRecordRow & {
 export type SupplierSoaDetailRow = SupplierSoaRecordRow & {
   supplier_id: string;
   supplier_name: string;
+  contact_person: string | null;
   contact_phone: string | null;
   address: string | null;
   contact_email: string | null;
+  tin: string | null;
+  generated_by_name: string | null;
 };
 
 export type SupplierSoaLineItemRow = {
@@ -92,6 +117,43 @@ export type SupplierSoaLineItemRow = {
   paid_at_generation: string;
   balance_at_generation: string;
 };
+
+function parseMoney(value: string | number | null | undefined): number {
+  const parsed = typeof value === "number" ? value : parseFloat(value ?? "0");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseCount(value: string | number | null | undefined): number {
+  const parsed = typeof value === "number" ? value : parseInt(value ?? "0", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildOverviewBucket(count: string | number | null | undefined, amount: string | number | null | undefined) {
+  return {
+    count: parseCount(count),
+    amount: parseMoney(amount),
+  };
+}
+
+function buildPaymentReadiness(row: SupplierSoaOverviewRow) {
+  const missingFields = [
+    row.bank_name?.trim() ? null : "bank name",
+    row.bank_account_number?.trim() ? null : "bank account number",
+    row.bank_account_name?.trim() ? null : "bank account name",
+    row.contact_person?.trim() ? null : "contact person",
+    row.address?.trim() ? null : "address",
+    row.tin?.trim() ? null : "TIN",
+  ].filter(Boolean) as string[];
+
+  return {
+    hasBankDetails: Boolean(row.bank_name?.trim() && row.bank_account_number?.trim() && row.bank_account_name?.trim()),
+    hasTerms: Number.isFinite(row.payment_terms_days),
+    hasContactPerson: Boolean(row.contact_person?.trim()),
+    hasAddress: Boolean(row.address?.trim()),
+    hasTin: Boolean(row.tin?.trim()),
+    missingFields,
+  };
+}
 
 export function buildSupplierSoaLedgerEntries({
   invoices,
@@ -263,9 +325,11 @@ export function buildSupplierSoaDetailResponse({
     supplierId: soa.supplier_id,
     supplier: {
       name: soa.supplier_name,
+      contactPerson: soa.contact_person,
       contactPhone: soa.contact_phone,
       address: soa.address,
       contactEmail: soa.contact_email,
+      tin: soa.tin,
     },
     dateFrom: soa.date_from,
     dateTo: soa.date_to,
@@ -276,6 +340,7 @@ export function buildSupplierSoaDetailResponse({
     invoiceCount: soa.invoice_count,
     status: soa.status,
     notes: soa.notes,
+    generatedByName: soa.generated_by_name,
     invoices: lines.map((line) => ({
       id: line.invoice_id,
       invoiceNumber: line.invoice_number,
@@ -310,15 +375,31 @@ export function buildSupplierSoaOverviewResponse(
     suppliers: rows.map((row) => ({
       supplierId: row.supplier_id,
       supplierName: row.supplier_name,
+      contactPerson: row.contact_person,
       contactEmail: row.contact_email,
       contactPhone: row.contact_phone,
       address: row.address,
+      tin: row.tin,
       invoiceCount: row.invoice_count,
-      totalBalance: parseFloat(row.total_balance),
+      totalBalance: parseMoney(row.total_balance),
       oldestInvoiceDate: row.oldest_invoice_date,
       earliestDueDate: row.earliest_due_date,
       overdueCount: row.overdue_count,
-      overdueAmount: parseFloat(row.overdue_amount),
+      overdueAmount: parseMoney(row.overdue_amount),
+      aging: {
+        current: buildOverviewBucket(row.current_count, row.current_amount),
+        days1To30: buildOverviewBucket(row.days_1_30_count, row.days_1_30_amount),
+        days31To60: buildOverviewBucket(row.days_31_60_count, row.days_31_60_amount),
+        days61To90: buildOverviewBucket(row.days_61_90_count, row.days_61_90_amount),
+        days90Plus: buildOverviewBucket(row.days_90_plus_count, row.days_90_plus_amount),
+      },
+      paymentReadiness: buildPaymentReadiness(row),
+      creditMemoCount: parseCount(row.available_credit_memo_count),
+      creditMemoAmount: parseMoney(row.available_credit_memo_amount),
+      lastPaymentDate: row.last_payment_date,
+      lastSoaDate: row.last_soa_date,
+      paidThisMonth: parseMoney(row.paid_this_month),
+      openVoucherCount: parseCount(row.open_voucher_count),
     })),
     summary: {
       totalPayable: Math.round(totalPayable * 100) / 100,

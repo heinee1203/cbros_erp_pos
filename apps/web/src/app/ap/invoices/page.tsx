@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { FileText, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
@@ -40,6 +41,10 @@ function isCreditMemoInvoice(invoice: Pick<Invoice, "invoiceNumber" | "totalAmou
 
 export default function SupplierInvoicesPage() {
   const { token, locationId, loading: authLoading, user } = useAuth();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
+  const openInvoiceId = searchParams.get("openInvoiceId");
+  const openPayForInvoice = searchParams.get("pay") === "1";
+  const initialSupplierId = searchParams.get("supplierId") ?? "";
 
   // ── Data state ──
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -47,7 +52,7 @@ export default function SupplierInvoicesPage() {
   const [error, setError] = useState<string | null>(null);
 
   // ── Filters ──
-  const [supplierFilter, setSupplierFilter] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState(() => initialSupplierId);
   const [statusFilter, setStatusFilter] = useState("");
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
@@ -81,6 +86,7 @@ export default function SupplierInvoicesPage() {
   // ── Row highlight (tap a success toast to scroll + pulse matching rows) ──
   const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openedInvoiceIdRef = useRef<string | null>(null);
 
   // Clear any pending timer on unmount.
   useEffect(() => {
@@ -298,7 +304,7 @@ export default function SupplierInvoicesPage() {
   );
 
   // ── Edit handler ──
-  const handleEdit = (inv: Invoice) => {
+  const handleEdit = useCallback((inv: Invoice) => {
     setEditInvoice({
       id: inv.id,
       invoiceNumber: inv.invoiceNumber,
@@ -309,7 +315,25 @@ export default function SupplierInvoicesPage() {
       notes: inv.notes,
     });
     setShowEditModal(true);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!openInvoiceId || loading || openedInvoiceIdRef.current === openInvoiceId) return;
+    const match = invoices.find((inv) => inv.id === openInvoiceId);
+    if (!match) return;
+    openedInvoiceIdRef.current = openInvoiceId;
+    if (
+      openPayForInvoice &&
+      !isCreditMemoInvoice(match) &&
+      (match.status === "OPEN" || match.status === "PARTIALLY_PAID")
+    ) {
+      setSelectedIds(new Set([match.id]));
+      setShowBulkPayDialog(true);
+    } else {
+      handleEdit(match);
+    }
+    pulseRows([match.id]);
+  }, [handleEdit, invoices, loading, openInvoiceId, openPayForInvoice, pulseRows]);
 
   // ── Void handler ──
   const handleVoidRequest = (inv: Invoice) => {

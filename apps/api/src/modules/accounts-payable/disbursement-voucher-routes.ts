@@ -13,13 +13,9 @@ import {
 // Narrow schema for additionalCharges only. The rest of the DV body stays on
 // manual validation to preserve the existing route contract.
 const dvAdditionalChargeSchema = z.object({
-  chargeType: z.enum([
-    "FREIGHT",
-    "HANDLING",
-    "MISCELLANEOUS",
-    "ADJUSTMENT",
-    "OTHER",
-  ]),
+  // The DB stores charge_type as text and older DV screens/tests used values
+  // outside the current dropdown, so accept any non-empty type here.
+  chargeType: z.string().trim().min(1),
   description: z.string().min(1),
   referenceNumber: z.string().optional().nullable(),
   amount: z

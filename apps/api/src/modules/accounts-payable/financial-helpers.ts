@@ -9,6 +9,7 @@ const tens = [
 ];
 
 export type SupplierInvoicePaymentStatus = "OPEN" | "PARTIALLY_PAID" | "PAID";
+const MONEY_TOLERANCE = 0.01;
 
 function chunkToWords(n: number): string {
   if (n === 0) return "";
@@ -102,9 +103,16 @@ export function calculateInvoicePaymentApplication({
   allocation: number;
   paidThreshold?: number;
 }) {
+  const currentBalance = parseFloat(totalAmount) - parseFloat(paidAmount) - parseFloat(rtvCreditAmount);
+  if (Math.abs(allocation - currentBalance) > Math.max(paidThreshold, MONEY_TOLERANCE)) {
+    throw new Error(
+      `Supplier invoice payments must settle the full remaining balance (${currentBalance.toFixed(2)}); partial payments are not allowed`,
+    );
+  }
+
   const newPaid = parseFloat(paidAmount) + allocation;
   const newBalance = parseFloat(totalAmount) - newPaid - parseFloat(rtvCreditAmount);
-  const status: SupplierInvoicePaymentStatus = newBalance <= paidThreshold ? "PAID" : "PARTIALLY_PAID";
+  const status: SupplierInvoicePaymentStatus = newBalance <= paidThreshold ? "PAID" : "OPEN";
 
   return {
     newPaid,
@@ -126,9 +134,16 @@ export function calculateInvoicePaymentReversal({
   rtvCreditAmount: string;
   reversal: number;
 }) {
+  const currentPaid = parseFloat(paidAmount);
+  if (Math.abs(reversal - currentPaid) > MONEY_TOLERANCE) {
+    throw new Error(
+      `Supplier invoice payment reversals must restore the full paid amount (${currentPaid.toFixed(2)}); partial reversals are not allowed`,
+    );
+  }
+
   const newPaid = parseFloat(paidAmount) - reversal;
   const newBalance = parseFloat(totalAmount) - newPaid - parseFloat(rtvCreditAmount);
-  const status: SupplierInvoicePaymentStatus = newPaid <= 0.005 ? "OPEN" : "PARTIALLY_PAID";
+  const status: SupplierInvoicePaymentStatus = "OPEN";
 
   return {
     newPaid,

@@ -7,6 +7,7 @@ import {
   assertDisbursementVoucherHasPaymentLines,
   assertDisbursementVoucherPaymentsMatchNet,
   assertDisbursementVoucherRequiresSoa,
+  assertDisbursementVoucherSoaAllocationsSettleBalances,
   appendDisbursementVoucherPaymentAuditNote,
   buildDisbursementVoucherAdditionalChargeInsertValues,
   buildDisbursementVoucherCreditMemoReferences,
@@ -110,6 +111,19 @@ test("DV SOA validation and create value helpers preserve existing payload polic
       supplierId: "supplier-1",
     }),
     /Supplier does not match SOA/,
+  );
+  assert.doesNotThrow(() => assertDisbursementVoucherSoaAllocationsSettleBalances({
+    resolvedSoaIds: ["soa-1", "soa-2"],
+    allocationMap: { "soa-1": 40, "soa-2": 60 },
+    soaBalances: { "soa-1": 40, "soa-2": 60 },
+  }));
+  assert.throws(
+    () => assertDisbursementVoucherSoaAllocationsSettleBalances({
+      resolvedSoaIds: ["soa-1", "soa-2"],
+      allocationMap: { "soa-1": 40, "soa-2": 25 },
+      soaBalances: { "soa-1": 40, "soa-2": 60 },
+    }),
+    /partial supplier invoice payments are not allowed/,
   );
 
   const data = {

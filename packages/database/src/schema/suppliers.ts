@@ -10,6 +10,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations";
+import { users } from "./users";
 
 export const suppliers = pgTable(
   "suppliers",
@@ -42,6 +43,10 @@ export const suppliers = pgTable(
     bankName: varchar("bank_name", { length: 100 }),
     bankAccountNumber: varchar("bank_account_number", { length: 50 }),
     bankAccountName: varchar("bank_account_name", { length: 255 }),
+    bankVerifiedAt: timestamp("bank_verified_at", { withTimezone: true }),
+    bankVerifiedBy: uuid("bank_verified_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
 
     // ── Notes + soft-delete ──
     notes: text("notes"),

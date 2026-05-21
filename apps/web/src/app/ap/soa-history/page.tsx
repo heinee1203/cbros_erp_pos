@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 import { fmtPeso } from "@/lib/format";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
-import { buildSupplierSOAHtml } from "@/lib/supplier-soa-html";
+import { buildSupplierSOAHtml, type SupplierSOAPrintMode } from "@/lib/supplier-soa-html";
 import { ConfirmPaymentDialog } from "@/app/ap/disbursement-vouchers/components/confirm-payment-dialog";
 import { VoidDialog } from "@/app/ap/disbursement-vouchers/components/void-dialog";
 import { VoucherDetailModal } from "@/app/ap/disbursement-vouchers/components/voucher-detail-modal";
@@ -114,6 +114,7 @@ export default function SupplierSOAHistoryPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showVoided, setShowVoided] = useState(false);
+  const [printMode, setPrintMode] = useState<SupplierSOAPrintMode>("detailed");
   const [voidingSOA, setVoidingSOA] = useState<SupplierSOARecord | null>(null);
   const [viewingDvId, setViewingDvId] = useState<string | null>(null);
   const [confirmingDv, setConfirmingDv] = useState<PendingDvAction | null>(null);
@@ -178,11 +179,19 @@ export default function SupplierSOAHistoryPage() {
       const snap = await apiFetch<any>(`/ap/supplier-soa/${r.id}`, { token, locationId });
       const html = buildSupplierSOAHtml({
         supplierName: snap.supplier?.name || r.supplierName,
+        supplierAddress: snap.supplier?.address ?? null,
+        supplierContact: snap.supplier?.contactPerson ?? null,
+        supplierPhone: snap.supplier?.contactPhone ?? null,
+        supplierEmail: snap.supplier?.contactEmail ?? null,
+        supplierTin: snap.supplier?.tin ?? null,
+        generatedAt: snap.generatedAt,
+        generatedByName: snap.generatedByName,
         invoices: (snap.invoices || []).map((i: any) => ({
           invoiceNumber: i.invoiceNumber, invoiceDate: i.invoiceDate, dueDate: i.dueDate,
           totalAmount: i.totalAmount, paidAmount: i.paidAmount, balance: i.balance,
         })),
         soaNumber: snap.soaNumber,
+        printMode,
       });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
@@ -411,6 +420,24 @@ export default function SupplierSOAHistoryPage() {
             <input type="checkbox" checked={showVoided} onChange={(e) => setShowVoided(e.target.checked)} className="rounded border-border" />
             Show voided
           </label>
+          <div className="ml-auto flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1 text-[11px]">
+            <span className="px-1.5 font-medium text-muted-foreground">Reprint format</span>
+            {(["detailed", "concise"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setPrintMode(mode)}
+                className={cn(
+                  "rounded-md px-2 py-1 font-semibold capitalize transition-colors",
+                  printMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-background hover:text-foreground",
+                )}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

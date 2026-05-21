@@ -44,6 +44,7 @@ import {
   assertDisbursementVoucherHasPaymentLines,
   assertDisbursementVoucherPaymentsMatchNet,
   assertDisbursementVoucherRequiresSoa,
+  assertDisbursementVoucherSoaAllocationsSettleBalances,
   appendDisbursementVoucherPaymentAuditNote,
   buildDisbursementVoucherAdditionalChargeInsertValues,
   buildDisbursementVoucherCreditMemoReferences,
@@ -117,13 +118,19 @@ import {
   type SupplierInvoiceUpdateInput,
 } from "./invoice-helpers";
 import {
+  buildSupplierChangedFields,
   buildSupplierApCreateValues,
   buildSupplierApUpdateFields,
+  buildSupplierBankVerificationStatus,
+  enrichSuppliersWithSafety,
   mapSupplierApDetailRow,
   mapSupplierApStatsRow,
+  splitSupplierChangedFields,
   type SupplierApCreateInput,
   type SupplierApUpdateInput,
+  type SupplierBankVerificationStatus,
 } from "./supplier-helpers";
+import { logAction } from "./accounts-payable-audit-service";
 
 // ════════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════════
@@ -206,6 +213,8 @@ export async function listInvoices(
       status: supplierInvoices.status,
       paymentTermsDays: supplierInvoices.paymentTermsDays,
       currency: supplierInvoices.currency,
+      sourcePoId: supplierInvoices.sourcePoId,
+      sourceReceiptId: supplierInvoices.sourceReceiptId,
       rtvCreditAmount: supplierInvoices.rtvCreditAmount,
       notes: supplierInvoices.notes,
       // SOA billing flags — the UI uses these to grey out rows already
@@ -541,6 +550,7 @@ export async function bulkMarkInvoicesPaid(
 export async function bulkUpdateSupplierTerms(
   orgId: string,
   data: { supplierIds: string[]; paymentTermsDays: number },
+  context?: SupplierAuditContext,
 ) {
   if (!data.supplierIds.length) throw new Error("No supplier IDs provided");
   if (data.supplierIds.length > 200) throw new Error("Maximum 200 suppliers per request");
@@ -556,7 +566,28 @@ export async function bulkUpdateSupplierTerms(
       ),
     );
 
-  return { updatedCount: (result as any).count ?? data.supplierIds.length };
+  const updatedCount = (result as any).count ?? data.supplierIds.length;
+  const invoiceTermsUpdated = await syncOpenSupplierInvoiceTerms(
+    orgId,
+    data.supplierIds,
+    data.paymentTermsDays,
+  );
+
+  logAction({
+    orgId,
+    userId: context?.userId,
+    action: "SUPPLIER_BULK_TERMS",
+    entityType: "SUPPLIER",
+    details: {
+      supplierIds: data.supplierIds,
+      paymentTermsDays: data.paymentTermsDays,
+      updatedCount,
+      invoiceTermsUpdated,
+    },
+    ipAddress: context?.ipAddress,
+  });
+
+  return { updatedCount };
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1101,21 +1132,78 @@ export async function getSupplierSOAOverview(orgId: string) {
     SELECT
       s.id AS supplier_id,
       s.name AS supplier_name,
+      s.contact_person,
       s.contact_email,
       s.contact_phone,
       s.address,
+      s.tin,
+      s.payment_terms_days,
+      s.bank_name,
+      s.bank_account_number,
+      s.bank_account_name,
       COUNT(si.id)::int AS invoice_count,
       COALESCE(SUM(si.balance::numeric), 0)::numeric(14,2) AS total_balance,
       MIN(si.invoice_date) AS oldest_invoice_date,
       MIN(si.due_date) AS earliest_due_date,
       COUNT(CASE WHEN si.due_date < CURRENT_DATE THEN 1 END)::int AS overdue_count,
-      COALESCE(SUM(CASE WHEN si.due_date < CURRENT_DATE THEN si.balance::numeric ELSE 0 END), 0)::numeric(14,2) AS overdue_amount
+      COALESCE(SUM(CASE WHEN si.due_date < CURRENT_DATE THEN si.balance::numeric ELSE 0 END), 0)::numeric(14,2) AS overdue_amount,
+      COUNT(*) FILTER (WHERE si.due_date >= CURRENT_DATE)::int AS current_count,
+      COALESCE(SUM(si.balance::numeric) FILTER (WHERE si.due_date >= CURRENT_DATE), 0)::numeric(14,2) AS current_amount,
+      COUNT(*) FILTER (WHERE CURRENT_DATE - si.due_date BETWEEN 1 AND 30)::int AS days_1_30_count,
+      COALESCE(SUM(si.balance::numeric) FILTER (WHERE CURRENT_DATE - si.due_date BETWEEN 1 AND 30), 0)::numeric(14,2) AS days_1_30_amount,
+      COUNT(*) FILTER (WHERE CURRENT_DATE - si.due_date BETWEEN 31 AND 60)::int AS days_31_60_count,
+      COALESCE(SUM(si.balance::numeric) FILTER (WHERE CURRENT_DATE - si.due_date BETWEEN 31 AND 60), 0)::numeric(14,2) AS days_31_60_amount,
+      COUNT(*) FILTER (WHERE CURRENT_DATE - si.due_date BETWEEN 61 AND 90)::int AS days_61_90_count,
+      COALESCE(SUM(si.balance::numeric) FILTER (WHERE CURRENT_DATE - si.due_date BETWEEN 61 AND 90), 0)::numeric(14,2) AS days_61_90_amount,
+      COUNT(*) FILTER (WHERE CURRENT_DATE - si.due_date > 90)::int AS days_90_plus_count,
+      COALESCE(SUM(si.balance::numeric) FILTER (WHERE CURRENT_DATE - si.due_date > 90), 0)::numeric(14,2) AS days_90_plus_amount,
+      COALESCE(MAX(cm.credit_memo_count), 0)::int AS available_credit_memo_count,
+      COALESCE(MAX(cm.credit_memo_amount), 0)::numeric(14,2) AS available_credit_memo_amount,
+      MAX(pay.last_payment_date)::text AS last_payment_date,
+      MAX(soa.last_soa_date)::text AS last_soa_date,
+      COALESCE(MAX(pay.paid_this_month), 0)::numeric(14,2) AS paid_this_month,
+      COALESCE(MAX(pay.open_voucher_count), 0)::int AS open_voucher_count
     FROM suppliers s
     JOIN supplier_invoices si ON si.supplier_id = s.id AND si.org_id = s.org_id
+    LEFT JOIN (
+      SELECT
+        supplier_id,
+        COUNT(*)::int AS credit_memo_count,
+        COALESCE(SUM(ABS(total_amount::numeric)), 0)::numeric(14,2) AS credit_memo_amount
+      FROM supplier_invoices
+      WHERE org_id = ${orgId}
+        AND status IN ('OPEN', 'PAID', 'PARTIALLY_PAID')
+        AND billed = false
+        AND (total_amount::numeric < 0 OR invoice_number ILIKE 'CM%')
+      GROUP BY supplier_id
+    ) cm ON cm.supplier_id = s.id
+    LEFT JOIN (
+      SELECT
+        supplier_id,
+        MAX(payment_date)::text AS last_payment_date,
+        COALESCE(SUM(net_amount::numeric) FILTER (
+          WHERE status = 'CONFIRMED'
+            AND payment_date >= date_trunc('month', CURRENT_DATE)::date
+            AND payment_date < (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month')::date
+        ), 0)::numeric(14,2) AS paid_this_month,
+        COUNT(*) FILTER (WHERE status IN ('DRAFT', 'PRINTED'))::int AS open_voucher_count
+      FROM supplier_disbursement_vouchers
+      WHERE org_id = ${orgId}
+        AND status != 'VOIDED'
+      GROUP BY supplier_id
+    ) pay ON pay.supplier_id = s.id
+    LEFT JOIN (
+      SELECT supplier_id, MAX(generated_at)::text AS last_soa_date
+      FROM supplier_soa_records
+      WHERE org_id = ${orgId}
+        AND status != 'VOID'
+      GROUP BY supplier_id
+    ) soa ON soa.supplier_id = s.id
     WHERE s.org_id = ${orgId}
       AND si.status IN ('OPEN', 'PARTIALLY_PAID')
       AND si.balance::numeric > 0
-    GROUP BY s.id, s.name, s.contact_email, s.contact_phone, s.address
+    GROUP BY s.id, s.name, s.contact_person, s.contact_email, s.contact_phone, s.address,
+      s.tin, s.payment_terms_days, s.bank_name, s.bank_account_number, s.bank_account_name
     ORDER BY total_balance DESC
   `);
 
@@ -1143,6 +1231,181 @@ export async function getSupplierSOAOverview(orgId: string) {
 // per-supplier rollups (invoice counts, payables, oldest overdue, status)
 // and an update path that covers the new AP fields (contact_person, tin,
 // payment_terms_days, credit_limit, bank details, notes, is_active).
+
+export type SupplierAuditContext = {
+  userId?: string;
+  ipAddress?: string;
+};
+
+export type SupplierActivityKind = "invoices" | "pos" | "returns" | "soas" | "dvs" | "audit";
+export type SupplierActivitySortDir = "asc" | "desc";
+
+export type SupplierActivityQuery = {
+  kind: SupplierActivityKind;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: string;
+  sort?: string;
+  dir?: SupplierActivitySortDir;
+};
+
+export type SupplierMergeInput = {
+  sourceSupplierId: string;
+  reason?: string;
+  dryRun?: boolean;
+};
+
+const SUPPLIER_ACTIVITY_KINDS = new Set<SupplierActivityKind>([
+  "invoices",
+  "pos",
+  "returns",
+  "soas",
+  "dvs",
+  "audit",
+]);
+
+const SUPPLIER_ACTIVITY_SORTS: Record<SupplierActivityKind, Record<string, SQL>> = {
+  invoices: {
+    invoiceDate: sql`si.invoice_date`,
+    dueDate: sql`si.due_date`,
+    invoiceNumber: sql`si.invoice_number`,
+    amount: sql`si.total_amount::numeric`,
+    balance: sql`si.balance::numeric`,
+    status: sql`si.status`,
+  },
+  pos: {
+    orderDate: sql`po.created_at`,
+    poNumber: sql`po.po_no`,
+    total: sql`COALESCE(po_totals.total_cost, 0)`,
+    status: sql`po.status`,
+  },
+  returns: {
+    createdAt: sql`sr.created_at`,
+    rtvNumber: sql`sr.rtv_number`,
+    totalCost: sql`sr.total_cost::numeric`,
+    creditAmount: sql`sr.credit_amount::numeric`,
+    status: sql`sr.status`,
+  },
+  soas: {
+    generatedAt: sql`sr.generated_at`,
+    soaNumber: sql`sr.soa_number`,
+    totalAmount: sql`sr.total_amount::numeric`,
+    totalBalance: sql`sr.total_balance::numeric`,
+    status: sql`sr.status`,
+  },
+  dvs: {
+    paymentDate: sql`dv.payment_date`,
+    dvNumber: sql`dv.dv_number`,
+    amount: sql`dv.amount::numeric`,
+    status: sql`dv.status`,
+  },
+  audit: {
+    createdAt: sql`al.created_at`,
+    action: sql`al.action`,
+  },
+};
+
+const SUPPLIER_ACTIVITY_DEFAULT_SORT: Record<SupplierActivityKind, string> = {
+  invoices: "invoiceDate",
+  pos: "orderDate",
+  returns: "createdAt",
+  soas: "generatedAt",
+  dvs: "paymentDate",
+  audit: "createdAt",
+};
+
+const SUPPLIER_ACTIVITY_STATUS_OPTIONS: Record<SupplierActivityKind, string[]> = {
+  invoices: ["OPEN", "PARTIALLY_PAID", "PAID", "VOIDED"],
+  pos: ["DRAFT", "SUBMITTED", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"],
+  returns: ["DRAFT", "SUBMITTED", "ACKNOWLEDGED", "CREDIT_RECEIVED", "CLOSED", "CANCELLED"],
+  soas: ["GENERATED", "SENT", "VOID"],
+  dvs: ["DRAFT", "PRINTED", "CONFIRMED", "VOIDED"],
+  audit: ["SUPPLIER_CREATE", "SUPPLIER_UPDATE", "SUPPLIER_BANK_CHANGE", "SUPPLIER_BANK_VERIFY", "SUPPLIER_MERGE"],
+};
+
+function toNumber(value: unknown): number {
+  const parsed = Number.parseFloat(String(value ?? "0"));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toInt(value: unknown): number {
+  const parsed = Number.parseInt(String(value ?? "0"), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeSupplierActivityQuery(query: SupplierActivityQuery) {
+  if (!SUPPLIER_ACTIVITY_KINDS.has(query.kind)) {
+    throw new Error("Invalid supplier activity kind");
+  }
+  const page = Math.max(1, Number.isFinite(query.page ?? NaN) ? Number(query.page) : 1);
+  const pageSize = Math.min(
+    100,
+    Math.max(1, Number.isFinite(query.pageSize ?? NaN) ? Number(query.pageSize) : 25),
+  );
+  const sortKey = query.sort || SUPPLIER_ACTIVITY_DEFAULT_SORT[query.kind];
+  const sortSql = SUPPLIER_ACTIVITY_SORTS[query.kind][sortKey];
+  if (!sortSql) {
+    throw new Error("Invalid supplier activity sort");
+  }
+
+  return {
+    kind: query.kind,
+    page,
+    pageSize,
+    offset: (page - 1) * pageSize,
+    search: query.search?.trim() || "",
+    status: query.status?.trim() || "",
+    sort: sortKey,
+    sortSql,
+    dirSql: query.dir === "asc" ? sql`ASC` : sql`DESC`,
+    dir: query.dir === "asc" ? "asc" as const : "desc" as const,
+  };
+}
+
+function logSupplierAudit(
+  orgId: string,
+  supplierId: string,
+  action: string,
+  details: Record<string, unknown>,
+  context?: SupplierAuditContext,
+) {
+  logAction({
+    orgId,
+    userId: context?.userId,
+    action,
+    entityType: "SUPPLIER",
+    entityId: supplierId,
+    details,
+    ipAddress: context?.ipAddress,
+  });
+}
+
+async function syncOpenSupplierInvoiceTerms(
+  orgId: string,
+  supplierIds: string[],
+  paymentTermsDays: number,
+) {
+  if (supplierIds.length === 0) return 0;
+
+  const rows = await db
+    .update(supplierInvoices)
+    .set({
+      paymentTermsDays,
+      dueDate: sql`${supplierInvoices.invoiceDate} + ${paymentTermsDays}::int`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(supplierInvoices.orgId, orgId),
+        inArray(supplierInvoices.supplierId, supplierIds),
+        inArray(supplierInvoices.status, ["OPEN", "PARTIALLY_PAID"] as any),
+      ),
+    )
+    .returning({ id: supplierInvoices.id });
+
+  return rows.length;
+}
 
 /**
  * Supplier list with per-row AP stats — for the Supplier List page.
@@ -1172,6 +1435,11 @@ export async function listSuppliersWithAPStats(orgId: string) {
       s.is_active,
       s.created_at,
       s.updated_at,
+      bank_audit.last_bank_change_at,
+      COALESCE(bank_audit.bank_change_count, 0)::int AS bank_change_count,
+      s.bank_verified_at,
+      s.bank_verified_by,
+      bank_verified_by.full_name AS bank_verified_by_name,
 
       -- Invoice rollups (only count non-void invoices)
       COALESCE(agg.open_count, 0)::int        AS open_count,
@@ -1195,11 +1463,23 @@ export async function listSuppliersWithAPStats(orgId: string) {
       WHERE org_id = ${orgId}
       GROUP BY supplier_id
     ) agg ON agg.supplier_id = s.id
+    LEFT JOIN (
+      SELECT
+        entity_id,
+        MAX(created_at) AS last_bank_change_at,
+        COUNT(*)::int AS bank_change_count
+      FROM audit_logs
+      WHERE org_id = ${orgId}
+        AND entity_type = 'SUPPLIER'
+        AND action = 'SUPPLIER_BANK_CHANGE'
+      GROUP BY entity_id
+    ) bank_audit ON bank_audit.entity_id = s.id
+    LEFT JOIN users bank_verified_by ON bank_verified_by.id = s.bank_verified_by
     WHERE s.org_id = ${orgId}
     ORDER BY s.name ASC
   `)) as any[];
 
-  return rows.map(mapSupplierApStatsRow);
+  return enrichSuppliersWithSafety(rows.map(mapSupplierApStatsRow));
 }
 
 /**
@@ -1214,13 +1494,653 @@ export async function getSupplierAPDetail(orgId: string, supplierId: string) {
       s.bank_name, s.bank_account_number, s.bank_account_name,
       s.notes, s.is_active,
       s.avg_lead_time_days,
-      s.created_at, s.updated_at
+      s.created_at, s.updated_at,
+      bank_audit.last_bank_change_at,
+      COALESCE(bank_audit.bank_change_count, 0)::int AS bank_change_count,
+      s.bank_verified_at,
+      s.bank_verified_by,
+      bank_verified_by.full_name AS bank_verified_by_name
     FROM suppliers s
+    LEFT JOIN (
+      SELECT
+        entity_id,
+        MAX(created_at) AS last_bank_change_at,
+        COUNT(*)::int AS bank_change_count
+      FROM audit_logs
+      WHERE org_id = ${orgId}
+        AND entity_type = 'SUPPLIER'
+        AND action = 'SUPPLIER_BANK_CHANGE'
+      GROUP BY entity_id
+    ) bank_audit ON bank_audit.entity_id = s.id
+    LEFT JOIN users bank_verified_by ON bank_verified_by.id = s.bank_verified_by
     WHERE s.id = ${supplierId} AND s.org_id = ${orgId}
   `)) as any[];
   if (!row) return null;
 
-  return mapSupplierApDetailRow(row);
+  const detail = mapSupplierApDetailRow(row);
+  const enrichedRows = await listSuppliersWithAPStats(orgId);
+  const safety = enrichedRows.find((supplier) => supplier.id === supplierId);
+
+  return {
+    ...detail,
+    safety: safety?.safety,
+    duplicateWarnings: safety?.duplicateWarnings ?? [],
+    riskBadges: safety?.riskBadges ?? [],
+    hasBankChangeHistory: safety?.hasBankChangeHistory ?? false,
+  };
+}
+
+export async function verifySupplierBank(
+  orgId: string,
+  supplierId: string,
+  context?: SupplierAuditContext,
+) {
+  const [supplier] = (await db.execute(sql`
+    SELECT id, name, bank_name, bank_account_number, bank_account_name
+    FROM suppliers
+    WHERE id = ${supplierId} AND org_id = ${orgId}
+    LIMIT 1
+  `)) as any[];
+
+  if (!supplier) throw new Error("Supplier not found");
+  if (!supplier.bank_name?.trim() || !supplier.bank_account_number?.trim() || !supplier.bank_account_name?.trim()) {
+    throw new Error("Complete bank name, account number, and account name before verification");
+  }
+
+  const [updated] = (await db.execute(sql`
+    UPDATE suppliers
+    SET bank_verified_at = NOW(),
+        bank_verified_by = ${context?.userId ?? null},
+        updated_at = NOW()
+    WHERE id = ${supplierId} AND org_id = ${orgId}
+    RETURNING id, name, bank_verified_at, bank_verified_by
+  `)) as any[];
+
+  logSupplierAudit(
+    orgId,
+    supplierId,
+    "SUPPLIER_BANK_VERIFY",
+    {
+      supplierName: supplier.name,
+      bankName: supplier.bank_name,
+      bankAccountName: supplier.bank_account_name,
+    },
+    context,
+  );
+
+  return {
+    id: updated.id,
+    name: updated.name,
+    bankVerifiedAt: updated.bank_verified_at,
+    bankVerifiedBy: updated.bank_verified_by,
+  };
+}
+
+export async function getSupplierAPOverview(orgId: string, supplierId: string) {
+  const detail = await getSupplierAPDetail(orgId, supplierId);
+  if (!detail) return null;
+
+  const [aging] = (await db.execute(sql`
+    SELECT
+      COALESCE(SUM(balance::numeric) FILTER (WHERE due_date >= CURRENT_DATE), 0)::text AS current_amount,
+      COALESCE(SUM(balance::numeric) FILTER (WHERE CURRENT_DATE - due_date BETWEEN 1 AND 30), 0)::text AS days_1_30_amount,
+      COALESCE(SUM(balance::numeric) FILTER (WHERE CURRENT_DATE - due_date BETWEEN 31 AND 60), 0)::text AS days_31_60_amount,
+      COALESCE(SUM(balance::numeric) FILTER (WHERE CURRENT_DATE - due_date BETWEEN 61 AND 90), 0)::text AS days_61_90_amount,
+      COALESCE(SUM(balance::numeric) FILTER (WHERE CURRENT_DATE - due_date > 90), 0)::text AS days_90_plus_amount,
+      COALESCE(SUM(balance::numeric), 0)::text AS total_balance,
+      COALESCE(SUM(balance::numeric) FILTER (WHERE due_date < CURRENT_DATE), 0)::text AS overdue_amount,
+      COUNT(*)::int AS open_count
+    FROM supplier_invoices
+    WHERE org_id = ${orgId}
+      AND supplier_id = ${supplierId}
+      AND status IN ('OPEN', 'PARTIALLY_PAID')
+      AND balance::numeric > 0
+  `)) as any[];
+
+  const [credits] = (await db.execute(sql`
+    SELECT
+      COUNT(*)::int AS count,
+      COALESCE(SUM(ABS(balance::numeric)), 0)::text AS amount
+    FROM supplier_invoices
+    WHERE org_id = ${orgId}
+      AND supplier_id = ${supplierId}
+      AND status IN ('OPEN', 'PARTIALLY_PAID')
+      AND (total_amount::numeric < 0 OR invoice_number ILIKE 'CM-%')
+  `)) as any[];
+
+  const [tabs] = (await db.execute(sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId}) AS invoices_count,
+      (SELECT COALESCE(SUM(si.balance::numeric), 0)::text FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId} AND si.status IN ('OPEN','PARTIALLY_PAID')) AS invoices_amount,
+      (SELECT COUNT(*)::int FROM purchase_orders po WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_count,
+      (SELECT COALESCE(SUM(pl.ordered_qty * pl.unit_cost::numeric), 0)::text
+         FROM purchase_orders po
+         LEFT JOIN po_lines pl ON pl.purchase_order_id = po.id
+        WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_amount,
+      (SELECT COUNT(*)::int FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_count,
+      (SELECT COALESCE(SUM(sr.credit_amount::numeric), 0)::text FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_amount,
+      (SELECT COUNT(*)::int FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId}) AS soas_count,
+      (SELECT COALESCE(SUM(ssr.total_balance::numeric), 0)::text FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId} AND ssr.status != 'VOID') AS soas_amount,
+      (SELECT COUNT(*)::int FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId}) AS dvs_count,
+      (SELECT COALESCE(SUM(dv.amount::numeric), 0)::text FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId} AND dv.status != 'VOIDED') AS dvs_amount,
+      (SELECT COUNT(*)::int FROM audit_logs al WHERE al.org_id = ${orgId} AND al.entity_type = 'SUPPLIER' AND al.entity_id = ${supplierId}) AS audit_count
+  `)) as any[];
+
+  const [lastActivity] = (await db.execute(sql`
+    SELECT
+      (SELECT jsonb_build_object('poNumber', po.po_no, 'date', po.created_at)
+         FROM purchase_orders po
+        WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}
+        ORDER BY po.created_at DESC
+        LIMIT 1) AS last_po,
+      (SELECT jsonb_build_object('dvNumber', dv.dv_number, 'date', dv.payment_date, 'amount', dv.amount::text)
+         FROM supplier_disbursement_vouchers dv
+        WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId} AND dv.status != 'VOIDED'
+        ORDER BY dv.payment_date DESC, dv.created_at DESC
+        LIMIT 1) AS last_payment,
+      (SELECT jsonb_build_object('soaNumber', ssr.soa_number, 'date', ssr.generated_at, 'balance', ssr.total_balance::text)
+         FROM supplier_soa_records ssr
+        WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId}
+        ORDER BY ssr.generated_at DESC
+        LIMIT 1) AS last_soa
+  `)) as any[];
+
+  const bankVerificationStatus = buildSupplierBankVerificationStatus(detail) as SupplierBankVerificationStatus;
+  const duplicateWarnings = detail.duplicateWarnings ?? [];
+  const totalPayable = toNumber(aging?.total_balance);
+  const recommendedAction =
+    bankVerificationStatus === "missing"
+      ? { code: "complete_bank", label: "Complete bank details", tab: "details" }
+      : bankVerificationStatus !== "verified"
+      ? { code: "verify_bank", label: "Verify bank profile", tab: "overview" }
+      : duplicateWarnings.length > 0
+      ? { code: "review_duplicates", label: "Review possible duplicate", tab: "overview" }
+      : totalPayable > 0
+      ? { code: "generate_soa", label: "Generate supplier SOA", href: `/ap/supplier-soa?supplierId=${supplierId}` }
+      : { code: "record_invoice", label: "Record invoice", href: `/ap/invoices?supplierId=${supplierId}` };
+
+  return {
+    supplier: {
+      ...detail,
+      bankVerificationStatus,
+    },
+    tabSummaries: {
+      invoices: { count: toInt(tabs?.invoices_count), totalAmount: toNumber(tabs?.invoices_amount) },
+      pos: { count: toInt(tabs?.pos_count), totalAmount: toNumber(tabs?.pos_amount) },
+      returns: { count: toInt(tabs?.returns_count), totalAmount: toNumber(tabs?.returns_amount) },
+      soas: { count: toInt(tabs?.soas_count), totalAmount: toNumber(tabs?.soas_amount) },
+      dvs: { count: toInt(tabs?.dvs_count), totalAmount: toNumber(tabs?.dvs_amount) },
+      audit: { count: toInt(tabs?.audit_count), totalAmount: 0 },
+    },
+    aging: {
+      current: toNumber(aging?.current_amount),
+      days1To30: toNumber(aging?.days_1_30_amount),
+      days31To60: toNumber(aging?.days_31_60_amount),
+      days61To90: toNumber(aging?.days_61_90_amount),
+      days90Plus: toNumber(aging?.days_90_plus_amount),
+      total: totalPayable,
+      overdue: toNumber(aging?.overdue_amount),
+      openCount: toInt(aging?.open_count),
+    },
+    availableCredits: {
+      count: toInt(credits?.count),
+      amount: toNumber(credits?.amount),
+    },
+    lastActivity,
+    paymentSafety: {
+      bankVerificationStatus,
+      lastBankChangeAt: detail.lastBankChangeAt,
+      bankChangeCount: detail.bankChangeCount,
+      bankVerifiedAt: detail.bankVerifiedAt ?? null,
+      bankVerifiedBy: detail.bankVerifiedBy ?? null,
+      bankVerifiedByName: detail.bankVerifiedByName ?? null,
+    },
+    duplicateWarnings,
+    recommendedAction,
+  };
+}
+
+function supplierActivitySummary(total: number, totalAmount: unknown) {
+  return {
+    count: total,
+    totalAmount: toNumber(totalAmount),
+  };
+}
+
+function supplierActivityResponse(
+  kind: SupplierActivityKind,
+  normalized: ReturnType<typeof normalizeSupplierActivityQuery>,
+  total: number,
+  totalAmount: unknown,
+  rows: any[],
+) {
+  return {
+    data: rows,
+    page: normalized.page,
+    pageSize: normalized.pageSize,
+    total,
+    summary: supplierActivitySummary(total, totalAmount),
+    statusOptions: SUPPLIER_ACTIVITY_STATUS_OPTIONS[kind],
+  };
+}
+
+export async function listSupplierActivity(
+  orgId: string,
+  supplierId: string,
+  query: SupplierActivityQuery,
+) {
+  const normalized = normalizeSupplierActivityQuery(query);
+
+  const [exists] = (await db.execute(sql`
+    SELECT id FROM suppliers WHERE id = ${supplierId} AND org_id = ${orgId} LIMIT 1
+  `)) as any[];
+  if (!exists) throw new Error("Supplier not found");
+
+  const searchPattern = `%${normalized.search}%`;
+  const statusPattern = normalized.status ? normalized.status.split(",").filter(Boolean) : [];
+
+  if (normalized.kind === "invoices") {
+    const searchSql = normalized.search
+      ? sql`AND (si.invoice_number ILIKE ${searchPattern} OR COALESCE(si.notes, '') ILIKE ${searchPattern})`
+      : sql``;
+    const statusSql = statusPattern.length > 0
+      ? sql`AND si.status::text = ANY(${statusPattern})`
+      : sql``;
+    const [countRow] = (await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(SUM(si.balance::numeric), 0)::text AS total_amount
+      FROM supplier_invoices si
+      WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+    `)) as any[];
+    const rows = (await db.execute(sql`
+      SELECT
+        si.id,
+        si.invoice_number AS "invoiceNumber",
+        si.invoice_date::text AS "invoiceDate",
+        si.due_date::text AS "dueDate",
+        si.total_amount::text AS "totalAmount",
+        si.paid_amount::text AS "paidAmount",
+        si.balance::text AS "balance",
+        si.status,
+        si.notes,
+        si.payment_terms_days AS "paymentTermsDays"
+      FROM supplier_invoices si
+      WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+      ORDER BY ${normalized.sortSql} ${normalized.dirSql}, si.id DESC
+      LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
+    `)) as any[];
+    const total = toInt(countRow?.total);
+    return supplierActivityResponse("invoices", normalized, total, countRow?.total_amount, rows);
+  }
+
+  if (normalized.kind === "pos") {
+    const searchSql = normalized.search ? sql`AND po.po_no ILIKE ${searchPattern}` : sql``;
+    const statusSql = statusPattern.length > 0 ? sql`AND po.status::text = ANY(${statusPattern})` : sql``;
+    const [countRow] = (await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(SUM(COALESCE(po_totals.total_cost, 0)), 0)::text AS total_amount
+      FROM purchase_orders po
+      LEFT JOIN (
+        SELECT purchase_order_id, SUM(ordered_qty * unit_cost::numeric) AS total_cost
+        FROM po_lines
+        GROUP BY purchase_order_id
+      ) po_totals ON po_totals.purchase_order_id = po.id
+      WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+    `)) as any[];
+    const rows = (await db.execute(sql`
+      SELECT
+        po.id,
+        po.po_no AS "poNumber",
+        po.created_at::text AS "orderDate",
+        COALESCE(po_totals.item_count, 0)::int AS "itemCount",
+        COALESCE(po_totals.total_cost, 0)::text AS "totalCost",
+        po.status
+      FROM purchase_orders po
+      LEFT JOIN (
+        SELECT purchase_order_id, COUNT(*)::int AS item_count, SUM(ordered_qty * unit_cost::numeric) AS total_cost
+        FROM po_lines
+        GROUP BY purchase_order_id
+      ) po_totals ON po_totals.purchase_order_id = po.id
+      WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+      ORDER BY ${normalized.sortSql} ${normalized.dirSql}, po.id DESC
+      LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
+    `)) as any[];
+    const total = toInt(countRow?.total);
+    return supplierActivityResponse("pos", normalized, total, countRow?.total_amount, rows);
+  }
+
+  if (normalized.kind === "returns") {
+    const searchSql = normalized.search
+      ? sql`AND (sr.rtv_number ILIKE ${searchPattern} OR COALESCE(sr.credit_reference, '') ILIKE ${searchPattern})`
+      : sql``;
+    const statusSql = statusPattern.length > 0 ? sql`AND sr.status::text = ANY(${statusPattern})` : sql``;
+    const [countRow] = (await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(SUM(sr.credit_amount::numeric), 0)::text AS total_amount
+      FROM supplier_returns sr
+      WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+    `)) as any[];
+    const rows = (await db.execute(sql`
+      SELECT
+        sr.id,
+        sr.rtv_number AS "rtvNumber",
+        sr.created_at::text AS "createdAt",
+        COALESCE(line_counts.item_count, 0)::int AS "itemCount",
+        sr.total_cost::text AS "totalCost",
+        sr.credit_amount::text AS "creditAmount",
+        sr.status
+      FROM supplier_returns sr
+      LEFT JOIN (
+        SELECT supplier_return_id, COUNT(*)::int AS item_count
+        FROM supplier_return_lines
+        GROUP BY supplier_return_id
+      ) line_counts ON line_counts.supplier_return_id = sr.id
+      WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+      ORDER BY ${normalized.sortSql} ${normalized.dirSql}, sr.id DESC
+      LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
+    `)) as any[];
+    const total = toInt(countRow?.total);
+    return supplierActivityResponse("returns", normalized, total, countRow?.total_amount, rows);
+  }
+
+  if (normalized.kind === "soas") {
+    const searchSql = normalized.search ? sql`AND sr.soa_number ILIKE ${searchPattern}` : sql``;
+    const statusSql = statusPattern.length > 0 ? sql`AND sr.status = ANY(${statusPattern})` : sql``;
+    const [countRow] = (await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(SUM(sr.total_balance::numeric), 0)::text AS total_amount
+      FROM supplier_soa_records sr
+      WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+    `)) as any[];
+    const rows = (await db.execute(sql`
+      SELECT
+        sr.id,
+        sr.soa_number AS "soaNumber",
+        sr.date_from::text AS "dateFrom",
+        sr.date_to::text AS "dateTo",
+        sr.generated_at::text AS "generatedAt",
+        sr.total_amount::numeric AS "totalAmount",
+        sr.total_paid::numeric AS "totalPaid",
+        sr.total_balance::numeric AS "totalBalance",
+        sr.invoice_count::int AS "invoiceCount",
+        sr.status
+      FROM supplier_soa_records sr
+      WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+      ORDER BY ${normalized.sortSql} ${normalized.dirSql}, sr.id DESC
+      LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
+    `)) as any[];
+    const total = toInt(countRow?.total);
+    return supplierActivityResponse("soas", normalized, total, countRow?.total_amount, rows);
+  }
+
+  if (normalized.kind === "dvs") {
+    const searchSql = normalized.search
+      ? sql`AND (dv.dv_number ILIKE ${searchPattern} OR COALESCE(dv.check_number, '') ILIKE ${searchPattern})`
+      : sql``;
+    const statusSql = statusPattern.length > 0 ? sql`AND dv.status::text = ANY(${statusPattern})` : sql``;
+    const [countRow] = (await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total,
+        COALESCE(SUM(dv.amount::numeric), 0)::text AS total_amount
+      FROM supplier_disbursement_vouchers dv
+      WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+    `)) as any[];
+    const rows = (await db.execute(sql`
+      SELECT
+        dv.id,
+        dv.dv_number AS "dvNumber",
+        dv.payment_date::text AS "paymentDate",
+        dv.amount::numeric AS amount,
+        dv.payment_method AS "paymentMethod",
+        dv.check_number AS "checkNumber",
+        dv.status
+      FROM supplier_disbursement_vouchers dv
+      WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+      ORDER BY ${normalized.sortSql} ${normalized.dirSql}, dv.id DESC
+      LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
+    `)) as any[];
+    const total = toInt(countRow?.total);
+    return supplierActivityResponse("dvs", normalized, total, countRow?.total_amount, rows);
+  }
+
+  const searchSql = normalized.search
+    ? sql`AND (al.action ILIKE ${searchPattern} OR COALESCE(al.details::text, '') ILIKE ${searchPattern})`
+    : sql``;
+  const statusSql = statusPattern.length > 0 ? sql`AND al.action = ANY(${statusPattern})` : sql``;
+  const [countRow] = (await db.execute(sql`
+    SELECT COUNT(*)::int AS total
+    FROM audit_logs al
+    WHERE al.org_id = ${orgId}
+      AND al.entity_type = 'SUPPLIER'
+      AND al.entity_id = ${supplierId}
+    ${searchSql}
+    ${statusSql}
+  `)) as any[];
+  const rows = (await db.execute(sql`
+    SELECT
+      al.id,
+      u.full_name AS "userName",
+      al.action,
+      al.details,
+      al.created_at::text AS "createdAt"
+    FROM audit_logs al
+    LEFT JOIN users u ON u.id = al.user_id
+    WHERE al.org_id = ${orgId}
+      AND al.entity_type = 'SUPPLIER'
+      AND al.entity_id = ${supplierId}
+    ${searchSql}
+    ${statusSql}
+    ORDER BY ${normalized.sortSql} ${normalized.dirSql}, al.id DESC
+    LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
+  `)) as any[];
+  const total = toInt(countRow?.total);
+  return supplierActivityResponse("audit", normalized, total, 0, rows);
+}
+
+async function buildSupplierMergePreview(orgId: string, targetSupplierId: string, sourceSupplierId: string) {
+  if (targetSupplierId === sourceSupplierId) {
+    throw new Error("Source and target suppliers must be different");
+  }
+
+  const suppliersRows = (await db.execute(sql`
+    SELECT id, name
+    FROM suppliers
+    WHERE org_id = ${orgId}
+      AND (id = ${targetSupplierId} OR id = ${sourceSupplierId})
+  `)) as any[];
+  const target = suppliersRows.find((row) => row.id === targetSupplierId);
+  const source = suppliersRows.find((row) => row.id === sourceSupplierId);
+  if (!target || !source) throw new Error("Supplier not found");
+
+  const [counts] = (await db.execute(sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM supplier_invoices WHERE org_id = ${orgId} AND supplier_id = ${sourceSupplierId}) AS invoices,
+      (SELECT COUNT(*)::int FROM supplier_soa_records WHERE org_id = ${orgId} AND supplier_id = ${sourceSupplierId}) AS soas,
+      (SELECT COUNT(*)::int FROM supplier_disbursement_vouchers WHERE org_id = ${orgId} AND supplier_id = ${sourceSupplierId}) AS dvs,
+      (SELECT COUNT(*)::int FROM check_vouchers WHERE org_id = ${orgId} AND supplier_id = ${sourceSupplierId}) AS check_vouchers,
+      (SELECT COUNT(*)::int FROM purchase_orders WHERE org_id = ${orgId} AND supplier_id = ${sourceSupplierId}) AS purchase_orders,
+      (SELECT COUNT(*)::int FROM supplier_returns WHERE org_id = ${orgId} AND supplier_id = ${sourceSupplierId}) AS supplier_returns,
+      (SELECT COUNT(*)::int FROM product_suppliers WHERE org_id = ${orgId} AND supplier_id = ${sourceSupplierId}) AS product_suppliers
+  `)) as any[];
+
+  const invoiceConflicts = (await db.execute(sql`
+    SELECT src.invoice_number
+    FROM supplier_invoices src
+    JOIN supplier_invoices tgt
+      ON tgt.org_id = src.org_id
+     AND tgt.supplier_id = ${targetSupplierId}
+     AND tgt.invoice_number = src.invoice_number
+    WHERE src.org_id = ${orgId}
+      AND src.supplier_id = ${sourceSupplierId}
+    ORDER BY src.invoice_number
+    LIMIT 25
+  `)) as any[];
+
+  const productSupplierConflicts = (await db.execute(sql`
+    SELECT src.product_id
+    FROM product_suppliers src
+    JOIN product_suppliers tgt
+      ON tgt.org_id = src.org_id
+     AND tgt.supplier_id = ${targetSupplierId}
+     AND tgt.product_id = src.product_id
+    WHERE src.org_id = ${orgId}
+      AND src.supplier_id = ${sourceSupplierId}
+    LIMIT 25
+  `)) as any[];
+
+  const conflicts = [
+    ...invoiceConflicts.map((row) => ({
+      type: "invoice_number",
+      label: `Duplicate invoice # ${row.invoice_number}`,
+      value: row.invoice_number,
+    })),
+    ...productSupplierConflicts.map((row) => ({
+      type: "product_supplier",
+      label: "Product already has the target supplier linked",
+      value: row.product_id,
+    })),
+  ];
+
+  return {
+    targetSupplierId,
+    targetSupplierName: target.name,
+    sourceSupplierId,
+    sourceSupplierName: source.name,
+    counts: {
+      invoices: toInt(counts?.invoices),
+      soas: toInt(counts?.soas),
+      dvs: toInt(counts?.dvs),
+      checkVouchers: toInt(counts?.check_vouchers),
+      purchaseOrders: toInt(counts?.purchase_orders),
+      supplierReturns: toInt(counts?.supplier_returns),
+      productSuppliers: toInt(counts?.product_suppliers),
+    },
+    conflicts,
+  };
+}
+
+export async function mergeSupplierAP(
+  orgId: string,
+  targetSupplierId: string,
+  input: SupplierMergeInput,
+  context?: SupplierAuditContext,
+) {
+  if (!input.sourceSupplierId) throw new Error("sourceSupplierId is required");
+  const preview = await buildSupplierMergePreview(orgId, targetSupplierId, input.sourceSupplierId);
+  if (input.dryRun) {
+    return { dryRun: true, merged: false, ...preview };
+  }
+  if (preview.conflicts.length > 0) {
+    const err = Object.assign(new Error("Supplier merge has conflicts"), {
+      details: preview.conflicts,
+    });
+    throw err;
+  }
+
+  const reason = input.reason?.trim() || "Supplier duplicate merge";
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`
+      UPDATE supplier_invoices
+      SET supplier_id = ${targetSupplierId}, updated_at = NOW()
+      WHERE org_id = ${orgId} AND supplier_id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE supplier_soa_records
+      SET supplier_id = ${targetSupplierId}
+      WHERE org_id = ${orgId} AND supplier_id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE supplier_disbursement_vouchers
+      SET supplier_id = ${targetSupplierId}, updated_at = NOW()
+      WHERE org_id = ${orgId} AND supplier_id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE check_vouchers
+      SET supplier_id = ${targetSupplierId}, updated_at = NOW()
+      WHERE org_id = ${orgId} AND supplier_id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE purchase_orders
+      SET supplier_id = ${targetSupplierId}, updated_at = NOW()
+      WHERE org_id = ${orgId} AND supplier_id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE supplier_returns
+      SET supplier_id = ${targetSupplierId}, updated_at = NOW()
+      WHERE org_id = ${orgId} AND supplier_id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE product_suppliers
+      SET supplier_id = ${targetSupplierId}, updated_at = NOW()
+      WHERE org_id = ${orgId} AND supplier_id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE suppliers
+      SET is_active = false,
+          notes = TRIM(BOTH FROM CONCAT_WS(E'\n', NULLIF(notes, ''), ${`Merged into ${preview.targetSupplierName}: ${reason}`})),
+          updated_at = NOW()
+      WHERE org_id = ${orgId} AND id = ${input.sourceSupplierId}
+    `);
+    await tx.execute(sql`
+      UPDATE suppliers
+      SET notes = TRIM(BOTH FROM CONCAT_WS(E'\n', NULLIF(notes, ''), ${`Merged ${preview.sourceSupplierName}: ${reason}`})),
+          updated_at = NOW()
+      WHERE org_id = ${orgId} AND id = ${targetSupplierId}
+    `);
+  });
+
+  const details = {
+    sourceSupplierId: input.sourceSupplierId,
+    sourceSupplierName: preview.sourceSupplierName,
+    targetSupplierId,
+    targetSupplierName: preview.targetSupplierName,
+    counts: preview.counts,
+    reason,
+  };
+  logAction({
+    orgId,
+    userId: context?.userId,
+    action: "SUPPLIER_MERGE",
+    entityType: "SUPPLIER",
+    entityId: targetSupplierId,
+    details,
+    ipAddress: context?.ipAddress,
+  });
+  logAction({
+    orgId,
+    userId: context?.userId,
+    action: "SUPPLIER_MERGE",
+    entityType: "SUPPLIER",
+    entityId: input.sourceSupplierId,
+    details,
+    ipAddress: context?.ipAddress,
+  });
+
+  return { dryRun: false, merged: true, ...preview };
 }
 
 /**
@@ -1233,11 +2153,27 @@ export async function updateSupplierAP(
   orgId: string,
   supplierId: string,
   input: SupplierApUpdateInput,
+  context?: SupplierAuditContext,
 ) {
   const setFields = buildSupplierApUpdateFields(input);
 
   if (Object.keys(setFields).length === 0) {
     throw new Error("No fields to update");
+  }
+
+  const [current] = await db
+    .select()
+    .from(suppliers)
+    .where(and(eq(suppliers.id, supplierId), eq(suppliers.orgId, orgId)))
+    .limit(1);
+
+  if (!current) throw new Error("Supplier not found");
+
+  const changedFields = buildSupplierChangedFields(current, setFields);
+  const splitChanges = splitSupplierChangedFields(changedFields);
+  if (splitChanges.bankFields.length > 0) {
+    setFields.bankVerifiedAt = null;
+    setFields.bankVerifiedBy = null;
   }
 
   const [updated] = await db
@@ -1247,6 +2183,54 @@ export async function updateSupplierAP(
     .returning();
 
   if (!updated) throw new Error("Supplier not found");
+
+  let invoiceTermsUpdated = 0;
+  if (input.paymentTermsDays !== undefined) {
+    invoiceTermsUpdated = await syncOpenSupplierInvoiceTerms(
+      orgId,
+      [supplierId],
+      input.paymentTermsDays,
+    );
+  }
+
+  if (splitChanges.bankFields.length > 0) {
+    logSupplierAudit(
+      orgId,
+      updated.id,
+      "SUPPLIER_BANK_CHANGE",
+      {
+        supplierName: updated.name,
+        changedFields: splitChanges.bankFields,
+      },
+      context,
+    );
+  }
+  if (splitChanges.masterFields.length > 0) {
+    logSupplierAudit(
+      orgId,
+      updated.id,
+      "SUPPLIER_UPDATE",
+      {
+        supplierName: updated.name,
+        changedFields: splitChanges.masterFields,
+        invoiceTermsUpdated,
+      },
+      context,
+    );
+  }
+  if (splitChanges.statusFields.length > 0) {
+    logSupplierAudit(
+      orgId,
+      updated.id,
+      "SUPPLIER_STATUS_CHANGE",
+      {
+        supplierName: updated.name,
+        changedFields: splitChanges.statusFields,
+        isActive: updated.isActive,
+      },
+      context,
+    );
+  }
 
   return { id: updated.id, name: updated.name, isActive: updated.isActive };
 }
@@ -1258,6 +2242,7 @@ export async function updateSupplierAP(
 export async function createSupplierAP(
   orgId: string,
   input: SupplierApCreateInput,
+  context?: SupplierAuditContext,
 ) {
   const values = buildSupplierApCreateValues(orgId, input);
 
@@ -1281,6 +2266,20 @@ export async function createSupplierAP(
     )
     RETURNING id, name
   `)) as any[];
+
+  logSupplierAudit(
+    orgId,
+    row.id,
+    "SUPPLIER_CREATE",
+    {
+      supplierName: row.name,
+      hasBankDetails: Boolean(
+        values.bankName && values.bankAccountNumber && values.bankAccountName,
+      ),
+      paymentTermsDays: values.paymentTermsDays,
+    },
+    context,
+  );
 
   return { id: row.id, name: row.name };
 }
@@ -1542,9 +2541,11 @@ export async function getSupplierSOAById(orgId: string, soaId: string) {
     SELECT sr.id, sr.soa_number, sr.supplier_id, sr.date_from::text, sr.date_to::text,
            sr.generated_at, sr.total_amount::text, sr.total_paid::text,
            sr.total_balance::text, sr.invoice_count, sr.status, sr.notes,
-           s.name AS supplier_name, s.contact_phone, s.address, s.contact_email
+           s.name AS supplier_name, s.contact_person, s.contact_phone, s.address, s.contact_email, s.tin,
+           u.full_name AS generated_by_name
     FROM supplier_soa_records sr
     JOIN suppliers s ON s.id = sr.supplier_id
+    LEFT JOIN users u ON u.id = sr.generated_by
     WHERE sr.id = ${soaId} AND sr.org_id = ${orgId}
   `)) as any[];
   if (!soa) throw new Error("Supplier SOA not found");
@@ -1683,6 +2684,11 @@ export async function paySupplierSOA(
     if (soaBalance <= 0) throw new Error("SOA is already fully paid");
     if (payAmount > soaBalance + 0.01) {
       throw new Error(`Payment amount (${payAmount}) exceeds SOA balance (${soaBalance})`);
+    }
+    if (Math.abs(payAmount - soaBalance) > 0.01) {
+      throw new Error(
+        `Supplier SOA payments must settle the full balance (${soaBalance.toFixed(2)}); partial supplier invoice payments are not allowed`,
+      );
     }
 
     // 2. Fetch the SOA's invoices (oldest first) with current balances
@@ -1851,6 +2857,11 @@ export async function createDisbursementVoucher(
       grossAmount: totals.grossAmount,
       soaBalances,
       explicitAllocations: data.soaAllocations,
+    });
+    assertDisbursementVoucherSoaAllocationsSettleBalances({
+      resolvedSoaIds,
+      allocationMap,
+      soaBalances,
     });
     for (const sid of resolvedSoaIds) {
       const soaInsert = buildDisbursementVoucherSoaInsertValues({

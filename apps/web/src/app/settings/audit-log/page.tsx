@@ -45,6 +45,12 @@ const ACTION_LABELS: Record<string, string> = {
   PRICE_CHANGE: "Price Changed",
   STOCK_ADJUST: "Stock Adjusted",
   SETTINGS_CHANGE: "Settings Changed",
+  SUPPLIER_CREATE: "Supplier Created",
+  SUPPLIER_UPDATE: "Supplier Updated",
+  SUPPLIER_BANK_CHANGE: "Supplier Bank Changed",
+  SUPPLIER_STATUS_CHANGE: "Supplier Status Changed",
+  SUPPLIER_BULK_TERMS: "Supplier Bulk Terms",
+  SUPPLIER_MERGE: "Supplier Merged",
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -58,6 +64,12 @@ const ACTION_COLORS: Record<string, string> = {
   PRODUCT_BULK_UPDATE: "bg-amber-500/10 text-amber-600",
   ITEM_IMPORT_EXECUTE: "bg-emerald-500/10 text-emerald-600",
   ITEM_IMPORT_ROLLBACK: "bg-orange-500/10 text-orange-600",
+  SUPPLIER_CREATE: "bg-blue-500/10 text-blue-600",
+  SUPPLIER_UPDATE: "bg-sky-500/10 text-sky-600",
+  SUPPLIER_BANK_CHANGE: "bg-red-500/10 text-red-600",
+  SUPPLIER_STATUS_CHANGE: "bg-violet-500/10 text-violet-600",
+  SUPPLIER_BULK_TERMS: "bg-amber-500/10 text-amber-600",
+  SUPPLIER_MERGE: "bg-purple-500/10 text-purple-600",
 };
 
 export default function AuditLogPage() {

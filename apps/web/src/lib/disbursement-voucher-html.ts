@@ -36,6 +36,7 @@ export interface DVData {
   amount: number;
   grossAmount?: number;
   totalDeductions?: number;
+  totalCharges?: number;
   paymentDate: string;
   soaNumber?: string;
   soaDateFrom?: string;
@@ -165,7 +166,10 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   const gross = d.grossAmount ?? d.amount;
   const totalCMs = (d.soaCreditMemos ?? []).reduce((s, cm) => s + cm.amount, 0);
   const totalDed = d.totalDeductions ?? 0;
-  const totalCharges = (d.additionalCharges ?? []).reduce((s, c) => s + c.amount, 0);
+  const rowChargeTotal = (d.additionalCharges ?? []).reduce((s, c) => s + c.amount, 0);
+  const totalCharges = (d.additionalCharges ?? []).length > 0
+    ? rowChargeTotal
+    : d.totalCharges ?? 0;
   const net = gross + totalCharges - totalCMs - totalDed;
 
   const paymentLines = d.payments && d.payments.length > 0
@@ -196,10 +200,14 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
     })),
   ];
 
-  const chargeLines = (d.additionalCharges ?? []).map((charge) => ({
-    label: `${charge.description}${charge.referenceNumber ? ` (${charge.referenceNumber})` : ""}`,
-    amount: charge.amount,
-  }));
+  const chargeLines = (d.additionalCharges ?? []).length > 0
+    ? (d.additionalCharges ?? []).map((charge) => ({
+        label: `${charge.description}${charge.referenceNumber ? ` (${charge.referenceNumber})` : ""}`,
+        amount: charge.amount,
+      }))
+    : totalCharges > 0
+      ? [{ label: "Additional charges", amount: totalCharges }]
+      : [];
 
   const soaRefs = d.soaRefs && d.soaRefs.length > 0
     ? d.soaRefs
@@ -218,6 +226,9 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   const chargeRows = chargeLines.map((line) =>
     `<div class="recon-row add"><span>+ ${esc(line.label)}</span><span>${fmt(line.amount)}</span></div>`
   ).join("\n");
+  const chargeSubtotalRow = chargeLines.length > 0
+    ? `<div class="recon-row add recon-subtotal"><span>Additional charges subtotal</span><span>${fmt(totalCharges)}</span></div>`
+    : "";
 
   const deductionRows = deductionLines.map((line) =>
     `<div class="recon-row less"><span>&minus; ${esc(line.label)}</span><span>(${fmt(line.amount)})</span></div>`
@@ -256,6 +267,7 @@ td { padding: 5px 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
 .add { color: #047857; }
 .less { color: #b91c1c; }
 .recon-rule { border-top: 1px solid #111827; margin: 4px 0; }
+.recon-subtotal { border-top: 1px solid #d1d5db; margin-top: 2px; padding-top: 2px; font-weight: 700; }
 .recon-total { font-size: 10pt; font-weight: 900; }
 .remarks { margin-top: 8px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 7px 9px; color: #4b5563; font-size: 8.5pt; line-height: 1.35; }
 .spacer { flex: 1; }
@@ -316,6 +328,7 @@ ${d.isVoided ? '<div class="voided-watermark">VOIDED</div>' : ""}
       <div class="recon" style="margin-top:8px">
         <div class="recon-row"><span>SOA gross amount</span><span>${fmt(gross)}</span></div>
         ${chargeRows}
+        ${chargeSubtotalRow}
         ${deductionRows}
         <div class="recon-rule"></div>
         <div class="recon-row recon-total"><span>Net Payment</span><span>&#8369;${fmt(net)}</span></div>

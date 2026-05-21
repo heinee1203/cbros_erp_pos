@@ -44,6 +44,15 @@ interface SupplierPaymentProfile {
   bankAccountName: string | null;
 }
 
+interface PendingSupplierReturn {
+  id: string;
+  rtvNo: string;
+  status: string;
+  lineCount: number;
+  totalCost: string;
+  locationName: string | null;
+}
+
 const EMPTY_DEDUCTION: DeductionLine = {
   deductionType: "EWT", description: "", referenceNumber: "", amount: "",
 };
@@ -104,6 +113,12 @@ function paymentLineWarnings(payment: PaymentLine): string[] {
   return warnings;
 }
 
+function pendingReturnStatusLabel(status: string): string {
+  if (status === "SUBMITTED") return "Submitted - stock deducted";
+  if (status === "ACKNOWLEDGED") return "Acknowledged - awaiting credit";
+  return status.replace(/_/g, " ");
+}
+
 /* ── Page ── */
 
 export default function NewDisbursementVoucherPage() {
@@ -113,6 +128,11 @@ export default function NewDisbursementVoucherPage() {
   const soaIdParam = params.get("soaId");
   const soaIdsParam = params.get("soaIds"); // comma-separated, from multi-SOA selection
   const supplierIdParam = params.get("supplierId");
+  const explicitRtvIdKey = params.get("rtvIds") || "";
+  const explicitRtvIds = useMemo(
+    () => new Set(explicitRtvIdKey.split(",").map((id) => id.trim()).filter(Boolean)),
+    [explicitRtvIdKey],
+  );
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -139,6 +159,7 @@ export default function NewDisbursementVoucherPage() {
   const [charges, setCharges] = useState<AdditionalChargeLine[]>([]);
   const [payments, setPayments] = useState<PaymentLine[]>([{ ...EMPTY_PAYMENT }]);
   const [supplierProfile, setSupplierProfile] = useState<SupplierPaymentProfile | null>(null);
+  const [pendingReturns, setPendingReturns] = useState<PendingSupplierReturn[]>([]);
   const [profileLoading, setProfileLoading] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [pendingPaymentReview, setPendingPaymentReview] = useState<"draft" | "print" | null>(null);
@@ -149,11 +170,20 @@ export default function NewDisbursementVoucherPage() {
 
   // Derived amounts
   const gross = parseFloat(grossAmount) || 0;
+  const grossLockedToSoa = Boolean(soaData || multiSoaData.length > 0);
   const totalDed = useMemo(() => deductions.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0), [deductions]);
   const totalCharges = useMemo(() => charges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0), [charges]);
   const totalCMs = useMemo(() =>
     availableCMs.filter((cm) => selectedCMIds.has(cm.id)).reduce((s, cm) => s + Math.abs(cm.totalAmount), 0),
     [availableCMs, selectedCMIds],
+  );
+  const selectedCreditMemos = useMemo(
+    () => availableCMs.filter((cm) => selectedCMIds.has(cm.id)),
+    [availableCMs, selectedCMIds],
+  );
+  const pendingReturnTotal = useMemo(
+    () => pendingReturns.reduce((sum, rtv) => sum + (parseFloat(rtv.totalCost) || 0), 0),
+    [pendingReturns],
   );
   const netAmount = gross + totalCharges - totalDed - totalCMs;
   const chargeTypeSummary = useMemo(() => {
@@ -189,6 +219,7 @@ export default function NewDisbursementVoucherPage() {
     if (soaIdList.length === 0) { setLoading(false); return; }
 
     try {
+      let resolvedSupplierId = supplierIdParam || "";
       if (soaIdList.length > 1) {
         // Multi-SOA: fetch each SOA's history entry for balance data
         const histRes = await apiFetch<{ data: any[] }>(`/ap/supplier-soa/history?limit=200`, { token, locationId });
@@ -203,6 +234,7 @@ export default function NewDisbursementVoucherPage() {
         setMultiSoaData(soaItems);
 
         const sid = soaItems[0].supplierId;
+        resolvedSupplierId = sid;
         setSupplierId(sid);
         const totalBal = soaItems.reduce((s: number, x: any) => s + x.totalBalance, 0);
         setGrossAmount(String(totalBal.toFixed(2)));
@@ -225,13 +257,14 @@ export default function NewDisbursementVoucherPage() {
           totalBalance: bal,
         });
         const sid = snap.supplierId ?? supplierIdParam ?? "";
+        resolvedSupplierId = sid;
         setSupplierId(sid);
         setGrossAmount(String(bal));
         setPayments([{ ...EMPTY_PAYMENT, amount: String(bal) }]);
       }
 
       // Fetch available credit memos for this supplier
-      const sid = supplierIdParam || soaData?.supplierId || "";
+      const sid = resolvedSupplierId;
       if (sid) {
         try {
           const cmRes = await apiFetch<{ data: any[] }>(
@@ -255,17 +288,29 @@ export default function NewDisbursementVoucherPage() {
   useEffect(() => {
     if (!token || !locationId || !supplierId) {
       setSupplierProfile(null);
+      setPendingReturns([]);
       setProfileLoading(false);
       return;
     }
     let cancelled = false;
     setProfileLoading(true);
-    apiFetch<SupplierPaymentProfile>(`/ap/suppliers/${supplierId}`, { token, locationId })
-      .then((detail) => {
-        if (!cancelled) setSupplierProfile(detail);
+    Promise.all([
+      apiFetch<SupplierPaymentProfile>(`/ap/suppliers/${supplierId}`, { token, locationId }).catch(() => null),
+      apiFetch<{ data: PendingSupplierReturn[] }>(
+        `/procurement/supplier-returns?status=SUBMITTED,ACKNOWLEDGED&supplierId=${supplierId}&allLocations=true&limit=100`,
+        { token, locationId },
+      ).catch(() => ({ data: [] })),
+    ])
+      .then(([detail, pendingRes]) => {
+        if (cancelled) return;
+        setSupplierProfile(detail);
+        setPendingReturns(Array.isArray(pendingRes.data) ? pendingRes.data : []);
       })
       .catch(() => {
-        if (!cancelled) setSupplierProfile(null);
+        if (!cancelled) {
+          setSupplierProfile(null);
+          setPendingReturns([]);
+        }
       })
       .finally(() => {
         if (!cancelled) setProfileLoading(false);
@@ -274,6 +319,24 @@ export default function NewDisbursementVoucherPage() {
       cancelled = true;
     };
   }, [token, locationId, supplierId]);
+
+  useEffect(() => {
+    if (explicitRtvIds.size === 0 || pendingReturns.length === 0) return;
+    setDeductions((prev) => {
+      const existingRefs = new Set(
+        prev.filter((d) => d.deductionType === "RETURN").map((d) => d.referenceNumber),
+      );
+      const additions = pendingReturns
+        .filter((rtv) => explicitRtvIds.has(rtv.id) && !existingRefs.has(rtv.rtvNo))
+        .map((rtv) => ({
+          deductionType: "RETURN",
+          description: `RTV deduction ${rtv.rtvNo}`,
+          referenceNumber: rtv.rtvNo,
+          amount: String(parseFloat(rtv.totalCost || "0").toFixed(2)),
+        }));
+      return additions.length > 0 ? [...prev, ...additions] : prev;
+    });
+  }, [explicitRtvIds, pendingReturns]);
 
   // Auto-update first payment amount when net changes
   useEffect(() => {
@@ -286,6 +349,25 @@ export default function NewDisbursementVoucherPage() {
   const updateDed = (i: number, f: keyof DeductionLine, v: string) => setDeductions((p) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n; });
   const addDed = () => setDeductions((p) => [...p, { ...EMPTY_DEDUCTION }]);
   const rmDed = (i: number) => setDeductions((p) => p.filter((_, j) => j !== i));
+  const pendingReturnIsIncluded = (rtv: PendingSupplierReturn) =>
+    deductions.some((d) => d.deductionType === "RETURN" && d.referenceNumber === rtv.rtvNo);
+  const includePendingReturnDeduction = (rtv: PendingSupplierReturn) => {
+    if (pendingReturnIsIncluded(rtv)) return;
+    setDeductions((prev) => [
+      ...prev,
+      {
+        deductionType: "RETURN",
+        description: `RTV deduction ${rtv.rtvNo}`,
+        referenceNumber: rtv.rtvNo,
+        amount: String(parseFloat(rtv.totalCost || "0").toFixed(2)),
+      },
+    ]);
+  };
+  const removePendingReturnDeduction = (rtv: PendingSupplierReturn) => {
+    setDeductions((prev) =>
+      prev.filter((d) => !(d.deductionType === "RETURN" && d.referenceNumber === rtv.rtvNo)),
+    );
+  };
 
   // Charge helpers
   const updateCharge = (i: number, f: keyof AdditionalChargeLine, v: string) => setCharges((p) => { const n = [...p]; n[i] = { ...n[i], [f]: v }; return n; });
@@ -332,7 +414,7 @@ export default function NewDisbursementVoucherPage() {
       deductionType: d.deductionType, description: d.description,
       referenceNumber: d.referenceNumber || undefined, amount: d.amount,
     }));
-    const cmDeds = availableCMs.filter((cm) => selectedCMIds.has(cm.id)).map((cm) => ({
+    const cmDeds = selectedCreditMemos.map((cm) => ({
       deductionType: "CREDIT_MEMO", description: cm.invoiceNumber,
       referenceNumber: cm.id, amount: String(Math.abs(cm.totalAmount).toFixed(2)),
     }));
@@ -432,7 +514,7 @@ export default function NewDisbursementVoucherPage() {
         ...deductions.filter((d) => parseFloat(d.amount) > 0).map((d) => ({
           description: d.description, amount: parseFloat(d.amount),
         })),
-        ...availableCMs.filter((cm) => selectedCMIds.has(cm.id)).map((cm) => ({
+        ...selectedCreditMemos.map((cm) => ({
           description: cm.invoiceNumber, amount: Math.abs(cm.totalAmount),
         })),
       ];
@@ -547,6 +629,58 @@ export default function NewDisbursementVoucherPage() {
           </div>
         )}
 
+        {pendingReturns.length > 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="font-semibold">Pending supplier returns before payment</div>
+                <p className="mt-1 text-[12px]">
+                  {pendingReturns.length} submitted/acknowledged RTV{pendingReturns.length !== 1 ? "s" : ""} worth {fmtPeso(pendingReturnTotal)} may be for supplier deduction. Confirm the credit memo or add a Return/Credit Memo deduction before releasing payment.
+                </p>
+              </div>
+              <span className="rounded-md bg-background/80 px-2 py-1 text-[11px] font-semibold">
+                Not auto-deducted
+              </span>
+            </div>
+            <div className="mt-3 overflow-hidden rounded-lg border border-amber-200 bg-background/80">
+              {pendingReturns.slice(0, 5).map((rtv) => (
+                <div
+                  key={rtv.id}
+                  className="grid w-full grid-cols-[120px_1fr_90px_100px_120px] gap-2 border-b border-amber-100 px-3 py-2 text-left text-[12px] last:border-b-0 hover:bg-amber-100/50"
+                >
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/procurement/supplier-returns/${rtv.id}`)}
+                    className="text-left font-mono font-semibold text-primary hover:underline"
+                  >
+                    {rtv.rtvNo}
+                  </button>
+                  <span className="truncate">{pendingReturnStatusLabel(rtv.status)}</span>
+                  <span className="text-right text-muted-foreground">{rtv.lineCount} item{rtv.lineCount !== 1 ? "s" : ""}</span>
+                  <span className="text-right font-semibold tabular-nums">{fmtPeso(rtv.totalCost)}</span>
+                  {pendingReturnIsIncluded(rtv) ? (
+                    <button
+                      type="button"
+                      onClick={() => removePendingReturnDeduction(rtv)}
+                      className="rounded-md border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                    >
+                      Remove deduction
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => includePendingReturnDeduction(rtv)}
+                      className="rounded-md bg-amber-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-amber-700"
+                    >
+                      Include deduction
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Supplier payment profile */}
         {supplierId && (
           <SupplierPaymentProfileCard
@@ -567,8 +701,13 @@ export default function NewDisbursementVoucherPage() {
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">SOA Amount (Gross)</label>
-            <input type="number" step="0.01" value={grossAmount} onChange={(e) => setGrossAmount(e.target.value)}
-              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm tabular-nums outline-none focus:border-primary" />
+            <input type="number" step="0.01" value={grossAmount} onChange={(e) => setGrossAmount(e.target.value)} readOnly={grossLockedToSoa}
+              className={`h-9 w-full rounded-lg border border-border px-3 text-sm tabular-nums outline-none focus:border-primary ${grossLockedToSoa ? "bg-muted/40 text-muted-foreground" : "bg-background"}`} />
+            {grossLockedToSoa && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Locked to the full SOA balance. Use deductions or credit memos to reduce the net payment.
+              </p>
+            )}
           </div>
         </div>
 
@@ -709,6 +848,29 @@ export default function NewDisbursementVoucherPage() {
                 Selected CMs: ({fmtPeso(totalCMs)})
               </div>
             )}
+          </div>
+        )}
+
+        {(soaData || multiSoaData.length > 0 || selectedCreditMemos.length > 0) && (
+          <div className="rounded-lg border border-primary/20 bg-primary/[0.025] p-3 text-[12px]">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="font-semibold text-foreground">DV funding trail</span>
+              <span className="text-[11px] text-muted-foreground">Gross - credits/deductions + charges = net payment</span>
+            </div>
+            <div className="space-y-1">
+              {(isMultiSOA ? multiSoaData : soaData ? [soaData] : []).map((soa) => (
+                <div key={soa.id} className="flex justify-between gap-3">
+                  <span className="font-mono font-semibold">{soa.soaNumber}</span>
+                  <span className="tabular-nums">{fmtPeso(soa.totalBalance)}</span>
+                </div>
+              ))}
+              {selectedCreditMemos.map((cm) => (
+                <div key={cm.id} className="flex justify-between gap-3 text-emerald-700">
+                  <span className="font-mono font-semibold">Credit {cm.invoiceNumber}</span>
+                  <span className="tabular-nums">({fmtPeso(Math.abs(cm.totalAmount))})</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

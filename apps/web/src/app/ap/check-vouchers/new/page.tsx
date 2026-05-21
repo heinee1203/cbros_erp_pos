@@ -37,7 +37,6 @@ interface InvoiceLine {
   invoiceNo: string;
   invoiceDate: string;
   amount: string;
-  payAmount: string;
   deduction: string;
 }
 
@@ -100,7 +99,7 @@ export default function NewCheckVoucherPage() {
     setLoadingInvoices(true);
     try {
       const res = await apiFetch<{ data: OpenInvoice[] }>(
-        `/ap/invoices?supplierId=${selectedSupplier}&status=OPEN&status=PARTIALLY_PAID`,
+        `/ap/invoices?supplierId=${selectedSupplier}&status=OPEN`,
         { token, locationId }
       );
       setOpenInvoices(res.data);
@@ -118,7 +117,6 @@ export default function NewCheckVoucherPage() {
             invoiceNo: inv.invoiceNo,
             invoiceDate: inv.invoiceDate,
             amount: inv.balance,
-            payAmount: inv.balance,
             deduction: "0",
           }));
         if (matchedLines.length > 0) {
@@ -175,7 +173,6 @@ export default function NewCheckVoucherPage() {
           invoiceNo: inv.invoiceNo,
           invoiceDate: inv.invoiceDate,
           amount: inv.balance,
-          payAmount: inv.balance,
           deduction: "0",
         },
       ];
@@ -184,7 +181,7 @@ export default function NewCheckVoucherPage() {
 
   const updateLine = (
     invoiceId: string,
-    field: "payAmount" | "deduction",
+    field: "deduction",
     value: string
   ) => {
     setLines((prev) =>
@@ -196,11 +193,11 @@ export default function NewCheckVoucherPage() {
   const totals = useMemo(() => {
     return lines.reduce(
       (acc, l) => ({
-        gross: acc.gross + parseFloat(l.payAmount || "0"),
+        gross: acc.gross + parseFloat(l.amount || "0"),
         deductions: acc.deductions + parseFloat(l.deduction || "0"),
         net:
           acc.net +
-          parseFloat(l.payAmount || "0") -
+          parseFloat(l.amount || "0") -
           parseFloat(l.deduction || "0"),
       }),
       { gross: 0, deductions: 0, net: 0 }
@@ -216,14 +213,14 @@ export default function NewCheckVoucherPage() {
       const body = {
         supplierId: selectedSupplier,
         bankAccountId: bankAccountId || undefined,
-        checkNo: checkNo || undefined,
+        checkNumber: checkNo || undefined,
         checkDate,
         notes: notes || undefined,
         approve,
         lines: lines.map((l) => ({
-          invoiceId: l.invoiceId,
-          payAmount: l.payAmount,
-          deduction: l.deduction,
+          supplierInvoiceId: l.invoiceId,
+          amount: l.amount,
+          deductionAmount: l.deduction,
         })),
       };
       await apiFetch("/ap/check-vouchers", {
@@ -332,7 +329,7 @@ export default function NewCheckVoucherPage() {
                   Open Invoices
                 </h3>
                 <p className="text-[11px] text-muted-foreground">
-                  Select invoices to include in this check voucher
+                  Select invoices to include in this check voucher. Supplier invoices are settled in full; deductions reduce the check amount, not the invoice balance.
                 </p>
               </div>
 
@@ -358,7 +355,7 @@ export default function NewCheckVoucherPage() {
                     <div className="w-24">Date</div>
                     <div className="w-24">Due Date</div>
                     <div className="w-28 text-right">Balance</div>
-                    <div className="flex-1 text-right">Pay Amount</div>
+                    <div className="flex-1 text-right">Invoice Amount</div>
                     <div className="w-28 text-right">Deduction</div>
                   </div>
 
@@ -392,22 +389,9 @@ export default function NewCheckVoucherPage() {
                           {fmtPeso(inv.balance)}
                         </div>
                         <div className="flex-1">
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            max={inv.balance}
-                            value={selected?.payAmount ?? ""}
-                            onChange={(e) =>
-                              updateLine(
-                                inv.id,
-                                "payAmount",
-                                e.target.value
-                              )
-                            }
-                            disabled={!selected}
-                            className="w-full rounded border border-border bg-background px-2 py-1 text-right text-sm tabular-nums outline-none focus:border-primary disabled:opacity-40"
-                          />
+                          <div className="rounded border border-transparent px-2 py-1 text-right text-sm tabular-nums font-medium">
+                            {selected ? fmtPeso(selected.amount) : "-"}
+                          </div>
                         </div>
                         <div className="w-28">
                           <input
@@ -494,7 +478,7 @@ export default function NewCheckVoucherPage() {
                   </span>
                   <span className="tabular-nums">
                     {fmtPeso(
-                      parseFloat(l.payAmount || "0") -
+                      parseFloat(l.amount || "0") -
                         parseFloat(l.deduction || "0")
                     )}
                   </span>

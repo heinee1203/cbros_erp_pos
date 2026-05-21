@@ -35,9 +35,9 @@ export default function DisbursementVoucherListPage() {
   const [loading, setLoading] = useState(true);
 
   // Filters
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
   const [statusFilter, setStatusFilter] = useState("");
-  const [supplierFilter, setSupplierFilter] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState(() => searchParams.get("supplierId") ?? "");
   const [methodFilter, setMethodFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -135,9 +135,16 @@ export default function DisbursementVoucherListPage() {
         await apiFetch(`/ap/disbursement-vouchers/${r.id}/print`, { token, locationId, method: "POST" });
       }
       const dv = await apiFetch<any>(`/ap/disbursement-vouchers/${r.id}`, { token, locationId });
+      const additionalCharges = (dv.additionalCharges || []).map((c: any) => ({
+        chargeType: c.chargeType,
+        description: c.description,
+        referenceNumber: c.referenceNumber,
+        amount: c.amount,
+      }));
       const html = buildDisbursementVoucherHtml({
         dvNumber: dv.dvNumber, supplierName: dv.supplierName,
         amount: dv.netAmount ?? dv.amount, grossAmount: dv.grossAmount, totalDeductions: dv.totalDeductions,
+        totalCharges: dv.totalCharges,
         paymentDate: dv.paymentDate, soaNumber: dv.soaNumber || undefined,
         soaDateFrom: dv.soaDateFrom || undefined, soaDateTo: dv.soaDateTo || undefined,
         soaRefs: (dv.soaRefs || []).map((r: any) => ({ soaNumber: r.soaNumber, allocatedAmount: r.allocatedAmount, dateFrom: r.dateFrom, dateTo: r.dateTo })),
@@ -147,6 +154,7 @@ export default function DisbursementVoucherListPage() {
           bankName: p.bankName, transactionDate: p.transactionDate, platform: p.platform,
         })),
         deductions: (dv.deductions || []).map((d: any) => ({ description: d.description, amount: d.amount })),
+        additionalCharges,
         soaCreditMemos: (dv.soaCreditMemos || []).map((cm: any) => ({ invoiceNumber: cm.invoiceNumber, amount: cm.amount })),
         isVoided: dv.status === "VOIDED", voidReason: dv.voidReason,
       });

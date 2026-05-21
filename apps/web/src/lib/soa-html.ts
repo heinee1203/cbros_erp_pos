@@ -31,6 +31,8 @@ interface SOAInput {
   from: string;
   to: string;
   soaNumber?: string;
+  generatedAt?: string;
+  generatedBy?: string;
 }
 
 /* ── Helpers ── */
@@ -70,6 +72,14 @@ export function buildSOAHtml(data: SOAInput): string {
 
   const charges = data.transactions.filter((x) => x.type === "CHARGE" || (x.type === "ADJUSTMENT" && parseFloat(x.amount) > 0));
   const credits = data.transactions.filter((x) => x.type === "PAYMENT" || x.type === "CREDIT_NOTE" || (x.type === "ADJUSTMENT" && parseFloat(x.amount) < 0));
+  const generatedAt = new Date(data.generatedAt || Date.now()).toLocaleString("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const generatedBy = data.generatedBy || "System";
 
   const chargeTotal = charges.reduce((s, x) => s + Math.abs(parseFloat(x.amount)), 0);
   const creditTotal = credits.reduce((s, x) => s + Math.abs(parseFloat(x.amount)), 0);
@@ -126,7 +136,8 @@ export function buildSOAHtml(data: SOAInput): string {
 </td>
 </tr>
 </table>
-<div class="title">BILLING STATEMENT</div>${data.soaNumber ? `<div style="text-align:center;font-weight:700;font-size:9pt;margin-bottom:4px">SOA #: ${esc(data.soaNumber)}</div>` : ""}` : `
+<div class="title">BILLING STATEMENT</div>${data.soaNumber ? `<div style="text-align:center;font-weight:700;font-size:9pt;margin-bottom:2px">SOA #: ${esc(data.soaNumber)}</div>` : ""}
+<div style="text-align:center;font-size:7pt;color:#334155;margin-bottom:4px">Generated ${esc(generatedAt)} by ${esc(generatedBy)} &middot; ${charges.length} invoice${charges.length === 1 ? "" : "s"} &middot; ${credits.length} credit/payment row${credits.length === 1 ? "" : "s"}</div>` : `
 <div class="hdr-sm">C-BROS GENUINE AUTOPARTS &amp; ACCESSORIES, INC.</div>
 <div style="font-size:8pt;text-align:center;margin-bottom:4px">${esc(c.name)} &mdash; ${esc(period)}, ${esc(year)}</div>
 <div class="title" style="margin-top:4px">BILLING STATEMENT (continued)</div>`;
@@ -158,7 +169,7 @@ export function buildSOAHtml(data: SOAInput): string {
       footer = `<div style="text-align:right;font-size:7pt;color:#666;margin-top:2px">Continued on next page...</div>`;
     }
 
-    const pageFooter = totalPages > 1 ? `<div class="pgf">Page ${pg + 1} of ${totalPages}</div>` : "";
+    const pageFooter = `<div class="pgf">Page ${pg + 1} of ${totalPages}</div>`;
 
     pages += `<div class="page">
 ${header}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   FileText,
@@ -27,20 +27,44 @@ import { apiFetch } from "@/lib/api";
 import { fmtPeso, fmtDate } from "@/lib/format";
 import { downloadCSV } from "@/lib/csv-export";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
-import { buildSupplierSOAHtml } from "@/lib/supplier-soa-html";
+import { buildSupplierSOAHtml, type SupplierSOAPrintMode } from "@/lib/supplier-soa-html";
 
 /* ── Types ── */
 interface SupplierRow {
   supplierId: string;
   supplierName: string;
+  contactPerson: string | null;
   contactPhone: string | null;
+  contactEmail: string | null;
   address: string | null;
+  tin: string | null;
   invoiceCount: number;
   totalBalance: number;
   oldestInvoiceDate: string | null;
   earliestDueDate: string | null;
   overdueCount: number;
   overdueAmount: number;
+  aging?: {
+    current: AgingBucket;
+    days1To30: AgingBucket;
+    days31To60: AgingBucket;
+    days61To90: AgingBucket;
+    days90Plus: AgingBucket;
+  };
+  paymentReadiness?: {
+    hasBankDetails: boolean;
+    hasTerms: boolean;
+    hasContactPerson: boolean;
+    hasAddress: boolean;
+    hasTin: boolean;
+    missingFields: string[];
+  };
+  creditMemoCount?: number;
+  creditMemoAmount?: number;
+  lastPaymentDate?: string | null;
+  lastSoaDate?: string | null;
+  paidThisMonth?: number;
+  openVoucherCount?: number;
 }
 
 interface Summary {
@@ -50,7 +74,25 @@ interface Summary {
   dueThisWeek: number;
 }
 
-type SupplierSOAView = "" | "current" | "due-week" | "overdue" | "critical" | "largest-overdue";
+interface AgingBucket {
+  count: number;
+  amount: number;
+}
+
+type SupplierSOAView =
+  | ""
+  | "current"
+  | "due-week"
+  | "overdue"
+  | "aging-1-30"
+  | "aging-31-60"
+  | "aging-61-90"
+  | "aging-90-plus"
+  | "critical"
+  | "largest-overdue"
+  | "missing-readiness"
+  | "has-credits"
+  | "no-recent-payment";
 
 interface Invoice {
   id: string;
@@ -61,6 +103,8 @@ interface Invoice {
   paidAmount: string;
   balance: string;
   status: string;
+  sourcePoId?: string | null;
+  sourceReceiptId?: string | null;
   /** True if the invoice is already on a previous non-void supplier SOA. */
   billed?: boolean;
   /** The supplier SOA id that billed this invoice, or null if unbilled. */
@@ -77,6 +121,18 @@ interface SupplierPaymentProfile {
   bankName: string | null;
   bankAccountNumber: string | null;
   bankAccountName: string | null;
+}
+
+interface PendingSupplierReturn {
+  id: string;
+  rtvNo: string;
+  status: string;
+  reason: string;
+  lineCount: number;
+  totalCost: string;
+  locationName: string | null;
+  createdAt: string;
+  submittedAt?: string | null;
 }
 
 function moneyValue(value: string | number | null | undefined): number {
@@ -97,10 +153,37 @@ function hasBankProfile(profile: SupplierPaymentProfile | null): boolean {
   return Boolean(profile?.bankName?.trim() && profile?.bankAccountNumber?.trim() && profile?.bankAccountName?.trim());
 }
 
+function hasRecentPayment(lastPaymentDate: string | null | undefined, maxAgeDays = 60): boolean {
+  if (!lastPaymentDate) return false;
+  return overdueDays(lastPaymentDate) <= maxAgeDays;
+}
+
+function readinessMissingText(row: SupplierRow): string {
+  const missing = row.paymentReadiness?.missingFields ?? [];
+  if (missing.length === 0) return "Payment profile ready";
+  if (missing.length <= 2) return `Missing ${missing.join(", ")}`;
+  return `Missing ${missing.slice(0, 2).join(", ")} +${missing.length - 2}`;
+}
+
+function agingBucketAmount(row: SupplierRow, view: SupplierSOAView): number {
+  if (view === "aging-1-30") return row.aging?.days1To30.amount ?? 0;
+  if (view === "aging-31-60") return row.aging?.days31To60.amount ?? 0;
+  if (view === "aging-61-90") return row.aging?.days61To90.amount ?? 0;
+  if (view === "aging-90-plus") return row.aging?.days90Plus.amount ?? 0;
+  if (view === "current") return row.aging?.current.amount ?? (row.overdueCount === 0 ? row.totalBalance : 0);
+  return 0;
+}
+
 function termsLabel(days: number | null | undefined): string {
   if (days === 0) return "COD";
   if (!Number.isFinite(days)) return "Net 30";
   return `Net ${days}`;
+}
+
+function pendingReturnStatusLabel(status: string): string {
+  if (status === "SUBMITTED") return "Submitted - stock deducted";
+  if (status === "ACKNOWLEDGED") return "Acknowledged - awaiting credit";
+  return status.replace(/_/g, " ");
 }
 
 function toSupplierSOAInvoiceLines(rows: Invoice[]) {
@@ -181,9 +264,9 @@ function agingBucket(ageDays: number): { label: string; classes: string } {
 /* ═══════════════════════════════════════════════════════
  * Expanded Supplier Detail — invoice list with selection + BILLED tracking
  * ═══════════════════════════════════════════════════════ */
-function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerateCV, onAfterMutation }: {
+function SupplierDetail({ supplierId, supplierName, supplierSummary, token, locationId, onAfterMutation }: {
   supplierId: string; supplierName: string; token: string; locationId: string;
-  onGenerateCV: (supplierId: string, invoiceIds: string[]) => void;
+  supplierSummary?: SupplierRow;
   /** Called after generate / void actions so the outer supplier list can refresh totals. */
   onAfterMutation?: () => void;
 }) {
@@ -198,6 +281,9 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   const [showHistory, setShowHistory] = useState(false);
   const [voidingHistory, setVoidingHistory] = useState<SupplierSOAHistoryRow | null>(null);
   const [supplierProfile, setSupplierProfile] = useState<SupplierPaymentProfile | null>(null);
+  const [pendingReturns, setPendingReturns] = useState<PendingSupplierReturn[]>([]);
+  const [selectedPendingReturnIds, setSelectedPendingReturnIds] = useState<Set<string>>(new Set());
+  const [printMode, setPrintMode] = useState<SupplierSOAPrintMode>("detailed");
 
   // Derived: only UNBILLED invoices are checkbox-eligible
   const unbilledInvoices = useMemo(
@@ -223,7 +309,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       // default fast-querystring parser turns `?status=OPEN&status=PARTIALLY_PAID`
       // into an array, which fails the `z.string().optional()` zod schema
       // and returns 400 — previously swallowed by `.catch(() => {})`.
-      const [invRes, histRes, profileRes] = await Promise.all([
+      const [invRes, histRes, profileRes, pendingReturnsRes] = await Promise.all([
         apiFetch<{ data: Invoice[] }>(
           `/ap/invoices?supplierId=${supplierId}&status=OPEN,PARTIALLY_PAID&limit=100`,
           { token, locationId },
@@ -233,6 +319,10 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           { token, locationId },
         ),
         apiFetch<SupplierPaymentProfile>(`/ap/suppliers/${supplierId}`, { token, locationId }).catch(() => null),
+        apiFetch<{ data: PendingSupplierReturn[] }>(
+          `/procurement/supplier-returns?status=SUBMITTED,ACKNOWLEDGED&supplierId=${supplierId}&allLocations=true&limit=100`,
+          { token, locationId },
+        ).catch(() => ({ data: [] })),
       ]);
       // Sort invoices newest first (by invoiceDate descending, then id)
       const sorted = Array.isArray(invRes.data)
@@ -241,6 +331,12 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       setInvoices(sorted);
       setSoaHistory(Array.isArray(histRes.data) ? histRes.data : []);
       setSupplierProfile(profileRes);
+      const pendingData = Array.isArray(pendingReturnsRes.data) ? pendingReturnsRes.data : [];
+      setPendingReturns(pendingData);
+      setSelectedPendingReturnIds((prev) => {
+        const validIds = new Set(pendingData.map((rtv) => rtv.id));
+        return new Set([...prev].filter((id) => validIds.has(id)));
+      });
       // Drop any selections that are no longer eligible (e.g. after a refresh)
       setSelected((prev) => {
         const eligibleIds = new Set(
@@ -253,6 +349,8 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       setInvoices([]);
       setSoaHistory([]);
       setSupplierProfile(null);
+      setPendingReturns([]);
+      setSelectedPendingReturnIds(new Set());
     } finally {
       setLoading(false);
     }
@@ -356,24 +454,83 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
     };
   }, [selectedInvoices]);
 
+  const pendingReturnSummary = useMemo(() => {
+    const totalValue = pendingReturns.reduce((sum, rtv) => sum + moneyValue(rtv.totalCost), 0);
+    const selectedValue = pendingReturns
+      .filter((rtv) => selectedPendingReturnIds.has(rtv.id))
+      .reduce((sum, rtv) => sum + moneyValue(rtv.totalCost), 0);
+    const submittedCount = pendingReturns.filter((rtv) => rtv.status === "SUBMITTED").length;
+    const acknowledgedCount = pendingReturns.filter((rtv) => rtv.status === "ACKNOWLEDGED").length;
+
+    return {
+      acknowledgedCount,
+      selectedValue,
+      selectedCount: selectedPendingReturnIds.size,
+      submittedCount,
+      totalValue,
+      totalCount: pendingReturns.length,
+    };
+  }, [pendingReturns, selectedPendingReturnIds]);
+
+  const duplicateInvoiceNumbers = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const invoice of invoices) {
+      const key = invoice.invoiceNumber.trim().toUpperCase();
+      if (!key) continue;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [invoices]);
+
+  const supplierPrintIdentity = useMemo(() => ({
+    supplierAddress: supplierProfile?.address ?? supplierSummary?.address ?? null,
+    supplierContact: supplierProfile?.contactPerson ?? supplierSummary?.contactPerson ?? null,
+    supplierPhone: supplierProfile?.contactPhone ?? supplierSummary?.contactPhone ?? null,
+    supplierEmail: supplierProfile?.contactEmail ?? supplierSummary?.contactEmail ?? null,
+    supplierTin: supplierProfile?.tin ?? supplierSummary?.tin ?? null,
+  }), [supplierProfile, supplierSummary]);
+
+  const buildPrintPayload = (
+    rows: Invoice[],
+    extra?: { soaNumber?: string; generatedAt?: string; generatedByName?: string | null },
+  ) => ({
+    supplierName,
+    ...supplierPrintIdentity,
+    invoices: toSupplierSOAInvoiceLines(rows),
+    printMode,
+    ...extra,
+  });
+
+  const reconciliationFlags = (inv: Invoice) => {
+    const flags: Array<{ label: string; tone: "danger" | "warning" | "muted" | "credit" }> = [];
+    const invoiceNumber = inv.invoiceNumber.trim().toUpperCase();
+    const amount = moneyValue(inv.totalAmount);
+    const balance = invoiceBalance(inv);
+    const isCreditMemo = isCreditMemoInvoice(inv);
+    const ageDays = overdueDays(inv.dueDate);
+
+    if ((duplicateInvoiceNumbers.get(invoiceNumber) ?? 0) > 1) flags.push({ label: "Duplicate #", tone: "danger" });
+    if (!isCreditMemo && !inv.sourcePoId) flags.push({ label: "No PO ref", tone: "warning" });
+    if (amount === 0 || balance === 0) flags.push({ label: "Zero amount", tone: "warning" });
+    if (amount < 0 && !isCreditMemo) flags.push({ label: "Negative", tone: "danger" });
+    if (!isCreditMemo && ageDays > 180) flags.push({ label: "180d+", tone: "danger" });
+    if (isCreditMemo) flags.push({ label: "Credit memo", tone: "credit" });
+
+    return flags;
+  };
+
   // ── Preview (all invoices, no persistence) ──
   // Ephemeral print of the current outstanding list. Does NOT mark invoices
   // billed and does NOT create a supplier_soa_records row.
   const handlePreviewAll = () => {
-    const html = buildSupplierSOAHtml({
-      supplierName,
-      invoices: toSupplierSOAInvoiceLines(invoices),
-    });
+    const html = buildSupplierSOAHtml(buildPrintPayload(invoices, { generatedByName: "Preview only" }));
     const w = window.open("", "_blank");
     if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
   };
 
   const handlePreviewSelected = () => {
     if (selectedInvoices.length === 0) return;
-    const html = buildSupplierSOAHtml({
-      supplierName,
-      invoices: toSupplierSOAInvoiceLines(selectedInvoices),
-    });
+    const html = buildSupplierSOAHtml(buildPrintPayload(selectedInvoices, { generatedByName: "Preview only" }));
     const w = window.open("", "_blank");
     if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
   };
@@ -409,6 +566,11 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       const snap = await apiFetch<any>(`/ap/supplier-soa/${created.id}`, { token, locationId });
       const html = buildSupplierSOAHtml({
         supplierName: snap.supplier?.name || supplierName,
+        supplierAddress: snap.supplier?.address ?? supplierPrintIdentity.supplierAddress,
+        supplierContact: snap.supplier?.contactPerson ?? supplierPrintIdentity.supplierContact,
+        supplierPhone: snap.supplier?.contactPhone ?? supplierPrintIdentity.supplierPhone,
+        supplierEmail: snap.supplier?.contactEmail ?? supplierPrintIdentity.supplierEmail,
+        supplierTin: snap.supplier?.tin ?? supplierPrintIdentity.supplierTin,
         invoices: (snap.invoices || []).map((i: any) => ({
           invoiceNumber: i.invoiceNumber,
           invoiceDate: i.invoiceDate,
@@ -418,6 +580,9 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           balance: i.balance,
         })),
         soaNumber: snap.soaNumber,
+        generatedAt: snap.generatedAt,
+        generatedByName: snap.generatedByName,
+        printMode,
       });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
@@ -433,6 +598,34 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
     }
   };
 
+  const handleGenerateSOAAndCreateDV = async () => {
+    if (selected.size === 0) return;
+    setGenerating(true);
+    setActionError(null);
+    try {
+      const created = await apiFetch<{ id: string }>(`/ap/supplier-soa/generate`, {
+        method: "POST",
+        token,
+        locationId,
+        body: JSON.stringify({
+          supplierId,
+          invoiceIds: Array.from(selected),
+        }),
+      });
+
+      setSelected(new Set());
+      await fetchAll();
+      onAfterMutation?.();
+      const rtvIds = [...selectedPendingReturnIds];
+      const rtvParam = rtvIds.length > 0 ? `&rtvIds=${encodeURIComponent(rtvIds.join(","))}` : "";
+      router.push(`/ap/disbursement-vouchers/new?soaId=${created.id}&supplierId=${supplierId}${rtvParam}`);
+    } catch (err: any) {
+      setActionError(err?.message || "Failed to create DV from SOA");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   // ── Reprint a historical SOA from snapshot ──
   const handleReprintHistory = async (soaId: string) => {
     setActionError(null);
@@ -440,6 +633,11 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       const snap = await apiFetch<any>(`/ap/supplier-soa/${soaId}`, { token, locationId });
       const html = buildSupplierSOAHtml({
         supplierName: snap.supplier?.name || supplierName,
+        supplierAddress: snap.supplier?.address ?? supplierPrintIdentity.supplierAddress,
+        supplierContact: snap.supplier?.contactPerson ?? supplierPrintIdentity.supplierContact,
+        supplierPhone: snap.supplier?.contactPhone ?? supplierPrintIdentity.supplierPhone,
+        supplierEmail: snap.supplier?.contactEmail ?? supplierPrintIdentity.supplierEmail,
+        supplierTin: snap.supplier?.tin ?? supplierPrintIdentity.supplierTin,
         invoices: (snap.invoices || []).map((i: any) => ({
           invoiceNumber: i.invoiceNumber,
           invoiceDate: i.invoiceDate,
@@ -449,6 +647,9 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           balance: i.balance,
         })),
         soaNumber: snap.soaNumber,
+        generatedAt: snap.generatedAt,
+        generatedByName: snap.generatedByName,
+        printMode,
       });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
@@ -504,7 +705,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
   return (
     <div className="bg-muted/20 border-t border-border">
       {/* Invoice table header — extra narrow 'Billed' column at the end */}
-      <div className="grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_100px_70px_90px] gap-1 px-6 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border/50">
+      <div className="grid grid-cols-[28px_1fr_90px_90px_100px_80px_80px_100px_70px_90px] gap-1 px-4 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border/50">
         <span />
         <span>Invoice #</span>
         <span className="text-right">Date</span>
@@ -524,8 +725,8 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       )}
 
       {invoices.length > 0 && (
-        <div className="border-b border-border/50 bg-background px-6 py-3">
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+        <div className="border-b border-border/50 bg-background px-4 py-2">
+          <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-5">
             <SupplierDetailMetric label="Payable balance" value={fmtPeso(invoiceSummary.payableBalance)} />
             <SupplierDetailMetric
               label="Overdue balance"
@@ -547,14 +748,125 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
               detail={invoiceSummary.billedCount > 0 ? `${invoiceSummary.billedCount} already billed` : "Ready to select"}
             />
           </div>
+          {supplierSummary && (
+            <div className="mt-1.5 grid grid-cols-2 gap-1.5 lg:grid-cols-4">
+              <SupplierDetailMetric
+                label="Last payment"
+                value={supplierSummary.lastPaymentDate ? fmtDate(supplierSummary.lastPaymentDate) : "None"}
+                tone={hasRecentPayment(supplierSummary.lastPaymentDate) ? "muted" : "danger"}
+                detail={supplierSummary.lastPaymentDate ? `${overdueDays(supplierSummary.lastPaymentDate)} days ago` : "No recent DV payment"}
+              />
+              <SupplierDetailMetric
+                label="Last SOA"
+                value={supplierSummary.lastSoaDate ? fmtDate(supplierSummary.lastSoaDate) : "None"}
+                tone="muted"
+              />
+              <SupplierDetailMetric
+                label="Paid this month"
+                value={fmtPeso(supplierSummary.paidThisMonth ?? 0)}
+                tone="credit"
+              />
+              <SupplierDetailMetric
+                label="Open DVs"
+                value={String(supplierSummary.openVoucherCount ?? 0)}
+                tone={(supplierSummary.openVoucherCount ?? 0) > 0 ? "danger" : "muted"}
+                detail={(supplierSummary.openVoucherCount ?? 0) > 0 ? "Draft or printed voucher exists" : "No open vouchers"}
+              />
+            </div>
+          )}
           {invoiceSummary.creditMemoCount > 0 && (
-            <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] leading-5 text-emerald-800">
+            <div className="mt-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] leading-4 text-emerald-800">
               Credit memo rows are shown separately in green. Select them with the invoices they should offset before previewing an SOA or creating a voucher.
+            </div>
+          )}
+          {pendingReturns.length > 0 && (
+            <div className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10px] leading-4 text-amber-900">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="font-semibold">
+                    Pending supplier returns for deduction: {pendingReturnSummary.totalCount} RTV{pendingReturnSummary.totalCount !== 1 ? "s" : ""} worth {fmtPeso(pendingReturnSummary.totalValue)}
+                  </div>
+                  <div className="text-amber-800">
+                    These returns have been submitted/acknowledged but no supplier credit has been recorded yet. Review before creating a DV; do not deduct automatically unless the credit memo/deduction is confirmed.
+                  </div>
+                </div>
+                <div className="rounded-md bg-background/70 px-2 py-1 text-[10px] font-semibold text-amber-800">
+                  {pendingReturnSummary.submittedCount} submitted · {pendingReturnSummary.acknowledgedCount} acknowledged
+                </div>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[10px] font-semibold text-amber-800">
+                  Selected for DV deduction: {pendingReturnSummary.selectedCount} RTV{pendingReturnSummary.selectedCount !== 1 ? "s" : ""} · {fmtPeso(pendingReturnSummary.selectedValue)}
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedPendingReturnIds(new Set(pendingReturns.map((rtv) => rtv.id)));
+                    }}
+                    className="rounded-md border border-amber-300 bg-background/70 px-2 py-0.5 text-[10px] font-semibold hover:bg-amber-100"
+                  >
+                    Include all in DV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedPendingReturnIds(new Set());
+                    }}
+                    className="rounded-md border border-amber-300 bg-background/70 px-2 py-0.5 text-[10px] font-semibold hover:bg-amber-100"
+                  >
+                    Exclude all
+                  </button>
+                </div>
+              </div>
+              <div className="mt-1.5 overflow-hidden rounded-md border border-amber-200 bg-background/70">
+                {pendingReturns.slice(0, 5).map((rtv) => (
+                  <div
+                    key={rtv.id}
+                    className="grid w-full grid-cols-[24px_110px_1fr_90px_90px_100px] gap-2 border-b border-amber-100 px-2 py-1 text-left last:border-b-0 hover:bg-amber-100/50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedPendingReturnIds.has(rtv.id)}
+                      onChange={() =>
+                        setSelectedPendingReturnIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(rtv.id)) next.delete(rtv.id);
+                          else next.add(rtv.id);
+                          return next;
+                        })
+                      }
+                      className="mt-0.5"
+                    />
+                    <span className="font-mono font-semibold text-primary">{rtv.rtvNo}</span>
+                    <span className="truncate text-amber-900">{pendingReturnStatusLabel(rtv.status)}</span>
+                    <span className="text-right text-muted-foreground">{rtv.lineCount} item{rtv.lineCount !== 1 ? "s" : ""}</span>
+                    <span className="truncate text-right text-muted-foreground">{rtv.locationName || "All locations"}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/procurement/supplier-returns/${rtv.id}`);
+                      }}
+                      className="text-right font-semibold tabular-nums text-primary hover:underline"
+                    >
+                      {fmtPeso(rtv.totalCost)}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {pendingReturns.length > 5 && (
+                <div className="mt-1 text-[10px] text-amber-800">
+                  Showing first 5 pending RTVs. Open Supplier Returns for the full list.
+                </div>
+              )}
             </div>
           )}
           <div
             className={cn(
-              "mt-2 rounded-lg border px-3 py-2 text-[11px] leading-5",
+              "mt-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] leading-4",
               bankReady
                 ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                 : "border-amber-200 bg-amber-50 text-amber-800",
@@ -585,10 +897,12 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
               </button>
             </div>
             {supplierProfile && (
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px]">
+              <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
                 <span>Bank: <span className="font-semibold">{supplierProfile.bankName || "Missing"}</span></span>
                 <span>Account #: <span className="font-mono font-semibold">{supplierProfile.bankAccountNumber || "Missing"}</span></span>
                 <span>Account name: <span className="font-semibold">{supplierProfile.bankAccountName || "Missing"}</span></span>
+                <span>Contact: <span className="font-semibold">{supplierProfile.contactPerson || "Missing"}</span></span>
+                <span>Address: <span className="font-semibold">{supplierProfile.address || "Missing"}</span></span>
                 <span>TIN: <span className="font-semibold">{supplierProfile.tin || "Missing"}</span></span>
               </div>
             )}
@@ -606,12 +920,13 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
         const isBilled = inv.billed === true;
         const billedSoaNumber = inv.billedSoaId ? soaIdToNumber.get(inv.billedSoaId) ?? null : null;
         const billedDisplay = billedSoaNumber ? billedSoaNumber.replace(/^SUPP-SOA-/, "") : null;
+        const flags = reconciliationFlags(inv);
         return (
           <div
             key={inv.id}
             onClick={() => toggle(inv.id, isBilled)}
             className={cn(
-              "grid grid-cols-[32px_1fr_90px_90px_100px_80px_80px_100px_70px_90px] gap-1 px-6 py-2 text-[12px] border-b border-border/30 transition-colors",
+              "grid grid-cols-[28px_1fr_90px_90px_100px_80px_80px_100px_70px_90px] gap-1 px-4 py-1 text-[11px] leading-tight border-b border-border/30 transition-colors",
               isBilled && "opacity-50 cursor-not-allowed bg-muted/30",
               isCreditMemo && !isBilled && !isSelected && "bg-emerald-50/30",
               !isBilled && (isSelected ? "bg-primary/[0.04] cursor-pointer" : "hover:bg-accent/30 cursor-pointer"),
@@ -626,12 +941,32 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
                 <Square size={14} className="text-muted-foreground/40" />
               )}
             </div>
-            <span className="font-mono font-semibold text-foreground truncate flex items-center gap-1.5">
-              {inv.invoiceNumber || `INV-${inv.id.slice(0, 8)}`}
-              {isCreditMemo && (
-                <span className="inline-flex rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600">CM</span>
+            <div className="min-w-0">
+              <div className="font-mono font-semibold text-foreground truncate flex items-center gap-1.5">
+                {inv.invoiceNumber || `INV-${inv.id.slice(0, 8)}`}
+                {isCreditMemo && (
+                  <span className="inline-flex rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600">CM</span>
+                )}
+              </div>
+              {flags.length > 0 && (
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  {flags.map((flag) => (
+                    <span
+                      key={flag.label}
+                      className={cn(
+                        "inline-flex rounded-md px-1.5 py-0 text-[9px] font-semibold",
+                        flag.tone === "danger" && "bg-red-50 text-red-700",
+                        flag.tone === "warning" && "bg-amber-50 text-amber-700",
+                        flag.tone === "credit" && "bg-emerald-50 text-emerald-700",
+                        flag.tone === "muted" && "bg-slate-100 text-slate-600",
+                      )}
+                    >
+                      {flag.label}
+                    </span>
+                  ))}
+                </div>
               )}
-            </span>
+            </div>
             <span className="text-right text-muted-foreground">{fmtDate(inv.invoiceDate)}</span>
             <span className={cn("text-right", isOverdue ? "text-red-600 font-medium" : "text-muted-foreground")}>
               {fmtDate(inv.dueDate)}
@@ -648,11 +983,11 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
             </span>
             <span>
               {isCreditMemo ? (
-                <span className="inline-flex rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600">
+                  <span className="inline-flex rounded-md bg-purple-50 px-1.5 py-0 text-[9px] font-semibold text-purple-600">
                   Credit
                 </span>
               ) : (
-                <span className={cn("inline-flex rounded-md px-1.5 py-0.5 text-[9px] font-semibold", bucket.classes)}>
+                <span className={cn("inline-flex rounded-md px-1.5 py-0 text-[9px] font-semibold", bucket.classes)}>
                   {bucket.label}
                 </span>
               )}
@@ -674,7 +1009,7 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
       })}
 
       {/* Action bar */}
-      <div className="flex items-center justify-between px-6 py-3 bg-muted/30 border-t border-border/50 flex-wrap gap-2">
+      <div className="flex items-center justify-between px-4 py-2 bg-muted/30 border-t border-border/50 flex-wrap gap-2">
         <div className="flex items-center gap-3 flex-wrap">
           {unbilledInvoices.length > 0 && (
             <button
@@ -713,6 +1048,24 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1 rounded-lg border border-border bg-background p-1 text-[11px]">
+            <span className="px-1.5 font-medium text-muted-foreground">SOA format</span>
+            {(["detailed", "concise"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setPrintMode(mode)}
+                className={cn(
+                  "rounded-md px-2 py-1 font-semibold capitalize transition-colors",
+                  printMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
           <button
             onClick={handlePreviewAll}
             disabled={invoices.length === 0}
@@ -737,10 +1090,12 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
           </button>
           {selected.size > 0 && (
             <button
-              onClick={() => onGenerateCV(supplierId, Array.from(selected))}
+              onClick={handleGenerateSOAAndCreateDV}
+              disabled={generating}
               className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90"
             >
-              <FileText size={12} /> Check Voucher
+              {generating ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
+              Generate SOA + Create DV
             </button>
           )}
         </div>
@@ -797,6 +1152,14 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
                   >
                     <Printer size={10} /> Reprint
                   </button>
+                  {h.status !== "VOID" && (
+                    <button
+                      onClick={() => router.push(`/ap/disbursement-vouchers/new?soaId=${h.id}&supplierId=${supplierId}`)}
+                      className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium text-emerald-700 hover:bg-emerald-50"
+                    >
+                      <FileText size={10} /> Create DV
+                    </button>
+                  )}
                   {h.status !== "VOID" && (
                     <button
                       onClick={() => setVoidingHistory(h)}
@@ -868,6 +1231,11 @@ function SupplierDetail({ supplierId, supplierName, token, locationId, onGenerat
 export default function SupplierSOAPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const router = useRouter();
+  const expandedFromQueryRef = useRef(false);
+  const [initialSupplierId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("supplierId") ?? "";
+  });
 
   const [data, setData] = useState<{ suppliers: SupplierRow[]; summary: Summary } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -895,6 +1263,20 @@ export default function SupplierSOAPage() {
   const suppliers = data?.suppliers ?? [];
   const summary = data?.summary;
 
+  useEffect(() => {
+    if (expandedFromQueryRef.current || !initialSupplierId || suppliers.length === 0) return;
+    const match = suppliers.find((s) => s.supplierId === initialSupplierId);
+    if (!match) return;
+    expandedFromQueryRef.current = true;
+    setSearch(match.supplierName);
+    setExpandedId(match.supplierId);
+    window.setTimeout(() => {
+      document
+        .getElementById(`supplier-soa-row-${match.supplierId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  }, [initialSupplierId, suppliers]);
+
   const searchedSuppliers = useMemo(() => {
     let result = [...suppliers];
     if (search.length >= 2) {
@@ -907,9 +1289,16 @@ export default function SupplierSOAPage() {
   const filtered = useMemo(() => {
     let result = [...searchedSuppliers];
     if (statusFilter === "overdue") result = result.filter((s) => s.overdueCount > 0);
-    if (statusFilter === "current") result = result.filter((s) => s.overdueCount === 0);
+    if (statusFilter === "current") result = result.filter((s) => agingBucketAmount(s, "current") > 0);
+    if (statusFilter === "aging-1-30") result = result.filter((s) => agingBucketAmount(s, "aging-1-30") > 0);
+    if (statusFilter === "aging-31-60") result = result.filter((s) => agingBucketAmount(s, "aging-31-60") > 0);
+    if (statusFilter === "aging-61-90") result = result.filter((s) => agingBucketAmount(s, "aging-61-90") > 0);
+    if (statusFilter === "aging-90-plus") result = result.filter((s) => agingBucketAmount(s, "aging-90-plus") > 0);
     if (statusFilter === "critical") result = result.filter((s) => s.overdueCount > 0 && overdueDays(s.earliestDueDate) > 90);
     if (statusFilter === "due-week") result = result.filter((s) => isDueThisWeek(s.earliestDueDate));
+    if (statusFilter === "missing-readiness") result = result.filter((s) => (s.paymentReadiness?.missingFields.length ?? 0) > 0);
+    if (statusFilter === "has-credits") result = result.filter((s) => (s.creditMemoCount ?? 0) > 0);
+    if (statusFilter === "no-recent-payment") result = result.filter((s) => !hasRecentPayment(s.lastPaymentDate));
     if (statusFilter === "largest-overdue") {
       result = result
         .filter((s) => s.overdueAmount > 0)
@@ -930,19 +1319,16 @@ export default function SupplierSOAPage() {
     () => [
       { key: "" as SupplierSOAView, label: "All", count: searchedSuppliers.length },
       { key: "due-week" as SupplierSOAView, label: "Due this week", count: searchedSuppliers.filter((s) => isDueThisWeek(s.earliestDueDate)).length },
-      { key: "overdue" as SupplierSOAView, label: "Overdue", count: searchedSuppliers.filter((s) => s.overdueCount > 0).length },
+      { key: "aging-1-30" as SupplierSOAView, label: "1-30", count: searchedSuppliers.filter((s) => agingBucketAmount(s, "aging-1-30") > 0).length },
+      { key: "aging-31-60" as SupplierSOAView, label: "31-60", count: searchedSuppliers.filter((s) => agingBucketAmount(s, "aging-31-60") > 0).length },
+      { key: "aging-61-90" as SupplierSOAView, label: "61-90", count: searchedSuppliers.filter((s) => agingBucketAmount(s, "aging-61-90") > 0).length },
       { key: "critical" as SupplierSOAView, label: "Critical 90+", count: searchedSuppliers.filter((s) => s.overdueCount > 0 && overdueDays(s.earliestDueDate) > 90).length },
+      { key: "missing-readiness" as SupplierSOAView, label: "Missing payment info", count: searchedSuppliers.filter((s) => (s.paymentReadiness?.missingFields.length ?? 0) > 0).length },
+      { key: "has-credits" as SupplierSOAView, label: "Has credits", count: searchedSuppliers.filter((s) => (s.creditMemoCount ?? 0) > 0).length },
       { key: "largest-overdue" as SupplierSOAView, label: "Largest overdue", count: searchedSuppliers.filter((s) => s.overdueAmount > 0).length },
     ],
     [searchedSuppliers],
   );
-
-  const handleGenerateCV = (supplierId: string, invoiceIds: string[]) => {
-    const params = new URLSearchParams();
-    params.set("supplierId", supplierId);
-    params.set("invoiceIds", invoiceIds.join(","));
-    router.push(`/ap/check-vouchers/new?${params.toString()}`);
-  };
 
   if (authLoading || loading) {
     return (
@@ -997,14 +1383,34 @@ export default function SupplierSOAPage() {
             <option value="current">Current</option>
             <option value="due-week">Due This Week</option>
             <option value="overdue">Overdue (any)</option>
+            <option value="aging-1-30">Aging 1-30 days</option>
+            <option value="aging-31-60">Aging 31-60 days</option>
+            <option value="aging-61-90">Aging 61-90 days</option>
+            <option value="aging-90-plus">Aging 90+ days</option>
             <option value="critical">Critical (90+ days)</option>
             <option value="largest-overdue">Largest Overdue</option>
+            <option value="missing-readiness">Missing payment info</option>
+            <option value="has-credits">Has credit memos</option>
+            <option value="no-recent-payment">No recent payment</option>
           </select>
 
           {filtered.length > 0 && (
             <button onClick={() => downloadCSV("supplier-soa",
-              ["Supplier", "Invoices", "Total Balance", "Overdue", "Oldest", "Status"],
-              filtered.map((s) => [s.supplierName, String(s.invoiceCount), s.totalBalance.toFixed(2), s.overdueAmount.toFixed(2), s.oldestInvoiceDate ?? "\u2014", s.overdueCount > 0 ? "Overdue" : "Current"])
+              ["Supplier", "Invoices", "Total Balance", "Current", "1-30", "31-60", "61-90", "90+", "Credits", "Missing Payment Info", "Last Payment", "Open DVs"],
+              filtered.map((s) => [
+                s.supplierName,
+                String(s.invoiceCount),
+                s.totalBalance.toFixed(2),
+                (s.aging?.current.amount ?? 0).toFixed(2),
+                (s.aging?.days1To30.amount ?? 0).toFixed(2),
+                (s.aging?.days31To60.amount ?? 0).toFixed(2),
+                (s.aging?.days61To90.amount ?? 0).toFixed(2),
+                (s.aging?.days90Plus.amount ?? 0).toFixed(2),
+                (s.creditMemoAmount ?? 0).toFixed(2),
+                s.paymentReadiness?.missingFields.join("; ") ?? "",
+                s.lastPaymentDate ?? "",
+                String(s.openVoucherCount ?? 0),
+              ])
             )} className="ml-auto flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
               <Download size={12} /> Export CSV
             </button>
@@ -1060,14 +1466,33 @@ export default function SupplierSOAPage() {
               const isExpanded = expandedId === s.supplierId;
               const status = dueStatus(s);
               return (
-                <div key={s.supplierId}>
+                <div key={s.supplierId} id={`supplier-soa-row-${s.supplierId}`}>
                   <div
                     onClick={() => setExpandedId(isExpanded ? null : s.supplierId)}
                     className={cn("flex items-center px-4 py-1.5 cursor-pointer transition-colors hover:bg-accent/40", isExpanded && "bg-accent/20")}
                   >
                     <div className="flex-1 min-w-0 flex items-center gap-1.5">
                       {isExpanded ? <ChevronDown size={12} className="text-muted-foreground flex-shrink-0" /> : <ChevronRight size={12} className="text-muted-foreground flex-shrink-0" />}
-                      <span className="text-[13px] font-medium text-foreground truncate">{s.supplierName}</span>
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-medium text-foreground truncate">{s.supplierName}</div>
+                        <div className="mt-0.5 flex flex-wrap gap-1">
+                          {(s.paymentReadiness?.missingFields.length ?? 0) > 0 && (
+                            <span className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                              {readinessMissingText(s)}
+                            </span>
+                          )}
+                          {(s.creditMemoCount ?? 0) > 0 && (
+                            <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700">
+                              Credits ({fmtPeso(s.creditMemoAmount ?? 0)})
+                            </span>
+                          )}
+                          {!hasRecentPayment(s.lastPaymentDate) && (
+                            <span className="inline-flex rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-600">
+                              No recent payment
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                     <div className="w-20 text-right text-[12px] tabular-nums text-foreground">{s.invoiceCount}</div>
                     <div className="w-32 text-right text-[13px] tabular-nums font-semibold text-foreground">{fmtPeso(s.totalBalance)}</div>
@@ -1088,9 +1513,9 @@ export default function SupplierSOAPage() {
                     <SupplierDetail
                       supplierId={s.supplierId}
                       supplierName={s.supplierName}
+                      supplierSummary={s}
                       token={token}
                       locationId={locationId}
-                      onGenerateCV={handleGenerateCV}
                       onAfterMutation={fetchData}
                     />
                   )}
@@ -1136,11 +1561,11 @@ function SupplierDetailMetric({
   value: string;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-background px-3 py-2">
+    <div className="rounded-lg border border-border bg-background px-2.5 py-1.5">
       <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{label}</div>
       <div
         className={cn(
-          "mt-1 text-[13px] font-bold tabular-nums text-foreground",
+          "mt-0.5 text-[12px] font-bold tabular-nums text-foreground",
           tone === "danger" && "text-red-600",
           tone === "credit" && "text-emerald-700",
           tone === "muted" && "text-muted-foreground",
@@ -1148,7 +1573,7 @@ function SupplierDetailMetric({
       >
         {value}
       </div>
-      {detail && <div className="mt-0.5 text-[10px] text-muted-foreground">{detail}</div>}
+      {detail && <div className="mt-0.5 text-[10px] leading-3 text-muted-foreground">{detail}</div>}
     </div>
   );
 }

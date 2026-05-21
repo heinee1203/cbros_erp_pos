@@ -35,7 +35,7 @@ test("check voucher status guards preserve existing lifecycle messages", () => {
 test("validateCheckVoucherInvoiceLines preserves supplier, status, balance, and missing-row checks", () => {
   const lines = [
     { supplierInvoiceId: "inv-1", amount: "25.00" },
-    { supplierInvoiceId: "inv-2", amount: "50.00" },
+    { supplierInvoiceId: "inv-2", amount: "75.00" },
   ];
   const invoiceRows = [
     {
@@ -49,7 +49,7 @@ test("validateCheckVoucherInvoiceLines preserves supplier, status, balance, and 
       id: "inv-2",
       supplierId: "supplier-1",
       invoiceNumber: "INV-002",
-      status: "PARTIALLY_PAID",
+      status: "OPEN",
       balance: "75.00",
     },
   ];
@@ -70,10 +70,10 @@ test("validateCheckVoucherInvoiceLines preserves supplier, status, balance, and 
   assert.throws(
     () => validateCheckVoucherInvoiceLines({
       lines,
-      invoiceRows: [{ ...invoiceRows[0], status: "PAID" }, invoiceRows[1]],
+      invoiceRows: [{ ...invoiceRows[0], status: "PARTIALLY_PAID" }, invoiceRows[1]],
       supplierId: "supplier-1",
     }),
-    /Invoice INV-001 is not payable \(status: PAID\)/,
+    /Invoice INV-001 is not payable \(status: PARTIALLY_PAID\)/,
   );
   assert.throws(
     () => validateCheckVoucherInvoiceLines({
@@ -82,6 +82,22 @@ test("validateCheckVoucherInvoiceLines preserves supplier, status, balance, and 
       supplierId: "supplier-1",
     }),
     /Amount 26.00 exceeds balance 25.00 for invoice INV-001/,
+  );
+  assert.throws(
+    () => validateCheckVoucherInvoiceLines({
+      lines: [{ supplierInvoiceId: "inv-1", amount: "24.00" }, lines[1]],
+      invoiceRows,
+      supplierId: "supplier-1",
+    }),
+    /must equal full balance 25.00/,
+  );
+  assert.throws(
+    () => validateCheckVoucherInvoiceLines({
+      lines: [{ supplierInvoiceId: "inv-1", amount: "0.00" }, lines[1]],
+      invoiceRows,
+      supplierId: "supplier-1",
+    }),
+    /Amount must be > 0 for invoice INV-001/,
   );
 });
 
