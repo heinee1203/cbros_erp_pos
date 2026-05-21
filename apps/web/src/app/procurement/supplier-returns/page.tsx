@@ -3,7 +3,10 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useAuth } from "@/app/auth-context";
-import { useSupplierReturns, type SupplierReturnRow } from "@/hooks/use-supplier-returns";
+import {
+  useSupplierReturns,
+  useSupplierReturnAnalytics,
+} from "@/hooks/use-supplier-returns";
 import { useSuppliers } from "@/hooks/use-suppliers";
 import { fmtPeso, fmtDate } from "@/lib/format";
 
@@ -12,8 +15,8 @@ import { fmtPeso, fmtDate } from "@/lib/format";
 const STATUS_OPTIONS = [
   { value: "", label: "All Statuses" },
   { value: "DRAFT", label: "Draft" },
-  { value: "SUBMITTED", label: "Submitted" },
-  { value: "ACKNOWLEDGED", label: "Acknowledged" },
+  { value: "SUBMITTED", label: "Stock Deducted" },
+  { value: "ACKNOWLEDGED", label: "Supplier Acknowledged" },
   { value: "CREDIT_RECEIVED", label: "Credit Received" },
   { value: "CLOSED", label: "Closed" },
   { value: "CLOSED_WITHOUT_CREDIT", label: "Closed Without Credit" },
@@ -32,13 +35,17 @@ const STATUS_COLORS: Record<string, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: "Draft",
-  SUBMITTED: "Submitted",
-  ACKNOWLEDGED: "Acknowledged",
+  SUBMITTED: "Stock Deducted",
+  ACKNOWLEDGED: "Supplier Acknowledged",
   CREDIT_RECEIVED: "Credit Received",
   CLOSED: "Closed",
   CLOSED_WITHOUT_CREDIT: "Closed (No Credit)",
   CANCELLED: "Cancelled",
 };
+
+function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+}
 
 // ── Page ──
 
@@ -55,7 +62,9 @@ export default function SupplierReturnsPage() {
   });
 
   const suppliersQuery = useSuppliers(token, locationId);
+  const analyticsQuery = useSupplierReturnAnalytics(token, locationId);
   const suppliers = suppliersQuery.data?.data ?? [];
+  const analytics = analyticsQuery.data;
 
   const rtvs = data?.data ?? [];
 
@@ -120,6 +129,57 @@ export default function SupplierReturnsPage() {
           <p className="mt-1 text-2xl font-bold text-green-600">{fmtPeso(summaryCards.creditThisMonth)}</p>
         </div>
       </div>
+
+      {analytics && (
+        <div className="mb-4 rounded-lg border border-border bg-background p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Pending RTV aging
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {analytics.pendingAging.totalCount} pending return{analytics.pendingAging.totalCount !== 1 ? "s" : ""} · {fmtPeso(analytics.pendingAging.totalValue)} awaiting supplier credit or closure
+              </p>
+            </div>
+            {analytics.topSuppliers[0] && (
+              <div className="rounded-md bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
+                Top supplier: <span className="font-semibold">{analytics.topSuppliers[0].supplier_name}</span>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {analytics.pendingAging.buckets.map((bucket) => (
+              <div key={bucket.key} className="rounded-md border border-border bg-muted/20 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{bucket.label}</p>
+                <p className="mt-1 text-lg font-bold">{bucket.count}</p>
+                <p className="text-xs text-muted-foreground">{fmtPeso(bucket.totalValue)}</p>
+              </div>
+            ))}
+          </div>
+          {(analytics.topItems.length > 0 || analytics.reasonBreakdown.length > 0) && (
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <div className="rounded-md border border-border bg-muted/10 p-3">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Most returned items</p>
+                {analytics.topItems.slice(0, 3).map((item) => (
+                  <div key={item.product_id} className="flex justify-between gap-3 border-t border-border/50 py-1.5 text-xs first:border-t-0">
+                    <span className="truncate">{item.product_name}</span>
+                    <span className="shrink-0 font-semibold">{item.total_qty} units</span>
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-md border border-border bg-muted/10 p-3">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Reason breakdown</p>
+                {analytics.reasonBreakdown.slice(0, 4).map((reason) => (
+                  <div key={reason.reason} className="flex justify-between gap-3 border-t border-border/50 py-1.5 text-xs first:border-t-0">
+                    <span>{reason.reason.replace(/_/g, " ")}</span>
+                    <span className="shrink-0 font-semibold">{reason.return_count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -224,7 +284,7 @@ export default function SupplierReturnsPage() {
                         STATUS_COLORS[rtv.status] ?? "bg-muted text-muted-foreground"
                       }`}
                     >
-                      {STATUS_LABELS[rtv.status] ?? rtv.status.replace(/_/g, " ")}
+                      {statusLabel(rtv.status)}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-right">

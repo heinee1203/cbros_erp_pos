@@ -20,6 +20,7 @@ export interface SupplierReturnRow {
   creditType: string | null;
   sourcePOId: string | null;
   sourcePONo: string | null;
+  submittedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -33,8 +34,14 @@ export interface SupplierReturnLineRow {
   quantity: number;
   condition: string;
   costPerUnit: string;
+  costPrice?: string;
   lineTotal: string;
   notes: string | null;
+  brandName?: string | null;
+  currentSku?: string | null;
+  oemNumber?: string | null;
+  currentStockLevel?: number | null;
+  sourcePoLineId?: string | null;
 }
 
 export interface StatusHistoryEntry {
@@ -54,6 +61,42 @@ export interface SupplierReturnDetail extends SupplierReturnRow {
   createdByName: string;
   lines: SupplierReturnLineRow[];
   statusHistory: StatusHistoryEntry[];
+}
+
+export interface ReturnablePoLine {
+  id: string;
+  poNo: string;
+  productId: string;
+  productName: string;
+  sku: string | null;
+  receivedQty: number;
+  alreadyReturnedQty: number;
+  returnableQty: number;
+  unitCost: string;
+}
+
+export interface SupplierReturnAttachment {
+  id: string;
+  supplierReturnId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  attachmentType: string;
+  dataUrl: string;
+  uploadedBy: string | null;
+  createdAt: string;
+}
+
+export interface SupplierReturnAnalytics {
+  pendingAging: {
+    totalCount: number;
+    totalValue: number;
+    buckets: Array<{ key: string; label: string; count: number; totalValue: number }>;
+  };
+  topSuppliers: Array<{ supplier_id: string; supplier_name: string; return_count: number; total_value: string }>;
+  topItems: Array<{ product_id: string; product_name: string; return_count: number; total_qty: number; total_value: string }>;
+  reasonBreakdown: Array<{ reason: string; return_count: number; total_value: string }>;
+  monthlyTotals: Array<{ month: string; return_count: number; total_value: string }>;
 }
 
 // ── List Hook ──
@@ -111,11 +154,45 @@ export function useSupplierReturnDetail(
 
 // ── Create Mutation ──
 
+export function useReturnablePoLines(
+  token: string,
+  locationId: string,
+  poId: string,
+  excludeRtvId?: string | null,
+) {
+  return useQuery<{ data: ReturnablePoLine[] }>({
+    queryKey: ["supplier-return-po-lines", poId, excludeRtvId],
+    queryFn: () => {
+      const params = new URLSearchParams({ poId });
+      if (excludeRtvId) params.set("excludeRtvId", excludeRtvId);
+      return apiFetch<{ data: ReturnablePoLine[] }>(
+        `/procurement/supplier-returns/po-returnable-lines?${params}`,
+        { token, locationId },
+      );
+    },
+    enabled: !!token && !!locationId && !!poId,
+    staleTime: 10_000,
+  });
+}
+
+export function useSupplierReturnAnalytics(token: string, locationId: string) {
+  return useQuery<SupplierReturnAnalytics>({
+    queryKey: ["supplier-return-analytics", locationId],
+    queryFn: () =>
+      apiFetch<SupplierReturnAnalytics>(
+        "/procurement/supplier-returns/analytics?allLocations=true",
+        { token, locationId },
+      ),
+    enabled: !!token && !!locationId,
+    staleTime: 30_000,
+  });
+}
+
 export interface CreateSupplierReturnPayload {
   supplierId: string;
   locationId: string;
   reason: string;
-  sourcePOId?: string;
+  sourcePoId?: string;
   notes?: string;
   idempotencyKey: string;
   lines: {
@@ -123,6 +200,7 @@ export interface CreateSupplierReturnPayload {
     quantity: number;
     costPrice: string;
     condition: string;
+    sourcePoLineId?: string;
     notes?: string;
   }[];
 }
@@ -147,7 +225,7 @@ export function useCreateSupplierReturn(token: string, locationId: string) {
 
 interface SupplierReturnActionInput {
   rtvId: string;
-  action: "submit" | "acknowledge" | "receive-credit" | "close" | "close-without-credit" | "cancel";
+  action: "submit" | "acknowledge" | "receive-credit" | "close" | "close-without-credit" | "cancel" | "reject";
   body?: Record<string, unknown>;
 }
 
@@ -179,6 +257,56 @@ export function useDeleteSupplierReturn(token: string, locationId: string) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["supplier-returns"] });
+    },
+  });
+}
+
+export function useSupplierReturnAttachments(
+  token: string,
+  locationId: string,
+  rtvId: string,
+) {
+  return useQuery<{ data: SupplierReturnAttachment[] }>({
+    queryKey: ["supplier-return-attachments", rtvId],
+    queryFn: () =>
+      apiFetch<{ data: SupplierReturnAttachment[] }>(
+        `/procurement/supplier-returns/${rtvId}/attachments`,
+        { token, locationId },
+      ),
+    enabled: !!token && !!locationId && !!rtvId,
+    staleTime: 10_000,
+  });
+}
+
+export function useAddSupplierReturnAttachment(token: string, locationId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ rtvId, body }: { rtvId: string; body: Record<string, unknown> }) =>
+      apiFetch(`/procurement/supplier-returns/${rtvId}/attachments`, {
+        method: "POST",
+        token,
+        locationId,
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ["supplier-return-attachments", variables.rtvId] });
+      qc.invalidateQueries({ queryKey: ["supplier-return", variables.rtvId] });
+    },
+  });
+}
+
+export function useDeleteSupplierReturnAttachment(token: string, locationId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ rtvId, attachmentId }: { rtvId: string; attachmentId: string }) =>
+      apiFetch(`/procurement/supplier-returns/${rtvId}/attachments/${attachmentId}`, {
+        method: "DELETE",
+        token,
+        locationId,
+      }),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ["supplier-return-attachments", variables.rtvId] });
+      qc.invalidateQueries({ queryKey: ["supplier-return", variables.rtvId] });
     },
   });
 }

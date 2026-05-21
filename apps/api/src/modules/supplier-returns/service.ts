@@ -1,10 +1,12 @@
 import { db, type DbOrTx } from "@apex/database";
 import {
   supplierReturns,
+  supplierReturnAttachments,
   supplierReturnLines,
   supplierReturnStatusHistory,
   inventory,
   stockJournal,
+  brands,
   suppliers,
   locations,
   products,
@@ -151,6 +153,136 @@ async function insertStatusHistory(
  * Create a supplier return in DRAFT status.
  * IDEMPOTENT: If already processed with same key, returns existing record.
  */
+type ReturnablePoLineRow = {
+  id: string;
+  poNo: string;
+  productId: string;
+  productName: string;
+  sku: string | null;
+  receivedQty: number;
+  alreadyReturnedQty: number;
+  returnableQty: number;
+  unitCost: string;
+};
+
+async function selectReturnablePoLines(
+  tx: DbOrTx,
+  orgId: string,
+  poId: string,
+  excludeRtvId?: string | null,
+): Promise<ReturnablePoLineRow[]> {
+  const excludeCurrentRtv = excludeRtvId
+    ? sql`AND sr.id <> ${excludeRtvId}`
+    : sql``;
+
+  const rows = await tx.execute(sql`
+    SELECT
+      pol.id,
+      po.po_no,
+      pol.product_id,
+      p.name AS product_name,
+      p.sku,
+      pol.received_accepted_qty,
+      pol.unit_cost,
+      COALESCE((
+        SELECT SUM(srl.quantity)::int
+        FROM supplier_return_lines srl
+        JOIN supplier_returns sr ON sr.id = srl.supplier_return_id
+        WHERE srl.source_po_line_id = pol.id
+          AND sr.org_id = ${orgId}
+          AND sr.status <> 'CANCELLED'
+          ${excludeCurrentRtv}
+      ), 0) AS already_returned_qty
+    FROM po_lines pol
+    JOIN purchase_orders po ON po.id = pol.purchase_order_id
+    JOIN products p ON p.id = pol.product_id
+    WHERE pol.org_id = ${orgId}
+      AND po.org_id = ${orgId}
+      AND po.id = ${poId}
+      AND pol.received_accepted_qty > 0
+    ORDER BY p.name ASC, pol.id ASC
+  `);
+
+  return (rows as any[]).map((row) => {
+    const receivedQty = Number(row.received_accepted_qty ?? 0);
+    const alreadyReturnedQty = Number(row.already_returned_qty ?? 0);
+    return {
+      id: row.id,
+      poNo: row.po_no,
+      productId: row.product_id,
+      productName: row.product_name,
+      sku: row.sku,
+      receivedQty,
+      alreadyReturnedQty,
+      returnableQty: Math.max(receivedQty - alreadyReturnedQty, 0),
+      unitCost: String(row.unit_cost ?? "0.00"),
+    };
+  });
+}
+
+async function assertPoReturnQuantities(
+  tx: DbOrTx,
+  params: {
+    orgId: string;
+    supplierId: string;
+    sourcePoId?: string | null;
+    lines: Array<{ productId: string; quantity: number; sourcePoLineId?: string | null }>;
+    excludeRtvId?: string | null;
+  },
+) {
+  const linkedLines = params.lines.filter((line) => line.sourcePoLineId);
+  if (linkedLines.length === 0) return;
+
+  if (!params.sourcePoId) {
+    throw new Error("Source PO is required when return lines are linked to PO lines");
+  }
+
+  const [po] = await tx
+    .select({ id: purchaseOrders.id, supplierId: purchaseOrders.supplierId })
+    .from(purchaseOrders)
+    .where(
+      and(
+        eq(purchaseOrders.id, params.sourcePoId),
+        eq(purchaseOrders.orgId, params.orgId),
+        eq(purchaseOrders.supplierId, params.supplierId),
+      ),
+    )
+    .limit(1);
+  if (!po) throw new Error("Source PO not found or does not match supplier");
+
+  const returnableRows = await selectReturnablePoLines(
+    tx,
+    params.orgId,
+    params.sourcePoId,
+    params.excludeRtvId,
+  );
+  const returnableByLine = new Map(returnableRows.map((row) => [row.id, row]));
+  const requestedByPoLine = new Map<string, number>();
+
+  for (const line of linkedLines) {
+    const row = returnableByLine.get(line.sourcePoLineId!);
+    if (!row) {
+      throw new Error("Source PO line not found or has no received quantity");
+    }
+    if (row.productId !== line.productId) {
+      throw new Error("Source PO line does not match the selected product");
+    }
+    requestedByPoLine.set(
+      row.id,
+      (requestedByPoLine.get(row.id) ?? 0) + line.quantity,
+    );
+  }
+
+  for (const [poLineId, requestedQty] of requestedByPoLine) {
+    const row = returnableByLine.get(poLineId)!;
+    if (requestedQty > row.returnableQty) {
+      throw new Error(
+        `Cannot return ${requestedQty} unit(s) for ${row.productName}; only ${row.returnableQty} remain returnable from ${row.poNo}`,
+      );
+    }
+  }
+}
+
 export async function createSupplierReturn(
   orgId: string,
   locationId: string,
@@ -228,6 +360,13 @@ export async function createSupplierReturn(
         .limit(1);
       if (!po) throw new Error("Source PO not found or does not match supplier");
     }
+
+    await assertPoReturnQuantities(tx, {
+      orgId,
+      supplierId: input.supplierId,
+      sourcePoId: input.sourcePoId,
+      lines: input.lines,
+    });
 
     // Calculate line totals and total cost
     let totalCost = 0;
@@ -345,6 +484,14 @@ export async function updateSupplierReturn(
         }
       }
 
+      await assertPoReturnQuantities(tx, {
+        orgId,
+        supplierId: rtv.supplier_id,
+        sourcePoId: rtv.source_po_id,
+        lines: input.lines,
+        excludeRtvId: rtvId,
+      });
+
       // Delete old lines
       await tx
         .delete(supplierReturnLines)
@@ -380,6 +527,14 @@ export async function updateSupplierReturn(
         .update(supplierReturns)
         .set(updates)
         .where(eq(supplierReturns.id, rtvId));
+
+      await insertStatusHistory(tx, {
+        supplierReturnId: rtvId,
+        fromStatus: "DRAFT",
+        toStatus: "DRAFT",
+        changedBy: userId,
+        notes: "Draft updated",
+      });
     }
 
     // Return updated record
@@ -452,6 +607,13 @@ export async function addLineToRTV(
       .where(eq(products.id, input.productId))
       .limit(1);
     if (!product) throw new Error("Product not found");
+
+    await assertPoReturnQuantities(tx, {
+      orgId,
+      supplierId: rtv.supplier_id,
+      sourcePoId: rtv.source_po_id,
+      lines: [input],
+    });
 
     const lineTotal = (input.quantity * parseFloat(input.costPrice)).toFixed(2);
 
@@ -854,11 +1016,102 @@ export async function cancelSupplierReturn(
   });
 }
 
+/**
+ * Supplier rejected an acknowledged RTV; bring the dispatched items back to stock.
+ */
+export async function rejectSupplierReturn(
+  rtvId: string,
+  orgId: string,
+  userId: string,
+  input: CancelSupplierReturnInput,
+) {
+  return db.transaction(async (tx) => {
+    const rows = await tx.execute(
+      sql`SELECT * FROM supplier_returns WHERE id = ${rtvId} AND org_id = ${orgId} FOR UPDATE`,
+    );
+    if (rows.length === 0) throw new Error("Supplier return not found");
+    const rtv = rows[0] as any;
+
+    if (rtv.status !== "ACKNOWLEDGED") {
+      throw new Error(
+        `Cannot mark supplier return rejected in ${rtv.status} status (must be ACKNOWLEDGED)`,
+      );
+    }
+
+    const lines = await tx
+      .select()
+      .from(supplierReturnLines)
+      .where(eq(supplierReturnLines.supplierReturnId, rtvId));
+
+    for (const line of lines) {
+      const inv = await lockInventoryRow(
+        tx,
+        orgId,
+        line.productId,
+        rtv.location_id,
+      );
+
+      const newBalance = inv.stockLevel + line.quantity;
+
+      await tx
+        .update(inventory)
+        .set({ stockLevel: newBalance })
+        .where(eq(inventory.id, inv.id));
+
+      await insertJournalEntry(tx, {
+        orgId,
+        productId: line.productId,
+        locationId: rtv.location_id,
+        userId,
+        actorType: "USER",
+        changeQuantity: line.quantity,
+        balanceAfter: newBalance,
+        referenceType: "SUPPLIER_RETURN_CANCEL",
+        referenceId: rtvId,
+        referenceLineId: line.id,
+        idempotencyKey: `${rtv.idempotency_key}:REJECT:${line.id}`,
+        notes: `[Supplier Rejected Return] ${rtv.rtv_number} — ${input.reason}`,
+      });
+    }
+
+    const [updated] = await tx
+      .update(supplierReturns)
+      .set({
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+        cancelledBy: userId,
+        cancelReason: `Supplier rejected: ${input.reason}`,
+      })
+      .where(eq(supplierReturns.id, rtvId))
+      .returning();
+
+    await insertStatusHistory(tx, {
+      supplierReturnId: rtvId,
+      fromStatus: "ACKNOWLEDGED",
+      toStatus: "CANCELLED",
+      changedBy: userId,
+      notes: `Supplier rejected: ${input.reason}`,
+    });
+
+    return updated;
+  });
+}
+
 // ── Query Functions ──
 
 /**
  * Get a single supplier return with lines and status history.
  */
+export async function getReturnablePoLines(
+  orgId: string,
+  poId: string,
+  excludeRtvId?: string | null,
+) {
+  return {
+    data: await selectReturnablePoLines(db, orgId, poId, excludeRtvId),
+  };
+}
+
 export async function getSupplierReturn(rtvId: string, orgId: string) {
   const [rtv] = await db
     .select()
@@ -880,8 +1133,36 @@ export async function getSupplierReturn(rtvId: string, orgId: string) {
   }
 
   const lines = await db
-    .select()
+    .select({
+      id: supplierReturnLines.id,
+      supplierReturnId: supplierReturnLines.supplierReturnId,
+      productId: supplierReturnLines.productId,
+      productName: supplierReturnLines.productName,
+      sku: supplierReturnLines.sku,
+      quantity: supplierReturnLines.quantity,
+      costPrice: supplierReturnLines.costPrice,
+      lineTotal: supplierReturnLines.lineTotal,
+      condition: supplierReturnLines.condition,
+      sourcePoLineId: supplierReturnLines.sourcePoLineId,
+      sourceCustomerReturnLineId: supplierReturnLines.sourceCustomerReturnLineId,
+      notes: supplierReturnLines.notes,
+      createdAt: supplierReturnLines.createdAt,
+      brandName: brands.name,
+      currentSku: products.sku,
+      oemNumber: products.oemNumber,
+      currentStockLevel: inventory.stockLevel,
+    })
     .from(supplierReturnLines)
+    .leftJoin(products, eq(supplierReturnLines.productId, products.id))
+    .leftJoin(brands, eq(products.brandId, brands.id))
+    .leftJoin(
+      inventory,
+      and(
+        eq(inventory.orgId, orgId),
+        eq(inventory.productId, supplierReturnLines.productId),
+        eq(inventory.locationId, rtv.locationId),
+      ),
+    )
     .where(eq(supplierReturnLines.supplierReturnId, rtv.id));
 
   const historyRows = await db
@@ -925,9 +1206,21 @@ export async function getSupplierReturn(rtvId: string, orgId: string) {
     .where(eq(locations.id, rtv.locationId))
     .limit(1);
 
+  const [sourcePo] = rtv.sourcePoId
+    ? await db
+        .select({
+          id: purchaseOrders.id,
+          poNo: purchaseOrders.poNo,
+        })
+        .from(purchaseOrders)
+        .where(eq(purchaseOrders.id, rtv.sourcePoId))
+        .limit(1)
+    : [];
+
   return {
     ...rtv,
     rtvNo: rtv.rtvNumber,
+    sourcePONo: sourcePo?.poNo ?? null,
     createdByName,
     lineCount: lines.length,
     lines,
@@ -970,8 +1263,9 @@ export async function listSupplierReturns(
   }
 
   if (opts.search) {
+    const pattern = "%" + opts.search + "%";
     conditions.push(
-      sql`${supplierReturns.rtvNumber} ILIKE ${"%" + opts.search + "%"}`,
+      sql`(${supplierReturns.rtvNumber} ILIKE ${pattern} OR ${suppliers.name} ILIKE ${pattern})`,
     );
   }
 
@@ -1014,6 +1308,7 @@ export async function listSupplierReturns(
       creditAmount: supplierReturns.creditAmount,
       creditType: supplierReturns.creditType,
       sourcePOId: supplierReturns.sourcePoId,
+      sourcePONo: purchaseOrders.poNo,
       submittedAt: supplierReturns.submittedAt,
       createdAt: supplierReturns.createdAt,
       updatedAt: supplierReturns.updatedAt,
@@ -1028,6 +1323,7 @@ export async function listSupplierReturns(
     .from(supplierReturns)
     .leftJoin(suppliers, eq(suppliers.id, supplierReturns.supplierId))
     .leftJoin(locations, eq(locations.id, supplierReturns.locationId))
+    .leftJoin(purchaseOrders, eq(purchaseOrders.id, supplierReturns.sourcePoId))
     .where(and(...conditions))
     .orderBy(desc(supplierReturns.createdAt), desc(supplierReturns.id))
     .limit(limit + 1);
@@ -1037,4 +1333,211 @@ export async function listSupplierReturns(
   const nextCursor = hasMore ? data[data.length - 1].id : null;
 
   return { data, nextCursor, hasMore };
+}
+
+export async function getSupplierReturnAnalytics(
+  orgId: string,
+  opts: { locationId?: string | null } = {},
+) {
+  const locationSql = opts.locationId
+    ? sql`AND sr.location_id = ${opts.locationId}`
+    : sql``;
+
+  const pendingRows = await db.execute(sql`
+    SELECT
+      sr.id,
+      sr.total_cost,
+      COALESCE(sr.submitted_at, sr.created_at) AS pending_since
+    FROM supplier_returns sr
+    WHERE sr.org_id = ${orgId}
+      AND sr.status IN ('SUBMITTED', 'ACKNOWLEDGED')
+      ${locationSql}
+  `);
+
+  const pendingBuckets = [
+    { key: "0-7", label: "0-7 days", min: 0, max: 7, count: 0, totalValue: 0 },
+    { key: "8-14", label: "8-14 days", min: 8, max: 14, count: 0, totalValue: 0 },
+    { key: "15-30", label: "15-30 days", min: 15, max: 30, count: 0, totalValue: 0 },
+    { key: "30+", label: "30+ days", min: 31, max: Number.POSITIVE_INFINITY, count: 0, totalValue: 0 },
+  ];
+  const now = Date.now();
+  for (const row of pendingRows as any[]) {
+    const pendingSince = row.pending_since ? new Date(row.pending_since).getTime() : now;
+    const ageDays = Math.max(0, Math.floor((now - pendingSince) / 86_400_000));
+    const bucket = pendingBuckets.find((b) => ageDays >= b.min && ageDays <= b.max) ?? pendingBuckets[pendingBuckets.length - 1];
+    bucket.count += 1;
+    bucket.totalValue += Number(row.total_cost ?? 0);
+  }
+
+  const topSuppliers = await db.execute(sql`
+    SELECT
+      s.id AS supplier_id,
+      s.name AS supplier_name,
+      COUNT(sr.id)::int AS return_count,
+      COALESCE(SUM(sr.total_cost), 0)::numeric AS total_value
+    FROM supplier_returns sr
+    JOIN suppliers s ON s.id = sr.supplier_id
+    WHERE sr.org_id = ${orgId}
+      ${locationSql}
+    GROUP BY s.id, s.name
+    ORDER BY total_value DESC, return_count DESC
+    LIMIT 5
+  `);
+
+  const topItems = await db.execute(sql`
+    SELECT
+      srl.product_id,
+      srl.product_name,
+      COUNT(DISTINCT sr.id)::int AS return_count,
+      COALESCE(SUM(srl.quantity), 0)::int AS total_qty,
+      COALESCE(SUM(srl.line_total), 0)::numeric AS total_value
+    FROM supplier_return_lines srl
+    JOIN supplier_returns sr ON sr.id = srl.supplier_return_id
+    WHERE sr.org_id = ${orgId}
+      ${locationSql}
+    GROUP BY srl.product_id, srl.product_name
+    ORDER BY total_qty DESC, total_value DESC
+    LIMIT 5
+  `);
+
+  const reasonBreakdown = await db.execute(sql`
+    SELECT
+      sr.reason,
+      COUNT(sr.id)::int AS return_count,
+      COALESCE(SUM(sr.total_cost), 0)::numeric AS total_value
+    FROM supplier_returns sr
+    WHERE sr.org_id = ${orgId}
+      ${locationSql}
+    GROUP BY sr.reason
+    ORDER BY return_count DESC
+  `);
+
+  const monthlyTotals = await db.execute(sql`
+    SELECT
+      to_char(date_trunc('month', sr.created_at), 'YYYY-MM') AS month,
+      COUNT(sr.id)::int AS return_count,
+      COALESCE(SUM(sr.total_cost), 0)::numeric AS total_value
+    FROM supplier_returns sr
+    WHERE sr.org_id = ${orgId}
+      ${locationSql}
+      AND sr.created_at >= now() - interval '12 months'
+    GROUP BY date_trunc('month', sr.created_at)
+    ORDER BY month DESC
+  `);
+
+  const pendingTotalValue = pendingBuckets.reduce((sum, bucket) => sum + bucket.totalValue, 0);
+  const pendingTotalCount = pendingBuckets.reduce((sum, bucket) => sum + bucket.count, 0);
+
+  return {
+    pendingAging: {
+      totalCount: pendingTotalCount,
+      totalValue: pendingTotalValue,
+      buckets: pendingBuckets.map(({ min: _min, max: _max, ...bucket }) => bucket),
+    },
+    topSuppliers,
+    topItems,
+    reasonBreakdown,
+    monthlyTotals,
+  };
+}
+
+export async function listSupplierReturnAttachments(
+  rtvId: string,
+  orgId: string,
+) {
+  const data = await db
+    .select()
+    .from(supplierReturnAttachments)
+    .where(
+      and(
+        eq(supplierReturnAttachments.supplierReturnId, rtvId),
+        eq(supplierReturnAttachments.orgId, orgId),
+      ),
+    )
+    .orderBy(desc(supplierReturnAttachments.createdAt));
+
+  return { data };
+}
+
+export async function addSupplierReturnAttachment(
+  rtvId: string,
+  orgId: string,
+  userId: string,
+  input: {
+    fileName: string;
+    mimeType: string;
+    sizeBytes?: number;
+    attachmentType?: string;
+    dataUrl: string;
+  },
+) {
+  return db.transaction(async (tx) => {
+    const rows = await tx.execute(
+      sql`SELECT id, status FROM supplier_returns WHERE id = ${rtvId} AND org_id = ${orgId} FOR UPDATE`,
+    );
+    if (rows.length === 0) throw new Error("Supplier return not found");
+    const rtv = rows[0] as any;
+
+    const [attachment] = await tx
+      .insert(supplierReturnAttachments)
+      .values({
+        supplierReturnId: rtvId,
+        orgId,
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes ?? 0,
+        attachmentType: input.attachmentType ?? "OTHER",
+        dataUrl: input.dataUrl,
+        uploadedBy: userId,
+      })
+      .returning();
+
+    await insertStatusHistory(tx, {
+      supplierReturnId: rtvId,
+      fromStatus: rtv.status,
+      toStatus: rtv.status,
+      changedBy: userId,
+      notes: `Attachment added: ${input.fileName}`,
+    });
+
+    return attachment;
+  });
+}
+
+export async function deleteSupplierReturnAttachment(
+  rtvId: string,
+  attachmentId: string,
+  orgId: string,
+  userId: string,
+) {
+  return db.transaction(async (tx) => {
+    const rows = await tx.execute(
+      sql`SELECT id, status FROM supplier_returns WHERE id = ${rtvId} AND org_id = ${orgId} FOR UPDATE`,
+    );
+    if (rows.length === 0) throw new Error("Supplier return not found");
+    const rtv = rows[0] as any;
+
+    const deleted = await tx
+      .delete(supplierReturnAttachments)
+      .where(
+        and(
+          eq(supplierReturnAttachments.id, attachmentId),
+          eq(supplierReturnAttachments.supplierReturnId, rtvId),
+          eq(supplierReturnAttachments.orgId, orgId),
+        ),
+      )
+      .returning({ fileName: supplierReturnAttachments.fileName });
+
+    if (deleted.length === 0) throw new Error("Attachment not found");
+
+    await insertStatusHistory(tx, {
+      supplierReturnId: rtvId,
+      fromStatus: rtv.status,
+      toStatus: rtv.status,
+      changedBy: userId,
+      notes: `Attachment removed: ${deleted[0].fileName}`,
+    });
+
+    return { deleted: true };
+  });
 }

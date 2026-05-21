@@ -8,6 +8,9 @@ import {
   useSupplierReturnDetail,
   useSupplierReturnAction,
   useDeleteSupplierReturn,
+  useSupplierReturnAttachments,
+  useAddSupplierReturnAttachment,
+  useDeleteSupplierReturnAttachment,
   type StatusHistoryEntry,
 } from "@/hooks/use-supplier-returns";
 import { fmtPeso, fmtDate, fmtDateTime } from "@/lib/format";
@@ -26,13 +29,20 @@ const STATUS_COLORS: Record<string, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: "Draft",
-  SUBMITTED: "Submitted",
-  ACKNOWLEDGED: "Acknowledged",
+  SUBMITTED: "Stock Deducted",
+  ACKNOWLEDGED: "Supplier Acknowledged",
   CREDIT_RECEIVED: "Credit Received",
   CLOSED: "Closed",
   CLOSED_WITHOUT_CREDIT: "Closed (No Credit)",
   CANCELLED: "Cancelled",
 };
+
+function supplierReturnStatusLabel(status: string, cancelReason?: string | null): string {
+  if (status === "CANCELLED" && cancelReason?.startsWith("Supplier rejected:")) {
+    return "Rejected / Restocked";
+  }
+  return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+}
 
 const CONDITION_COLORS: Record<string, string> = {
   DEFECTIVE: "bg-red-100 text-red-700",
@@ -64,108 +74,187 @@ const TIMELINE_DOT_COLORS: Record<string, string> = {
 
 // ── Print Return Form ──
 
-function printReturnForm(rtv: any) {
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function pesoText(value: unknown): string {
+  const amount = parseFloat(String(value ?? "0"));
+  return Number.isFinite(amount)
+    ? amount.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : "0.00";
+}
+
+function supplierReturnLineUnitCost(line: any): number {
+  const amount = parseFloat(String(line.costPrice ?? line.costPerUnit ?? "0"));
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function numericStockLevel(value: unknown): number {
+  const stock = Number(value ?? 0);
+  return Number.isFinite(stock) ? stock : 0;
+}
+
+function normalizePrintText(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function looksLikeInternalSku(value: string): boolean {
+  return /^\d{4,}$/.test(value.trim());
+}
+
+function extractReturnPartNumber(line: any): string {
+  const candidates = [
+    normalizePrintText(line.oemNumber),
+    normalizePrintText(line.currentSku),
+    normalizePrintText(line.sku),
+    normalizePrintText(line.productName),
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate || looksLikeInternalSku(candidate)) continue;
+    const partMatch = candidate.match(/\b[A-Z0-9]{2,}(?:-[A-Z0-9]+)+\b/i);
+    if (partMatch) return partMatch[0].toUpperCase();
+  }
+
+  return "";
+}
+
+function deriveReturnPrintLine(line: any) {
+  const partNumber = extractReturnPartNumber(line);
+  const rawName = normalizePrintText(line.productName);
+  const itemName = partNumber
+    ? normalizePrintText(rawName.replace(new RegExp(`\\b${partNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"), ""))
+    : rawName;
+
+  let brand = normalizePrintText(line.brandName);
+  if (!brand && partNumber) {
+    const skuTail = normalizePrintText(String(line.currentSku ?? line.sku ?? "").replace(partNumber, ""));
+    brand = skuTail && !looksLikeInternalSku(skuTail) ? skuTail.toUpperCase() : "";
+  }
+
+  return {
+    itemName: itemName || rawName,
+    brand,
+    partNumber,
+  };
+}
+
+function printReturnForm(rtv: any, mode: "supplier" | "internal" = "supplier") {
   const date = new Date(rtv.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  const supplierName = rtv.supplierName || rtv.supplier?.name || "";
+  const locationName = rtv.locationName || rtv.location?.name || "";
+  const preparedBy = rtv.createdByName || "____________________";
+  const stockDeductedAt = rtv.submittedAt
+    ? new Date(rtv.submittedAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
+    : "Not yet deducted";
   const totalItems = rtv.lines.length;
   const totalUnits = rtv.lines.reduce((s: number, l: any) => s + l.quantity, 0);
-  const totalCost = parseFloat(rtv.totalCost).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const totalCost = pesoText(rtv.totalCost);
+  const reasonLabel = REASON_LABELS[rtv.reason] ?? String(rtv.reason || "").replace(/_/g, " ");
+  const modeTitle = mode === "internal" ? "Internal copy" : "Supplier copy";
+  const auditRows = mode === "internal"
+    ? (rtv.statusHistory || [])
+        .map((entry: any) => `<tr>
+          <td>${escapeHtml(entry.createdAt ? new Date(entry.createdAt).toLocaleString("en-US") : "")}</td>
+          <td>${escapeHtml(supplierReturnStatusLabel(entry.toStatus, rtv.cancelReason))}</td>
+          <td>${escapeHtml(entry.changedByName || "")}</td>
+          <td>${escapeHtml(entry.notes || "")}</td>
+        </tr>`)
+        .join("\n")
+    : "";
 
   const itemRows = rtv.lines
-    .map((l: any, i: number) =>
-      `<tr>
-        <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">${i + 1}</td>
-        <td style="padding:4px 8px;border-bottom:1px solid #e5e5e5;">${l.productName}</td>
-        <td style="padding:4px 8px;font-family:monospace;font-size:11px;border-bottom:1px solid #e5e5e5;">${l.sku || "—"}</td>
-        <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">${l.quantity}</td>
-        <td style="padding:4px 8px;text-align:center;border-bottom:1px solid #e5e5e5;">
-          <span style="display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;background:${l.condition === "DEFECTIVE" ? "#fee2e2" : l.condition === "DAMAGED" ? "#ffedd5" : "#f3f4f6"};color:${l.condition === "DEFECTIVE" ? "#b91c1c" : l.condition === "DAMAGED" ? "#c2410c" : "#374151"};">${l.condition}</span>
-        </td>
-        <td style="padding:4px 8px;text-align:right;border-bottom:1px solid #e5e5e5;">₱${parseFloat(l.costPrice || l.costPerUnit || "0").toLocaleString("en-PH", { minimumFractionDigits: 2 })}</td>
-        <td style="padding:4px 8px;font-size:11px;border-bottom:1px solid #e5e5e5;">${l.notes || ""}</td>
-      </tr>`)
+    .map((line: any) => {
+      const printLine = deriveReturnPrintLine(line);
+      const unitCost = supplierReturnLineUnitCost(line);
+      const lineTotal = line.lineTotal || String(unitCost * line.quantity);
+
+      return `<tr>
+        <td class="qty">${line.quantity}</td>
+        <td class="item">${escapeHtml(printLine.itemName)}</td>
+        <td class="brand">${escapeHtml(printLine.brand)}</td>
+        <td class="part">${escapeHtml(printLine.partNumber)}</td>
+        <td class="money">${pesoText(unitCost)}</td>
+        <td class="money">${pesoText(lineTotal)}</td>
+      </tr>`;
+    })
     .join("\n");
 
   const html = `<!DOCTYPE html>
-<html><head><title>Return Form — ${rtv.rtvNo}</title>
+<html><head><title>Return Form - ${escapeHtml(rtv.rtvNo)}</title>
 <style>
-  @media print { @page { margin: 15mm; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1a1a1a; max-width: 800px; margin: 0 auto; padding: 20px; }
-  .header { text-align: center; padding: 12px 0; border: 2px solid #1a1a1a; margin-bottom: 16px; }
-  .header h1 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: 1px; }
-  .header p { margin: 2px 0 0; font-size: 11px; color: #666; }
-  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
-  .meta-label { font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-  .meta-value { font-size: 13px; font-weight: 500; }
+  @media print { @page { size: landscape; margin: 10mm; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  body { font-family: Arial, Helvetica, sans-serif; color: #000; margin: 0 auto; padding: 10px; max-width: 1180px; }
+  h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; line-height: 1.08; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; }
+  .date { margin-top: 6px; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; line-height: 1.08; font-weight: 800; }
+  .meta-line { margin: 10px 0 8px; color: #333; font-size: 13px; }
   table { width: 100%; border-collapse: collapse; }
-  th { padding: 6px 8px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #666; background: #f9fafb; border-bottom: 2px solid #e5e5e5; }
-  .sig-section { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 30px; }
-  .sig-block { border-top: 1px solid #ccc; padding-top: 8px; }
-  .sig-label { font-size: 11px; color: #666; }
+  th { padding: 2px 8px; border-top: 1px solid #d9d9d9; border-bottom: 1px solid #d9d9d9; border-right: 1px solid #e5e5e5; font-size: 20px; font-weight: 400; text-align: left; white-space: nowrap; }
+  td { padding: 2px 8px; border-bottom: 1px solid #eeeeee; border-right: 1px solid #eeeeee; font-size: 20px; vertical-align: top; }
+  .qty { width: 70px; text-align: right; }
+  .item { width: 370px; letter-spacing: 1px; }
+  .brand { width: 170px; letter-spacing: 1px; }
+  .part { width: 260px; letter-spacing: 1px; }
+  .money { width: 160px; text-align: right; letter-spacing: 2px; white-space: nowrap; }
+  .spacer td { height: 46px; border-bottom: 1px solid #d9d9d9; }
+  .total-rule { border-top: 1px solid #333; }
+  .grand-total { font-size: 32px; text-align: right; letter-spacing: 3px; padding-top: 8px; }
+  .footer { margin-top: 28px; color: #555; font-size: 12px; display: flex; justify-content: space-between; gap: 24px; }
+  .signature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 50px; }
+  .signature-block { border-top: 1px solid #333; padding-top: 6px; color: #555; font-size: 12px; }
+  .copy-label { margin-top: 4px; color: #555; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  .audit { margin-top: 22px; font-size: 12px; }
+  .audit th, .audit td { font-size: 12px; letter-spacing: 0; }
 </style></head><body onload="window.print()">
-  <div class="header">
-    <h1>SUPPLIER RETURN FORM</h1>
-    <p>For Account Deduction</p>
-  </div>
-
-  <div class="meta">
-    <div><div class="meta-label">RTV No</div><div class="meta-value">${rtv.rtvNo}</div></div>
-    <div><div class="meta-label">Date</div><div class="meta-value">${date}</div></div>
-    <div><div class="meta-label">From</div><div class="meta-value">C-BROS Genuine Autoparts &amp; Accessories, Inc. — ${rtv.location?.name ?? ""}</div></div>
-    <div><div class="meta-label">To (Supplier)</div><div class="meta-value">${rtv.supplier?.name ?? ""}</div></div>
-    <div><div class="meta-label">Reason</div><div class="meta-value">${REASON_LABELS[rtv.reason] ?? rtv.reason}</div></div>
-    ${rtv.notes ? `<div><div class="meta-label">Notes</div><div class="meta-value">${rtv.notes}</div></div>` : ""}
+  <h1>RETURN ITEMS: ${escapeHtml(supplierName || "Supplier")} #${escapeHtml(rtv.rtvNo)}</h1>
+  <div class="copy-label">${escapeHtml(modeTitle)}</div>
+  <div class="date">${date}</div>
+  <div class="meta-line">
+    Reason: ${escapeHtml(reasonLabel)}
+    ${mode === "internal" ? ` | Location: ${escapeHtml(locationName || "Not specified")} | Stock deducted: ${escapeHtml(stockDeductedAt)} | Prepared by: ${escapeHtml(preparedBy)}` : ""}
   </div>
 
   <table>
     <thead>
       <tr>
-        <th style="text-align:center;width:30px;">#</th>
-        <th>Item</th>
-        <th>SKU</th>
-        <th style="text-align:center;">Qty</th>
-        <th style="text-align:center;">Condition</th>
-        <th style="text-align:right;">Cost/Unit</th>
-        <th>Notes</th>
+        <th class="qty">QTY</th>
+        <th>ITEM</th>
+        <th>BRAND</th>
+        <th>PART #</th>
+        <th class="money">UNIT PRICE</th>
+        <th class="money">AMOUNT</th>
       </tr>
     </thead>
     <tbody>${itemRows}</tbody>
     <tfoot>
-      <tr style="background:#f9fafb;">
-        <td colspan="3" style="padding:6px 8px;text-align:right;font-weight:700;">Total</td>
-        <td style="padding:6px 8px;text-align:center;font-weight:700;">${totalUnits}</td>
-        <td></td>
-        <td style="padding:6px 8px;text-align:right;font-weight:700;">₱${totalCost}</td>
-        <td></td>
+      <tr class="spacer"><td colspan="4"></td><td></td><td class="total-rule"></td></tr>
+      <tr>
+        <td colspan="5"></td>
+        <td class="grand-total">${totalCost}</td>
       </tr>
     </tfoot>
   </table>
 
-  <div style="margin-top:16px;font-size:11px;color:#666;">
-    ${totalItems} item${totalItems !== 1 ? "s" : ""}, ${totalUnits} unit${totalUnits !== 1 ? "s" : ""} &middot; Total cost value: ₱${totalCost}
+  <div class="footer">
+    <div>${totalItems} item${totalItems !== 1 ? "s" : ""}, ${totalUnits} unit${totalUnits !== 1 ? "s" : ""}${mode === "internal" ? ` | Prepared by: ${escapeHtml(preparedBy)}` : ""}</div>
+    <div>Credit Memo / Deduction Reference: ____________________ &nbsp; Amount: ____________________</div>
   </div>
-
-  <div class="sig-section">
-    <div>
-      <div style="height:40px;"></div>
-      <div class="sig-block">
-        <div class="sig-label">Returned by (CBROS Genuine Autoparts & Accessories, Inc.)</div>
-        <div style="margin-top:4px;font-size:11px;color:#aaa;">Name / Signature / Date</div>
-      </div>
-    </div>
-    <div>
-      <div style="height:40px;"></div>
-      <div class="sig-block">
-        <div class="sig-label">Received by (Supplier Representative)</div>
-        <div style="margin-top:4px;font-size:11px;color:#aaa;">Name / Signature / Date</div>
-      </div>
-    </div>
-  </div>
-
-  <div style="margin-top:24px;padding-top:12px;border-top:1px solid #e5e5e5;">
-    <div style="font-size:11px;color:#666;">
-      Credit Memo / Deduction Reference: ____________________________
-      <span style="margin-left:24px;">Amount: ₱__________________</span>
-    </div>
+  ${mode === "internal" && auditRows ? `
+    <table class="audit">
+      <thead><tr><th>Date/Time</th><th>Status</th><th>User</th><th>Notes</th></tr></thead>
+      <tbody>${auditRows}</tbody>
+    </table>
+  ` : ""}
+  <div class="signature-grid">
+    <div class="signature-block">Prepared by / Date</div>
+    <div class="signature-block">Dispatched by / Date</div>
+    <div class="signature-block">Supplier received by / Date</div>
   </div>
 </body></html>`;
 
@@ -182,8 +271,12 @@ export default function SupplierReturnDetailPage() {
   const { token, locationId, loading: authLoading } = useAuth();
 
   const { data: rtv, isLoading, error, refetch } = useSupplierReturnDetail(token, locationId, rtvId);
+  const attachmentsQuery = useSupplierReturnAttachments(token, locationId, rtvId);
+  const addAttachmentMutation = useAddSupplierReturnAttachment(token, locationId);
+  const deleteAttachmentMutation = useDeleteSupplierReturnAttachment(token, locationId);
   const actionMutation = useSupplierReturnAction(token, locationId);
   const deleteMutation = useDeleteSupplierReturn(token, locationId);
+  const attachments = attachmentsQuery.data?.data ?? [];
 
   // ── Modal states ──
   const [showCreditModal, setShowCreditModal] = useState(false);
@@ -201,6 +294,7 @@ export default function SupplierReturnDetailPage() {
   const [creditType, setCreditType] = useState("CREDIT_MEMO");
   const [creditReference, setCreditReference] = useState("");
   const [creditNotes, setCreditNotes] = useState("");
+  const [attachmentType, setAttachmentType] = useState("DEFECT_PHOTO");
 
   const creditVariance = useMemo(() => {
     if (!rtv) return 0;
@@ -208,6 +302,23 @@ export default function SupplierReturnDetailPage() {
     const credit = parseFloat(creditAmount) || 0;
     return credit - total;
   }, [rtv, creditAmount]);
+
+  const stockImpactRows = useMemo(() => {
+    if (!rtv) return [];
+    return rtv.lines.map((line) => {
+      const currentStock = numericStockLevel(line.currentStockLevel);
+      const afterSubmit = currentStock - line.quantity;
+      return {
+        id: line.id,
+        productName: line.productName,
+        currentStock,
+        returnQty: line.quantity,
+        afterSubmit,
+      };
+    });
+  }, [rtv]);
+
+  const hasNegativeStockImpact = stockImpactRows.some((row) => row.afterSubmit < 0);
 
   // ── Action handlers ──
 
@@ -236,6 +347,24 @@ export default function SupplierReturnDetailPage() {
     setCreditType("CREDIT_MEMO");
     setCreditReference("");
     setCreditNotes("");
+  }
+
+  function handleAttachmentUpload(file: File | null) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      addAttachmentMutation.mutate({
+        rtvId,
+        body: {
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          sizeBytes: file.size,
+          attachmentType,
+          dataUrl: String(reader.result || ""),
+        },
+      });
+    };
+    reader.readAsDataURL(file);
   }
 
   if (authLoading || isLoading) {
@@ -280,37 +409,45 @@ export default function SupplierReturnDetailPage() {
                   STATUS_COLORS[rtv.status] ?? "bg-muted text-muted-foreground"
                 }`}
               >
-                {STATUS_LABELS[rtv.status] ?? rtv.status}
+                {supplierReturnStatusLabel(rtv.status, (rtv as any).cancelReason)}
               </span>
             </div>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              {rtv.supplierName} &middot; {REASON_LABELS[rtv.reason] ?? rtv.reason}
+              {rtv.supplierName || (rtv as any).supplier?.name || "Supplier not specified"} &middot; {REASON_LABELS[rtv.reason] ?? rtv.reason}
             </p>
           </div>
 
           {/* Contextual Action Buttons */}
           <div className="flex items-center gap-2">
             {rtv.status !== "CANCELLED" && (
-              <button
-                onClick={() => printReturnForm(rtv)}
-                className="rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent"
-              >
-                Print Return Form
-              </button>
+              <>
+                <button
+                  onClick={() => printReturnForm(rtv, "supplier")}
+                  className="rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent"
+                >
+                  Print Supplier Copy
+                </button>
+                <button
+                  onClick={() => printReturnForm(rtv, "internal")}
+                  className="rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-accent"
+                >
+                  Print Internal Copy
+                </button>
+              </>
             )}
             {rtv.status === "DRAFT" && (
               <>
                 <button
                   onClick={() =>
                     setShowConfirmDialog({
-                      title: "Submit to Supplier",
-                      message: "This will deduct inventory and submit the RTV. Continue?",
+                      title: "Submit & Deduct Stock",
+                      message: "This will deduct the return quantities from the selected location and dispatch the RTV to the supplier.",
                       action: "submit",
                     })
                   }
                   className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
                 >
-                  Submit to Supplier
+                  Submit & Deduct Stock
                 </button>
                 <Link
                   href={`/procurement/supplier-returns/new?edit=${rtv.id}`}
@@ -381,6 +518,20 @@ export default function SupplierReturnDetailPage() {
                 >
                   Close Without Credit
                 </button>
+                <button
+                  onClick={() =>
+                    setShowConfirmDialog({
+                      title: "Supplier Rejected - Return Items to Stock",
+                      message: "Use this only when the supplier rejected the return and the items physically came back. This will restore the RTV quantities to stock.",
+                      action: "reject",
+                      requiresInput: true,
+                      inputLabel: "Rejection reason",
+                    })
+                  }
+                  className="rounded-md border border-destructive/30 px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/5"
+                >
+                  Supplier Rejected
+                </button>
               </>
             )}
             {rtv.status === "CREDIT_RECEIVED" && (
@@ -410,7 +561,7 @@ export default function SupplierReturnDetailPage() {
         <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
           <div>
             <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Return From</p>
-            <p className="mt-0.5 text-sm">{rtv.locationName}</p>
+            <p className="mt-0.5 text-sm">{rtv.locationName || (rtv as any).location?.name || "Location not specified"}</p>
           </div>
           <div>
             <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Reason</p>
@@ -480,7 +631,7 @@ export default function SupplierReturnDetailPage() {
                       {line.condition}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-right text-sm">{fmtPeso(line.costPerUnit)}</td>
+                  <td className="px-3 py-2 text-right text-sm">{fmtPeso((line as any).costPrice ?? line.costPerUnit)}</td>
                   <td className="px-3 py-2 text-right text-sm font-medium">{fmtPeso(line.lineTotal)}</td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">{line.notes || "\u2014"}</td>
                 </tr>
@@ -532,6 +683,80 @@ export default function SupplierReturnDetailPage() {
         </div>
       )}
 
+      {/* Proof Attachments */}
+      <div className="rounded-lg border border-border bg-background">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2">
+          <div>
+            <h3 className="text-sm font-semibold">Proof Attachments</h3>
+            <p className="text-xs text-muted-foreground">
+              Product photos, defect proof, signed return forms, and credit memo files.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={attachmentType}
+              onChange={(e) => setAttachmentType(e.target.value)}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
+            >
+              <option value="DEFECT_PHOTO">Defect photo</option>
+              <option value="PRODUCT_PHOTO">Product photo</option>
+              <option value="SIGNED_RETURN_FORM">Signed return form</option>
+              <option value="CREDIT_MEMO">Credit memo</option>
+              <option value="OTHER">Other</option>
+            </select>
+            <label className="cursor-pointer rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-accent">
+              {addAttachmentMutation.isPending ? "Uploading..." : "Attach file"}
+              <input
+                type="file"
+                className="hidden"
+                accept="image/*,.pdf"
+                onChange={(e) => {
+                  handleAttachmentUpload(e.target.files?.[0] ?? null);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </div>
+        </div>
+        <div className="p-4">
+          {attachments.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No proof files attached yet.</p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {attachments.map((attachment) => (
+                <div key={attachment.id} className="rounded-md border border-border p-3 text-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{attachment.fileName}</p>
+                      <p className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {attachment.attachmentType.replace(/_/g, " ")} · {Math.ceil((attachment.sizeBytes || 0) / 1024)} KB
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        deleteAttachmentMutation.mutate({ rtvId, attachmentId: attachment.id })
+                      }
+                      className="text-[11px] font-semibold text-destructive hover:underline"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                  <a
+                    href={attachment.dataUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-block text-xs font-semibold text-primary hover:underline"
+                  >
+                    Open proof
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Status Timeline */}
       {rtv.statusHistory.length > 0 && (
         <div className="rounded-lg border border-border bg-background">
@@ -558,6 +783,52 @@ export default function SupplierReturnDetailPage() {
           <div className="w-full max-w-md rounded-lg border border-border bg-background p-6 shadow-lg">
             <h3 className="text-base font-semibold">{showConfirmDialog.title}</h3>
             <p className="mt-2 text-sm text-muted-foreground">{showConfirmDialog.message}</p>
+            {showConfirmDialog.action === "submit" && (
+              <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-amber-900">
+                      Stock impact preview
+                    </p>
+                    <p className="mt-0.5 text-xs text-amber-800">
+                      These quantities will be deducted immediately when you confirm.
+                    </p>
+                  </div>
+                  {hasNegativeStockImpact && (
+                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+                      Negative stock warning
+                    </span>
+                  )}
+                </div>
+                <div className="max-h-52 overflow-auto rounded-md border border-amber-200 bg-white/70">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-amber-200 bg-amber-100/60 text-amber-900">
+                        <th className="px-2 py-1 text-left font-semibold">Item</th>
+                        <th className="px-2 py-1 text-right font-semibold">Current</th>
+                        <th className="px-2 py-1 text-right font-semibold">Return</th>
+                        <th className="px-2 py-1 text-right font-semibold">After</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stockImpactRows.map((row) => (
+                        <tr key={row.id} className="border-b border-amber-100 last:border-0">
+                          <td className="px-2 py-1 font-medium text-gray-900">{row.productName}</td>
+                          <td className="px-2 py-1 text-right text-gray-700">{row.currentStock}</td>
+                          <td className="px-2 py-1 text-right text-gray-700">-{row.returnQty}</td>
+                          <td className={`px-2 py-1 text-right font-semibold ${row.afterSubmit < 0 ? "text-red-700" : "text-gray-900"}`}>
+                            {row.afterSubmit}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-2 text-xs text-amber-800">
+                  If this does not match the physical items leaving the store, cancel and edit the RTV first.
+                </p>
+              </div>
+            )}
             {showConfirmDialog.requiresInput && (
               <div className="mt-3">
                 <label className="text-xs font-medium text-muted-foreground">
@@ -593,7 +864,13 @@ export default function SupplierReturnDetailPage() {
                 disabled={actionMutation.isPending}
                 className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                {actionMutation.isPending ? "Processing..." : "Confirm"}
+                {actionMutation.isPending
+                  ? "Processing..."
+                  : showConfirmDialog.action === "submit"
+                    ? "Submit & Deduct Stock"
+                    : showConfirmDialog.action === "reject"
+                      ? "Restore Stock"
+                      : "Confirm"}
               </button>
             </div>
           </div>
@@ -644,9 +921,9 @@ export default function SupplierReturnDetailPage() {
                   className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 >
                   <option value="CREDIT_MEMO">Credit Memo</option>
-                  <option value="REFUND">Refund</option>
+                  <option value="CASH_REFUND">Cash Refund</option>
                   <option value="REPLACEMENT">Replacement</option>
-                  <option value="DEBIT_NOTE">Debit Note</option>
+                  <option value="DEDUCTED_FROM_NEXT_PO">Deducted from Next PO</option>
                 </select>
               </div>
 
@@ -730,7 +1007,7 @@ function TimelineEntry({ entry }: { entry: StatusHistoryEntry }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
           <span className="text-sm font-medium">
-            {STATUS_LABELS[entry.toStatus] ?? entry.toStatus.replace(/_/g, " ")}
+            {supplierReturnStatusLabel(entry.toStatus, entry.notes)}
           </span>
           {entry.createdAt && (
             <span className="text-xs text-muted-foreground">

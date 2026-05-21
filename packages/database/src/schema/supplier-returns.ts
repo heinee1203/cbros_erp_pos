@@ -164,3 +164,33 @@ export const supplierReturnStatusHistory = pgTable(
     index("idx_sr_status_history_return").on(table.supplierReturnId),
   ],
 );
+
+// ── Supplier Return Proof Attachments ──
+
+export const supplierReturnAttachments = pgTable(
+  "supplier_return_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    supplierReturnId: uuid("supplier_return_id")
+      .notNull()
+      .references(() => supplierReturns.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    fileName: varchar("file_name", { length: 255 }).notNull(),
+    mimeType: varchar("mime_type", { length: 100 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull().default(0),
+    attachmentType: varchar("attachment_type", { length: 50 })
+      .notNull()
+      .default("OTHER"),
+    dataUrl: text("data_url").notNull(),
+    uploadedBy: uuid("uploaded_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_sr_attachments_return").on(table.supplierReturnId),
+    index("idx_sr_attachments_org_created").on(table.orgId, table.createdAt),
+  ],
+);

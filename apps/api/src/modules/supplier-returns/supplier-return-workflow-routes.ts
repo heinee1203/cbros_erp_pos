@@ -16,6 +16,7 @@ import {
   createSupplierReturn,
   deleteSupplierReturn,
   receiveCreditSupplierReturn,
+  rejectSupplierReturn,
   submitSupplierReturn,
   updateSupplierReturn,
 } from "./supplier-return-workflow-service";
@@ -294,6 +295,38 @@ export async function registerSupplierReturnWorkflowRoutes(app: FastifyInstance)
 
     try {
       const result = await cancelSupplierReturn(
+        id,
+        orgId,
+        userId,
+        parsed.data,
+      );
+      return reply.send(result);
+    } catch (err: any) {
+      return reply.status(400).send({ error: err.message });
+    }
+  });
+
+  // POST /:id/reject - ACKNOWLEDGED -> CANCELLED and restore stock
+  app.post("/:id/reject", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { orgId } = request.storeContext!;
+    const { userId, role } = request.user;
+
+    if (!SUPPLIER_RETURN_ROLES.includes(role as any)) {
+      return reply
+        .status(403)
+        .send({ error: "Only ADMIN or MANAGER can reject supplier returns" });
+    }
+
+    const parsed = cancelSupplierReturnSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: "Validation failed", details: parsed.error.flatten() });
+    }
+
+    try {
+      const result = await rejectSupplierReturn(
         id,
         orgId,
         userId,

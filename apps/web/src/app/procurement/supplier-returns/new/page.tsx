@@ -4,10 +4,14 @@ import { useState, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/app/auth-context";
-import { useSuppliers, type SupplierRow } from "@/hooks/use-suppliers";
+import { useSuppliers } from "@/hooks/use-suppliers";
 import { useLocations } from "@/hooks/use-locations";
 import { useProductSearch, type ProductSearchResult } from "@/hooks/use-product-search";
-import { useCreateSupplierReturn } from "@/hooks/use-supplier-returns";
+import {
+  useCreateSupplierReturn,
+  useReturnablePoLines,
+  type ReturnablePoLine,
+} from "@/hooks/use-supplier-returns";
 import { fmtPeso } from "@/lib/format";
 import { apiFetch } from "@/lib/api";
 
@@ -22,6 +26,10 @@ interface RTVLineInput {
   costPerUnit: string;
   condition: string;
   notes: string;
+  sourcePoLineId?: string;
+  receivedQty?: number;
+  alreadyReturnedQty?: number;
+  returnableQty?: number;
 }
 
 interface POOption {
@@ -57,7 +65,7 @@ const REASON_OPTIONS = [
 const CONDITION_OPTIONS = [
   { value: "DEFECTIVE", label: "Defective" },
   { value: "DAMAGED", label: "Damaged" },
-  { value: "GOOD", label: "Good" },
+  { value: "WRONG_ITEM", label: "Wrong Item" },
   { value: "EXPIRED", label: "Expired" },
   { value: "OTHER", label: "Other" },
 ];
@@ -99,7 +107,8 @@ export default function NewSupplierReturnPage() {
 
   // ── PO search for supplier ──
   const [poOptions, setPOOptions] = useState<POOption[]>([]);
-  const [poSearch, setPOSearch] = useState("");
+  const returnablePoLinesQuery = useReturnablePoLines(token, locationId, sourcePOId, editId);
+  const returnablePoLines = returnablePoLinesQuery.data?.data ?? [];
 
   useEffect(() => {
     if (!token || !locationId || !supplierId) {
@@ -172,6 +181,7 @@ export default function NewSupplierReturnPage() {
             costPerUnit: l.costPrice ?? l.costPerUnit ?? "0.00",
             condition: l.condition ?? "DEFECTIVE",
             notes: l.notes ?? "",
+            sourcePoLineId: l.sourcePoLineId ?? undefined,
           })));
         }
       } catch {
@@ -181,6 +191,23 @@ export default function NewSupplierReturnPage() {
   }, [editId, token, locationId, editLoaded]);
 
   // ── Product search ──
+  useEffect(() => {
+    if (!sourcePOId || returnablePoLines.length === 0) return;
+    setLines((prev) =>
+      prev.map((line) => {
+        if (!line.sourcePoLineId) return line;
+        const poLine = returnablePoLines.find((candidate) => candidate.id === line.sourcePoLineId);
+        if (!poLine) return line;
+        return {
+          ...line,
+          receivedQty: poLine.receivedQty,
+          alreadyReturnedQty: poLine.alreadyReturnedQty,
+          returnableQty: poLine.returnableQty,
+        };
+      }),
+    );
+  }, [sourcePOId, returnablePoLines]);
+
   const [productQuery, setProductQuery] = useState("");
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const productSearch = useProductSearch(token, locationId, productQuery);
@@ -215,6 +242,27 @@ export default function NewSupplierReturnPage() {
     }
   }
 
+  function addPoLine(poLine: ReturnablePoLine) {
+    if (poLine.returnableQty <= 0 || lines.some((l) => l.sourcePoLineId === poLine.id)) return;
+    setLines((prev) => [
+      ...prev,
+      {
+        localId: crypto.randomUUID(),
+        productId: poLine.productId,
+        productName: poLine.productName,
+        sku: poLine.sku ?? "",
+        quantity: Math.min(1, poLine.returnableQty),
+        costPerUnit: poLine.unitCost,
+        condition: "DEFECTIVE",
+        notes: "",
+        sourcePoLineId: poLine.id,
+        receivedQty: poLine.receivedQty,
+        alreadyReturnedQty: poLine.alreadyReturnedQty,
+        returnableQty: poLine.returnableQty,
+      },
+    ]);
+  }
+
   function updateLine(localId: string, field: keyof RTVLineInput, value: string | number) {
     setLines((prev) =>
       prev.map((l) => (l.localId === localId ? { ...l, [field]: value } : l)),
@@ -231,7 +279,24 @@ export default function NewSupplierReturnPage() {
   );
 
   // ── Validation ──
-  const canSubmit = !!supplierId && !!returnLocationId && !!reason && lines.length > 0 && !createMutation.isPending;
+  const overReturnLines = useMemo(
+    () =>
+      lines.filter(
+        (line) =>
+          line.sourcePoLineId &&
+          typeof line.returnableQty === "number" &&
+          line.quantity > line.returnableQty,
+      ),
+    [lines],
+  );
+
+  const canSubmit =
+    !!supplierId &&
+    !!returnLocationId &&
+    !!reason &&
+    lines.length > 0 &&
+    overReturnLines.length === 0 &&
+    !createMutation.isPending;
 
   function handleSubmit() {
     if (isEdit) {
@@ -248,6 +313,7 @@ export default function NewSupplierReturnPage() {
             quantity: l.quantity,
             costPrice: l.costPerUnit,
             condition: l.condition,
+            sourcePoLineId: l.sourcePoLineId || undefined,
             notes: l.notes || undefined,
           })),
         }),
@@ -260,7 +326,7 @@ export default function NewSupplierReturnPage() {
           supplierId,
           locationId: returnLocationId,
           reason,
-          sourcePOId: sourcePOId || undefined,
+          sourcePoId: sourcePOId || undefined,
           notes: notes || undefined,
           idempotencyKey: crypto.randomUUID(),
           lines: lines.map((l) => ({
@@ -268,6 +334,7 @@ export default function NewSupplierReturnPage() {
             quantity: l.quantity,
             costPrice: l.costPerUnit,
             condition: l.condition,
+            sourcePoLineId: l.sourcePoLineId || undefined,
             notes: l.notes || undefined,
           })),
         },
@@ -426,7 +493,22 @@ export default function NewSupplierReturnPage() {
                   <label className="text-xs font-medium text-muted-foreground">Source PO (optional)</label>
                   <select
                     value={sourcePOId}
-                    onChange={(e) => setSourcePOId(e.target.value)}
+                    onChange={(e) => {
+                      setSourcePOId(e.target.value);
+                      setLines((prev) =>
+                        prev.map((line) =>
+                          line.sourcePoLineId
+                            ? {
+                                ...line,
+                                sourcePoLineId: undefined,
+                                receivedQty: undefined,
+                                alreadyReturnedQty: undefined,
+                                returnableQty: undefined,
+                              }
+                            : line,
+                        ),
+                      );
+                    }}
                     className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                   >
                     <option value="">None</option>
@@ -436,6 +518,46 @@ export default function NewSupplierReturnPage() {
                       </option>
                     ))}
                   </select>
+                  {sourcePOId && (
+                    <div className="mt-2 rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="font-semibold">Received PO lines</span>
+                        <span className="text-[10px] text-blue-700">
+                          {returnablePoLinesQuery.isLoading ? "Loading..." : `${returnablePoLines.length} line${returnablePoLines.length !== 1 ? "s" : ""}`}
+                        </span>
+                      </div>
+                      {returnablePoLines.length === 0 && !returnablePoLinesQuery.isLoading ? (
+                        <p className="text-blue-700">No received quantities remain returnable for this PO.</p>
+                      ) : (
+                        <div className="max-h-48 space-y-1 overflow-auto">
+                          {returnablePoLines.map((poLine) => {
+                            const alreadyAdded = lines.some((line) => line.sourcePoLineId === poLine.id);
+                            return (
+                              <div
+                                key={poLine.id}
+                                className="grid grid-cols-[1fr_auto] gap-2 rounded border border-blue-100 bg-white/70 px-2 py-1.5"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-blue-950">{poLine.productName}</p>
+                                  <p className="font-mono text-[10px] text-blue-700">
+                                    {poLine.sku || "No SKU"} · Received {poLine.receivedQty} · Returned {poLine.alreadyReturnedQty} · Remaining {poLine.returnableQty}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => addPoLine(poLine)}
+                                  disabled={alreadyAdded || poLine.returnableQty <= 0}
+                                  className="rounded bg-blue-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+                                >
+                                  {alreadyAdded ? "Added" : poLine.returnableQty <= 0 ? "None left" : "Add"}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -469,7 +591,7 @@ export default function NewSupplierReturnPage() {
                   setShowProductDropdown(true);
                 }}
                 onFocus={() => setShowProductDropdown(true)}
-                placeholder="Search products by name or SKU..."
+                placeholder="Search or scan barcode / SKU / item name..."
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
               />
               {showProductDropdown && productQuery.length >= 2 && productResults.length > 0 && (
@@ -484,8 +606,13 @@ export default function NewSupplierReturnPage() {
                       <div>
                         <span className="font-medium">{p.name}</span>
                         <span className="ml-2 font-mono text-xs text-muted-foreground">{p.sku}</span>
+                        {p.barcode && (
+                          <span className="ml-2 font-mono text-[10px] text-muted-foreground">BC {p.barcode}</span>
+                        )}
                       </div>
-                      <span className="text-xs text-muted-foreground">{fmtPeso(p.costPrice)}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Stock {p.stockLevel} · {fmtPeso(p.costPrice)}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -562,6 +689,22 @@ export default function NewSupplierReturnPage() {
                         </p>
                       </div>
                     </div>
+                    {line.sourcePoLineId && (
+                      <div
+                        className={`mt-2 rounded border px-2 py-1.5 text-[11px] ${
+                          line.returnableQty !== undefined && line.quantity > line.returnableQty
+                            ? "border-destructive/30 bg-destructive/5 text-destructive"
+                            : "border-blue-200 bg-blue-50 text-blue-800"
+                        }`}
+                      >
+                        PO-assisted return: received {line.receivedQty ?? "?"}, already returned {line.alreadyReturnedQty ?? "?"}, remaining {line.returnableQty ?? "?"}.
+                        {line.returnableQty !== undefined && line.quantity > line.returnableQty && (
+                          <span className="ml-1 font-semibold">
+                            Reduce qty to {line.returnableQty}; over-returning is blocked.
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <div className="mt-2">
                       <label className="text-[10px] text-muted-foreground">Notes</label>
                       <input
@@ -640,6 +783,15 @@ export default function NewSupplierReturnPage() {
           </div>
         </div>
       </div>
+
+      {overReturnLines.length > 0 && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+          <div className="font-semibold">Over-return blocked</div>
+          <p className="mt-1 text-xs">
+            {overReturnLines.length} PO-linked line{overReturnLines.length !== 1 ? "s" : ""} exceed the remaining received quantity. Reduce the quantity before saving this RTV.
+          </p>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="flex items-center justify-end gap-3 border-t border-border pt-4">

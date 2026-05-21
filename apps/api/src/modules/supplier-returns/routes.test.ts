@@ -37,7 +37,12 @@ test("supplier return route registration preserves public endpoint order", async
 
   assert.deepEqual(routes, [
     { method: "get", path: "/" },
+    { method: "get", path: "/po-returnable-lines" },
+    { method: "get", path: "/analytics" },
     { method: "get", path: "/:id" },
+    { method: "get", path: "/:id/attachments" },
+    { method: "post", path: "/:id/attachments" },
+    { method: "delete", path: "/:id/attachments/:attachmentId" },
     { method: "post", path: "/" },
     { method: "patch", path: "/:id" },
     { method: "delete", path: "/:id" },
@@ -47,6 +52,7 @@ test("supplier return route registration preserves public endpoint order", async
     { method: "post", path: "/:id/close" },
     { method: "post", path: "/:id/close-without-credit" },
     { method: "post", path: "/:id/cancel" },
+    { method: "post", path: "/:id/reject" },
     { method: "get", path: "/draft-for-supplier" },
     { method: "post", path: "/:id/add-line" },
   ]);
