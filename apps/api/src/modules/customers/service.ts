@@ -1751,6 +1751,7 @@ export async function getSOA(
   orgId: string,
   from: string,
   to: string,
+  options: { includeUnbilled?: boolean } = {},
 ) {
   // Validate customer exists and belongs to org
   const [customer] = await db
@@ -1761,6 +1762,9 @@ export async function getSOA(
 
   if (!customer) throw new Error("Customer not found");
 
+  const rangeStart = sql`${from}::date`;
+  const rangeEndExclusive = sql`(${to}::date + interval '1 day')`;
+
   // Get opening balance: balanceAfter of the last transaction before `from`
   const [lastBefore] = await db
     .select({ balanceAfter: customerTransactions.balanceAfter })
@@ -1769,7 +1773,7 @@ export async function getSOA(
       and(
         eq(customerTransactions.customerId, customerId),
         eq(customerTransactions.orgId, orgId),
-        sql`${customerTransactions.recordedAt} < ${from}`,
+        sql`${customerTransactions.recordedAt} < ${rangeStart}`,
       ),
     )
     .orderBy(desc(customerTransactions.recordedAt), desc(customerTransactions.id))
@@ -1777,7 +1781,17 @@ export async function getSOA(
 
   const openingBalance = lastBefore ? parseFloat(lastBefore.balanceAfter) : 0;
 
-  // Fetch transactions in [from, to] range
+  const dateRangeCondition = and(
+    sql`${customerTransactions.recordedAt} >= ${rangeStart}`,
+    sql`${customerTransactions.recordedAt} < ${rangeEndExclusive}`,
+  );
+  const openBillableCondition = and(
+    sql`${customerTransactions.type} IN ('CHARGE', 'CREDIT_NOTE')`,
+    sql`${customerTransactions.billed} IS NOT TRUE`,
+  );
+
+  // Fetch selected-period activity, plus open billable rows when the SOA workspace
+  // needs to surface older unbilled charges for receipt generation.
   const transactions = await db
     .select()
     .from(customerTransactions)
@@ -1785,8 +1799,9 @@ export async function getSOA(
       and(
         eq(customerTransactions.customerId, customerId),
         eq(customerTransactions.orgId, orgId),
-        sql`${customerTransactions.recordedAt} >= ${from}`,
-        sql`${customerTransactions.recordedAt} <= ${to}`,
+        options.includeUnbilled
+          ? or(dateRangeCondition, openBillableCondition)
+          : dateRangeCondition,
       ),
     )
     .orderBy(asc(customerTransactions.recordedAt), asc(customerTransactions.id));

@@ -77,6 +77,20 @@ function isBillable(tx: CustomerTransaction) {
   return tx.type === "CHARGE" || tx.type === "CREDIT_NOTE";
 }
 
+function dateKey(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+function isOutsideSOARange(tx: CustomerTransaction, from: string, to: string) {
+  const txDate = dateKey(tx.recordedAt);
+  const fromDate = dateKey(from);
+  const toDate = dateKey(to);
+  return Boolean(txDate && fromDate && toDate && (txDate < fromDate || txDate > toDate));
+}
+
 function hasRecentPayment(date: string | null | undefined, maxAgeDays = 60) {
   if (!date) return false;
   const timestamp = new Date(date).getTime();
@@ -205,8 +219,13 @@ export default function CustomerSOAPage() {
     if (!token || !locationId || !customerId) return;
     setExpanded({ customerId, loading: true, error: "", data: null });
     try {
+      const params = new URLSearchParams({
+        from: dateFrom,
+        to: dateTo,
+        includeUnbilled: "true",
+      });
       const data = await apiFetch<SOAResponse>(
-        `/customers/reports/soa/${customerId}?from=${dateFrom}&to=${dateTo}`,
+        `/customers/reports/soa/${customerId}?${params.toString()}`,
         { token, locationId },
       );
       setExpanded({ customerId, loading: false, error: "", data });
@@ -558,6 +577,9 @@ function CustomerSOARow({
   const data = isOpen ? expanded.data : null;
   const billable = data?.transactions.filter(isBillable) ?? [];
   const unbilled = billable.filter((tx) => !tx.billed);
+  const unbilledOutsideRange = data
+    ? unbilled.filter((tx) => isOutsideSOARange(tx, data.from, data.to))
+    : [];
   const availableCredits = billable.filter((tx) => tx.type === "CREDIT_NOTE" && !tx.billed);
   const appliedCredits = billable.filter((tx) => tx.type === "CREDIT_NOTE" && tx.billed);
   const selected = selectedTotals(billable, selectedIds);
@@ -664,6 +686,13 @@ function CustomerSOARow({
                 <MiniMetric label="Unbilled rows" value={fmtNum(unbilled.length)} tone="warning" />
               </div>
 
+              {unbilledOutsideRange.length > 0 && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-950">
+                  <strong>{unbilledOutsideRange.length} unbilled row{unbilledOutsideRange.length === 1 ? "" : "s"} outside the selected date range included.</strong>{" "}
+                  These are shown so older receipts/charges do not disappear while still needing an SOA.
+                </div>
+              )}
+
               {(availableCredits.length > 0 || appliedCredits.length > 0) && (
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 text-emerald-950">
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -725,13 +754,16 @@ function CustomerSOARow({
                 </div>
 
                 {billable.length === 0 ? (
-                  <div className="py-8 text-center text-[13px] text-muted-foreground">No billable charges or credit memos in this date range.</div>
+                  <div className="py-8 text-center text-[13px] text-muted-foreground">
+                    No billable charges or credit memos were found for this customer.
+                  </div>
                 ) : (
                   <div className="divide-y divide-border">
                     {billable.map((tx) => {
                       const checked = selectedIds.has(tx.id);
                       const disabled = Boolean(tx.billed);
                       const warnings = invoiceWarningBadges(tx, billable);
+                      const outsideRange = data ? isOutsideSOARange(tx, data.from, data.to) : false;
                       return (
                         <div key={tx.id} className={cn("flex items-center px-3 py-2 text-[12px]", checked && "bg-primary/[0.04]", disabled && "opacity-60")}>
                           <div className="w-8">
@@ -755,6 +787,13 @@ function CustomerSOARow({
                                     {warning.label}
                                   </span>
                                 ))}
+                              </div>
+                            )}
+                            {outsideRange && (
+                              <div className="mt-1">
+                                <span className="rounded-md border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-950">
+                                  Outside selected range
+                                </span>
                               </div>
                             )}
                           </div>

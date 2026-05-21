@@ -21,7 +21,11 @@ export function registerCustomerReportRoutes(app: FastifyInstance) {
   app.get("/reports/soa/:customerId", async (request, reply) => {
     const { customerId } = request.params as { customerId: string };
     const { orgId } = request.storeContext!;
-    const { from, to } = request.query as { from?: string; to?: string };
+    const { from, to, includeUnbilled } = request.query as {
+      from?: string;
+      to?: string;
+      includeUnbilled?: string;
+    };
 
     const now = new Date();
     const defaultFrom = new Date(
@@ -37,6 +41,7 @@ export function registerCustomerReportRoutes(app: FastifyInstance) {
         orgId,
         from || defaultFrom,
         to || defaultTo,
+        { includeUnbilled: includeUnbilled === "true" || includeUnbilled === "1" },
       );
       return reply.send(result);
     } catch (err: any) {
