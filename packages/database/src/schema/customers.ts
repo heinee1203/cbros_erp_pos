@@ -46,6 +46,15 @@ export const customers = pgTable(
     totalPurchases: numeric("total_purchases", { precision: 14, scale: 2 })
       .notNull()
       .default("0.00"),
+    creditStatus: varchar("credit_status", { length: 40 }).notNull().default("OK"),
+    creditHoldType: varchar("credit_hold_type", { length: 40 }).notNull().default("NONE"),
+    creditHoldReason: text("credit_hold_reason"),
+    creditHoldNote: text("credit_hold_note"),
+    creditHoldApprovedBy: uuid("credit_hold_approved_by"),
+    creditHoldApprovedAt: timestamp("credit_hold_approved_at", { withTimezone: true }),
+    mergedIntoCustomerId: uuid("merged_into_customer_id"),
+    mergedAt: timestamp("merged_at", { withTimezone: true }),
+    mergedByUserId: uuid("merged_by_user_id"),
     isActive: boolean("is_active").notNull().default(true),
     notes: text("notes"),
     tierId: uuid("tier_id"),

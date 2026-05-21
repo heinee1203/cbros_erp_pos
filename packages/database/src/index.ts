@@ -12,6 +12,10 @@ if (!connectionString) {
 const queryClient = postgres(connectionString, { max: 10 });
 export const db = drizzle(queryClient, { schema });
 
+export async function closeDatabaseConnections() {
+  await queryClient.end();
+}
+
 // For migrations / seed (single connection, then close)
 export function createMigrationClient() {
   const migrationClient = postgres(connectionString!, { max: 1 });
