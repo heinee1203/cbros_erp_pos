@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 /**
- * Monthly Sales Report — admin analytics page.
+ * Monthly Sales Report â€” admin analytics page.
  *
  * Reads one month of pre-aggregated data from GET /analytics/monthly-sales/
  * single-month and renders a visual layout identical to the Daily Sales
@@ -9,7 +9,7 @@
  *   - 5 colored division cards (A/P, A/C, A/R, Painting, Junior)
  *   - A/P OLD/NEW segmented bar
  *   - Gold 3-column grand total footer
- *   - Averages card (weekday / Sunday / daily — new vs daily page)
+ *   - Averages card (weekday / Sunday / daily â€” new vs daily page)
  *
  * Compare modes: None / Previous Month (MoM) / Same Month Last Year (YoY) /
  * Both. When compare is active, each division card, footer cell, and average
@@ -26,12 +26,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  ArrowDownRight,
-  ArrowUpRight,
-  Camera,
-  Check,
-  ChevronLeft,
-  ChevronRight,
   Loader2,
   Lock,
   TrendingUp,
@@ -39,227 +33,24 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
-
-/* ═════════════════════════════════════════════════════════════
- *  Types  — mirror the backend service shape
- * ═════════════════════════════════════════════════════════════ */
-
-type MonthlyCompareMode = "none" | "mom" | "yoy" | "both";
-
-interface MonthlyPeriod {
-  month: string; // "YYYY-MM"
-  startDate: string; // "YYYY-MM-DD"
-  endDate: string; // "YYYY-MM-DD"
-  totalDays: number;
-  weekdays: number;
-  sundays: number;
-}
-
-interface MonthlyAggregates {
-  period: MonthlyPeriod;
-  ap: {
-    total: number;
-    old: number;
-    new: number;
-    onAccount: number;
-    oldRatio: number | null;
-    newRatio: number | null;
-    pctOfTotal: number;
-  };
-  ac: { total: number; cash: number; onAccount: number; pctOfTotal: number };
-  service: { total: number; cash: number; onAccount: number; pctOfTotal: number };
-  painting: { total: number; cash: number; onAccount: number; pctOfTotal: number };
-  junior: { total: number; cash: number; pctOfTotal: number };
-  totals: { cash: number; onAccount: number; grandTotal: number; payments: number };
-  averages: { weekday: number; sunday: number; daily: number };
-  hasData: boolean;
-}
-
-interface MonthlySalesResponse extends MonthlyAggregates {
-  comparisons?: {
-    mom?: MonthlyAggregates;
-    yoy?: MonthlyAggregates;
-  };
-}
-
-/* ═════════════════════════════════════════════════════════════
- *  Formatters & helpers
- * ═════════════════════════════════════════════════════════════ */
-
-function fmtPesoFull(v: number): string {
-  return `\u20B1${v.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function fmtPesoOrDash(v: number): string {
-  return v > 0 ? fmtPesoFull(v) : "\u2014";
-}
-
-/** Returns the current month as "YYYY-MM" in LOCAL time. */
-function currentMonthLocal(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-}
-
-/** Parses "YYYY-MM" → Date object for the first of that month (UTC). */
-function monthToDate(ym: string): Date {
-  const [y, m] = ym.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, 1));
-}
-
-/** Formats "YYYY-MM" → "March 2026". */
-function fmtMonthLong(ym: string): string {
-  return monthToDate(ym).toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-/** Formats "2026-03-01" → "March 1, 2026". */
-function fmtDateLong(iso: string): string {
-  return new Date(iso + "T12:00:00Z").toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-/** Shift a "YYYY-MM" string by N months, returning a new "YYYY-MM". */
-function shiftMonth(ym: string, deltaMonths: number): string {
-  const [y, m] = ym.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 + deltaMonths, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/** Earliest month we have data for — matches the legacy Excel import window. */
-const MIN_MONTH = "2022-01";
-
-/** Delta result shape — encodes "new" (prior=0, current>0) and "absent". */
-type DeltaResult =
-  | { kind: "pct"; delta: number; pct: number }
-  | { kind: "new" }
-  | null;
-
-/**
- * Computes the percentage change between two values.
- * Returns null when both are zero (nothing meaningful), "new" when
- * prior is 0 and current is positive, and a regular pct otherwise.
- */
-function computeDelta(current: number, prior: number | null | undefined): DeltaResult {
-  if (prior == null) return null;
-  if (prior === 0) {
-    return current > 0 ? { kind: "new" } : null;
-  }
-  const delta = current - prior;
-  return { kind: "pct", delta, pct: (delta / prior) * 100 };
-}
-
-/* ═════════════════════════════════════════════════════════════
- *  Division palette — mirrors DIVISION_STYLES in daily-sales page
- * ═════════════════════════════════════════════════════════════ */
-
-interface DivisionStyle {
-  bar: string;
-  barSoft: string;
-  text: string;
-  headerBg: string;
-}
-
-const DIVISION_STYLES: Record<"ap" | "ac" | "service" | "painting" | "junior", DivisionStyle> = {
-  ap: { bar: "#2563eb", barSoft: "#dbeafe", text: "#1e40af", headerBg: "#eff6ff" },
-  ac: { bar: "#16a34a", barSoft: "#dcfce7", text: "#15803d", headerBg: "#f0fdf4" },
-  service: { bar: "#ea580c", barSoft: "#ffedd5", text: "#c2410c", headerBg: "#fff7ed" },
-  painting: { bar: "#7c3aed", barSoft: "#ede9fe", text: "#6d28d9", headerBg: "#f5f3ff" },
-  junior: { bar: "#0891b2", barSoft: "#cffafe", text: "#0e7490", headerBg: "#ecfeff" },
-};
-
-/* ═════════════════════════════════════════════════════════════
- *  Delta pills
- *
- *  MoMPill  = filled (green/red bg + white-ish text)
- *  YoYPill  = outlined (transparent bg + colored border + colored text)
- *
- *  Both accept a DeltaResult from computeDelta() or null.
- * ═════════════════════════════════════════════════════════════ */
-
-function MoMPill({ result }: { result: DeltaResult }) {
-  if (result == null) return null;
-  if (result.kind === "new") {
-    return (
-      <span className="inline-flex items-center gap-0.5 rounded-md bg-sky-600 px-1.5 py-0.5 text-[9px] font-bold tabular-nums text-white">
-        NEW · MoM
-      </span>
-    );
-  }
-  const positive = result.delta > 0;
-  const zero = result.delta === 0;
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[9px] font-bold tabular-nums",
-        zero && "bg-slate-400 text-white",
-        !zero && positive && "bg-emerald-600 text-white",
-        !zero && !positive && "bg-red-600 text-white",
-      )}
-    >
-      {positive ? <ArrowUpRight size={9} /> : !zero ? <ArrowDownRight size={9} /> : null}
-      {positive ? "+" : ""}
-      {result.pct.toFixed(1)}% MoM
-    </span>
-  );
-}
-
-function YoYPill({ result }: { result: DeltaResult }) {
-  if (result == null) return null;
-  if (result.kind === "new") {
-    return (
-      <span className="inline-flex items-center gap-0.5 rounded-md border border-sky-600 bg-transparent px-1.5 py-0.5 text-[9px] font-bold tabular-nums text-sky-700">
-        NEW · YoY
-      </span>
-    );
-  }
-  const positive = result.delta > 0;
-  const zero = result.delta === 0;
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-0.5 rounded-md border bg-transparent px-1.5 py-0.5 text-[9px] font-bold tabular-nums",
-        zero && "border-slate-400 text-slate-600",
-        !zero && positive && "border-emerald-600 text-emerald-700",
-        !zero && !positive && "border-red-600 text-red-700",
-      )}
-    >
-      {positive ? <ArrowUpRight size={9} /> : !zero ? <ArrowDownRight size={9} /> : null}
-      {positive ? "+" : ""}
-      {result.pct.toFixed(1)}% YoY
-    </span>
-  );
-}
-
-/** A pair of pills for when both compare modes are active. */
-function CompareBadges({
-  mom,
-  yoy,
-}: {
-  mom: DeltaResult;
-  yoy: DeltaResult;
-}) {
-  if (!mom && !yoy) return null;
-  return (
-    <span className="inline-flex flex-wrap items-center gap-1">
-      {mom && <MoMPill result={mom} />}
-      {yoy && <YoYPill result={yoy} />}
-    </span>
-  );
-}
-
-/* ═════════════════════════════════════════════════════════════
- *  Division card — one per division (A/P, A/C, A/R, Painting, Junior)
- *
- *  Copied from the daily-sales page's DivisionCard, extended with
- *  mom/yoy compare badges next to the total.
- * ═════════════════════════════════════════════════════════════ */
+import { DIVISION_STYLES, MIN_MONTH } from "./constants";
+import {
+  computeDelta,
+  currentMonthLocal,
+  fmtDateLong,
+  fmtMonthLong,
+  fmtPesoFull,
+  fmtPesoOrDash,
+  shiftMonth,
+} from "./formatters";
+import type {
+  DeltaResult,
+  MonthlyAggregates,
+  MonthlyCompareMode,
+  MonthlySalesResponse,
+} from "./types";
+import { CompareBadges } from "./components/compare-badges";
+import { MonthlySalesToolbar } from "./components/monthly-sales-toolbar";
 
 interface MonthlyDivisionCardProps {
   styleKey: keyof typeof DIVISION_STYLES;
@@ -382,7 +173,7 @@ function MonthlyDivisionCard({
                 color={style.text}
                 isZero={isZero}
               />
-              <span className="text-slate-300">·</span>
+              <span className="text-slate-300">Â·</span>
               <SubItem
                 label="NEW"
                 value={segmented.new.value}
@@ -447,11 +238,11 @@ function SubItem({
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Gold footer (3-col Total Cash | Total On Acct | Grand Total)
  *   + PAYMENTS row
  *   + optional compare pills on each stat
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function FooterStat({
   label,
@@ -500,9 +291,9 @@ function FooterStat({
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Averages card (below the gold footer)
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function AveragesCard({
   averages,
@@ -554,7 +345,7 @@ function AveragesCard({
         </span>
       </div>
       <div className="divide-y divide-slate-200/70">
-        {row("Weekday Average", "Mon – Sat", averages.weekday, weekdayMom, weekdayYoy)}
+        {row("Weekday Average", "Mon â€“ Sat", averages.weekday, weekdayMom, weekdayYoy)}
         {row("Sunday Average", null, averages.sunday, sundayMom, sundayYoy)}
         {row("Daily Average", `${totalDays} days`, averages.daily, dailyMom, dailyYoy)}
       </div>
@@ -562,9 +353,9 @@ function AveragesCard({
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
- *  Report body — division rows + gold footer + averages
- * ═════════════════════════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+ *  Report body â€” division rows + gold footer + averages
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function ReportBody({
   data,
@@ -709,7 +500,7 @@ function ReportBody({
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Share-as-image: static HTML template + dom-to-image-more
  *
  *  Same hardened pipeline as the daily page:
@@ -717,8 +508,8 @@ function ReportBody({
  *  - Every inline style starts with `border:0` (belt-and-suspenders)
  *  - Block divs for layout; 2-cell tables only where two items share a baseline
  *  - A/P segmented bar = `width:${barPct}%` container holding a 2-cell table
- *  - Fixed 640px width, 2× retina via transform:scale
- * ═════════════════════════════════════════════════════════════ */
+ *  - Fixed 640px width, 2Ã— retina via transform:scale
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function buildMonthlySalesImageHtml(
   data: MonthlySalesResponse,
@@ -755,7 +546,7 @@ function buildMonthlySalesImageHtml(
     yoy: useYoy ? computeDelta(current, priorYoy ?? null) : null,
   });
 
-  // Pill HTML renderers — plain inline spans, no flex.
+  // Pill HTML renderers â€” plain inline spans, no flex.
   const pillColorMom = (res: DeltaResult): { bg: string; fg: string; arrow: string } => {
     if (!res || res.kind === "new") return { bg: "#0284C7", fg: "#FFFFFF", arrow: "" };
     if (res.delta === 0) return { bg: "#94A3B8", fg: "#FFFFFF", arrow: "" };
@@ -1089,16 +880,16 @@ async function copyReportAsImage(
   }
 }
 
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Page component
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 export function MonthlySalesView() {
   const { user, token, locationId, loading: authLoading } = useAuth();
   const isAdmin = user?.role === "ADMIN";
 
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
 
   const nowMonth = useMemo(() => currentMonthLocal(), []);
 
@@ -1170,7 +961,7 @@ export function MonthlySalesView() {
     [month, nowMonth],
   );
 
-  // Keyboard ← / →
+  // Keyboard â† / â†’
   useEffect(() => {
     if (!isAdmin) return;
     const handler = (e: KeyboardEvent) => {
@@ -1223,7 +1014,7 @@ export function MonthlySalesView() {
 
   return (
     <div className="mx-auto flex h-full max-w-5xl flex-col">
-      {/* ── Page header ── */}
+      {/* â”€â”€ Page header â”€â”€ */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.06]">
@@ -1243,104 +1034,29 @@ export function MonthlySalesView() {
         </div>
       </div>
 
-      {/* ── Toolbar ── */}
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-1.5">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => stepMonth(-1)}
-            disabled={!canStepBack}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
-            title="Previous month (←)"
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v && v >= MIN_MONTH && v <= nowMonth) setMonth(v);
-            }}
-            min={MIN_MONTH}
-            max={nowMonth}
-            className="h-8 rounded-md border border-border bg-background px-2 text-[12px] font-medium outline-none focus:border-primary/40"
-          />
-          <button
-            type="button"
-            onClick={() => stepMonth(1)}
-            disabled={!canStepForward}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
-            title="Next month (→)"
-          >
-            <ChevronRight size={14} />
-          </button>
-          <div className="ml-2 hidden flex-col leading-tight sm:flex">
-            <span className="text-[13px] font-bold text-foreground">{fmtMonthLong(month)}</span>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              ← → arrow keys
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
-            Compare:
-            <select
-              value={compareMode}
-              onChange={(e) => setCompareMode(e.target.value as MonthlyCompareMode)}
-              className="h-8 rounded-md border border-border bg-background px-2 text-[11px] font-medium outline-none focus:border-primary/40"
-            >
-              <option value="none">None</option>
-              <option value="mom">Previous Month (MoM)</option>
-              <option value="yoy">Same Month Last Year (YoY)</option>
-              <option value="both">Both</option>
-            </select>
-          </label>
-          {data?.hasData && (
-            <button
-              type="button"
-              onClick={handleCopy}
-              disabled={copyState === "copying"}
-              className={cn(
-                "flex h-8 items-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition-colors",
-                copyState === "copied" || copyState === "downloaded"
-                  ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                  : copyState === "failed"
-                    ? "border-red-500 bg-red-50 text-red-700"
-                    : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
-                copyState === "copying" && "cursor-wait opacity-70",
-              )}
-              title="Copy as image — paste directly into Viber/Messenger"
-            >
-              {copyState === "copying" ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : copyState === "copied" || copyState === "downloaded" ? (
-                <Check size={12} />
-              ) : (
-                <Camera size={12} />
-              )}
-              {copyState === "copying"
-                ? "Copying…"
-                : copyState === "copied"
-                  ? "Copied!"
-                  : copyState === "downloaded"
-                    ? "Downloaded"
-                    : copyState === "failed"
-                      ? "Failed"
-                      : "Copy"}
-            </button>
-          )}
-        </div>
-      </div>
+      {/* â”€â”€ Toolbar â”€â”€ */}
+      <MonthlySalesToolbar
+        month={month}
+        nowMonth={nowMonth}
+        compareMode={compareMode}
+        copyState={copyState}
+        hasData={Boolean(data?.hasData)}
+        canStepBack={canStepBack}
+        canStepForward={canStepForward}
+        onStepMonth={stepMonth}
+        onMonthChange={setMonth}
+        onCompareModeChange={setCompareMode}
+        onCopy={handleCopy}
+      />
 
-      {/* ── Error banner ── */}
+      {/* â”€â”€ Error banner â”€â”€ */}
       {error && (
         <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">
           {error}
         </div>
       )}
 
-      {/* ── Report card ── */}
+      {/* â”€â”€ Report card â”€â”€ */}
       <div
         id="monthly-report-card"
         data-month={month}
@@ -1357,8 +1073,8 @@ export function MonthlySalesView() {
           <div className="mt-2 text-[14px] font-bold text-slate-900">{fmtMonthLong(month)}</div>
           {data && (
             <div className="mt-1 text-[11px] font-medium text-slate-600">
-              {fmtDateLong(data.period.startDate)} – {fmtDateLong(data.period.endDate)}{" "}
-              <span className="text-slate-400">·</span>{" "}
+              {fmtDateLong(data.period.startDate)} â€“ {fmtDateLong(data.period.endDate)}{" "}
+              <span className="text-slate-400">Â·</span>{" "}
               <span>
                 {data.period.totalDays} days ({data.period.weekdays} weekdays,{" "}
                 {data.period.sundays} Sundays)
@@ -1370,7 +1086,7 @@ export function MonthlySalesView() {
         {/* Body */}
         {loading && !data ? (
           <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-            <Loader2 size={16} className="mr-2 animate-spin" /> Loading…
+            <Loader2 size={16} className="mr-2 animate-spin" /> Loadingâ€¦
           </div>
         ) : !data || !data.hasData ? (
           <div className="flex flex-col items-center justify-center gap-2 px-6 py-12 text-center">

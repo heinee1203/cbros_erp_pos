@@ -24,7 +24,7 @@ function parseTab(raw: string | null): SalesReportTab {
 
 export default function SalesReportPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams() ?? new URLSearchParams();
   const activeTab = useMemo(
     () => parseTab(searchParams?.get("view") ?? null),
     [searchParams],

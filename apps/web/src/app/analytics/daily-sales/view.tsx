@@ -1,14 +1,14 @@
-"use client";
+﻿"use client";
 
 /**
- * Daily Sales Analytics Dashboard — admin-only.
+ * Daily Sales Analytics Dashboard â€” admin-only.
  *
  * Hydrated from /analytics/daily-sales/* which aggregates the
  * daily_sales_summary table. Every API call is gated on the user having
  * the ADMIN role; non-admin users see an access-denied screen without
  * ever firing a request.
  *
- * Layout (top→bottom):
+ * Layout (topâ†’bottom):
  *   1. Header + admin badge + date range selector w/ presets
  *   2. Summary KPI cards
  *   3. Revenue Trend line chart
@@ -42,17 +42,9 @@ import {
   Legend,
 } from "recharts";
 import {
-  BarChart3,
   Calendar,
   TrendingUp,
-  TrendingDown,
-  DollarSign,
-  Award,
-  Download,
   Lock,
-  ChevronUp,
-  ChevronDown,
-  ChevronsUpDown,
   ChevronLeft,
   ChevronRight,
   Printer,
@@ -69,243 +61,44 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
-
-/* ─── Types (mirror the /analytics/daily-sales/* responses) ─── */
-
-type GroupBy = "day" | "week" | "month" | "quarter" | "year";
-
-interface SummaryResponse {
-  from: string;
-  to: string;
-  dayCount: number;
-  totalSales: number;
-  cashSales: number;
-  creditSales: number;
-  totalPayments: number;
-  avgDailySales: number;
-  cashShare: number | null;
-  creditShare: number | null;
-  bestDay: { date: string; amount: number } | null;
-  worstDay: { date: string; amount: number } | null;
-  prevFrom: string;
-  prevTo: string;
-  prevTotalSales: number;
-  yoyGrowthPct: number | null;
-}
-
-interface SeriesBucket {
-  bucket: string;
-  dayCount: number;
-  apOldSales: number;
-  apNewSales: number;
-  apOnAccount: number;
-  acSales: number;
-  acOnAccount: number;
-  serviceSales: number;
-  serviceOnAccount: number;
-  paintingSales: number;
-  paintingOnAccount: number;
-  juniorSales: number;
-  payments: number;
-  autoParts: number;
-  accessories: number;
-  service: number;
-  painting: number;
-  junior: number;
-  total: number;
-}
-
-interface DivisionRow {
-  key: string;
-  label: string;
-  cash: number;
-  credit: number;
-  total: number;
-  share: number | null;
-}
-
-interface DivisionResponse {
-  from: string;
-  to: string;
-  divisions: DivisionRow[];
-  totalCash: number;
-  totalCredit: number;
-  grandTotal: number;
-}
-
-interface YoYRow {
-  year: number;
-  month: number;
-  total: number;
-}
-
-interface DayOfWeekRow {
-  dow: number;
-  dayCount: number;
-  total: number;
-  avg: number;
-}
-
-interface DailyRow {
-  date: string;
-  apOldSales: number;
-  apNewSales: number;
-  apOnAccount: number;
-  acSales: number;
-  acOnAccount: number;
-  serviceSales: number;
-  serviceOnAccount: number;
-  paintingSales: number;
-  paintingOnAccount: number;
-  juniorSales: number;
-  payments: number;
-}
-
-/** /analytics/daily-sales/single-day response shape */
-interface SingleDayResponse {
-  date: string;
-  dayOfWeek: string;
-  hasData: boolean;
-  ap: { old: number; new: number; total: number; onAccount: number; oldRatio: number | null; newRatio: number | null };
-  ac: { cash: number; onAccount: number; total: number };
-  service: { cash: number; onAccount: number; total: number };
-  painting: { cash: number; onAccount: number; total: number };
-  junior: { cash: number; total: number };
-  totals: { cash: number; onAccount: number; grandTotal: number; payments: number };
-  percentages: { ap: number; ac: number; service: number; painting: number; junior: number };
-}
-
-/* ─── Formatters ─── */
-
-function fmtPeso(v: number): string {
-  if (Math.abs(v) >= 1_000_000_000) return `\u20B1${(v / 1_000_000_000).toFixed(2)}B`;
-  if (Math.abs(v) >= 1_000_000) return `\u20B1${(v / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(v) >= 1_000) return `\u20B1${(v / 1_000).toFixed(1)}K`;
-  return `\u20B1${v.toLocaleString("en-PH", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-}
-
-function fmtPesoFull(v: number): string {
-  return `\u20B1${v.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function fmtPct(v: number | null): string {
-  if (v == null) return "—";
-  return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
-}
-
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
+import { DIVISION_COLORS, DOW_NAMES, MONTH_LABELS, PRESETS, YOY_COLORS } from "./constants";
+import {
+  fmtDate,
+  fmtPeso,
+  fmtPesoFull,
+  pesoTooltipFormatter,
+  pesoTooltipLabelFormatter,
+  toIso,
+} from "./formatters";
+import type {
+  DailyRow,
+  DayOfWeekRow,
+  DivisionResponse,
+  DivisionRow,
+  GroupBy,
+  Preset,
+  SeriesBucket,
+  SingleDayResponse,
+  SummaryResponse,
+  YoYRow,
+} from "./types";
+import { ChartCard } from "./components/chart-card";
+import { DailyDataTable } from "./components/daily-data-table";
+import { DateRangeControls } from "./components/date-range-controls";
+import { SummaryCards } from "./components/summary-cards";
 
 // Recharts Tooltip formatter signature is
 // `(value, name, item, index, payload) => ReactNode | [string, string]`.
-// Our helpers only care about the value, but TypeScript is strict — we
+// Our helpers only care about the value, but TypeScript is strict â€” we
 // wrap in a 5-arg function so it satisfies the signature.
-const pesoTooltipFormatter: (value: any) => string = (v) =>
-  fmtPesoFull(Number(v));
-const pesoTooltipLabelFormatter = (v: any) => fmtDate(String(v));
-
-function toIso(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/* ─── Date range presets ─── */
-
-interface Preset {
-  label: string;
-  compute: () => { from: string; to: string };
-}
-
-const PRESETS: Preset[] = [
-  {
-    label: "This Month",
-    compute: () => {
-      const now = new Date();
-      const first = new Date(now.getFullYear(), now.getMonth(), 1);
-      return { from: toIso(first), to: toIso(now) };
-    },
-  },
-  {
-    label: "Last Month",
-    compute: () => {
-      const now = new Date();
-      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const last = new Date(now.getFullYear(), now.getMonth(), 0);
-      return { from: toIso(first), to: toIso(last) };
-    },
-  },
-  {
-    label: "This Quarter",
-    compute: () => {
-      const now = new Date();
-      const q = Math.floor(now.getMonth() / 3);
-      const first = new Date(now.getFullYear(), q * 3, 1);
-      return { from: toIso(first), to: toIso(now) };
-    },
-  },
-  {
-    label: "Last Quarter",
-    compute: () => {
-      const now = new Date();
-      const q = Math.floor(now.getMonth() / 3) - 1;
-      const year = q < 0 ? now.getFullYear() - 1 : now.getFullYear();
-      const quarter = (q + 4) % 4;
-      const first = new Date(year, quarter * 3, 1);
-      const last = new Date(year, (quarter + 1) * 3, 0);
-      return { from: toIso(first), to: toIso(last) };
-    },
-  },
-  {
-    label: "This Year",
-    compute: () => {
-      const now = new Date();
-      return { from: `${now.getFullYear()}-01-01`, to: toIso(now) };
-    },
-  },
-  {
-    label: "Last Year",
-    compute: () => {
-      const y = new Date().getFullYear() - 1;
-      return { from: `${y}-01-01`, to: `${y}-12-31` };
-    },
-  },
-  {
-    label: "All Time",
-    compute: () => ({ from: "2019-06-01", to: toIso(new Date()) }),
-  },
-];
-
-/* ─── Palette ─── */
-
-const DIVISION_COLORS: Record<string, string> = {
-  auto_parts: "#3b82f6", // blue
-  accessories: "#10b981", // emerald
-  service: "#f59e0b", // amber
-  painting: "#8b5cf6", // violet
-  junior: "#ef4444", // red
-};
-
-const YOY_COLORS = [
-  "#94a3b8", "#64748b", "#475569",
-  "#3b82f6", "#10b981", "#f59e0b",
-  "#8b5cf6", "#ef4444",
-];
-
-const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Page
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 export function DailySalesView() {
   const { user, token, locationId, loading: authLoading } = useAuth();
   const isAdmin = user?.role === "ADMIN";
 
-  // Default to "This Year" on first load — covers a meaningful window.
+  // Default to "This Year" on first load â€” covers a meaningful window.
   const [dateRange, setDateRange] = useState<{ from: string; to: string }>(() =>
     PRESETS.find((p) => p.label === "This Year")!.compute(),
   );
@@ -321,7 +114,7 @@ export function DailySalesView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ── Section 1 (Daily Sales Report card) ──
+  // â”€â”€ Section 1 (Daily Sales Report card) â”€â”€
   // Defaults to today; gets nudged back to the most recent date with data
   // once `rows` arrives so first render isn't a "no data" empty state.
   const [selectedDate, setSelectedDate] = useState<string>(() => toIso(new Date()));
@@ -331,13 +124,13 @@ export function DailySalesView() {
   const [compareYesterday, setCompareYesterday] = useState(false);
   const [autoSnappedToLatest, setAutoSnappedToLatest] = useState(false);
 
-  // ── Manual entry modal (Step 7) ──
+  // â”€â”€ Manual entry modal (Step 7) â”€â”€
   // Mode 'create' opens an empty form for a no-data date.
   // Mode 'edit'   prefills the form from the current singleDay snapshot.
   const [entryModalOpen, setEntryModalOpen] = useState(false);
   const [entryModalMode, setEntryModalMode] = useState<"create" | "edit">("create");
 
-  // Auto-pick a sensible groupBy when the window changes — day for <=60d,
+  // Auto-pick a sensible groupBy when the window changes â€” day for <=60d,
   // week for <=1y, month for everything longer.
   useEffect(() => {
     const from = new Date(dateRange.from);
@@ -379,8 +172,8 @@ export function DailySalesView() {
     if (!authLoading) fetchAll();
   }, [authLoading, fetchAll]);
 
-  // ── Auto-snap selectedDate to latest available row ──
-  // First time rows arrive (and only once), advance from "today" → most
+  // â”€â”€ Auto-snap selectedDate to latest available row â”€â”€
+  // First time rows arrive (and only once), advance from "today" â†’ most
   // recent date that actually has data. The user can still navigate
   // forward/back from there with arrows or the date picker.
   useEffect(() => {
@@ -393,7 +186,7 @@ export function DailySalesView() {
     setAutoSnappedToLatest(true);
   }, [rows, autoSnappedToLatest, selectedDate]);
 
-  // ── Fetch single-day whenever selectedDate or compareYesterday changes ──
+  // â”€â”€ Fetch single-day whenever selectedDate or compareYesterday changes â”€â”€
   useEffect(() => {
     if (!isAdmin || !token || !locationId) return;
     let cancelled = false;
@@ -432,7 +225,7 @@ export function DailySalesView() {
     };
   }, [isAdmin, token, locationId, selectedDate, compareYesterday]);
 
-  // ── Manual entry handlers ──
+  // â”€â”€ Manual entry handlers â”€â”€
   const openCreateModal = useCallback(() => {
     setEntryModalMode("create");
     setEntryModalOpen(true);
@@ -451,13 +244,13 @@ export function DailySalesView() {
       setSingleDay(saved);
       setEntryModalOpen(false);
       // Refetch the broader rows + summary so charts/table stay in sync.
-      // We don't await this — the modal close shouldn't block on it.
+      // We don't await this â€” the modal close shouldn't block on it.
       fetchAll();
     },
     [fetchAll],
   );
 
-  // ── Date navigation (arrows + ◄ ► buttons) ──
+  // â”€â”€ Date navigation (arrows + â—„ â–º buttons) â”€â”€
   const stepDate = useCallback((deltaDays: number) => {
     setSelectedDate((cur) => {
       const d = new Date(cur + "T12:00:00Z");
@@ -471,7 +264,7 @@ export function DailySalesView() {
     });
   }, []);
 
-  // Keyboard shortcuts: Left/Right arrows step ±1 day. We attach on the
+  // Keyboard shortcuts: Left/Right arrows step Â±1 day. We attach on the
   // window so the user can navigate without focusing a specific element,
   // but we ignore the event when an input/textarea/select is focused so
   // typing into the date range pickers below isn't hijacked.
@@ -497,11 +290,11 @@ export function DailySalesView() {
     return () => window.removeEventListener("keydown", handler);
   }, [isAdmin, stepDate]);
 
-  // ── RBAC gate ──
+  // â”€â”€ RBAC gate â”€â”€
   if (authLoading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading…
+        Loadingâ€¦
       </div>
     );
   }
@@ -533,7 +326,7 @@ export function DailySalesView() {
 
   return (
     <div className="mx-auto flex h-full max-w-7xl flex-col">
-      {/* ── Header ── */}
+      {/* â”€â”€ Header â”€â”€ */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/[0.06]">
@@ -553,11 +346,11 @@ export function DailySalesView() {
         </div>
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════
-       *  SECTION 1 — Daily Sales Report (matches the legacy Excel template)
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+       *  SECTION 1 â€” Daily Sales Report (matches the legacy Excel template)
        *  This is the PRIMARY view. Sections 2 & 3 (charts + data table)
        *  live below it for trend analysis.
-       * ═══════════════════════════════════════════════════════════ */}
+       * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <DailyReportCard
         date={selectedDate}
         data={singleDay}
@@ -571,7 +364,7 @@ export function DailySalesView() {
         onEditEntry={openEditModal}
       />
 
-      {/* Manual entry modal — opened from the no-data CTA or the Edit pencil */}
+      {/* Manual entry modal â€” opened from the no-data CTA or the Edit pencil */}
       {entryModalOpen && token && locationId && (
         <ManualEntryModal
           mode={entryModalMode}
@@ -592,55 +385,15 @@ export function DailySalesView() {
         <div className="h-px flex-1 bg-border" />
       </div>
 
-      {/* ── Date range selector + presets ── */}
-      <div className="mb-4 rounded-xl border border-border bg-background p-3 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
-        <div className="flex flex-wrap items-center gap-2">
-          <Calendar size={14} className="text-muted-foreground" />
-          <input
-            type="date"
-            value={dateRange.from}
-            onChange={handleCustomDate("from")}
-            className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] text-foreground outline-none focus:border-primary/40"
-          />
-          <span className="text-[12px] text-muted-foreground">&rarr;</span>
-          <input
-            type="date"
-            value={dateRange.to}
-            onChange={handleCustomDate("to")}
-            className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] text-foreground outline-none focus:border-primary/40"
-          />
-          <div className="mx-2 h-5 w-px bg-border" />
-          <div className="flex flex-wrap items-center gap-1">
-            {PRESETS.map((p) => (
-              <button
-                key={p.label}
-                onClick={() => handlePreset(p)}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
-                  activePreset === p.label
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground hover:bg-muted/70",
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <div className="mx-2 h-5 w-px bg-border" />
-          <label className="text-[11px] text-muted-foreground">Group:</label>
-          <select
-            value={groupBy}
-            onChange={(e) => setGroupBy(e.target.value as GroupBy)}
-            className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] outline-none"
-          >
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-            <option value="month">Month</option>
-            <option value="quarter">Quarter</option>
-            <option value="year">Year</option>
-          </select>
-        </div>
-      </div>
+      {/* â”€â”€ Date range selector + presets â”€â”€ */}
+      <DateRangeControls
+        dateRange={dateRange}
+        activePreset={activePreset}
+        groupBy={groupBy}
+        onCustomDate={handleCustomDate}
+        onPreset={handlePreset}
+        onGroupByChange={setGroupBy}
+      />
 
       {error && (
         <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2 text-sm text-destructive">
@@ -658,13 +411,13 @@ export function DailySalesView() {
 
       {summary && (
         <>
-          {/* ── Summary KPI cards ── */}
+          {/* â”€â”€ Summary KPI cards â”€â”€ */}
           <SummaryCards summary={summary} />
 
-          {/* ── Revenue Trend ── */}
+          {/* â”€â”€ Revenue Trend â”€â”€ */}
           <ChartCard
             title="Revenue Trend"
-            subtitle={`${fmtDate(dateRange.from)} – ${fmtDate(dateRange.to)} · grouped by ${groupBy}`}
+            subtitle={`${fmtDate(dateRange.from)} â€“ ${fmtDate(dateRange.to)} Â· grouped by ${groupBy}`}
           >
             <ResponsiveContainer width="100%" height={320}>
               <AreaChart data={series} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
@@ -710,7 +463,7 @@ export function DailySalesView() {
             </ResponsiveContainer>
           </ChartCard>
 
-          {/* ── Division Breakdown + Cash vs Credit side by side ── */}
+          {/* â”€â”€ Division Breakdown + Cash vs Credit side by side â”€â”€ */}
           <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
             <ChartCard title="Division Breakdown" subtitle="Share of total revenue">
               {divisions && <DivisionPie divisions={divisions.divisions} />}
@@ -721,7 +474,7 @@ export function DailySalesView() {
             </ChartCard>
           </div>
 
-          {/* ── Payments Trend + Day of Week ── */}
+          {/* â”€â”€ Payments Trend + Day of Week â”€â”€ */}
           <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
             <ChartCard title="Collections (AR Payments)" subtitle="Payments received over time">
               <PaymentsTrend series={series} groupBy={groupBy} />
@@ -732,12 +485,12 @@ export function DailySalesView() {
             </ChartCard>
           </div>
 
-          {/* ── YoY ── */}
+          {/* â”€â”€ YoY â”€â”€ */}
           <ChartCard title="Year-over-Year Comparison" subtitle="Monthly totals across every year in the data">
             <YoYChart yoy={yoy} />
           </ChartCard>
 
-          {/* ── Detailed daily data table ── */}
+          {/* â”€â”€ Detailed daily data table â”€â”€ */}
           <DailyDataTable rows={rows} from={dateRange.from} to={dateRange.to} />
         </>
       )}
@@ -745,109 +498,9 @@ export function DailySalesView() {
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
- *  Summary cards
- * ═════════════════════════════════════════════════════════════ */
-function SummaryCards({ summary }: { summary: SummaryResponse }) {
-  const growthPositive = summary.yoyGrowthPct != null && summary.yoyGrowthPct >= 0;
-  return (
-    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <KPICard
-        icon={<DollarSign size={14} />}
-        label="Total Revenue"
-        value={fmtPesoFull(summary.totalSales)}
-        sub={`${summary.dayCount} business days`}
-        accent
-      />
-      <KPICard
-        icon={<BarChart3 size={14} />}
-        label="Avg Daily Sales"
-        value={fmtPesoFull(summary.avgDailySales)}
-        sub={summary.cashShare != null ? `${(summary.cashShare * 100).toFixed(0)}% cash, ${((summary.creditShare ?? 0) * 100).toFixed(0)}% credit` : ""}
-      />
-      <KPICard
-        icon={<Award size={14} />}
-        label="Best Day"
-        value={summary.bestDay ? fmtPesoFull(summary.bestDay.amount) : "—"}
-        sub={summary.bestDay ? fmtDate(summary.bestDay.date) : ""}
-      />
-      <KPICard
-        icon={growthPositive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-        label="YoY Growth"
-        value={fmtPct(summary.yoyGrowthPct)}
-        sub={`vs ${fmtPesoFull(summary.prevTotalSales)} prior`}
-        color={
-          summary.yoyGrowthPct == null
-            ? undefined
-            : growthPositive
-            ? "text-emerald-600"
-            : "text-red-600"
-        }
-      />
-    </div>
-  );
-}
-
-function KPICard({
-  icon,
-  label,
-  value,
-  sub,
-  accent,
-  color,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sub?: string;
-  accent?: boolean;
-  color?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-xl border border-border bg-background p-4 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]",
-        accent && "border-amber-200 bg-amber-50/40 dark:border-amber-800 dark:bg-amber-950/20",
-      )}
-    >
-      <div className="flex items-center gap-1.5 text-muted-foreground">
-        {icon}
-        <span className="text-[11px] font-medium">{label}</span>
-      </div>
-      <div className={cn("mt-1 text-xl font-bold tabular-nums text-foreground", color)}>
-        {value}
-      </div>
-      {sub && <div className="mt-0.5 text-[11px] text-muted-foreground">{sub}</div>}
-    </div>
-  );
-}
-
-/* ═════════════════════════════════════════════════════════════
- *  ChartCard wrapper
- * ═════════════════════════════════════════════════════════════ */
-function ChartCard({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="mb-4 rounded-xl border border-border bg-background p-4 shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
-      <div className="mb-3">
-        <h3 className="text-[14px] font-semibold text-foreground">{title}</h3>
-        {subtitle && <p className="text-[11px] text-muted-foreground">{subtitle}</p>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Division Breakdown pie
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 function DivisionPie({ divisions }: { divisions: DivisionRow[] }) {
   const data = divisions.filter((d) => d.total > 0);
   if (data.length === 0) {
@@ -881,9 +534,9 @@ function DivisionPie({ divisions }: { divisions: DivisionRow[] }) {
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Cash vs Credit stacked bar
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 function CashCreditStack({ divisions }: { divisions: DivisionRow[] }) {
   return (
     <ResponsiveContainer width="100%" height={260}>
@@ -903,9 +556,9 @@ function CashCreditStack({ divisions }: { divisions: DivisionRow[] }) {
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  Payments Trend
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 function PaymentsTrend({
   series,
   groupBy,
@@ -947,9 +600,9 @@ function PaymentsTrend({
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
- *  Day-of-Week chart (bar, not actual heatmap — simpler + more legible)
- * ═════════════════════════════════════════════════════════════ */
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+ *  Day-of-Week chart (bar, not actual heatmap â€” simpler + more legible)
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 function DayOfWeekChart({ dow }: { dow: DayOfWeekRow[] }) {
   const data = dow.map((r) => ({ ...r, label: DOW_NAMES[r.dow] }));
   return (
@@ -969,9 +622,9 @@ function DayOfWeekChart({ dow }: { dow: DayOfWeekRow[] }) {
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  *  YoY multi-line chart
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 function YoYChart({ yoy }: { yoy: YoYRow[] }) {
   // Pivot into { month, [year1]: total, [year2]: total, ... }
   const { pivoted, years } = useMemo(() => {
@@ -1021,246 +674,6 @@ function YoYChart({ yoy }: { yoy: YoYRow[] }) {
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
- *  Detailed data table (sortable, CSV export)
- * ═════════════════════════════════════════════════════════════ */
-type SortField =
-  | "date"
-  | "apOldSales"
-  | "apNewSales"
-  | "apOnAccount"
-  | "acSales"
-  | "acOnAccount"
-  | "serviceSales"
-  | "serviceOnAccount"
-  | "paintingSales"
-  | "paintingOnAccount"
-  | "juniorSales"
-  | "payments"
-  | "total";
-
-function DailyDataTable({ rows, from, to }: { rows: DailyRow[]; from: string; to: string }) {
-  const [sortField, setSortField] = useState<SortField>("date");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [search, setSearch] = useState("");
-
-  const sorted = useMemo(() => {
-    const withTotal = rows.map((r) => ({
-      ...r,
-      total:
-        r.apOldSales + r.apNewSales + r.apOnAccount +
-        r.acSales + r.acOnAccount +
-        r.serviceSales + r.serviceOnAccount +
-        r.paintingSales + r.paintingOnAccount +
-        r.juniorSales,
-    }));
-    const filtered = search
-      ? withTotal.filter((r) => r.date.includes(search))
-      : withTotal;
-    return [...filtered].sort((a, b) => {
-      let cmp: number;
-      if (sortField === "date") {
-        cmp = a.date.localeCompare(b.date);
-      } else {
-        cmp = (a[sortField] as number) - (b[sortField] as number);
-      }
-      return sortDir === "desc" ? -cmp : cmp;
-    });
-  }, [rows, search, sortField, sortDir]);
-
-  const handleSort = (field: SortField) => {
-    if (field === sortField) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortField(field);
-      setSortDir(field === "date" ? "desc" : "desc");
-    }
-  };
-
-  const exportCSV = () => {
-    const headers = [
-      "Date",
-      "A/P Old", "A/P New", "A/P On Acct",
-      "A/C", "A/C On Acct",
-      "Service", "Service On Acct",
-      "Painting", "Painting On Acct",
-      "Junior",
-      "Payments",
-      "Total",
-    ];
-    const csvRows = sorted.map((r) =>
-      [
-        r.date,
-        r.apOldSales, r.apNewSales, r.apOnAccount,
-        r.acSales, r.acOnAccount,
-        r.serviceSales, r.serviceOnAccount,
-        r.paintingSales, r.paintingOnAccount,
-        r.juniorSales,
-        r.payments,
-        r.total,
-      ].join(","),
-    );
-    const blob = new Blob([headers.join(",") + "\n" + csvRows.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `daily-sales-${from}-to-${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  return (
-    <div className="mb-4 rounded-xl border border-border bg-background shadow-[0_1px_3px_0_rgba(0,0,0,0.04)]">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div>
-          <h3 className="text-[14px] font-semibold text-foreground">Daily Data</h3>
-          <p className="text-[11px] text-muted-foreground">
-            {sorted.length} days · {fmtDate(from)} – {fmtDate(to)}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter by date (YYYY-MM)…"
-            className="h-8 w-56 rounded-lg border border-border bg-background px-2 text-[12px] outline-none focus:border-primary/40"
-          />
-          <button
-            onClick={exportCSV}
-            disabled={sorted.length === 0}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Download size={12} /> Export CSV
-          </button>
-        </div>
-      </div>
-      <div className="max-h-[480px] overflow-auto">
-        <table className="w-full text-[11px]">
-          <thead className="sticky top-0 bg-muted/60 backdrop-blur">
-            <tr>
-              <Th field="date" label="Date" activeField={sortField} dir={sortDir} onSort={handleSort} align="left" />
-              <Th field="apOldSales" label="A/P Old" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="apNewSales" label="A/P New" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="apOnAccount" label="A/P Acct" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="acSales" label="A/C" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="acOnAccount" label="A/C Acct" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="serviceSales" label="Service" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="serviceOnAccount" label="Svc Acct" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="paintingSales" label="Painting" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="paintingOnAccount" label="Paint Acct" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="juniorSales" label="Junior" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="payments" label="Payments" activeField={sortField} dir={sortDir} onSort={handleSort} />
-              <Th field="total" label="Total" activeField={sortField} dir={sortDir} onSort={handleSort} />
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((r) => (
-              <tr key={r.date} className="border-b border-border/40 hover:bg-accent/30">
-                <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">{r.date}</td>
-                <Td v={r.apOldSales} />
-                <Td v={r.apNewSales} />
-                <Td v={r.apOnAccount} />
-                <Td v={r.acSales} />
-                <Td v={r.acOnAccount} />
-                <Td v={r.serviceSales} />
-                <Td v={r.serviceOnAccount} />
-                <Td v={r.paintingSales} />
-                <Td v={r.paintingOnAccount} />
-                <Td v={r.juniorSales} />
-                <Td v={r.payments} muted />
-                <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-foreground">
-                  {r.total > 0 ? fmtPesoFull(r.total) : "—"}
-                </td>
-              </tr>
-            ))}
-            {sorted.length === 0 && (
-              <tr>
-                <td colSpan={13} className="px-3 py-8 text-center text-[12px] text-muted-foreground">
-                  No rows in the selected period
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function Th({
-  field,
-  label,
-  activeField,
-  dir,
-  onSort,
-  align = "right",
-}: {
-  field: SortField;
-  label: string;
-  activeField: SortField;
-  dir: "asc" | "desc";
-  onSort: (f: SortField) => void;
-  align?: "left" | "right";
-}) {
-  const active = field === activeField;
-  return (
-    <th
-      className={cn(
-        "px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground select-none",
-        align === "right" ? "text-right" : "text-left",
-      )}
-    >
-      <button
-        onClick={() => onSort(field)}
-        className={cn(
-          "group inline-flex items-center gap-0.5 transition-colors",
-          active ? "text-foreground" : "hover:text-foreground",
-          align === "right" && "flex-row-reverse",
-        )}
-      >
-        {label}
-        <span className="inline-flex w-3 justify-center">
-          {active ? (
-            dir === "asc" ? <ChevronUp size={10} className="text-primary" strokeWidth={2.5} />
-            : <ChevronDown size={10} className="text-primary" strokeWidth={2.5} />
-          ) : (
-            <ChevronsUpDown size={10} className="text-muted-foreground/30 group-hover:text-muted-foreground/60" />
-          )}
-        </span>
-      </button>
-    </th>
-  );
-}
-
-function Td({ v, muted }: { v: number; muted?: boolean }) {
-  if (v === 0) {
-    return <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground/30">—</td>;
-  }
-  return (
-    <td
-      className={cn(
-        "px-3 py-1.5 text-right tabular-nums",
-        muted ? "text-emerald-600" : "text-foreground",
-      )}
-    >
-      {fmtPesoFull(v)}
-    </td>
-  );
-}
-
-/* ═════════════════════════════════════════════════════════════
- *  SECTION 1 — Daily Sales Report card
- *
- *  Replicates the legacy Excel "Daily Sales Report" template that
- *  Chris reviews every morning. Each division row shows the cash/credit
- *  breakdown, division total, and percentage of grand total. The
- *  Auto Parts row also shows the OLD/NEW ratio (e.g. 0.18 / 0.82).
- *
- *  Optional "Compare to yesterday" overlay renders a green/red delta
- *  next to each division total.
- * ═════════════════════════════════════════════════════════════ */
-
 interface DailyReportCardProps {
   date: string;
   data: SingleDayResponse | null;
@@ -1282,7 +695,7 @@ interface DailyReportCardProps {
  * Design brief: mirror the live on-screen `#daily-report-card` element-for-
  * element at its full 640px width, so the captured PNG is visually identical
  * to what the user sees in the browser. The on-screen card is rendered by
- * `DailyReportCard` → `ReportRows` → `DivisionCard`; this template hand-
+ * `DailyReportCard` â†’ `ReportRows` â†’ `DivisionCard`; this template hand-
  * rewrites the same layout in inline-styled HTML that survives the
  * dom-to-image-more cloning pass without Tailwind class lookups.
  *
@@ -1293,25 +706,25 @@ interface DailyReportCardProps {
  * washed colors. The static-HTML + scoped-reset approach is robust and we've
  * already proved it captures cleanly at 1:1.
  *
- * Template rules — all chosen to survive dom-to-image-more's CSS inlining:
- *  • A scoped `<style>` reset (`.ds-img-root *, ...`) zeroes out every
+ * Template rules â€” all chosen to survive dom-to-image-more's CSS inlining:
+ *  â€¢ A scoped `<style>` reset (`.ds-img-root *, ...`) zeroes out every
  *    descendant's border/outline/box-shadow so Tailwind's preflight
- *    `border:0 solid #E5E7EB` can't leak through as ghost 0.666…px
+ *    `border:0 solid #E5E7EB` can't leak through as ghost 0.666â€¦px
  *    hairlines. Specificity (0,1,0) beats preflight's `*` (0,0,0) but
  *    stays below inline styles (1,0,0,0), so the elements that explicitly
  *    declare a border still get one.
- *  • Every <div>, <table>, and <td> starts its inline style with
+ *  â€¢ Every <div>, <table>, and <td> starts its inline style with
  *    `NO_BORDER` belt-and-suspenders; elements with real borders declare
  *    them after.
- *  • Flex layouts are replaced with 2-cell <table> rows (baseline-aligned).
- *  • Proportion bars are divs with nested fill divs — no table cells.
- *  • A/P's segmented OLD/NEW bar uses a `width:${barPct}%` outer div
+ *  â€¢ Flex layouts are replaced with 2-cell <table> rows (baseline-aligned).
+ *  â€¢ Proportion bars are divs with nested fill divs â€” no table cells.
+ *  â€¢ A/P's segmented OLD/NEW bar uses a `width:${barPct}%` outer div
  *    containing a 2-cell table whose widths are `${oldRatio*100}%` and
  *    `${newRatio*100}%`. Left cell gets 0.55 opacity for the OLD segment.
- *  • All colors are hex; no CSS variables, no oklch.
- *  • Geist/SF stack with Arial/Courier fallbacks since web fonts may not
+ *  â€¢ All colors are hex; no CSS variables, no oklch.
+ *  â€¢ Geist/SF stack with Arial/Courier fallbacks since web fonts may not
  *    load inside the foreignObject pipeline.
- *  • Dimensions and font sizes match the on-screen card verbatim.
+ *  â€¢ Dimensions and font sizes match the on-screen card verbatim.
  */
 function buildDailySalesImageHtml(
   data: SingleDayResponse,
@@ -1349,7 +762,7 @@ function buildDailySalesImageHtml(
     ratio?: number | null;
   };
 
-  // Renders an inline SubItem — label + amount + optional ratio — matching
+  // Renders an inline SubItem â€” label + amount + optional ratio â€” matching
   // the on-screen `SubItem` component at `page.tsx:2117`.
   const renderSubItem = (spec: SubItemSpec, accentColor: string, isZero: boolean): string => {
     const valueColor = isZero ? "#CBD5E1" : "#334155";
@@ -1429,7 +842,7 @@ function buildDailySalesImageHtml(
         </div>
       </div>`;
 
-    // Sub-row: SubItems on the left (OLD·NEW or CASH), ACCT on the right.
+    // Sub-row: SubItems on the left (OLDÂ·NEW or CASH), ACCT on the right.
     let leftContent = "";
     if (segmented) {
       leftContent = `${renderSubItem({ label: "OLD", value: segmented.old.value, ratio: segmented.old.ratio }, style.text, isZero)}<span style="${NO_BORDER}color:#CBD5E1;margin:0 8px;">\u00B7</span>${renderSubItem({ label: "NEW", value: segmented.new.value, ratio: segmented.new.ratio }, style.text, isZero)}`;
@@ -1578,7 +991,7 @@ function buildDailySalesImageHtml(
  * walks the stylesheet list globally. dom-to-image-more's SVG-foreignObject
  * pipeline sidesteps that by letting the browser do color resolution.
  *
- * Dynamic import keeps the library (~150kB) out of the initial bundle — it
+ * Dynamic import keeps the library (~150kB) out of the initial bundle â€” it
  * loads on first click only. ClipboardItem is not available in some browsers
  * (Safari < 13.4, older Firefox), so we fall back to a download.
  */
@@ -1590,7 +1003,7 @@ async function copyReportAsImage(
 ): Promise<"copied" | "downloaded" | "failed"> {
   const html = buildDailySalesImageHtml(data, longDate, dayOfWeek);
 
-  // Offscreen container — positioned far off-screen so it doesn't flash
+  // Offscreen container â€” positioned far off-screen so it doesn't flash
   // visibly, but still laid out so offsetHeight is real.
   const container = document.createElement("div");
   container.style.position = "fixed";
@@ -1605,7 +1018,7 @@ async function copyReportAsImage(
     const mod = await import("dom-to-image-more");
     const domtoimage = (mod as any).default ?? mod;
 
-    // 2x scale via transform → sharper output without relying on a `scale`
+    // 2x scale via transform â†’ sharper output without relying on a `scale`
     // option that dom-to-image-more doesn't have. Matches what the previous
     // implementation did and is the documented way to get retina PNGs.
     const w = 640;
@@ -1701,14 +1114,14 @@ function DailyReportCard({
 
   return (
     <div className="mb-4 print:shadow-none">
-      {/* Date navigator + actions — kept OUTSIDE the capture target so the
+      {/* Date navigator + actions â€” kept OUTSIDE the capture target so the
           screenshot is just the report card, not the navigation chrome. */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-1.5 print:hidden">
         <div className="flex items-center gap-2">
           <button
             onClick={() => onStepDate(-1)}
             className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Previous day (←)"
+            title="Previous day (â†)"
           >
             <ChevronLeft size={14} />
           </button>
@@ -1723,7 +1136,7 @@ function DailyReportCard({
             onClick={() => onStepDate(1)}
             disabled={date >= toIso(new Date())}
             className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Next day (→)"
+            title="Next day (â†’)"
           >
             <ChevronRight size={14} />
           </button>
@@ -1731,7 +1144,7 @@ function DailyReportCard({
             <span className="text-[13px] font-bold text-foreground">{longDate}</span>
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
               {dayOfWeek}
-              <span className="ml-2 text-muted-foreground/60">← → arrow keys</span>
+              <span className="ml-2 text-muted-foreground/60">â† â†’ arrow keys</span>
             </span>
           </div>
         </div>
@@ -1761,7 +1174,7 @@ function DailyReportCard({
                     : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
                 copyState === "copying" && "cursor-wait opacity-70",
               )}
-              title="Copy as image — paste directly into Viber/Messenger"
+              title="Copy as image â€” paste directly into Viber/Messenger"
             >
               {copyState === "copying" ? (
                 <Loader2 size={12} className="animate-spin" />
@@ -1799,7 +1212,7 @@ function DailyReportCard({
         </div>
       </div>
 
-      {/* ── Capture target ──
+      {/* â”€â”€ Capture target â”€â”€
           Everything inside #daily-report-card ends up in the screenshot.
           Max-w-[640px] keeps the captured PNG at a chat-friendly width.
           Width: max-w-[640px] desktop / full-width mobile.
@@ -1809,7 +1222,7 @@ function DailyReportCard({
         data-date={date}
         className="mx-auto max-w-[640px] overflow-hidden rounded-2xl border border-border bg-white shadow-[0_4px_24px_-12px_rgba(0,0,0,0.12)] print:max-w-none print:shadow-none print:border-black"
       >
-        {/* Title strip — matches the Excel report header */}
+        {/* Title strip â€” matches the Excel report header */}
         <div className="border-b border-border bg-gradient-to-b from-amber-50 to-white px-6 py-4 text-center print:bg-white">
           <div className="font-serif text-[15px] font-bold tracking-wide text-slate-900">
             C-BROS GENUINE AUTO PARTS &amp; ACCESSORIES, INC
@@ -1818,7 +1231,7 @@ function DailyReportCard({
             Daily Sales Report
           </div>
           <div className="mt-2 text-[12px] font-semibold text-slate-700">
-            {longDate} <span className="text-slate-400">·</span>{" "}
+            {longDate} <span className="text-slate-400">Â·</span>{" "}
             <span className="uppercase tracking-wider text-slate-500">{dayOfWeek}</span>
           </div>
         </div>
@@ -1826,7 +1239,7 @@ function DailyReportCard({
         {/* Body */}
         {loading && !data ? (
           <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-            <Loader2 size={16} className="mr-2 animate-spin" /> Loading…
+            <Loader2 size={16} className="mr-2 animate-spin" /> Loadingâ€¦
           </div>
         ) : !data || !data.hasData ? (
           <NoDataPanel date={date} dayOfWeek={dayOfWeek} onCreateEntry={onCreateEntry} />
@@ -1847,7 +1260,7 @@ function NoDataPanel({
   dayOfWeek: string;
   onCreateEntry: () => void;
 }) {
-  // Refuse to show the "Enter Sales" CTA for future dates — sales can't
+  // Refuse to show the "Enter Sales" CTA for future dates â€” sales can't
   // be reported before they happen, and the API will reject it anyway.
   const isFuture = date > toIso(new Date());
   return (
@@ -1872,19 +1285,19 @@ function NoDataPanel({
       )}
       {isFuture && (
         <p className="text-[11px] italic text-muted-foreground/70">
-          This is a future date — sales can be entered once the day has passed.
+          This is a future date â€” sales can be entered once the day has passed.
         </p>
       )}
     </div>
   );
 }
 
-/* ─── Body cards (5 divisions + totals) ─── */
+/* â”€â”€â”€ Body cards (5 divisions + totals) â”€â”€â”€ */
 
 /**
  * Per-division visual identity. Each division gets its own color so the report
  * can be scanned at a glance. The hex strings are used directly on inline
- * styles for the progress bar fill so html2canvas captures them faithfully —
+ * styles for the progress bar fill so html2canvas captures them faithfully â€”
  * Tailwind arbitrary classes occasionally get purged when serialized.
  */
 interface DivisionStyle {
@@ -1913,7 +1326,7 @@ function ReportRows({
 
   return (
     <div className="space-y-2.5 px-5 py-4">
-      {/* AUTO PARTS — special: OLD/NEW segmented bar */}
+      {/* AUTO PARTS â€” special: OLD/NEW segmented bar */}
       <DivisionCard
         styleKey="ap"
         label="A/P"
@@ -1959,7 +1372,7 @@ function ReportRows({
         cash={data.painting.cash}
         acct={data.painting.onAccount}
       />
-      {/* JUNIOR — no ACCT column at all */}
+      {/* JUNIOR â€” no ACCT column at all */}
       <DivisionCard
         styleKey="junior"
         label="Junior"
@@ -1969,7 +1382,7 @@ function ReportRows({
         cash={data.junior.cash}
       />
 
-      {/* GRAND TOTAL — prominent footer card */}
+      {/* GRAND TOTAL â€” prominent footer card */}
       <div
         className="mt-3 overflow-hidden rounded-xl border border-amber-300"
         style={{ background: "linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%)" }}
@@ -1991,7 +1404,7 @@ function ReportRows({
             Payments (AR Collections)
           </span>
           <span className="text-[13px] font-bold tabular-nums text-amber-900">
-            {data.totals.payments > 0 ? fmtPesoFull(data.totals.payments) : "—"}
+            {data.totals.payments > 0 ? fmtPesoFull(data.totals.payments) : "â€”"}
           </span>
         </div>
       </div>
@@ -2007,13 +1420,13 @@ function FooterStat({ label, value }: { label: string; value: number }) {
         {label}
       </span>
       <span className="mt-0.5 text-[14px] font-bold tabular-nums text-amber-900">
-        {value > 0 ? fmtPesoFull(value) : "—"}
+        {value > 0 ? fmtPesoFull(value) : "â€”"}
       </span>
     </div>
   );
 }
 
-/* ─── One division card ─── */
+/* â”€â”€â”€ One division card â”€â”€â”€ */
 
 interface DivisionCardProps {
   styleKey: keyof typeof DIVISION_STYLES;
@@ -2022,9 +1435,9 @@ interface DivisionCardProps {
   total: number;
   previousTotal: number | null;
   percentage: number;
-  /** A/C / Service / Painting / Junior — single CASH amount */
+  /** A/C / Service / Painting / Junior â€” single CASH amount */
   cash?: number;
-  /** A/P only — OLD/NEW split with the OLD ratio */
+  /** A/P only â€” OLD/NEW split with the OLD ratio */
   segmented?: {
     old: { value: number; ratio: number | null };
     new: { value: number; ratio: number | null };
@@ -2061,7 +1474,7 @@ function DivisionCard({
         isZero ? "border-slate-200 bg-slate-50/40 opacity-70" : "border-slate-200 bg-white",
       )}
     >
-      {/* Header strip — division name, total, percentage */}
+      {/* Header strip â€” division name, total, percentage */}
       <div
         className="flex items-center justify-between px-4 py-2"
         style={{ backgroundColor: isZero ? "#f8fafc" : style.headerBg }}
@@ -2090,7 +1503,7 @@ function DivisionCard({
               isZero ? "text-slate-400" : "text-slate-900",
             )}
           >
-            {isZero ? "—" : fmtPesoFull(total)}
+            {isZero ? "â€”" : fmtPesoFull(total)}
           </span>
           <span
             className={cn(
@@ -2103,7 +1516,7 @@ function DivisionCard({
         </div>
       </div>
 
-      {/* Full-width progress bar — proportional to grand total */}
+      {/* Full-width progress bar â€” proportional to grand total */}
       <div className="px-4 pt-2">
         <div
           className="relative h-2.5 w-full overflow-hidden rounded-full"
@@ -2149,7 +1562,7 @@ function DivisionCard({
                 color={style.text}
                 isZero={isZero}
               />
-              <span className="text-slate-300">·</span>
+              <span className="text-slate-300">Â·</span>
               <SubItem
                 label="NEW"
                 value={segmented.new.value}
@@ -2210,7 +1623,7 @@ function SubItem({
           isZero ? "text-slate-300" : "text-slate-700",
         )}
       >
-        {value > 0 ? fmtPesoFull(value) : "—"}
+        {value > 0 ? fmtPesoFull(value) : "â€”"}
       </span>
       {ratio != null && value > 0 && (
         <span className="text-[9px] text-slate-400">({ratio.toFixed(2)})</span>
@@ -2219,12 +1632,12 @@ function SubItem({
   );
 }
 
-/** Green ↑ / red ↓ delta pill rendered next to a division total. */
+/** Green â†‘ / red â†“ delta pill rendered next to a division total. */
 function DeltaPill({ delta }: { delta: number }) {
   if (delta === 0) {
     return (
       <span className="inline-flex items-center gap-0.5 rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
-        ±0
+        Â±0
       </span>
     );
   }
@@ -2245,8 +1658,8 @@ function DeltaPill({ delta }: { delta: number }) {
   );
 }
 
-/* ═════════════════════════════════════════════════════════════
- *  Manual Entry Modal — POST /analytics/daily-sales/upsert
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+ *  Manual Entry Modal â€” POST /analytics/daily-sales/upsert
  *
  *  Mode 'create' opens an empty form (used by the no-data CTA).
  *  Mode 'edit'   prefills from the existing SingleDayResponse so the user
@@ -2255,7 +1668,7 @@ function DeltaPill({ delta }: { delta: number }) {
  *  Submitting writes to daily_sales_summary with source='MANUAL' and
  *  recorded_by set to the current admin user. The parent page is told via
  *  onSaved so it can replace its local state without a follow-up GET.
- * ═════════════════════════════════════════════════════════════ */
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 interface EntryForm {
   apOldSales: string;
@@ -2305,7 +1718,7 @@ function ManualEntryModal({
   onSaved: (saved: SingleDayResponse) => void;
 }) {
   // Prefill from existing data when editing. We use string state (not number)
-  // so empty inputs stay empty rather than rendering "0" — and the user can
+  // so empty inputs stay empty rather than rendering "0" â€” and the user can
   // type partial decimals without React fighting them.
   const [form, setForm] = useState<EntryForm>(() => {
     if (mode === "edit" && existing && existing.hasData) {
@@ -2457,7 +1870,7 @@ function ManualEntryModal({
           </button>
         </div>
 
-        {/* Body — scrollable form */}
+        {/* Body â€” scrollable form */}
         <form onSubmit={handleSubmit} className="max-h-[70vh] overflow-y-auto">
           <div className="space-y-4 px-6 py-4">
             <EntrySection title="Auto Parts (A/P)" tint="bg-blue-50/40">
@@ -2497,7 +1910,7 @@ function ManualEntryModal({
                 value={form.notes}
                 onChange={(e) => setField("notes", e.target.value)}
                 rows={2}
-                placeholder="e.g. half-day, holiday, system was down…"
+                placeholder="e.g. half-day, holiday, system was downâ€¦"
                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary/40 focus:ring-1 focus:ring-primary/20"
               />
             </div>
@@ -2514,7 +1927,7 @@ function ManualEntryModal({
             <div className="text-[11px] text-muted-foreground">
               Grand total preview:{" "}
               <span className="ml-1 text-[14px] font-bold tabular-nums text-foreground">
-                {grandTotal > 0 ? fmtPesoFull(grandTotal) : "—"}
+                {grandTotal > 0 ? fmtPesoFull(grandTotal) : "â€”"}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -2577,7 +1990,7 @@ function EntryField({
       </label>
       <div className="relative">
         <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
-          ₱
+          â‚±
         </span>
         <input
           type="number"
@@ -2593,4 +2006,3 @@ function EntryField({
     </div>
   );
 }
-
