@@ -33,7 +33,10 @@ interface SOAInput {
   soaNumber?: string;
   generatedAt?: string;
   generatedBy?: string;
+  printMode?: CustomerSOAPrintMode;
 }
+
+export type CustomerSOAPrintMode = "detailed" | "concise";
 
 /* ── Helpers ── */
 function fmt(v: number): string {
@@ -51,8 +54,120 @@ function esc(s: string): string {
 const ROWS_PER_PAGE = 40;          // rows per page for multi-page SOAs
 const MAX_SINGLE_PAGE_ROWS = 27;   // max data rows that fit on 1 page with all bottom sections
 
+function buildConciseSOAHtml(data: SOAInput): string {
+  const c = data.customer;
+  const f = new Date(data.from);
+  const t = new Date(data.to);
+  const period = f.getFullYear() === t.getFullYear()
+    ? `${f.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${t.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+    : `${f.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} - ${t.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+  const year = String(t.getFullYear());
+  const terms = c.paymentTermsDays === 0 ? "COD" : `Net ${c.paymentTermsDays}`;
+  const phone = c.phone?.startsWith("AR-") ? "" : c.phone || "";
+  const charges = data.transactions.filter((x) => x.type === "CHARGE" || (x.type === "ADJUSTMENT" && parseFloat(x.amount) > 0));
+  const credits = data.transactions.filter((x) => x.type === "PAYMENT" || x.type === "CREDIT_NOTE" || (x.type === "ADJUSTMENT" && parseFloat(x.amount) < 0));
+  const generatedAt = new Date(data.generatedAt || Date.now()).toLocaleString("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const generatedBy = data.generatedBy || "System";
+  const chargeTotal = charges.reduce((s, x) => s + Math.abs(parseFloat(x.amount)), 0);
+  const creditTotal = credits.reduce((s, x) => s + Math.abs(parseFloat(x.amount)), 0);
+  const totalPayable = chargeTotal - creditTotal;
+  const rowSlots = Math.max(5, Math.min(8, charges.length));
+  const emptyRows = Array(Math.max(0, rowSlots - charges.length))
+    .fill("<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>")
+    .join("");
+  const rows = charges.map((x) =>
+    `<tr><td>${fmtDate(x.recordedAt)}</td><td class="part">${esc(x.referenceNumber || x.notes || "Credit Sale")}</td><td class="r">${fmt(Math.abs(parseFloat(x.amount)))}</td></tr>`
+  ).join("");
+  const creditSummary = credits.length > 0
+    ? `<div class="credit"><b>Credit memo / payments:</b><span>${fmt(creditTotal)}</span></div>`
+    : `<div class="credit muted"><b>Credit memo:</b><span>-</span></div>`;
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Concise Billing Statement - ${esc(c.name)}</title>
+<style>
+@page { size: letter portrait; margin: 0; }
+body { font-family: Arial, sans-serif; color: #000; margin: 0; padding: 0; background: #fff; }
+.page { box-sizing: border-box; width: 8.1in; height: 5.15in; margin: 0.18in auto 0; padding: 0.04in 0.08in; overflow: hidden; }
+.brand { font-family: 'Rockwell Extra Bold', Rockwell, Georgia, serif; font-size: 13pt; font-weight: 900; text-align: center; letter-spacing: .4px; margin-bottom: 3px; }
+.top { border: 1px solid #000; display: grid; grid-template-columns: 1.2fr .9fr; font-size: 7.6pt; line-height: 1.18; }
+.top > div { padding: 3px 5px; }
+.top > div:first-child { border-right: 1px solid #000; }
+.line { display: grid; grid-template-columns: 92px 1fr; gap: 3px; align-items: end; }
+.label { font-weight: 800; white-space: nowrap; }
+.value { min-height: 12px; border-bottom: 1px solid #000; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.title { text-align: center; font-weight: 900; font-size: 10.5pt; margin: 4px 0 0; letter-spacing: .5px; }
+.meta { text-align: center; font-size: 7.2pt; color: #334155; margin-bottom: 3px; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th, td { border: 1px solid #000; padding: 2px 6px; font-size: 8.2pt; line-height: 1.1; }
+th { background: #e8e8e8; font-weight: 900; }
+td { height: 17px; }
+.period th { text-align: left; font-size: 7.8pt; padding: 2px 5px; }
+.period th:last-child { text-align: right; }
+.date { width: 24%; }
+.part { width: 46%; text-align: center; font-weight: 700; }
+.amt { width: 30%; }
+.r { text-align: right; font-family: 'Courier New', Courier, monospace; }
+.tot td { font-weight: 900; background: #f3f4f6; font-size: 8.8pt; }
+.credit { display: flex; justify-content: space-between; border: 1px solid #000; border-top: 0; padding: 2px 8px; font-size: 8pt; line-height: 1.15; }
+.muted { color: #475569; }
+.grand { display: grid; grid-template-columns: 1fr 170px; border: 2px solid #000; margin-top: 3px; font-weight: 900; font-size: 10pt; }
+.grand div { padding: 3px 8px; }
+.grand div:first-child { text-align: right; border-right: 1px solid #000; }
+.note { text-align: center; font-size: 6.8pt; font-weight: 700; line-height: 1.18; margin: 2px 0 3px; }
+.sig { display: grid; grid-template-columns: 1.1fr .9fr .8fr; border: 1px solid #000; font-size: 7.2pt; line-height: 1.28; }
+.sig > div { min-height: 44px; padding: 3px 5px; border-right: 1px solid #000; }
+.sig > div:last-child { border-right: 0; }
+.blank { display: inline-block; min-width: 145px; border-bottom: 1px solid #000; }
+.smallblank { display: inline-block; min-width: 86px; border-bottom: 1px solid #000; }
+.footer { text-align: center; font-size: 6.6pt; color: #475569; margin-top: 2px; }
+</style></head><body><div class="page">
+<div class="brand">C-BROS GENUINE AUTOPARTS &amp; ACCESSORIES, INC.</div>
+<div class="top">
+  <div>
+    <div class="line"><span class="label">CUSTOMER:</span><span class="value"><b>${esc(c.name)}</b></span></div>
+    <div class="line"><span class="label">CONTACT:</span><span class="value">${c.contactPerson ? esc(c.contactPerson) : "&nbsp;"}</span></div>
+    <div class="line"><span class="label">ADDRESS:</span><span class="value">${c.address ? esc(c.address) : "&nbsp;"}</span></div>
+  </div>
+  <div>
+    <div class="line"><span class="label">TEL/CEL:</span><span class="value">${phone ? esc(phone) : "&nbsp;"}</span></div>
+    <div class="line"><span class="label">EMAIL:</span><span class="value">${c.email ? esc(c.email) : "&nbsp;"}</span></div>
+    <div class="line"><span class="label">TERMS:</span><span class="value">${terms}</span></div>
+  </div>
+</div>
+<div class="title">BILLING STATEMENT</div>
+<div class="meta">${data.soaNumber ? `SOA #: <b>${esc(data.soaNumber)}</b> &middot; ` : ""}Generated ${esc(generatedAt)} by ${esc(generatedBy)} &middot; ${charges.length} invoice${charges.length === 1 ? "" : "s"}</div>
+<table>
+  <thead>
+    <tr class="period"><th colspan="2">MONTH/PERIOD: ${esc(period)}</th><th>YEAR: ${esc(year)}</th></tr>
+    <tr><th class="date">DATE</th><th class="part">PARTICULARS</th><th class="amt">AMOUNT</th></tr>
+  </thead>
+  <tbody>${rows}${emptyRows}<tr class="tot"><td colspan="2" class="r">TOTAL INVOICES</td><td class="r">&#8369;${fmt(chargeTotal)}</td></tr></tbody>
+</table>
+${creditSummary}
+<div class="grand"><div>TOTAL PAYABLE</div><div class="r">&#8369;${fmt(totalPayable)}</div></div>
+<div class="note">PLEASE MAKE CHECK PAYABLE TO C-BROS GENUINE AUTOPARTS &amp; ACCESSORIES, INC. &middot; COLLECTION WITHIN 5 DAYS AFTER RECEIPT OF SOA.</div>
+<div class="sig">
+  <div><b>RECEIVED STATEMENT:</b><br>NAME: <span class="blank"></span><br>SIGN: <span class="blank"></span><br>DATE: <span class="blank"></span></div>
+  <div><b>PAYMENT DETAILS</b><br>CASH: <span class="smallblank"></span><br>CHECK: <span class="smallblank"></span><br>DATE: <span class="smallblank"></span></div>
+  <div><b>RCVD BY:</b><br><br><span class="blank" style="min-width:120px"></span></div>
+</div>
+<div class="footer">Concise half-letter SOA. Match printed copy to generated SOA before collection.</div>
+</div></body></html>`;
+}
+
 /* ── Main export ── */
 export function buildSOAHtml(data: SOAInput): string {
+  if (data.printMode === "concise") {
+    const conciseChargeCount = data.transactions.filter((x) => x.type === "CHARGE" || (x.type === "ADJUSTMENT" && parseFloat(x.amount) > 0)).length;
+    if (conciseChargeCount <= 8) return buildConciseSOAHtml(data);
+  }
+
   const c = data.customer;
   const f = new Date(data.from);
   const t = new Date(data.to);

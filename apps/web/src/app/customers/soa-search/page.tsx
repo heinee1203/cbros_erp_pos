@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { fmtPeso } from "@/lib/format";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
-import { buildSOAHtml } from "@/lib/soa-html";
+import { buildSOAHtml, type CustomerSOAPrintMode } from "@/lib/soa-html";
 
 interface SOARecord {
   id: string;
@@ -44,6 +44,7 @@ export default function SOASearchPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [printMode, setPrintMode] = useState<CustomerSOAPrintMode>("concise");
 
   const fetchData = useCallback(async () => {
     if (!token || !locationId) return;
@@ -73,7 +74,16 @@ export default function SOASearchPage() {
       // produced Lucky Se7en's wrong ₱17,361 total because two SOAs with
       // overlapping periods both returned the customer's full ledger slice.
       const soaRes = await apiFetch<any>(`/customers/reports/soa-by-id/${r.id}`, { token, locationId });
-      const html = buildSOAHtml({ customer: soaRes.customer, transactions: soaRes.transactions, openingBalance: soaRes.openingBalance, closingBalance: soaRes.closingBalance, from: r.dateFrom, to: r.dateTo, soaNumber: r.soaNumber });
+      const html = buildSOAHtml({
+        customer: soaRes.customer,
+        transactions: soaRes.transactions,
+        openingBalance: soaRes.openingBalance,
+        closingBalance: soaRes.closingBalance,
+        from: r.dateFrom,
+        to: r.dateTo,
+        soaNumber: r.soaNumber,
+        printMode,
+      });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
     } catch {}
@@ -116,6 +126,24 @@ export default function SOASearchPage() {
             <option value="VOID">Void</option>
           </select>
           <DateRangePicker startDate={dateFrom} endDate={dateTo} onChange={(s, e) => { setDateFrom(s); setDateTo(e); }} />
+          <div className="flex h-8 items-center rounded-lg border border-border bg-muted/40 p-0.5 text-[11px] font-semibold">
+            {(["concise", "detailed"] as CustomerSOAPrintMode[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setPrintMode(mode)}
+                className={cn(
+                  "h-7 rounded-md px-2.5 capitalize transition-colors",
+                  printMode === mode
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                title={mode === "concise" ? "Half-letter crosswise SOA for 1-5 entries" : "Full-page detailed SOA"}
+              >
+                {mode === "concise" ? "Concise 1/2" : "Detailed"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

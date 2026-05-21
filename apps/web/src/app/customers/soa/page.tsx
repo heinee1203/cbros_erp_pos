@@ -23,7 +23,7 @@ import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { downloadCSV } from "@/lib/csv-export";
 import { fmtDate, fmtNum, fmtPeso, timeAgo } from "@/lib/format";
-import { buildSOAHtml } from "@/lib/soa-html";
+import { buildSOAHtml, type CustomerSOAPrintMode } from "@/lib/soa-html";
 import {
   useARSummary,
   useCustomerList,
@@ -181,6 +181,7 @@ export default function CustomerSOAPage() {
   const [selectedByCustomer, setSelectedByCustomer] = useState<Record<string, Set<string>>>({});
   const [processingCustomerId, setProcessingCustomerId] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [printMode, setPrintMode] = useState<CustomerSOAPrintMode>("concise");
 
   const customerQuery = useCustomerList(token, locationId, {
     search: committedSearch || undefined,
@@ -288,6 +289,7 @@ export default function CustomerSOAPage() {
       from: dateFrom,
       to: dateTo,
       generatedBy: user?.fullName || user?.email || "Current user",
+      printMode,
     });
     const w = window.open("", "_blank");
     if (w) {
@@ -329,6 +331,7 @@ export default function CustomerSOAPage() {
         to: dateTo,
         soaNumber: result.soaNumber,
         generatedBy: user?.fullName || user?.email || "Current user",
+        printMode,
       });
       const w = window.open("", "_blank");
       if (w) {
@@ -366,6 +369,24 @@ export default function CustomerSOAPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex h-9 items-center rounded-lg border border-border bg-muted/40 p-1 text-[11px] font-semibold">
+              {(["concise", "detailed"] as CustomerSOAPrintMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPrintMode(mode)}
+                  className={cn(
+                    "h-7 rounded-md px-3 capitalize transition-colors",
+                    printMode === mode
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  title={mode === "concise" ? "Half-letter crosswise SOA for 1-5 entries" : "Full-page detailed SOA"}
+                >
+                  {mode === "concise" ? "Concise 1/2" : "Detailed"}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={() => router.push("/customers/soa-search")}

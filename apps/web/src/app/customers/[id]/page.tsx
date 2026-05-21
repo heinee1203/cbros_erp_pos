@@ -3272,23 +3272,16 @@ function DocumentsTab({
   const reprint = async (doc: CustomerDocumentRow, mode: CustomerSOAPrintMode = "detailed") => {
     if (doc.documentType === "SOA") {
       const soaRes = await apiFetch<any>(`/customers/reports/soa-by-id/${doc.id}`, { token, locationId });
-      const html = mode === "concise"
-        ? buildConciseCustomerSOAHtml({
-            customer: soaRes.customer,
-            transactions: soaRes.transactions,
-            from: soaRes.from,
-            to: soaRes.to,
-            soaNumber: soaRes.soaNumber,
-          })
-        : buildSOAHtml({
-            customer: soaRes.customer,
-            transactions: soaRes.transactions,
-            openingBalance: soaRes.openingBalance,
-            closingBalance: soaRes.closingBalance,
-            from: soaRes.from,
-            to: soaRes.to,
-            soaNumber: soaRes.soaNumber,
-          });
+      const html = buildSOAHtml({
+        customer: soaRes.customer,
+        transactions: soaRes.transactions,
+        openingBalance: soaRes.openingBalance,
+        closingBalance: soaRes.closingBalance,
+        from: soaRes.from,
+        to: soaRes.to,
+        soaNumber: soaRes.soaNumber,
+        printMode: mode,
+      });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
       return;
@@ -4387,15 +4380,16 @@ function SOAHistoryTab({ customerId, token, locationId }: { customerId: string; 
       // Se7en bug where two overlapping-date SOAs both pulled in the same
       // ledger slice on reprint.
       const soaRes = await apiFetch<any>(`/customers/reports/soa-by-id/${r.id}`, { token, locationId });
-      const html = printMode === "concise"
-        ? buildConciseCustomerSOAHtml({
-            customer: soaRes.customer as Customer,
-            transactions: soaRes.transactions || [],
-            from: r.dateFrom,
-            to: r.dateTo,
-            soaNumber: r.soaNumber,
-          })
-        : buildSOAHtml({ customer: soaRes.customer, transactions: soaRes.transactions, openingBalance: soaRes.openingBalance, closingBalance: soaRes.closingBalance, from: r.dateFrom, to: r.dateTo, soaNumber: r.soaNumber });
+      const html = buildSOAHtml({
+        customer: soaRes.customer,
+        transactions: soaRes.transactions,
+        openingBalance: soaRes.openingBalance,
+        closingBalance: soaRes.closingBalance,
+        from: r.dateFrom,
+        to: r.dateTo,
+        soaNumber: r.soaNumber,
+        printMode,
+      });
       const w = window.open("", "_blank");
       if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
     } catch {}
