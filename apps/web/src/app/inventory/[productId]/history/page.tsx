@@ -70,7 +70,7 @@ function getDocumentLink(referenceType: string, referenceNumber: string | null):
 }
 
 export default function ItemHistoryPage() {
-  const { productId } = useParams<{ productId: string }>();
+  const { productId } = useParams<{ productId: string }>() ?? { productId: "" };
   const { token, locationId, apiLocationId } = useAuth();
 
   const { data: product } = useProductDetail(token, apiLocationId, productId);

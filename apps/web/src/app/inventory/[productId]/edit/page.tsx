@@ -93,8 +93,8 @@ interface VehicleEntry {
 
 export default function EditItemPage() {
   const router = useRouter();
-  const params = useParams();
-  const productId = params.productId as string;
+  const params = useParams<{ productId: string }>();
+  const productId = params?.productId as string;
   const queryClient = useQueryClient();
   const { token, locationId, user } = useAuth();
   const { isCollapsed } = useSidebar();

@@ -57,8 +57,8 @@ function SkeletonRow() {
  * ───────────────────────────────────────────── */
 
 export default function FamilyDetailPage() {
-  const params = useParams();
-  const slug = params.slug as string;
+  const params = useParams<{ slug: string }>();
+  const slug = params?.slug as string;
   const router = useRouter();
   const { token, locationId } = useAuth();
   const confirm = useConfirm();

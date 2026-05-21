@@ -64,8 +64,8 @@ const SCOPE_LABELS: Record<string, string> = {
  * ═══════════════════════════════════════════════════════ */
 
 export default function CountDetailPage() {
-  const params = useParams();
-  const countId = params.countId as string;
+  const params = useParams<{ countId: string }>();
+  const countId = params?.countId as string;
   const router = useRouter();
   const { token, locationId, loading: authLoading } = useAuth();
   const queryClient = useQueryClient();
