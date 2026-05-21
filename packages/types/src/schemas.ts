@@ -967,7 +967,7 @@ export const createCustomerSchema = z.object({
     (val) => /^\d+(\.\d{1,2})?$/.test(val),
     { message: "Credit limit must be a valid decimal" },
   ),
-  paymentTermsDays: z.number().int().min(1).max(365).default(30),
+  paymentTermsDays: z.number().int().min(0).max(365).default(30),
   notes: z.string().max(5000).optional(),
   tierId: z.string().uuid().nullable().optional(),
 });
@@ -986,7 +986,7 @@ export const updateCustomerSchema = z.object({
     (val) => /^\d+(\.\d{1,2})?$/.test(val),
     { message: "Credit limit must be a valid decimal" },
   ).optional(),
-  paymentTermsDays: z.number().int().min(1).max(365).optional(),
+  paymentTermsDays: z.number().int().min(0).max(365).optional(),
   notes: z.string().max(5000).nullable().optional(),
   isActive: z.boolean().optional(),
   tierId: z.string().uuid().nullable().optional(),
