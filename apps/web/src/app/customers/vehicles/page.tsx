@@ -1,14 +1,12 @@
-import { Car } from "lucide-react";
-import { PageShell } from "@/components/page-shell";
+import { UnavailableFeaturePage } from "@/components/unavailable-feature-page";
 
 export default function CustomerVehiclesPage() {
   return (
-    <PageShell
-      icon={Car}
+    <UnavailableFeaturePage
       title="Customer Vehicles"
-      description="Track customer vehicles by make, model, year, and VIN. Link service history and parts purchases to specific vehicles."
-      relatedHref="/customers"
-      relatedLabel="View Customers"
+      description="Vehicle tracking is hidden from navigation until it supports real customer repair history and parts lookup. Use the customer account workspace for active AR and profile work."
+      returnHref="/customers"
+      returnLabel="Back to Customers"
     />
   );
 }

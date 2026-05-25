@@ -56,20 +56,22 @@ const METHODS = [
 
 const METHOD_LABELS: Record<string, string> = {
   CASH: "Cash", CHECK: "Check", BANK_TRANSFER: "Bank Tx", CREDIT_CARD: "Card",
-  GCASH: "GCash", MAYA: "Maya", QRPH: "QRPH", SPLIT: "Split", EWT: "EWT", OTHER: "Other",
+  GCASH: "GCash", MAYA: "Maya", QRPH: "QRPH", SPLIT: "Split", EWT: "EWT", DEDUCTION: "Deduction", OTHER: "Other",
 };
 
 const PAGE_SIZES = [25, 50, 100] as const;
 
-/** Effective payment method for display: ignores EWT deduction lines.
- * A Check + EWT payment used to count as 2 lines and display "Split"; now
- * the EWT line is excluded from the split-detection so it correctly
- * displays as "Check". */
+function isDeductionLine(line: any): boolean {
+  return line?.method === "EWT" || line?.method === "DEDUCTION";
+}
+
+/** Effective payment method for display: ignores deduction lines.
+ * A Check + EWT/payment deduction should display as "Check", not "Split". */
 function displayMethod(row: PaymentRecord): string {
   const lines = Array.isArray(row.paymentLines) ? row.paymentLines : [];
-  const nonEwt = lines.filter((l: any) => l && typeof l.method === "string" && l.method !== "EWT");
-  if (nonEwt.length === 0) return row.paymentMethod ?? "";
-  if (nonEwt.length === 1) return nonEwt[0].method;
+  const paymentOnly = lines.filter((l: any) => l && typeof l.method === "string" && !isDeductionLine(l));
+  if (paymentOnly.length === 0) return row.paymentMethod ?? "";
+  if (paymentOnly.length === 1) return paymentOnly[0].method;
   return "SPLIT";
 }
 

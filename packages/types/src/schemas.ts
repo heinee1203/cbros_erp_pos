@@ -1007,7 +1007,7 @@ export const recordPaymentSchema = z.object({
   traceNumber: z.string().max(50).optional(),
   cardType: z.string().max(50).optional(),
   paymentLines: z.array(z.object({
-    method: z.enum(["CASH", "BANK_TRANSFER", "CHECK", "CREDIT_CARD", "GCASH", "MAYA", "QRPH", "EWT", "OTHER"]),
+    method: z.enum(["CASH", "BANK_TRANSFER", "CHECK", "CREDIT_CARD", "GCASH", "MAYA", "QRPH", "EWT", "DEDUCTION", "OTHER"]),
     amount: z.number(),
     reference: z.string().optional(),
     bank: z.string().optional(),
@@ -1019,6 +1019,8 @@ export const recordPaymentSchema = z.object({
     rate: z.number().optional(),
     bir2307: z.string().optional(),
     baseAmount: z.number().optional(),
+    deductionType: z.string().max(50).optional(),
+    description: z.string().max(200).optional(),
   })).optional(),
   allocations: z.array(z.object({
     chargeTransactionId: z.string(),

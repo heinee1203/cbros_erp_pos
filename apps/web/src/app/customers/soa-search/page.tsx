@@ -9,6 +9,13 @@ import { fmtPeso } from "@/lib/format";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { buildSOAHtml, type CustomerSOAPrintMode } from "@/lib/soa-html";
+import { buildPaymentReceiptHtml } from "@/lib/payment-receipt-html";
+import {
+  DOCUMENT_ACTION_LABELS,
+  PRINT_PRESETS,
+  customerSOAPresetToMode,
+  type PrintPreset,
+} from "@/lib/document-actions";
 
 interface SOARecord {
   id: string;
@@ -25,12 +32,25 @@ interface SOARecord {
   status: string;
 }
 
+interface SOAPaymentSummary {
+  id: string;
+  paymentNumber: string | null;
+  totalAmount: number;
+  allocatedToSOA: number;
+  paymentMethod: string | null;
+  paymentLines: any[] | null;
+  recordedAt: string;
+  notes: string | null;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   GENERATED: "border border-blue-200 bg-blue-100 text-blue-700",
   PARTIAL: "border border-amber-200 bg-amber-100 text-amber-700",
   PAID: "border border-emerald-200 bg-emerald-100 text-emerald-700",
   VOID: "bg-gray-200 text-gray-700",
 };
+
+const SOA_PRINT_PRESETS: PrintPreset[] = ["concise-half", "detailed"];
 
 export default function SOASearchPage() {
   const { token, locationId, loading: authLoading } = useAuth();
@@ -45,6 +65,8 @@ export default function SOASearchPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [printMode, setPrintMode] = useState<CustomerSOAPrintMode>("concise");
+  const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+  const [receiptError, setReceiptError] = useState("");
 
   const fetchData = useCallback(async () => {
     if (!token || !locationId) return;
@@ -89,6 +111,51 @@ export default function SOASearchPage() {
     } catch {}
   };
 
+  const handleReceiptReprint = async (r: SOARecord) => {
+    if (!token || !locationId) return;
+    setReceiptLoadingId(r.id);
+    setReceiptError("");
+    try {
+      const [paymentsRes, customerRes] = await Promise.all([
+        apiFetch<{ data: SOAPaymentSummary[] }>(`/customers/${r.customerId}/soa/${r.id}/payment-summary`, { token, locationId }),
+        apiFetch<{ customer: { name: string; phone: string } }>(`/customers/${r.customerId}`, { token, locationId }),
+      ]);
+      const payments = (paymentsRes.data || [])
+        .filter((payment) => payment.paymentNumber || payment.totalAmount > 0)
+        .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
+      const payment = payments[0];
+      if (!payment) {
+        setReceiptError(`No receipt payment found for ${r.soaNumber}.`);
+        return;
+      }
+      const html = buildPaymentReceiptHtml({
+        receiptNumber: payment.paymentNumber || "PAY-N/A",
+        date: payment.recordedAt,
+        customer: {
+          name: customerRes.customer?.name || r.customerName,
+          code: customerRes.customer?.phone || "",
+        },
+        amount: Math.abs(payment.totalAmount),
+        method: payment.paymentMethod || "CASH",
+        paymentLines: payment.paymentLines || undefined,
+        soaApplications: [{
+          soaNumber: r.soaNumber,
+          period: `${new Date(r.dateFrom).toLocaleDateString("en-PH", { month: "short", day: "numeric" })} - ${new Date(r.dateTo).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}`,
+          amount: payment.allocatedToSOA || r.totalPayable,
+          soaTotal: r.totalPayable,
+        }],
+        previousBalance: 0,
+        newBalance: 0,
+      });
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); w.onload = () => w.print(); }
+    } catch (err: any) {
+      setReceiptError(err?.message || `Failed to reprint receipt for ${r.soaNumber}.`);
+    } finally {
+      setReceiptLoadingId(null);
+    }
+  };
+
   const totalPayable = records.reduce((s, r) => s + (r.status !== "VOID" ? r.totalPayable : 0), 0);
 
   return (
@@ -127,23 +194,31 @@ export default function SOASearchPage() {
           </select>
           <DateRangePicker startDate={dateFrom} endDate={dateTo} onChange={(s, e) => { setDateFrom(s); setDateTo(e); }} />
           <div className="flex h-8 items-center rounded-lg border border-border bg-muted/40 p-0.5 text-[11px] font-semibold">
-            {(["concise", "detailed"] as CustomerSOAPrintMode[]).map((mode) => (
+            {SOA_PRINT_PRESETS.map((preset) => {
+              const mode = customerSOAPresetToMode(preset) as CustomerSOAPrintMode;
+              const active = printMode === mode;
+              return (
               <button
-                key={mode}
+                key={preset}
                 type="button"
                 onClick={() => setPrintMode(mode)}
                 className={cn(
                   "h-7 rounded-md px-2.5 capitalize transition-colors",
-                  printMode === mode
+                  active
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground",
                 )}
-                title={mode === "concise" ? "Half-letter crosswise SOA for 1-5 entries" : "Full-page detailed SOA"}
+                title={PRINT_PRESETS[preset].description}
               >
-                {mode === "concise" ? "Concise 1/2" : "Detailed"}
+                {PRINT_PRESETS[preset].label}
               </button>
-            ))}
+            )})}
           </div>
+          {receiptError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[11px] font-medium text-red-700">
+              {receiptError}
+            </div>
+          )}
         </div>
       </div>
 
@@ -157,7 +232,7 @@ export default function SOASearchPage() {
           <div className="w-24 text-right">Credits</div>
           <div className="w-24 text-right">Balance</div>
           <div className="w-20 text-center">Status</div>
-          <div className="w-32 text-right">Actions</div>
+          <div className="w-44 text-right">Actions</div>
         </div>
 
         {loading ? (
@@ -194,12 +269,21 @@ export default function SOASearchPage() {
                 <div className="w-20 text-center">
                   <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[9px] font-semibold uppercase", STATUS_COLORS[r.status] ?? "bg-muted text-muted-foreground")}>{r.status}</span>
                 </div>
-                <div className="w-32 flex items-center justify-end gap-1">
-                  <button onClick={() => handleReprint(r)} className="rounded px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10">Reprint</button>
-                  {(r.status === "GENERATED" || r.status === "SENT" || r.status === "PARTIAL") && (
-                    <button onClick={() => router.push(`/customers/${r.customerId}?pay=${r.soaNumber}`)} className="rounded px-2 py-0.5 text-[10px] font-medium text-emerald-600 hover:bg-emerald-50">Pay</button>
+                <div className="w-44 flex items-center justify-end gap-1">
+                  <button onClick={() => handleReprint(r)} className="rounded px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10">{DOCUMENT_ACTION_LABELS.reprint}</button>
+                  {(r.status === "PAID" || r.status === "PARTIAL") && (
+                    <button
+                      onClick={() => void handleReceiptReprint(r)}
+                      disabled={receiptLoadingId === r.id}
+                      className="rounded px-2 py-0.5 text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:pointer-events-none disabled:opacity-50"
+                    >
+                      {receiptLoadingId === r.id ? "..." : DOCUMENT_ACTION_LABELS.receipt}
+                    </button>
                   )}
-                  <button onClick={() => router.push(`/customers/${r.customerId}`)} className="rounded px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted">View</button>
+                  {(r.status === "GENERATED" || r.status === "SENT" || r.status === "PARTIAL") && (
+                    <button onClick={() => router.push(`/customers/${r.customerId}?pay=${r.soaNumber}`)} className="rounded px-2 py-0.5 text-[10px] font-medium text-emerald-600 hover:bg-emerald-50">{DOCUMENT_ACTION_LABELS.pay}</button>
+                  )}
+                  <button onClick={() => router.push(`/customers/${r.customerId}`)} className="rounded px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted">{DOCUMENT_ACTION_LABELS.view}</button>
                 </div>
               </div>
             ))}

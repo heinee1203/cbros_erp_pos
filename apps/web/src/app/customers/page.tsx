@@ -35,6 +35,12 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { downloadCSV } from "@/lib/csv-export";
+import {
+  firstFieldError,
+  hasFieldErrors,
+  normalizeFieldErrors,
+  type FieldErrorMap,
+} from "@/lib/field-errors";
 
 /* ── Constants ── */
 const TYPE_BADGES: Record<string, string> = {
@@ -225,9 +231,6 @@ const PAYMENT_TERMS_OPTIONS = [
   { value: 60, label: "Net 60" },
 ];
 
-/* ── Types ── */
-interface Tier { id: string; name: string; defaultDiscount: string; color: string | null; }
-
 interface CustomerForm {
   name: string;
   phone: string;
@@ -241,6 +244,34 @@ interface CustomerForm {
   notes: string;
   tierId: string;
 }
+
+const CUSTOMER_FIELD_ALIASES: Record<string, keyof CustomerForm> = {
+  customer_type: "customerType",
+  customerType: "customerType",
+  contact_person: "contactPerson",
+  contactPerson: "contactPerson",
+  payment_terms_days: "paymentTermsDays",
+  paymentTermsDays: "paymentTermsDays",
+  credit_limit: "creditLimit",
+  creditLimit: "creditLimit",
+  tier_id: "tierId",
+  tierId: "tierId",
+};
+
+function customerFieldClass(fieldErrors: FieldErrorMap, field: keyof CustomerForm) {
+  return firstFieldError(fieldErrors, field)
+    ? "border-red-500 bg-red-50/40 focus:border-red-600 focus:ring-1 focus:ring-red-200"
+    : "border-border";
+}
+
+function CustomerFieldError({ fieldErrors, field }: { fieldErrors: FieldErrorMap; field: keyof CustomerForm }) {
+  const message = firstFieldError(fieldErrors, field);
+  if (!message) return null;
+  return <p className="mt-1 text-[11px] font-medium text-red-700">{message}</p>;
+}
+
+/* ── Types ── */
+interface Tier { id: string; name: string; defaultDiscount: string; color: string | null; }
 
 const emptyForm: CustomerForm = {
   name: "", phone: "", customerType: "INDIVIDUAL", contactPerson: "", email: "",
@@ -350,6 +381,7 @@ export default function CustomersPage() {
   const [form, setForm] = useState<CustomerForm>(emptyForm);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [saveFieldErrors, setSaveFieldErrors] = useState<FieldErrorMap>({});
   const modalOpen = showCreateModal || !!editingCustomer;
   const modalTitle = editingCustomer ? "Edit Customer" : "New Customer";
 
@@ -372,12 +404,19 @@ export default function CustomersPage() {
       setForm(emptyForm);
     }
     setSaveError("");
+    setSaveFieldErrors({});
   }, [editingCustomer, showCreateModal]);
 
-  const closeModal = () => { setShowCreateModal(false); setEditingCustomer(null); setForm(emptyForm); setSaveError(""); };
+  const closeModal = () => {
+    setShowCreateModal(false);
+    setEditingCustomer(null);
+    setForm(emptyForm);
+    setSaveError("");
+    setSaveFieldErrors({});
+  };
 
   const handleSave = async () => {
-    setIsSaving(true); setSaveError("");
+    setIsSaving(true); setSaveError(""); setSaveFieldErrors({});
     try {
       const payload: Record<string, unknown> = {
         name: form.name.trim(), phone: form.phone.trim(), customerType: form.customerType,
@@ -399,8 +438,12 @@ export default function CustomersPage() {
       }
       closeModal(); customerQuery.refetch(); summaryQuery.refetch();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to save customer";
-      setSaveError(msg);
+      const normalized = normalizeFieldErrors(err, CUSTOMER_FIELD_ALIASES, "Failed to save customer");
+      if (!hasFieldErrors(normalized.fieldErrors) && normalized.message.toLowerCase().includes("phone number already exists")) {
+        normalized.fieldErrors.phone = ["This customer code or phone number already exists."];
+      }
+      setSaveFieldErrors(normalized.fieldErrors);
+      setSaveError(normalized.message);
     } finally { setIsSaving(false); }
   };
 
@@ -780,12 +823,16 @@ export default function CustomersPage() {
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Name *</label>
                   <input type="text" value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="Customer name"
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" autoFocus />
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "name"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "name"))} autoFocus />
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="name" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Phone / Code *</label>
                   <input type="tel" value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} placeholder="AR-XXXX or 0917..."
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "phone"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "phone"))} />
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="phone" />
                 </div>
               </div>
 
@@ -793,17 +840,21 @@ export default function CustomersPage() {
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Customer Type</label>
                   <select value={form.customerType} onChange={(e) => setForm((p) => ({ ...p, customerType: e.target.value }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "customerType"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "customerType"))}>
                     {TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>)}
                   </select>
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="customerType" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Pricing Tier</label>
                   <select value={form.tierId} onChange={(e) => setForm((p) => ({ ...p, tierId: e.target.value }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "tierId"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "tierId"))}>
                     <option value="">No Tier</option>
                     {tiers.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.defaultDiscount}% off)</option>)}
                   </select>
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="tierId" />
                 </div>
               </div>
 
@@ -811,25 +862,33 @@ export default function CustomersPage() {
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Contact Person</label>
                   <input type="text" value={form.contactPerson} onChange={(e) => setForm((p) => ({ ...p, contactPerson: e.target.value }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "contactPerson"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "contactPerson"))} />
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="contactPerson" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Email</label>
                   <input type="email" value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "email"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "email"))} />
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="email" />
                 </div>
               </div>
 
               <div>
                 <label className="text-xs font-medium text-muted-foreground">TIN</label>
                 <input type="text" value={form.tin} onChange={(e) => setForm((p) => ({ ...p, tin: e.target.value }))}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+                  aria-invalid={Boolean(firstFieldError(saveFieldErrors, "tin"))}
+                  className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "tin"))} />
+                <CustomerFieldError fieldErrors={saveFieldErrors} field="tin" />
               </div>
 
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Address</label>
                 <textarea value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} rows={2}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none" />
+                  aria-invalid={Boolean(firstFieldError(saveFieldErrors, "address"))}
+                  className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm resize-none", customerFieldClass(saveFieldErrors, "address"))} />
+                <CustomerFieldError fieldErrors={saveFieldErrors} field="address" />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -837,21 +896,27 @@ export default function CustomersPage() {
                   <label className="text-xs font-medium text-muted-foreground">Credit Limit</label>
                   <input type="number" step="0.01" min="0" value={form.creditLimit}
                     onChange={(e) => setForm((p) => ({ ...p, creditLimit: e.target.value }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "creditLimit"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "creditLimit"))} />
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="creditLimit" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Payment Terms</label>
                   <select value={form.paymentTermsDays} onChange={(e) => setForm((p) => ({ ...p, paymentTermsDays: parseInt(e.target.value, 10) }))}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+                    aria-invalid={Boolean(firstFieldError(saveFieldErrors, "paymentTermsDays"))}
+                    className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm", customerFieldClass(saveFieldErrors, "paymentTermsDays"))}>
                     {PAYMENT_TERMS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
+                  <CustomerFieldError fieldErrors={saveFieldErrors} field="paymentTermsDays" />
                 </div>
               </div>
 
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Notes</label>
                 <textarea value={form.notes} onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))} rows={2}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none" />
+                  aria-invalid={Boolean(firstFieldError(saveFieldErrors, "notes"))}
+                  className={cn("w-full rounded-md border bg-background px-3 py-2 text-sm resize-none", customerFieldClass(saveFieldErrors, "notes"))} />
+                <CustomerFieldError fieldErrors={saveFieldErrors} field="notes" />
               </div>
             </div>
 

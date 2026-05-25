@@ -42,6 +42,7 @@ import { buildConsolidatedBillingHtml } from "@/lib/consolidated-billing-html";
 import { buildSOARemainingHtml } from "@/lib/soa-remaining-html";
 import { buildCollectionSummaryHtml, type CollectionPayment } from "@/lib/soa-collection-summary-html";
 import { buildPaymentReceiptHtml, type PaymentReceiptData } from "@/lib/payment-receipt-html";
+import { FinancialActionSummary } from "@/components/financial-action-summary";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -687,6 +688,27 @@ export default function CustomerDetailPage() {
   type PayStep = "form" | "confirm" | "success" | "error";
   interface PayLine { id: string; method: string; amount: string; reference: string; bank: string; checkNumber: string; checkDate: string; cardType: string; batchNo: string; traceNo: string; }
   const newPayLine = (): PayLine => ({ id: Math.random().toString(36).slice(2), method: "CASH", amount: "", reference: "", bank: "", checkNumber: "", checkDate: "", cardType: "", batchNo: "", traceNo: "" });
+  type DeductionType = "EWT" | "DISCOUNT" | "CREDIT_MEMO" | "OTHER";
+  interface DeductionLine {
+    id: string;
+    deductionType: DeductionType;
+    amount: string;
+    reference: string;
+    description: string;
+    mode: "difference" | "rate" | "manual";
+    rate: string;
+    bir2307: string;
+  }
+  const newDeductionLine = (): DeductionLine => ({
+    id: Math.random().toString(36).slice(2),
+    deductionType: "EWT",
+    amount: "",
+    reference: "",
+    description: "EWT Deduction",
+    mode: "rate",
+    rate: "1",
+    bir2307: "",
+  });
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showChargeModal, setShowChargeModal] = useState(false);
@@ -697,12 +719,7 @@ export default function CustomerDetailPage() {
   const [payLines, setPayLines] = useState<PayLine[]>([]);
   const [payNotes, setPayNotes] = useState("");
   const [payError, setPayError] = useState("");
-  // EWT
-  const [ewtEnabled, setEwtEnabled] = useState(false);
-  const [ewtMode, setEwtMode] = useState<"difference" | "rate">("difference");
-  const [ewtRate, setEwtRate] = useState("1");
-  const [ewtAmount, setEwtAmount] = useState("");
-  const [ewtBir, setEwtBir] = useState("");
+  const [deductionLines, setDeductionLines] = useState<DeductionLine[]>([]);
   const [payLoading, setPayLoading] = useState(false);
   const [paySoaList, setPaySoaList] = useState<any[]>([]);
   const [paySelectedSoas, setPaySelectedSoas] = useState<Set<string>>(new Set());
@@ -720,11 +737,15 @@ export default function CustomerDetailPage() {
   const [payNewBalance, setPayNewBalance] = useState(0);
   const [payReceiptData, setPayReceiptData] = useState<PaymentReceiptData | null>(null);
 
-  const METHOD_LABELS: Record<string, string> = { CASH: "Cash", CHECK: "Check", BANK_TRANSFER: "Bank Tx", CREDIT_CARD: "Card", GCASH: "GCash", MAYA: "Maya", QRPH: "QRPH", OTHER: "Other", EWT: "EWT", SPLIT: "Split" };
+  const METHOD_LABELS: Record<string, string> = { CASH: "Cash", CHECK: "Check", BANK_TRANSFER: "Bank Tx", CREDIT_CARD: "Card", GCASH: "GCash", MAYA: "Maya", QRPH: "QRPH", OTHER: "Other", EWT: "EWT", DEDUCTION: "Deduction", SPLIT: "Split" };
+  const DEDUCTION_TYPE_LABELS: Record<DeductionType, string> = {
+    EWT: "EWT Deduction",
+    DISCOUNT: "Discount",
+    CREDIT_MEMO: "Credit Memo",
+    OTHER: "Other Deduction",
+  };
 
   const payLinesTotal = payLines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
-  const payEwtAmt = ewtEnabled ? (parseFloat(ewtAmount) || 0) : 0;
-  const payTotal = payLinesTotal + payEwtAmt;
   const payOutstanding = parseFloat(customer?.currentBalance ?? "0");
   // SOA total for EWT "by difference" mode
   const paySoaTotal = paySoaList.filter((s) => paySelectedSoas.has(s.id)).reduce((sum: number, s: any) => sum + Math.max(0, (s.totalPayable || 0) - (s.paidAmount || 0)), 0);
@@ -734,7 +755,8 @@ export default function CustomerDetailPage() {
     : 0;
   // Use invoice total if any invoices checked, else SOA total, else outstanding
   const paySelectedTotal = Object.keys(invoiceAllocs).length > 0 ? payInvoiceTotal : paySelectedSoas.size > 0 ? paySoaTotal : payOutstanding;
-  const ewtEffectiveRate = paySelectedTotal > 0 && payEwtAmt > 0 ? ((payEwtAmt / paySelectedTotal) * 100) : 0;
+  const payDeductionTotal = deductionLines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
+  const payTotal = payLinesTotal + payDeductionTotal;
   // Remaining: based on selected total
   const payTarget = paySelectedTotal;
   const payRemaining = payTarget - payTotal;
@@ -743,12 +765,63 @@ export default function CustomerDetailPage() {
     setPayLines((prev) => prev.map((l) => l.id === lineId ? { ...l, [field]: value } : l));
   };
 
+  const deductionBaseAmount = () => paySelectedTotal > 0 ? paySelectedTotal : payOutstanding;
+  const calculateDeductionAmount = (line: DeductionLine): string => {
+    const base = deductionBaseAmount();
+    if (line.deductionType === "EWT" && line.mode === "rate") {
+      const rate = parseFloat(line.rate) || 0;
+      return (base * (rate / 100)).toFixed(2);
+    }
+    if (line.deductionType === "EWT" && line.mode === "difference") {
+      const otherDeductions = deductionLines
+        .filter((d) => d.id !== line.id)
+        .reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
+      return Math.max(0, base - payLinesTotal - otherDeductions).toFixed(2);
+    }
+    return line.amount;
+  };
+  const updateDeductionLine = (lineId: string, field: keyof DeductionLine, value: string) => {
+    setDeductionLines((prev) => prev.map((line) => {
+      if (line.id !== lineId) return line;
+      const next = { ...line, [field]: value };
+      if (field === "deductionType") {
+        const deductionType = value as DeductionType;
+        next.deductionType = deductionType;
+        next.description = DEDUCTION_TYPE_LABELS[deductionType] ?? "Deduction";
+        next.mode = deductionType === "EWT" ? "rate" : "manual";
+        next.rate = deductionType === "EWT" ? (next.rate || "1") : "";
+        next.amount = deductionType === "EWT" ? calculateDeductionAmount(next) : "";
+      } else if (next.deductionType === "EWT" && (field === "mode" || field === "rate")) {
+        next.amount = calculateDeductionAmount(next);
+      }
+      return next;
+    }));
+  };
+  const addDeductionLine = () => {
+    const line = newDeductionLine();
+    line.amount = calculateDeductionAmount(line);
+    setDeductionLines((prev) => [...prev, line]);
+  };
+  const removeDeductionLine = (lineId: string) => {
+    setDeductionLines((prev) => prev.filter((line) => line.id !== lineId));
+  };
+  const deductionLabel = (line: DeductionLine) => {
+    if (line.deductionType === "EWT") {
+      return line.mode === "rate" ? `EWT Deduction (${line.rate || 0}%)` : "EWT Deduction";
+    }
+    return line.description.trim() || DEDUCTION_TYPE_LABELS[line.deductionType] || "Deduction";
+  };
+  const deductionEffectiveRate = (line: DeductionLine) => {
+    const amount = parseFloat(line.amount) || 0;
+    return paySelectedTotal > 0 && amount > 0 ? (amount / paySelectedTotal) * 100 : 0;
+  };
+
   const openPaymentModal = async () => {
     const initLine = newPayLine();
     initLine.amount = customer ? customer.currentBalance : "0";
     setPayLines([initLine]);
     setPayNotes(""); setPayError(""); setPayStep("form"); setPaySelectedSoas(new Set()); setPayNoSoa(false); setSoaInvoices({}); setInvoiceAllocs({});
-    setEwtEnabled(false); setEwtMode("difference"); setEwtRate("1"); setEwtAmount(""); setEwtBir("");
+    setDeductionLines([]);
     setShowPaymentModal(true);
     try {
       const res = await apiFetch<{ data: any[] }>(`/customers/${id}/soa/history`, { token, locationId });
@@ -786,7 +859,7 @@ export default function CustomerDetailPage() {
         const initLine = newPayLine();
         setPayLines([initLine]);
         setPayNotes(""); setPayError(""); setPayStep("form"); setPaySelectedSoas(new Set()); setPayNoSoa(false); setSoaInvoices({}); setInvoiceAllocs({});
-        setEwtEnabled(false); setEwtMode("difference"); setEwtRate("1"); setEwtAmount(""); setEwtBir("");
+        setDeductionLines([]);
         setShowPaymentModal(true);
         try {
           const res = await apiFetch<{ data: any[] }>(`/customers/${id}/soa/history`, { token, locationId });
@@ -809,6 +882,9 @@ export default function CustomerDetailPage() {
     if (payTotal <= 0) { setPayError("Total payment must be greater than 0"); return; }
     for (const l of payLines) {
       if (!l.method || (parseFloat(l.amount) || 0) <= 0) { setPayError("Each payment line needs a method and amount > 0"); return; }
+    }
+    for (const line of deductionLines) {
+      if ((parseFloat(line.amount) || 0) <= 0) { setPayError("Each deduction line needs an amount greater than 0"); return; }
     }
     if (payTotal > payOutstanding) { /* allow but warn */ }
     setPayError("");
@@ -839,14 +915,35 @@ export default function CustomerDetailPage() {
         checkNumber: l.checkNumber || undefined, checkDate: l.checkDate || undefined,
         cardType: l.cardType || undefined, batchNumber: l.batchNo || undefined, traceNumber: l.traceNo || undefined,
       }));
-      if (ewtEnabled && payEwtAmt > 0) {
-        linesJson.push({ method: "EWT", amount: payEwtAmt, rate: parseFloat(ewtRate) || 0, bir2307: ewtBir || undefined, baseAmount: paySoaTotal || payOutstanding });
-      }
+      const deductionJson = deductionLines
+        .filter((line) => (parseFloat(line.amount) || 0) > 0)
+        .map((line) => {
+          const amount = parseFloat(line.amount) || 0;
+          if (line.deductionType === "EWT") {
+            return {
+              method: "EWT",
+              amount,
+              rate: line.mode === "rate" ? (parseFloat(line.rate) || 0) : undefined,
+              bir2307: line.bir2307 || undefined,
+              baseAmount: paySelectedTotal || payOutstanding,
+              reference: line.reference || undefined,
+              description: line.description || "EWT Deduction",
+            };
+          }
+          return {
+            method: "DEDUCTION",
+            deductionType: line.deductionType,
+            amount,
+            reference: line.reference || undefined,
+            description: line.description || DEDUCTION_TYPE_LABELS[line.deductionType],
+          };
+        });
+      linesJson.push(...deductionJson);
       const txn = await apiFetch<any>(`/customers/${id}/payments`, {
         method: "POST", token, locationId,
         body: JSON.stringify({
           amount: payTotal.toFixed(2),
-          paymentMethod: (payLines.length === 1 && !ewtEnabled) ? primaryLine.method : "SPLIT",
+          paymentMethod: (payLines.length === 1 && deductionJson.length === 0) ? primaryLine.method : "SPLIT",
           referenceNumber: payLines.length === 1 ? (primaryLine.reference || undefined) : undefined,
           notes: (() => {
             const soaRefs = paySoaList.filter((s) => paySelectedSoas.has(s.id)).map((s) => s.soaNumber);
@@ -894,15 +991,13 @@ export default function CustomerDetailPage() {
         };
       });
       // Build payment lines for receipt
-      const receiptLines = payLines.map((l) => ({
+      const receiptLines: any[] = payLines.map((l) => ({
         method: l.method, amount: parseFloat(l.amount) || 0,
         reference: l.reference || undefined, bank: l.bank || undefined,
         checkNumber: l.checkNumber || undefined, checkDate: l.checkDate || undefined,
         cardType: l.cardType || undefined, batchNumber: l.batchNo || undefined, traceNumber: l.traceNo || undefined,
       }));
-      if (ewtEnabled && payEwtAmt > 0) {
-        receiptLines.push({ method: "EWT", amount: payEwtAmt, reference: undefined, bank: undefined, checkNumber: undefined, checkDate: undefined, cardType: undefined, batchNumber: undefined, traceNumber: undefined });
-      }
+      receiptLines.push(...deductionJson);
       // Build settled invoices list from checked allocations OR all SOA invoices
       // Include soaNumber per invoice for per-SOA grouping on the receipt
       const soaIdToNumber = new Map(paySoaList.map((s: any) => [s.id, s.soaNumber]));
@@ -933,7 +1028,7 @@ export default function CustomerDetailPage() {
         date: new Date().toISOString(),
         customer: { name: customer!.name, code: customer!.phone },
         amount: payTotal,
-        method: payLines.length === 1 ? primaryLine.method : "SPLIT",
+        method: payLines.length === 1 && deductionJson.length === 0 ? primaryLine.method : "SPLIT",
         paymentLines: receiptLines,
         soaApplications: selectedSoaDetails,
         settledInvoices: settledInvoices.length > 0 ? settledInvoices : undefined,
@@ -2663,7 +2758,7 @@ export default function CustomerDetailPage() {
                 <div className="border-t border-border pt-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Payment Lines</label>
-                    <button onClick={() => { const l = newPayLine(); l.amount = payLines.length === 1 ? payLines[0].amount : ""; setPayLines([...payLines, newPayLine()]); }}
+                    <button onClick={() => { const l = newPayLine(); l.amount = payLines.length === 1 ? payLines[0].amount : ""; setPayLines([...payLines, l]); }}
                       className="text-[11px] font-medium text-primary hover:underline">+ Add Method</button>
                   </div>
 
@@ -2713,102 +2808,175 @@ export default function CustomerDetailPage() {
                     </div>
                   ))}
 
-                  {/* EWT Section */}
-                  <div className="rounded-lg border border-border p-3">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" checked={ewtEnabled} onChange={(e) => {
-                        setEwtEnabled(e.target.checked);
-                        if (e.target.checked && ewtMode === "difference") {
-                          // Auto-calc: SOA total - cash entered
-                          const target = paySelectedTotal > 0 ? paySelectedTotal : payOutstanding;
-                          const diff = Math.max(0, target - payLinesTotal);
-                          setEwtAmount(diff.toFixed(2));
-                        }
-                      }} className="h-3.5 w-3.5 accent-primary rounded" />
-                      <span className="text-[12px] font-medium text-foreground">EWT Deduction</span>
-                    </label>
-                    {ewtEnabled && (
-                      <div className="mt-2 space-y-2">
-                        {/* Mode toggle */}
-                        <div className="flex rounded-md border border-border bg-muted/30 p-0.5 w-fit">
-                          <button onClick={() => {
-                            setEwtMode("difference");
-                            const target = paySelectedTotal > 0 ? paySelectedTotal : payOutstanding;
-                            setEwtAmount(Math.max(0, target - payLinesTotal).toFixed(2));
-                          }} className={cn("rounded px-2 py-0.5 text-[10px] font-medium", ewtMode === "difference" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>By Difference</button>
-                          <button onClick={() => {
-                            setEwtMode("rate");
-                            const target = paySelectedTotal > 0 ? paySelectedTotal : payOutstanding;
-                            setEwtAmount((target * (parseFloat(ewtRate) / 100)).toFixed(2));
-                          }} className={cn("rounded px-2 py-0.5 text-[10px] font-medium", ewtMode === "rate" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>By Rate</button>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          {ewtMode === "rate" && (
-                            <div>
-                              <label className="text-[10px] text-muted-foreground">Rate</label>
-                              <select value={ewtRate} onChange={(e) => {
-                                setEwtRate(e.target.value);
-                                const target = paySelectedTotal > 0 ? paySelectedTotal : payOutstanding;
-                                const rate = parseFloat(e.target.value) || 0;
-                                setEwtAmount((target * (rate / 100)).toFixed(2));
-                              }} className="h-7 w-full rounded border border-border bg-background px-2 text-[11px]">
-                                <option value="1">1% (Goods)</option>
-                                <option value="2">2% (Services)</option>
-                                <option value="5">5% (Professional)</option>
+                  {/* Deduction Lines */}
+                  <div className="rounded-lg border border-border p-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-[12px] font-medium text-foreground">Deduction Lines</span>
+                        <p className="text-[10px] text-muted-foreground">Add EWT, credit memo, discount, or other deductions separately.</p>
+                      </div>
+                      <button onClick={addDeductionLine} className="text-[11px] font-medium text-primary hover:underline">+ Add Deduction</button>
+                    </div>
+                    {deductionLines.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+                        No deductions added.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {deductionLines.map((line, idx) => (
+                          <div key={line.id} className="rounded-lg border border-border bg-muted/10 p-3 space-y-2">
+                            <div className="grid grid-cols-[24px_170px_1fr_auto] items-center gap-2">
+                              <span className="text-[11px] font-semibold text-muted-foreground">{idx + 1}.</span>
+                              <select
+                                value={line.deductionType}
+                                onChange={(e) => updateDeductionLine(line.id, "deductionType", e.target.value)}
+                                className="h-8 rounded-lg border border-border bg-background px-2 text-[12px] outline-none"
+                              >
+                                <option value="EWT">EWT Deduction</option>
+                                <option value="CREDIT_MEMO">Credit Memo</option>
+                                <option value="DISCOUNT">Discount</option>
+                                <option value="OTHER">Other Deduction</option>
                               </select>
+                              <div className="relative">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[12px] text-muted-foreground">{"\u20B1"}</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={line.amount}
+                                  onChange={(e) => updateDeductionLine(line.id, "amount", e.target.value)}
+                                  className="h-8 w-full rounded-lg border border-border bg-background pl-6 pr-2 text-[13px] font-semibold tabular-nums outline-none focus:border-primary/40"
+                                />
+                              </div>
+                              <button
+                                onClick={() => removeDeductionLine(line.id)}
+                                className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-500"
+                                aria-label="Remove deduction"
+                              >
+                                <X size={14} />
+                              </button>
                             </div>
-                          )}
-                          <div>
-                            <label className="text-[10px] text-muted-foreground">EWT Amount</label>
-                            <div className="relative">
-                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">{"\u20B1"}</span>
-                              <input type="number" step="0.01" value={ewtAmount} onChange={(e) => setEwtAmount(e.target.value)}
-                                className="h-7 w-full rounded border border-border bg-background pl-5 pr-2 text-[11px] font-semibold tabular-nums" />
-                            </div>
-                            {ewtMode === "difference" && ewtEffectiveRate > 0 && (
-                              <span className="text-[9px] text-muted-foreground">~{ewtEffectiveRate.toFixed(2)}% effective rate</span>
+
+                            {line.deductionType === "EWT" ? (
+                              <div className="space-y-2">
+                                <div className="flex rounded-md border border-border bg-muted/30 p-0.5 w-fit">
+                                  <button
+                                    onClick={() => updateDeductionLine(line.id, "mode", "difference")}
+                                    className={cn("rounded px-2 py-0.5 text-[10px] font-medium", line.mode === "difference" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}
+                                  >
+                                    By Difference
+                                  </button>
+                                  <button
+                                    onClick={() => updateDeductionLine(line.id, "mode", "rate")}
+                                    className={cn("rounded px-2 py-0.5 text-[10px] font-medium", line.mode === "rate" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}
+                                  >
+                                    By Rate
+                                  </button>
+                                  <button
+                                    onClick={() => updateDeductionLine(line.id, "mode", "manual")}
+                                    className={cn("rounded px-2 py-0.5 text-[10px] font-medium", line.mode === "manual" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}
+                                  >
+                                    Manual
+                                  </button>
+                                </div>
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                  {line.mode === "rate" && (
+                                    <div>
+                                      <label className="text-[10px] text-muted-foreground">Rate</label>
+                                      <select
+                                        value={line.rate}
+                                        onChange={(e) => updateDeductionLine(line.id, "rate", e.target.value)}
+                                        className="h-7 w-full rounded border border-border bg-background px-2 text-[11px]"
+                                      >
+                                        <option value="1">1% (Goods)</option>
+                                        <option value="2">2% (Services)</option>
+                                        <option value="5">5% (Professional)</option>
+                                      </select>
+                                    </div>
+                                  )}
+                                  <div className={line.mode === "rate" ? "sm:col-span-1" : "sm:col-span-2"}>
+                                    <label className="text-[10px] text-muted-foreground">BIR Form 2307 No. (optional)</label>
+                                    <input
+                                      type="text"
+                                      value={line.bir2307}
+                                      onChange={(e) => updateDeductionLine(line.id, "bir2307", e.target.value)}
+                                      placeholder="2307-XXXX"
+                                      className="h-7 w-full rounded border border-border bg-background px-2 text-[11px]"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] text-muted-foreground">Reference / notes</label>
+                                    <input
+                                      type="text"
+                                      value={line.reference}
+                                      onChange={(e) => updateDeductionLine(line.id, "reference", e.target.value)}
+                                      placeholder="Optional reference"
+                                      className="h-7 w-full rounded border border-border bg-background px-2 text-[11px]"
+                                    />
+                                  </div>
+                                </div>
+                                {line.mode === "difference" && deductionEffectiveRate(line) > 0 && (
+                                  <span className="text-[9px] text-muted-foreground">~{deductionEffectiveRate(line).toFixed(2)}% effective rate</span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div>
+                                  <label className="text-[10px] text-muted-foreground">Description</label>
+                                  <input
+                                    type="text"
+                                    value={line.description}
+                                    onChange={(e) => updateDeductionLine(line.id, "description", e.target.value)}
+                                    placeholder="e.g. freight deduction, credit memo"
+                                    className="h-7 w-full rounded border border-border bg-background px-2 text-[11px]"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-muted-foreground">Reference</label>
+                                  <input
+                                    type="text"
+                                    value={line.reference}
+                                    onChange={(e) => updateDeductionLine(line.id, "reference", e.target.value)}
+                                    placeholder="CM # / approval #"
+                                    className="h-7 w-full rounded border border-border bg-background px-2 text-[11px]"
+                                  />
+                                </div>
+                              </div>
                             )}
                           </div>
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-muted-foreground">BIR Form 2307 No. (optional)</label>
-                          <input type="text" value={ewtBir} onChange={(e) => setEwtBir(e.target.value)} placeholder="2307-XXXX"
-                            className="h-7 w-full rounded border border-border bg-background px-2 text-[11px]" />
-                        </div>
+                        ))}
                       </div>
                     )}
                   </div>
 
-                  {/* Summary Breakdown */}
-                  <div className="rounded-lg border border-border bg-muted/10 p-3 space-y-1 text-[12px]">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Selected Invoices:</span>
-                      <span className="tabular-nums font-medium">{formatPeso(paySelectedTotal)}</span>
-                    </div>
-                    {payLines.map((line, idx) => (
-                      <div key={line.id} className="flex justify-between">
-                        <span className="text-muted-foreground">Payment ({METHOD_LABELS[line.method] ?? line.method}):</span>
-                        <span className="tabular-nums text-emerald-600">-{formatPeso(line.amount || "0")}</span>
-                      </div>
-                    ))}
-                    {ewtEnabled && payEwtAmt > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">EWT Deduction{ewtMode === "rate" ? ` (${ewtRate}%)` : ""}:</span>
-                        <span className="tabular-nums text-emerald-600">-{formatPeso(payEwtAmt)}</span>
-                      </div>
-                    )}
-                    <div className="border-t border-border pt-1 flex justify-between font-medium">
-                      <span>Remaining:</span>
-                      <span className={cn("tabular-nums", payRemaining === 0 ? "text-emerald-600" : payRemaining < 0 ? "text-red-600" : "text-foreground")}>
-                        {payRemaining === 0 ? `${formatPeso(0)} \u2713` : payRemaining > 0 ? `${formatPeso(payRemaining)} remaining` : `Overpayment ${formatPeso(Math.abs(payRemaining))}`}
-                      </span>
-                    </div>
-                  </div>
+                  <FinancialActionSummary
+                    grossLabel="Selected Invoices"
+                    grossAmount={paySelectedTotal}
+                    lines={[
+                      ...payLines.map((line) => ({
+                        id: line.id,
+                        label: `Payment (${METHOD_LABELS[line.method] ?? line.method})`,
+                        amount: line.amount || "0",
+                        tone: "payment" as const,
+                      })),
+                      ...deductionLines
+                        .filter((line) => (parseFloat(line.amount) || 0) > 0)
+                        .map((line) => ({
+                          id: line.id,
+                          label: deductionLabel(line),
+                          amount: line.amount || "0",
+                          tone: "deduction" as const,
+                        })),
+                    ]}
+                    netLabel="Remaining"
+                    netAmount={payRemaining}
+                    netDisplayValue={payRemaining === 0 ? `${formatPeso(0)} \u2713` : payRemaining > 0 ? `${formatPeso(payRemaining)} remaining` : `Overpayment ${formatPeso(Math.abs(payRemaining))}`}
+                    netTone={payRemaining === 0 ? "payment" : payRemaining < 0 ? "deduction" : "neutral"}
+                  />
 
                   {/* Quick buttons */}
                   <div className="flex gap-2">
-                    <button onClick={() => { const l = newPayLine(); l.amount = customer!.currentBalance; setPayLines([l]); }}
+                    <button onClick={() => { const l = newPayLine(); l.amount = customer!.currentBalance; setPayLines([l]); setDeductionLines([]); }}
                       className="rounded-full px-3 py-0.5 text-[10px] font-medium border border-border hover:bg-muted">Full Payment (Cash)</button>
                   </div>
 
@@ -2872,14 +3040,18 @@ export default function CustomerDetailPage() {
                         <span className="tabular-nums">{formatPeso(l.amount)}</span>
                       </div>
                     ))}
-                    {ewtEnabled && payEwtAmt > 0 && (
-                      <div className="flex justify-between text-[12px]">
-                        <span className="text-muted-foreground">EWT {ewtRate}%{ewtBir ? ` (BIR 2307: ${ewtBir})` : ""}</span>
-                        <span className="tabular-nums">{formatPeso(payEwtAmt)}</span>
+                    {deductionLines.filter((line) => (parseFloat(line.amount) || 0) > 0).map((line) => (
+                      <div key={line.id} className="flex justify-between text-[12px]">
+                        <span className="text-muted-foreground">
+                          {deductionLabel(line)}
+                          {line.reference ? ` (${line.reference})` : ""}
+                          {line.deductionType === "EWT" && line.bir2307 ? ` (BIR 2307: ${line.bir2307})` : ""}
+                        </span>
+                        <span className="tabular-nums">{formatPeso(line.amount)}</span>
                       </div>
-                    )}
+                    ))}
                     <div className="flex justify-between font-bold pt-1 border-t border-border/50">
-                      <span>{ewtEnabled ? "Total Applied" : "Total Payment"}</span>
+                      <span>{deductionLines.length > 0 ? "Total Applied" : "Total Payment"}</span>
                       <span className="text-lg text-emerald-600 tabular-nums">{formatPeso(payTotal)}</span>
                     </div>
                   </div>
@@ -2907,7 +3079,7 @@ export default function CustomerDetailPage() {
                 <div className="text-5xl mb-3">{"\u2705"}</div>
                 <h3 className="text-lg font-semibold mb-1">Payment Recorded</h3>
                 {payReceiptData && <p className="text-[11px] font-mono text-muted-foreground mb-1">{payReceiptData.receiptNumber}</p>}
-                <p className="text-[15px] font-bold text-emerald-600 mb-1">{formatPeso(payTotal)} &mdash; {payLines.length === 1 ? (METHOD_LABELS[payLines[0].method] ?? payLines[0].method) : "Split Payment"}</p>
+                <p className="text-[15px] font-bold text-emerald-600 mb-1">{formatPeso(payTotal)} &mdash; {payLines.length === 1 && deductionLines.length === 0 ? (METHOD_LABELS[payLines[0].method] ?? payLines[0].method) : deductionLines.length > 0 ? "Payment with deductions" : "Split Payment"}</p>
                 {paySelectedSoas.size > 0 && <p className="text-[12px] text-muted-foreground">Applied to {paySoaList.filter((s) => paySelectedSoas.has(s.id)).map((s) => s.soaNumber).join(", ")}</p>}
                 <p className="text-[13px] mt-2">New Balance: <strong className={payNewBalance === 0 ? "text-emerald-600" : ""}>{formatPeso(payNewBalance)}</strong></p>
                 <div className="flex justify-center gap-2 mt-6">
@@ -3766,10 +3938,11 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
       .finally(() => setLoading(false));
   }, [customerId, token, locationId, dateFrom, dateTo]);
 
-  const METHOD_LABELS: Record<string, string> = { CASH: "Cash", BANK_TRANSFER: "Bank Transfer", CHECK: "Check", CREDIT_CARD: "Credit Card", GCASH: "GCash", MAYA: "Maya", QRPH: "QRPH", OTHER: "Other" };
+  const METHOD_LABELS: Record<string, string> = { CASH: "Cash", BANK_TRANSFER: "Bank Transfer", CHECK: "Check", CREDIT_CARD: "Credit Card", GCASH: "GCash", MAYA: "Maya", QRPH: "QRPH", OTHER: "Other", EWT: "EWT", DEDUCTION: "Deduction" };
   const paymentLinesFor = (t: any) => (Array.isArray(t.paymentLines) ? t.paymentLines : []) as any[];
+  const isDeductionPaymentLine = (line: any) => line?.method === "EWT" || line?.method === "DEDUCTION";
   const primaryPaymentMethod = (t: any) => {
-    const lines = paymentLinesFor(t).filter((line: any) => line.method !== "EWT");
+    const lines = paymentLinesFor(t).filter((line: any) => !isDeductionPaymentLine(line));
     if (lines.length > 1) return "SPLIT";
     if (lines.length === 1) return lines[0].method ?? "";
     return t.paymentMethod ?? "";
@@ -3781,15 +3954,16 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
     if (!methodFilter) return true;
     const lines = paymentLinesFor(t);
     if (methodFilter === "EWT") return lines.some((line: any) => line.method === "EWT");
-    if (methodFilter === "SPLIT") return lines.filter((line: any) => line.method !== "EWT").length > 1;
+    if (methodFilter === "DEDUCTION") return lines.some((line: any) => isDeductionPaymentLine(line));
+    if (methodFilter === "SPLIT") return lines.filter((line: any) => !isDeductionPaymentLine(line)).length > 1;
     return primaryPaymentMethod(t) === methodFilter;
   });
   const totalPayments = visibleTxns.reduce((s, t) => s + Math.abs(parseFloat(t.amount)), 0);
   const splitPaymentCount = visibleTxns.filter((t) => primaryPaymentMethod(t) === "SPLIT").length;
-  const ewtPaymentCount = visibleTxns.filter((t) => paymentLinesFor(t).some((line: any) => line.method === "EWT")).length;
+  const deductionPaymentCount = visibleTxns.filter((t) => paymentLinesFor(t).some((line: any) => isDeductionPaymentLine(line))).length;
   const soaLinkedCount = visibleTxns.filter((t) => extractSoaRefs(t.notes).length > 0).length;
   const balancePaymentCount = visibleTxns.length - soaLinkedCount;
-  const methodSummaryLabel = methodFilter === "SPLIT" ? "Split payments" : methodFilter === "EWT" ? "With EWT" : methodFilter ? (METHOD_LABELS[methodFilter] ?? methodFilter) : "All payment methods";
+  const methodSummaryLabel = methodFilter === "SPLIT" ? "Split payments" : methodFilter === "EWT" ? "With EWT" : methodFilter === "DEDUCTION" ? "With deductions" : methodFilter ? (METHOD_LABELS[methodFilter] ?? methodFilter) : "All payment methods";
 
   const openAllocationDetails = async (payment: any) => {
     setAllocationPayment(payment);
@@ -3889,6 +4063,7 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
           <option value="QRPH">QRPH</option>
           <option value="SPLIT">Split payments</option>
           <option value="EWT">With EWT</option>
+          <option value="DEDUCTION">With deductions</option>
           <option value="OTHER">Other</option>
         </select>
         <select
@@ -3916,7 +4091,7 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
         <div className="rounded-xl border border-border bg-background p-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">SOA-linked / balance</div>
           <div className="mt-1 text-xl font-bold tabular-nums text-foreground">{soaLinkedCount} / {balancePaymentCount}</div>
-          <div className="text-[10px] text-muted-foreground">Split: {splitPaymentCount} · EWT: {ewtPaymentCount}</div>
+          <div className="text-[10px] text-muted-foreground">Split: {splitPaymentCount} · Deductions: {deductionPaymentCount}</div>
         </div>
       </div>
 
@@ -3956,8 +4131,8 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
                   {t.type === "PAYMENT" ? (() => {
                     const pl = t.paymentLines as any[] | null;
                     if (pl && pl.length > 1) {
-                      const nonEwt = pl.filter((l: any) => l.method !== "EWT");
-                      return nonEwt.length > 1 ? "Split" : (METHOD_LABELS[nonEwt[0]?.method] ?? nonEwt[0]?.method ?? "Split");
+                      const paymentOnlyLines = pl.filter((l: any) => !isDeductionPaymentLine(l));
+                      return paymentOnlyLines.length > 1 ? "Split" : (METHOD_LABELS[paymentOnlyLines[0]?.method] ?? paymentOnlyLines[0]?.method ?? "Split");
                     }
                     if (pl && pl.length === 1) return METHOD_LABELS[pl[0].method] ?? pl[0].method;
                     return METHOD_LABELS[t.paymentMethod] ?? t.paymentMethod ?? "\u2014";
@@ -3967,7 +4142,7 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
                   {(() => {
                     const pl = t.paymentLines as any[] | null;
                     if (pl && pl.length >= 1) {
-                      const mainLine = pl.find((l: any) => l.method !== "EWT") || pl[0];
+                      const mainLine = pl.find((l: any) => !isDeductionPaymentLine(l)) || pl[0];
                       if (mainLine.method === "CHECK") {
                         const parts: string[] = [];
                         if (mainLine.bank) parts.push(mainLine.bank);
@@ -4035,6 +4210,7 @@ function PaymentHistoryTab({ customerId, token, locationId, customerName, custom
                           reference: l.reference, bank: l.bank, checkNumber: l.checkNumber, checkDate: l.checkDate,
                           cardType: l.cardType, batchNumber: l.batchNumber, traceNumber: l.traceNumber,
                           rate: l.rate, bir2307: l.bir2307, baseAmount: l.baseAmount,
+                          deductionType: l.deductionType, description: l.description,
                         })) : undefined,
                         soaApplications: soaApps,
                         settledInvoices,
@@ -4477,6 +4653,12 @@ function SOAHistoryTab({ customerId, token, locationId }: { customerId: string; 
               detail = parts.join(", ");
             } else if (l.method === "EWT" && l.rate) {
               detail = `${l.rate}%`;
+              if (l.bir2307) detail += `, BIR 2307: ${l.bir2307}`;
+            } else if (l.method === "DEDUCTION") {
+              const parts: string[] = [];
+              if (l.description) parts.push(l.description);
+              if (l.reference) parts.push(`Ref: ${l.reference}`);
+              detail = parts.join(", ");
             }
             lines.push({ method: l.method, amount: parseFloat(l.amount) || 0, detail: detail || undefined });
           }
