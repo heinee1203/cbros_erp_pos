@@ -1,5 +1,5 @@
 /**
- * Generates a printable Collection Receipt (single copy, quarter-page portrait letter).
+ * Generates a printable customer collection receipt.
  */
 import { amountToWords } from "./amount-to-words";
 
@@ -16,6 +16,8 @@ export interface PaymentLineData {
   rate?: number;
   bir2307?: string;
   baseAmount?: number;
+  deductionType?: string;
+  description?: string;
 }
 
 export interface PaymentReceiptData {
@@ -44,167 +46,96 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-const METHOD_LABELS: Record<string, string> = { CASH: "Cash", CHECK: "Check", BANK_TRANSFER: "Bank Transfer", CREDIT_CARD: "Credit Card", GCASH: "GCash", MAYA: "Maya", QRPH: "QRPH", EWT: "EWT", OTHER: "Other" };
+const METHOD_LABELS: Record<string, string> = {
+  CASH: "Cash",
+  CHECK: "Check",
+  BANK_TRANSFER: "Bank Transfer",
+  CREDIT_CARD: "Credit Card",
+  GCASH: "GCash",
+  MAYA: "Maya",
+  QRPH: "QRPH",
+  EWT: "EWT",
+  DEDUCTION: "Deduction",
+  OTHER: "Other",
+};
+
+function isDeductionLine(line: PaymentLineData): boolean {
+  return line.method === "EWT" || line.method === "DEDUCTION";
+}
 
 function fmtShortDate(d: string): string {
   return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function buildAppliedToSection(d: PaymentReceiptData): string {
-  const soas = d.soaApplications;
-  const invoices = d.settledInvoices || [];
-
-  // No SOA — general balance
-  if (soas.length === 0 || !soas[0].soaNumber) {
-    return `<tr><td class="lbl">Applied to:</td><td colspan="3">General Balance</td></tr>`;
-  }
-
-  // Single SOA
-  if (soas.length === 1) {
-    const soa = soas[0];
-    const soaNum = soa.soaNumber;
-    const soaInvoices = invoices.length > 0 ? invoices.filter((i) => !i.soaNumber || i.soaNumber === soaNum) : [];
-
-    // Hide the Invoices Settled list when this payment fully settles the only
-    // SOA — the SOA number on the "Applied to" row is authoritative and the
-    // invoice list is redundant noise. Use soaRemaining (post-payment balance)
-    // as the source of truth; fall back to the legacy amount-vs-invoice-net
-    // check when the caller didn't include soaRemaining.
-    const fullySettled = soa.soaRemaining !== undefined
-      ? soa.soaRemaining < 0.005
-      : (() => {
-          const invoiceNet = soaInvoices.reduce((s, inv) => s + inv.amount, 0);
-          return soaInvoices.length > 0 && Math.abs(d.amount - Math.abs(invoiceNet)) < 1;
-        })();
-
-    let html = `<tr><td class="lbl">Applied to:</td><td colspan="3">${esc(soaNum)}</td></tr>`;
-    if (!fullySettled && soaInvoices.length > 0) {
-      html += `<tr><td colspan="4"><div style="margin-top:2px"><div style="font-weight:700;font-size:6.5pt;margin-bottom:1px">Invoices Settled:</div><table style="width:100%;border-collapse:collapse;line-height:1.2">`;
-      html += soaInvoices.map((inv) => `<tr><td style="padding:1px 0 1px 4px;font-size:6.5pt;font-family:monospace">${esc(inv.referenceNumber)}</td><td style="text-align:right;padding:1px 0;font-size:6.5pt">${fmt(inv.amount)}</td></tr>`).join("\n");
-      html += `</table></div></td></tr>`;
-    }
-    return html;
-  }
-
-  // Multiple SOAs — per-SOA breakdown
-  let html = `<tr><td class="lbl" style="vertical-align:top">Applied to:</td><td colspan="3">`;
-
-  for (const soa of soas) {
-    const soaInvoices = invoices.filter((i) => i.soaNumber === soa.soaNumber);
-    const soaInvTotal = soaInvoices.reduce((s, inv) => s + Math.abs(inv.amount), 0);
-    const isFullSOA = soaInvoices.length > 0 && soaInvTotal > 0 && Math.abs(soaInvTotal - Math.abs(soa.amount || soaInvTotal)) < 1;
-
-    html += `<div style="margin-bottom:3px"><span style="font-family:monospace;font-weight:600;font-size:6.5pt">${esc(soa.soaNumber)}</span>`;
-    if (soaInvTotal > 0) html += ` <span style="font-size:6pt;color:#666">${fmt(soaInvTotal)}</span>`;
-    if (isFullSOA) html += ` <span style="font-size:5.5pt;color:#059669">Fully Paid</span>`;
-    else if (soaInvoices.length > 0) html += ` <span style="font-size:5.5pt;color:#d97706">Partial</span>`;
-    html += `</div>`;
-
-    // Show invoice list only for partial SOAs
-    if (!isFullSOA && soaInvoices.length > 0) {
-      html += `<table style="width:100%;border-collapse:collapse;line-height:1.2;margin-bottom:2px">`;
-      html += soaInvoices.map((inv) => `<tr><td style="padding:0 0 0 8px;font-size:6pt;font-family:monospace">${esc(inv.referenceNumber)}</td><td style="text-align:right;padding:0;font-size:6pt">${fmt(inv.amount)}</td></tr>`).join("\n");
-      html += `</table>`;
-    }
-  }
-
-  html += `</td></tr>`;
-  return html;
-}
-
-function buildAppliedTo(d: PaymentReceiptData): string {
-  const soa = d.soaApplications;
-  if (soa.length > 0 && soa[0].soaNumber) {
-    return soa.map((s) => esc(s.soaNumber)).join(", ");
-  }
-  return "General Balance";
-}
-
-function formatLineDetail(l: PaymentLineData, d: PaymentReceiptData): string {
-  const label = METHOD_LABELS[l.method] ?? l.method;
-  let detail = "";
-  if (l.method === "CHECK") {
-    const parts: string[] = [];
-    if (l.bank) parts.push(l.bank);
-    if (l.checkNumber) parts.push(`#${l.checkNumber}`);
-    if (l.checkDate) parts.push(fmtShortDate(l.checkDate));
-    if (parts.length > 0) detail = ` (${parts.join(", ")})`;
-  } else if (l.method === "CREDIT_CARD") {
-    const parts: string[] = [];
-    if (l.cardType) parts.push(l.cardType);
-    if (l.batchNumber) parts.push(`Batch: ${l.batchNumber}`);
-    if (l.traceNumber) parts.push(`Trace: ${l.traceNumber}`);
-    if (parts.length > 0) detail = ` (${parts.join(", ")})`;
-  } else if (l.method === "EWT") {
-    const parts: string[] = [];
-    if (l.rate) parts.push(`${l.rate}%`);
-    if (l.bir2307) parts.push(`BIR 2307: ${l.bir2307}`);
-    if (parts.length > 0) detail = ` (${parts.join(", ")})`;
-  } else if (l.method === "BANK_TRANSFER" || l.method === "GCASH" || l.method === "MAYA" || l.method === "QRPH") {
-    if (l.reference) detail = ` (Ref: ${l.reference})`;
-  }
-  return `${esc(label)}${esc(detail)}`;
-}
-
-function buildPaymentDetails(d: PaymentReceiptData): string {
-  // Build payment lines from the structured array, or fall back to top-level fields
-  let effectiveLines: PaymentLineData[] = [];
-
+function getEffectivePaymentLines(d: PaymentReceiptData): PaymentLineData[] {
   if (d.paymentLines && d.paymentLines.length > 0) {
-    effectiveLines = d.paymentLines;
-  } else {
-    // Legacy: no paymentLines — build from top-level fields
-    effectiveLines = [{
-      method: d.method, amount: d.amount,
-      bank: undefined, checkNumber: undefined, checkDate: undefined,
-      reference: d.referenceNumber, cardType: d.cardType,
-      batchNumber: d.batchNumber, traceNumber: d.traceNumber,
-    }];
+    return d.paymentLines;
+  }
+  return [{
+    method: d.method,
+    amount: d.amount,
+    reference: d.referenceNumber,
+    cardType: d.cardType,
+    batchNumber: d.batchNumber,
+    traceNumber: d.traceNumber,
+  }];
+}
+
+function formatLineDetail(line: PaymentLineData): string {
+  const label = METHOD_LABELS[line.method] ?? line.method;
+  const parts: string[] = [];
+
+  if (line.method === "CHECK") {
+    if (line.bank) parts.push(line.bank);
+    if (line.checkNumber) parts.push(`#${line.checkNumber}`);
+    if (line.checkDate) parts.push(fmtShortDate(line.checkDate));
+  } else if (line.method === "CREDIT_CARD") {
+    if (line.cardType) parts.push(line.cardType);
+    if (line.batchNumber) parts.push(`Batch: ${line.batchNumber}`);
+    if (line.traceNumber) parts.push(`Trace: ${line.traceNumber}`);
+  } else if (line.method === "EWT") {
+    if (line.rate) parts.push(`${line.rate}%`);
+    if (line.bir2307) parts.push(`BIR 2307: ${line.bir2307}`);
+    if (line.reference) parts.push(`Ref: ${line.reference}`);
+    if (line.description && line.description !== "EWT Deduction") parts.push(line.description);
+  } else if (line.method === "DEDUCTION") {
+    if (line.description) parts.push(line.description);
+    else if (line.deductionType) parts.push(line.deductionType.replace(/_/g, " "));
+    if (line.reference) parts.push(`Ref: ${line.reference}`);
+  } else if (line.method === "BANK_TRANSFER" || line.method === "GCASH" || line.method === "MAYA" || line.method === "QRPH" || line.method === "OTHER") {
+    if (line.reference) parts.push(`Ref: ${line.reference}`);
   }
 
-  // Single-line branch: inline label rows (Amount / Method / Bank / Check No /
-  // Check Date) — matches the physical receipt's layout. The numbered Payment
-  // Breakdown block adds visual noise when there's only one line.
-  if (effectiveLines.length === 1) {
-    const l = effectiveLines[0];
-    const methodLabel = METHOD_LABELS[l.method] ?? l.method;
-    const rows: string[] = [];
-    rows.push(
-      `<tr><td class="lbl">Amount:</td><td>${fmt(l.amount)}</td><td class="lbl2">Method:</td><td>${esc(methodLabel)}</td></tr>`
-    );
-    if (l.method === "CHECK") {
-      if (l.bank) rows.push(`<tr><td class="lbl">Bank:</td><td colspan="3">${esc(l.bank)}</td></tr>`);
-      if (l.checkNumber) rows.push(`<tr><td class="lbl">Check No:</td><td colspan="3">${esc(l.checkNumber)}</td></tr>`);
-      if (l.checkDate) rows.push(`<tr><td class="lbl">Check Date:</td><td colspan="3">${esc(fmtShortDate(l.checkDate))}</td></tr>`);
-    } else if (l.method === "CREDIT_CARD") {
-      if (l.cardType) rows.push(`<tr><td class="lbl">Card Type:</td><td colspan="3">${esc(l.cardType)}</td></tr>`);
-      if (l.batchNumber) rows.push(`<tr><td class="lbl">Batch No:</td><td colspan="3">${esc(l.batchNumber)}</td></tr>`);
-      if (l.traceNumber) rows.push(`<tr><td class="lbl">Trace No:</td><td colspan="3">${esc(l.traceNumber)}</td></tr>`);
-    } else if (l.method === "BANK_TRANSFER" || l.method === "GCASH" || l.method === "MAYA" || l.method === "QRPH") {
-      if (l.reference) rows.push(`<tr><td class="lbl">Reference:</td><td colspan="3">${esc(l.reference)}</td></tr>`);
-    } else if (l.method === "EWT") {
-      if (l.rate) rows.push(`<tr><td class="lbl">Rate:</td><td colspan="3">${l.rate}%</td></tr>`);
-      if (l.bir2307) rows.push(`<tr><td class="lbl">BIR 2307:</td><td colspan="3">${esc(l.bir2307)}</td></tr>`);
-    }
-    return rows.join("\n");
-  }
+  return `${esc(label)}${parts.length > 0 ? ` <span class="muted">(${esc(parts.join(", "))})</span>` : ""}`;
+}
 
-  // Multi-line branch: numbered Payment Breakdown table — preserves working
-  // behavior for split payments (e.g. Cash + Check).
-  const hasEwt = effectiveLines.some((l) => l.method === "EWT");
-  const rows = effectiveLines.map((l, i) =>
-    `<tr><td style="padding:1px 0;font-size:7pt">${i + 1}. ${formatLineDetail(l, d)}</td><td style="text-align:right;padding:1px 0;font-size:7pt;tabular-nums">${fmt(l.amount)}</td></tr>`
-  ).join("\n");
+function buildPaymentBreakdownBlock(d: PaymentReceiptData): string {
+  const effectiveLines = getEffectivePaymentLines(d);
+  const rows = effectiveLines.map((line, index) => `
+    <tr class="${isDeductionLine(line) ? "deduction-row" : ""}">
+      <td>${index + 1}</td>
+      <td>${formatLineDetail(line)}</td>
+      <td class="amount">${fmt(line.amount)}</td>
+    </tr>`).join("\n");
 
   return `
-<tr><td class="lbl" style="vertical-align:top" colspan="4">
-<div style="margin-top:4px;font-weight:700;font-size:7pt;margin-bottom:2px">Payment Breakdown:</div>
-<table style="width:100%;border-collapse:collapse">
-${rows}
-<tr><td colspan="2" style="border-top:1px solid #000;padding-top:2px"></td></tr>
-<tr><td style="font-weight:700;font-size:7pt;padding:1px 0">${hasEwt ? "Total Applied" : "Total"}</td><td style="text-align:right;font-weight:700;font-size:7.5pt;padding:1px 0">${fmt(d.amount)}</td></tr>
-</table>
-</td></tr>`;
+<section class="receipt-section">
+  <div class="section-title">Payment Details</div>
+  <table class="breakdown">
+    <thead><tr><th>#</th><th>Method / Ref</th><th class="amount">Amount</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr class="grand"><td colspan="2">Total</td><td class="amount">${fmt(d.amount)}</td></tr>
+    </tfoot>
+  </table>
+</section>`;
+}
+
+function buildAppliedToBlock(d: PaymentReceiptData): string {
+  const soas = d.soaApplications.filter((soa) => soa.soaNumber);
+  const appliedTo = soas.length > 0 ? soas.map((soa) => soa.soaNumber).join(", ") : "General balance";
+
+  return `<div class="applied-line"><span>Applied to:</span><strong>${esc(appliedTo)}</strong></div>`;
 }
 
 export function buildPaymentReceiptHtml(d: PaymentReceiptData): string {
@@ -213,69 +144,88 @@ export function buildPaymentReceiptHtml(d: PaymentReceiptData): string {
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Collection Receipt - ${esc(d.customer.name)}</title>
 <style>
-@page { size: letter portrait; margin: 5mm 10mm 8mm 2.125in; }
-body { font-family: Arial, sans-serif; font-size: 7.5pt; color: #000; margin: 0; padding: 0; background: #fff; line-height: 1.3; }
+@page { size: letter portrait; margin: 6mm; }
+body { font-family: Arial, sans-serif; font-size: 7.2pt; color: #000; margin: 0; padding: 0; background: #fff; line-height: 1.2; }
 .receipt {
   width: 4.25in;
-  min-height: 5.5in;
-  border: 1px solid #000;
-  padding: 6px 12px 10px;
+  min-height: 5.35in;
+  border: 1.5px solid #000;
+  padding: 7px 10px 9px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  margin: 0 auto;
 }
-.content-section { flex: 0 0 auto; }
+.content-section { flex: 0 0 auto; display: flex; flex-direction: column; gap: 5px; }
 .spacer { flex: 1 1 auto; }
-.top-section {}
-.header { font-family: 'Rockwell Extra Bold', Rockwell, Georgia, serif; font-weight: 900; font-size: 10.5pt; text-align: center; letter-spacing: 0.3px; line-height: 1.2; }
-.title { text-align: center; font-weight: 700; font-size: 9pt; margin: 1px 0 3px; }
-.meta { display: flex; justify-content: space-between; font-size: 7.5pt; margin-bottom: 2px; }
-hr { border: none; border-top: 1px solid #000; margin: 2px 0; }
-table.fields { width: 100%; border-collapse: collapse; font-size: 7.5pt; line-height: 1.3; }
-table.fields td { border: none; padding: 1px 2px 1px 0; }
-table.fields td.lbl { font-weight: 700; white-space: nowrap; width: 80px; }
-table.fields td.lbl2 { font-weight: 700; white-space: nowrap; width: 70px; padding-left: 8px; }
-.bottom-section {
-  margin-top: 4px;
-  page-break-inside: avoid;
-}
-.sig-table { width: 100%; border-collapse: collapse; font-size: 7pt; line-height: 1.8; table-layout: fixed; }
-.sig-table td { border: none; padding: 0; overflow: hidden; }
-.footer { font-size: 6pt; color: #666; margin-top: 2px; text-align: center; }
+.header { text-align: center; border-bottom: 1.5px solid #000; padding-bottom: 4px; }
+.company { font-family: 'Rockwell Extra Bold', Rockwell, Georgia, serif; font-weight: 900; font-size: 10.2pt; letter-spacing: 0.25px; line-height: 1.05; }
+.title { font-weight: 800; font-size: 8.5pt; letter-spacing: 0.8px; margin-top: 1px; }
+.meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.info-box { border: 1px solid #000; padding: 4px 5px; min-height: 30px; }
+.info-row { display: grid; grid-template-columns: 62px 1fr; gap: 4px; margin-bottom: 1px; }
+.info-row:last-child { margin-bottom: 0; }
+.label { font-weight: 800; text-transform: uppercase; font-size: 6.4pt; color: #333; }
+.value { font-weight: 700; }
+.amount-words { border: 1px solid #000; padding: 4px 5px; display: grid; grid-template-columns: 62px 1fr; gap: 4px; }
+.amount-words .words { font-weight: 800; font-style: italic; text-transform: uppercase; }
+.receipt-section { border: 1px solid #000; padding: 4px 5px; }
+.section-title { font-weight: 900; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 2px; color: #000; }
+table { width: 100%; border-collapse: collapse; }
+.breakdown th, .breakdown td { padding: 1.5px 0; border-bottom: 1px solid #d6d6d6; vertical-align: top; }
+.breakdown th { font-size: 6.2pt; text-transform: uppercase; letter-spacing: 0.3px; color: #333; text-align: left; }
+.breakdown td:first-child { width: 16px; color: #555; }
+.amount { text-align: right !important; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.muted { color: #333; font-size: 6.6pt; }
+.deduction-row td { color: #000; }
+tfoot td { border-bottom: none !important; font-weight: 800; }
+tfoot .grand td { border-top: 1.5px solid #000 !important; font-size: 8pt; }
+.mono { font-family: "Courier New", monospace; font-weight: 700; }
+.applied-line { border: 1px solid #000; padding: 4px 5px; display: grid; grid-template-columns: 62px 1fr; gap: 4px; }
+.applied-line span { font-weight: 800; text-transform: uppercase; font-size: 6.4pt; }
+.applied-line strong { font-family: "Courier New", monospace; }
+.bottom-section { margin-top: 6px; page-break-inside: avoid; }
+.signature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: end; }
+.signature-block { border-top: 1px solid #000; padding-top: 2px; min-height: 24px; }
+.signature-block strong { display: block; font-size: 6.8pt; text-transform: uppercase; letter-spacing: 0.3px; }
+.signature-block span { display: block; margin-top: 1px; font-size: 6.2pt; color: #333; }
+.footer { font-size: 5.8pt; color: #444; margin-top: 5px; text-align: center; }
 </style></head><body>
 
 <div class="receipt">
 <div class="content-section">
-<div class="top-section">
-  <div class="header">C-BROS GENUINE AUTOPARTS &amp; ACCESSORIES, INC.</div>
-  <div class="title">COLLECTION RECEIPT</div>
-
-  <div class="meta">
-    <span><b>Receipt No:</b> ${esc(d.receiptNumber)}</span>
-    <span><b>Date:</b> ${dateStr}</span>
+  <div class="header">
+    <div class="company">C-BROS GENUINE AUTOPARTS &amp; ACCESSORIES, INC.</div>
+    <div class="title">COLLECTION RECEIPT</div>
   </div>
 
-  <hr>
+  <div class="meta-grid">
+    <div class="info-box">
+      <div class="info-row"><span class="label">Receipt No.</span><span class="value mono">${esc(d.receiptNumber)}</span></div>
+      <div class="info-row"><span class="label">Date</span><span class="value">${dateStr}</span></div>
+    </div>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Customer</span><span class="value">${esc(d.customer.name)}</span></div>
+      <div class="info-row"><span class="label">Account</span><span class="value mono">${esc(d.customer.code || "-")}</span></div>
+    </div>
+  </div>
 
-  <table class="fields">
-  <colgroup><col style="width:80px"><col><col style="width:70px"><col></colgroup>
-  <tr><td class="lbl">Received from:</td><td>${esc(d.customer.name)}</td><td class="lbl2">Account:</td><td>${esc(d.customer.code)}</td></tr>
-  <tr><td class="lbl" style="vertical-align:top">The sum of:</td><td colspan="3" style="font-style:italic;font-size:6.5pt">${amountToWords(d.amount)}</td></tr>
-  ${buildPaymentDetails(d)}
-  ${buildAppliedToSection(d)}
-  </table>
-</div>
+  <div class="amount-words">
+    <span class="label">The sum of</span>
+    <span class="words">${amountToWords(d.amount)}</span>
+  </div>
+
+  ${buildPaymentBreakdownBlock(d)}
+  ${buildAppliedToBlock(d)}
 </div>
 
 <div class="spacer"></div>
 
 <div class="bottom-section">
-  <hr>
-
-  <table class="sig-table">
-  <tr><td style="width:55%">Received by: _________________________</td><td>Date: _________________________</td></tr>
-  <tr><td>Signature: &nbsp;&nbsp;_________________________</td><td></td></tr>
-  </table>
+  <div class="signature-grid">
+    <div class="signature-block"><strong>Received By</strong><span>Name / Signature</span></div>
+    <div class="signature-block"><strong>Date Received</strong><span>Date / Time</span></div>
+  </div>
 
   <div class="footer">This is a computer-generated document.</div>
 </div>

@@ -182,9 +182,9 @@ export function buildDisbursementVoucherHtml(d: DVData): string {
   const payRows = paymentLines.map((p) => {
     const dt = p.transactionDate ? fmtDate(p.transactionDate) : fmtDate(d.paymentDate);
     return `<tr>
-      <td>${esc(METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod)}</td>
-      <td>${esc(buildPaymentRef(p))}</td>
       <td>${dt}</td>
+      <td>${esc(buildPaymentRef(p))}</td>
+      <td>${esc(METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod)}</td>
       <td class="right">${fmt(p.amount)}</td>
     </tr>`;
   }).join("\n");
@@ -299,9 +299,9 @@ ${d.isVoided ? '<div class="voided-watermark">VOIDED</div>' : ""}
       <div class="section-title">Payment Details</div>
       <table>
         <thead><tr>
-          <th style="width:22%">Mode</th>
-          <th style="width:34%">Reference</th>
           <th style="width:20%">Date</th>
+          <th style="width:34%">Reference Number</th>
+          <th style="width:22%">Mode</th>
           <th class="right" style="width:24%">Amount</th>
         </tr></thead>
         <tbody>
