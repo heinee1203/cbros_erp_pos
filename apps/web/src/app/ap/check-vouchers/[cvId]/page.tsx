@@ -16,6 +16,7 @@ import {
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso, fmtDate } from "@/lib/format";
+import { useConfirm } from "@/components/confirm-dialog";
 
 /* ─── Types ─── */
 
@@ -208,6 +209,7 @@ export default function CheckVoucherDetailPage() {
   const { token, locationId, loading: authLoading } = useAuth();
   const params = useParams<{ cvId: string }>();
   const router = useRouter();
+  const confirm = useConfirm();
   const cvId = params?.cvId as string;
 
   const [cv, setCv] = useState<CheckVoucherDetail | null>(null);
@@ -275,7 +277,13 @@ export default function CheckVoucherDetailPage() {
   };
 
   const handleDelete = async () => {
-    if (!confirm("Delete this check voucher? This cannot be undone.")) return;
+    const ok = await confirm({
+      title: "Delete check voucher?",
+      message: "This deletes the draft check voucher permanently. This cannot be undone.",
+      confirmLabel: "Delete Voucher",
+      variant: "danger",
+    });
+    if (!ok) return;
     if (!token || !locationId || !cv) return;
     try {
       await apiFetch(`/ap/check-vouchers/${cv.id}`, {
@@ -482,9 +490,14 @@ export default function CheckVoucherDetailPage() {
                 Clear
               </button>
               <button
-                onClick={() => {
-                  if (confirm("Void this check voucher?"))
-                    performAction("void");
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: "Void check voucher?",
+                    message: "This will void the released check voucher. Confirm only if the voucher should no longer be used.",
+                    confirmLabel: "Void Voucher",
+                    variant: "danger",
+                  });
+                  if (ok) performAction("void");
                 }}
                 disabled={actionLoading}
                 className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"

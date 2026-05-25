@@ -1334,6 +1334,19 @@ function toInt(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isMissingAuditLogTableError(error: unknown): boolean {
+  const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+  const message = `${(error as Error)?.message ?? ""} ${cause?.message ?? ""}`;
+  return cause?.code === "42P01" && message.includes("audit_logs");
+}
+
+function isMissingSupplierSafetyMetadataError(error: unknown): boolean {
+  const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+  const message = `${(error as Error)?.message ?? ""} ${cause?.message ?? ""}`;
+  return isMissingAuditLogTableError(error)
+    || (cause?.code === "42703" && message.includes("bank_verified"));
+}
+
 function normalizeSupplierActivityQuery(query: SupplierActivityQuery) {
   if (!SUPPLIER_ACTIVITY_KINDS.has(query.kind)) {
     throw new Error("Invalid supplier activity kind");
@@ -1416,68 +1429,125 @@ async function syncOpenSupplierInvoiceTerms(
  * suppliers.
  */
 export async function listSuppliersWithAPStats(orgId: string) {
-  const rows = (await db.execute(sql`
-    SELECT
-      s.id,
-      s.name,
-      s.contact_person,
-      s.contact_phone,
-      s.contact_email,
-      s.address,
-      s.tin,
-      s.mnemonic_code,
-      s.payment_terms_days,
-      s.credit_limit::text AS credit_limit,
-      s.bank_name,
-      s.bank_account_number,
-      s.bank_account_name,
-      s.notes,
-      s.is_active,
-      s.created_at,
-      s.updated_at,
-      bank_audit.last_bank_change_at,
-      COALESCE(bank_audit.bank_change_count, 0)::int AS bank_change_count,
-      s.bank_verified_at,
-      s.bank_verified_by,
-      bank_verified_by.full_name AS bank_verified_by_name,
+  let rows: any[];
 
-      -- Invoice rollups (only count non-void invoices)
-      COALESCE(agg.open_count, 0)::int        AS open_count,
-      COALESCE(agg.total_payable, 0)::text    AS total_payable,
-      COALESCE(agg.overdue_count, 0)::int     AS overdue_count,
-      COALESCE(agg.overdue_amount, 0)::text   AS overdue_amount,
-      agg.oldest_overdue_date::text           AS oldest_overdue_date
-    FROM suppliers s
-    LEFT JOIN (
+  try {
+    rows = (await db.execute(sql`
       SELECT
-        supplier_id,
-        COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID'))::int AS open_count,
-        SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')) AS total_payable,
-        COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
-                          AND due_date < CURRENT_DATE)::int AS overdue_count,
-        SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
-                                        AND due_date < CURRENT_DATE) AS overdue_amount,
-        MIN(due_date) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
-                                AND due_date < CURRENT_DATE) AS oldest_overdue_date
-      FROM supplier_invoices
-      WHERE org_id = ${orgId}
-      GROUP BY supplier_id
-    ) agg ON agg.supplier_id = s.id
-    LEFT JOIN (
+        s.id,
+        s.name,
+        s.contact_person,
+        s.contact_phone,
+        s.contact_email,
+        s.address,
+        s.tin,
+        s.mnemonic_code,
+        s.payment_terms_days,
+        s.credit_limit::text AS credit_limit,
+        s.bank_name,
+        s.bank_account_number,
+        s.bank_account_name,
+        s.notes,
+        s.is_active,
+        s.created_at,
+        s.updated_at,
+        bank_audit.last_bank_change_at,
+        COALESCE(bank_audit.bank_change_count, 0)::int AS bank_change_count,
+        s.bank_verified_at,
+        s.bank_verified_by,
+        bank_verified_by.full_name AS bank_verified_by_name,
+
+        -- Invoice rollups (only count non-void invoices)
+        COALESCE(agg.open_count, 0)::int        AS open_count,
+        COALESCE(agg.total_payable, 0)::text    AS total_payable,
+        COALESCE(agg.overdue_count, 0)::int     AS overdue_count,
+        COALESCE(agg.overdue_amount, 0)::text   AS overdue_amount,
+        agg.oldest_overdue_date::text           AS oldest_overdue_date
+      FROM suppliers s
+      LEFT JOIN (
+        SELECT
+          supplier_id,
+          COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID'))::int AS open_count,
+          SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')) AS total_payable,
+          COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                            AND due_date < CURRENT_DATE)::int AS overdue_count,
+          SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                                          AND due_date < CURRENT_DATE) AS overdue_amount,
+          MIN(due_date) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                                  AND due_date < CURRENT_DATE) AS oldest_overdue_date
+        FROM supplier_invoices
+        WHERE org_id = ${orgId}
+        GROUP BY supplier_id
+      ) agg ON agg.supplier_id = s.id
+      LEFT JOIN (
+        SELECT
+          entity_id,
+          MAX(created_at) AS last_bank_change_at,
+          COUNT(*)::int AS bank_change_count
+        FROM audit_logs
+        WHERE org_id = ${orgId}
+          AND entity_type = 'SUPPLIER'
+          AND action = 'SUPPLIER_BANK_CHANGE'
+        GROUP BY entity_id
+      ) bank_audit ON bank_audit.entity_id = s.id
+      LEFT JOIN users bank_verified_by ON bank_verified_by.id = s.bank_verified_by
+      WHERE s.org_id = ${orgId}
+      ORDER BY s.name ASC
+    `)) as any[];
+  } catch (error) {
+    if (!isMissingSupplierSafetyMetadataError(error)) throw error;
+
+    rows = (await db.execute(sql`
       SELECT
-        entity_id,
-        MAX(created_at) AS last_bank_change_at,
-        COUNT(*)::int AS bank_change_count
-      FROM audit_logs
-      WHERE org_id = ${orgId}
-        AND entity_type = 'SUPPLIER'
-        AND action = 'SUPPLIER_BANK_CHANGE'
-      GROUP BY entity_id
-    ) bank_audit ON bank_audit.entity_id = s.id
-    LEFT JOIN users bank_verified_by ON bank_verified_by.id = s.bank_verified_by
-    WHERE s.org_id = ${orgId}
-    ORDER BY s.name ASC
-  `)) as any[];
+        s.id,
+        s.name,
+        s.contact_person,
+        s.contact_phone,
+        s.contact_email,
+        s.address,
+        s.tin,
+        s.mnemonic_code,
+        s.payment_terms_days,
+        s.credit_limit::text AS credit_limit,
+        s.bank_name,
+        s.bank_account_number,
+        s.bank_account_name,
+        s.notes,
+        s.is_active,
+        s.created_at,
+        s.updated_at,
+        NULL::timestamp with time zone AS last_bank_change_at,
+        0::int AS bank_change_count,
+        NULL::timestamp with time zone AS bank_verified_at,
+        NULL::uuid AS bank_verified_by,
+        NULL::text AS bank_verified_by_name,
+
+        -- Invoice rollups (only count non-void invoices)
+        COALESCE(agg.open_count, 0)::int        AS open_count,
+        COALESCE(agg.total_payable, 0)::text    AS total_payable,
+        COALESCE(agg.overdue_count, 0)::int     AS overdue_count,
+        COALESCE(agg.overdue_amount, 0)::text   AS overdue_amount,
+        agg.oldest_overdue_date::text           AS oldest_overdue_date
+      FROM suppliers s
+      LEFT JOIN (
+        SELECT
+          supplier_id,
+          COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID'))::int AS open_count,
+          SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')) AS total_payable,
+          COUNT(*) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                            AND due_date < CURRENT_DATE)::int AS overdue_count,
+          SUM(balance::numeric) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                                          AND due_date < CURRENT_DATE) AS overdue_amount,
+          MIN(due_date) FILTER (WHERE status IN ('OPEN','PARTIALLY_PAID')
+                                  AND due_date < CURRENT_DATE) AS oldest_overdue_date
+        FROM supplier_invoices
+        WHERE org_id = ${orgId}
+        GROUP BY supplier_id
+      ) agg ON agg.supplier_id = s.id
+      WHERE s.org_id = ${orgId}
+      ORDER BY s.name ASC
+    `)) as any[];
+  }
 
   return enrichSuppliersWithSafety(rows.map(mapSupplierApStatsRow));
 }
@@ -1486,35 +1556,59 @@ export async function listSuppliersWithAPStats(orgId: string) {
  * Get a single supplier with every AP field. Used by the detail drawer.
  */
 export async function getSupplierAPDetail(orgId: string, supplierId: string) {
-  const [row] = (await db.execute(sql`
-    SELECT
-      s.id, s.name, s.contact_person, s.contact_phone, s.contact_email,
-      s.address, s.tin, s.mnemonic_code,
-      s.payment_terms_days, s.credit_limit::text AS credit_limit,
-      s.bank_name, s.bank_account_number, s.bank_account_name,
-      s.notes, s.is_active,
-      s.avg_lead_time_days,
-      s.created_at, s.updated_at,
-      bank_audit.last_bank_change_at,
-      COALESCE(bank_audit.bank_change_count, 0)::int AS bank_change_count,
-      s.bank_verified_at,
-      s.bank_verified_by,
-      bank_verified_by.full_name AS bank_verified_by_name
-    FROM suppliers s
-    LEFT JOIN (
+  let row: any | undefined;
+
+  try {
+    [row] = (await db.execute(sql`
       SELECT
-        entity_id,
-        MAX(created_at) AS last_bank_change_at,
-        COUNT(*)::int AS bank_change_count
-      FROM audit_logs
-      WHERE org_id = ${orgId}
-        AND entity_type = 'SUPPLIER'
-        AND action = 'SUPPLIER_BANK_CHANGE'
-      GROUP BY entity_id
-    ) bank_audit ON bank_audit.entity_id = s.id
-    LEFT JOIN users bank_verified_by ON bank_verified_by.id = s.bank_verified_by
-    WHERE s.id = ${supplierId} AND s.org_id = ${orgId}
-  `)) as any[];
+        s.id, s.name, s.contact_person, s.contact_phone, s.contact_email,
+        s.address, s.tin, s.mnemonic_code,
+        s.payment_terms_days, s.credit_limit::text AS credit_limit,
+        s.bank_name, s.bank_account_number, s.bank_account_name,
+        s.notes, s.is_active,
+        s.avg_lead_time_days,
+        s.created_at, s.updated_at,
+        bank_audit.last_bank_change_at,
+        COALESCE(bank_audit.bank_change_count, 0)::int AS bank_change_count,
+        s.bank_verified_at,
+        s.bank_verified_by,
+        bank_verified_by.full_name AS bank_verified_by_name
+      FROM suppliers s
+      LEFT JOIN (
+        SELECT
+          entity_id,
+          MAX(created_at) AS last_bank_change_at,
+          COUNT(*)::int AS bank_change_count
+        FROM audit_logs
+        WHERE org_id = ${orgId}
+          AND entity_type = 'SUPPLIER'
+          AND action = 'SUPPLIER_BANK_CHANGE'
+        GROUP BY entity_id
+      ) bank_audit ON bank_audit.entity_id = s.id
+      LEFT JOIN users bank_verified_by ON bank_verified_by.id = s.bank_verified_by
+      WHERE s.id = ${supplierId} AND s.org_id = ${orgId}
+    `)) as any[];
+  } catch (error) {
+    if (!isMissingSupplierSafetyMetadataError(error)) throw error;
+
+    [row] = (await db.execute(sql`
+      SELECT
+        s.id, s.name, s.contact_person, s.contact_phone, s.contact_email,
+        s.address, s.tin, s.mnemonic_code,
+        s.payment_terms_days, s.credit_limit::text AS credit_limit,
+        s.bank_name, s.bank_account_number, s.bank_account_name,
+        s.notes, s.is_active,
+        s.avg_lead_time_days,
+        s.created_at, s.updated_at,
+        NULL::timestamp with time zone AS last_bank_change_at,
+        0::int AS bank_change_count,
+        NULL::timestamp with time zone AS bank_verified_at,
+        NULL::uuid AS bank_verified_by,
+        NULL::text AS bank_verified_by_name
+      FROM suppliers s
+      WHERE s.id = ${supplierId} AND s.org_id = ${orgId}
+    `)) as any[];
+  }
   if (!row) return null;
 
   const detail = mapSupplierApDetailRow(row);
@@ -1608,23 +1702,46 @@ export async function getSupplierAPOverview(orgId: string, supplierId: string) {
       AND (total_amount::numeric < 0 OR invoice_number ILIKE 'CM-%')
   `)) as any[];
 
-  const [tabs] = (await db.execute(sql`
-    SELECT
-      (SELECT COUNT(*)::int FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId}) AS invoices_count,
-      (SELECT COALESCE(SUM(si.balance::numeric), 0)::text FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId} AND si.status IN ('OPEN','PARTIALLY_PAID')) AS invoices_amount,
-      (SELECT COUNT(*)::int FROM purchase_orders po WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_count,
-      (SELECT COALESCE(SUM(pl.ordered_qty * pl.unit_cost::numeric), 0)::text
-         FROM purchase_orders po
-         LEFT JOIN po_lines pl ON pl.purchase_order_id = po.id
-        WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_amount,
-      (SELECT COUNT(*)::int FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_count,
-      (SELECT COALESCE(SUM(sr.credit_amount::numeric), 0)::text FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_amount,
-      (SELECT COUNT(*)::int FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId}) AS soas_count,
-      (SELECT COALESCE(SUM(ssr.total_balance::numeric), 0)::text FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId} AND ssr.status != 'VOID') AS soas_amount,
-      (SELECT COUNT(*)::int FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId}) AS dvs_count,
-      (SELECT COALESCE(SUM(dv.amount::numeric), 0)::text FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId} AND dv.status != 'VOIDED') AS dvs_amount,
-      (SELECT COUNT(*)::int FROM audit_logs al WHERE al.org_id = ${orgId} AND al.entity_type = 'SUPPLIER' AND al.entity_id = ${supplierId}) AS audit_count
-  `)) as any[];
+  let tabs: any;
+  try {
+    [tabs] = (await db.execute(sql`
+      SELECT
+        (SELECT COUNT(*)::int FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId}) AS invoices_count,
+        (SELECT COALESCE(SUM(si.balance::numeric), 0)::text FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId} AND si.status IN ('OPEN','PARTIALLY_PAID')) AS invoices_amount,
+        (SELECT COUNT(*)::int FROM purchase_orders po WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_count,
+        (SELECT COALESCE(SUM(pl.ordered_qty * pl.unit_cost::numeric), 0)::text
+           FROM purchase_orders po
+           LEFT JOIN po_lines pl ON pl.purchase_order_id = po.id
+          WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_amount,
+        (SELECT COUNT(*)::int FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_count,
+        (SELECT COALESCE(SUM(sr.credit_amount::numeric), 0)::text FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_amount,
+        (SELECT COUNT(*)::int FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId}) AS soas_count,
+        (SELECT COALESCE(SUM(ssr.total_balance::numeric), 0)::text FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId} AND ssr.status != 'VOID') AS soas_amount,
+        (SELECT COUNT(*)::int FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId}) AS dvs_count,
+        (SELECT COALESCE(SUM(dv.amount::numeric), 0)::text FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId} AND dv.status != 'VOIDED') AS dvs_amount,
+        (SELECT COUNT(*)::int FROM audit_logs al WHERE al.org_id = ${orgId} AND al.entity_type = 'SUPPLIER' AND al.entity_id = ${supplierId}) AS audit_count
+    `)) as any[];
+  } catch (error) {
+    if (!isMissingAuditLogTableError(error)) throw error;
+
+    [tabs] = (await db.execute(sql`
+      SELECT
+        (SELECT COUNT(*)::int FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId}) AS invoices_count,
+        (SELECT COALESCE(SUM(si.balance::numeric), 0)::text FROM supplier_invoices si WHERE si.org_id = ${orgId} AND si.supplier_id = ${supplierId} AND si.status IN ('OPEN','PARTIALLY_PAID')) AS invoices_amount,
+        (SELECT COUNT(*)::int FROM purchase_orders po WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_count,
+        (SELECT COALESCE(SUM(pl.ordered_qty * pl.unit_cost::numeric), 0)::text
+           FROM purchase_orders po
+           LEFT JOIN po_lines pl ON pl.purchase_order_id = po.id
+          WHERE po.org_id = ${orgId} AND po.supplier_id = ${supplierId}) AS pos_amount,
+        (SELECT COUNT(*)::int FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_count,
+        (SELECT COALESCE(SUM(sr.credit_amount::numeric), 0)::text FROM supplier_returns sr WHERE sr.org_id = ${orgId} AND sr.supplier_id = ${supplierId}) AS returns_amount,
+        (SELECT COUNT(*)::int FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId}) AS soas_count,
+        (SELECT COALESCE(SUM(ssr.total_balance::numeric), 0)::text FROM supplier_soa_records ssr WHERE ssr.org_id = ${orgId} AND ssr.supplier_id = ${supplierId} AND ssr.status != 'VOID') AS soas_amount,
+        (SELECT COUNT(*)::int FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId}) AS dvs_count,
+        (SELECT COALESCE(SUM(dv.amount::numeric), 0)::text FROM supplier_disbursement_vouchers dv WHERE dv.org_id = ${orgId} AND dv.supplier_id = ${supplierId} AND dv.status != 'VOIDED') AS dvs_amount,
+        0::int AS audit_count
+    `)) as any[];
+  }
 
   const [lastActivity] = (await db.execute(sql`
     SELECT
@@ -1931,34 +2048,39 @@ export async function listSupplierActivity(
     ? sql`AND (al.action ILIKE ${searchPattern} OR COALESCE(al.details::text, '') ILIKE ${searchPattern})`
     : sql``;
   const statusSql = statusPattern.length > 0 ? sql`AND al.action = ANY(${statusPattern})` : sql``;
-  const [countRow] = (await db.execute(sql`
-    SELECT COUNT(*)::int AS total
-    FROM audit_logs al
-    WHERE al.org_id = ${orgId}
-      AND al.entity_type = 'SUPPLIER'
-      AND al.entity_id = ${supplierId}
-    ${searchSql}
-    ${statusSql}
-  `)) as any[];
-  const rows = (await db.execute(sql`
-    SELECT
-      al.id,
-      u.full_name AS "userName",
-      al.action,
-      al.details,
-      al.created_at::text AS "createdAt"
-    FROM audit_logs al
-    LEFT JOIN users u ON u.id = al.user_id
-    WHERE al.org_id = ${orgId}
-      AND al.entity_type = 'SUPPLIER'
-      AND al.entity_id = ${supplierId}
-    ${searchSql}
-    ${statusSql}
-    ORDER BY ${normalized.sortSql} ${normalized.dirSql}, al.id DESC
-    LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
-  `)) as any[];
-  const total = toInt(countRow?.total);
-  return supplierActivityResponse("audit", normalized, total, 0, rows);
+  try {
+    const [countRow] = (await db.execute(sql`
+      SELECT COUNT(*)::int AS total
+      FROM audit_logs al
+      WHERE al.org_id = ${orgId}
+        AND al.entity_type = 'SUPPLIER'
+        AND al.entity_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+    `)) as any[];
+    const rows = (await db.execute(sql`
+      SELECT
+        al.id,
+        u.full_name AS "userName",
+        al.action,
+        al.details,
+        al.created_at::text AS "createdAt"
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id = al.user_id
+      WHERE al.org_id = ${orgId}
+        AND al.entity_type = 'SUPPLIER'
+        AND al.entity_id = ${supplierId}
+      ${searchSql}
+      ${statusSql}
+      ORDER BY ${normalized.sortSql} ${normalized.dirSql}, al.id DESC
+      LIMIT ${normalized.pageSize} OFFSET ${normalized.offset}
+    `)) as any[];
+    const total = toInt(countRow?.total);
+    return supplierActivityResponse("audit", normalized, total, 0, rows);
+  } catch (error) {
+    if (!isMissingAuditLogTableError(error)) throw error;
+    return supplierActivityResponse("audit", normalized, 0, 0, []);
+  }
 }
 
 async function buildSupplierMergePreview(orgId: string, targetSupplierId: string, sourceSupplierId: string) {

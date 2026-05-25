@@ -38,6 +38,11 @@ import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso, fmtDate } from "@/lib/format";
 import { buildSupplierSOAHtml } from "@/lib/supplier-soa-html";
+import {
+  firstFieldError,
+  normalizeFieldErrors,
+  type FieldErrorMap,
+} from "@/lib/field-errors";
 
 export interface SupplierDetail {
   id: string;
@@ -399,6 +404,41 @@ const EMPTY_FORM: FormState = {
   isActive: true,
 };
 
+const SUPPLIER_FIELD_ALIASES: Record<string, keyof FormState> = {
+  contact_person: "contactPerson",
+  contactPerson: "contactPerson",
+  contact_phone: "contactPhone",
+  contactPhone: "contactPhone",
+  contact_email: "contactEmail",
+  contactEmail: "contactEmail",
+  mnemonic_code: "mnemonicCode",
+  mnemonicCode: "mnemonicCode",
+  payment_terms_days: "paymentTermsDays",
+  paymentTermsDays: "paymentTermsDays",
+  credit_limit: "creditLimit",
+  creditLimit: "creditLimit",
+  avg_lead_time_days: "avgLeadTimeDays",
+  avgLeadTimeDays: "avgLeadTimeDays",
+  bank_name: "bankName",
+  bankName: "bankName",
+  bank_account_number: "bankAccountNumber",
+  bankAccountNumber: "bankAccountNumber",
+  bank_account_name: "bankAccountName",
+  bankAccountName: "bankAccountName",
+};
+
+function supplierFieldClass(fieldErrors: FieldErrorMap, field: keyof FormState) {
+  return firstFieldError(fieldErrors, field)
+    ? "border-red-500 bg-red-50/40 focus:border-red-600 focus:ring-1 focus:ring-red-200"
+    : "border-border";
+}
+
+function SupplierFieldError({ fieldErrors, field }: { fieldErrors: FieldErrorMap; field: keyof FormState }) {
+  const message = firstFieldError(fieldErrors, field);
+  if (!message) return null;
+  return <p className="mt-1 text-[11px] font-medium text-red-700">{message}</p>;
+}
+
 /* ─── Supporting tab types ─── */
 
 interface InvoiceLite {
@@ -468,6 +508,7 @@ export function SupplierDetailDrawer({
   const [tab, setTab] = useState<Tab>(isNew ? "details" : "overview");
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrorMap>({});
   const [saving, setSaving] = useState(false);
   const [supplier, setSupplier] = useState<SupplierDetail | null>(null);
   const [overview, setOverview] = useState<SupplierOverview | null>(null);
@@ -646,11 +687,18 @@ export function SupplierDetailDrawer({
   // ── Handlers ──
   const setField = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
+    setFieldErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   };
 
   const handleSave = async () => {
     if (!form.name.trim()) {
       setError("Supplier name is required");
+      setFieldErrors({ name: ["Supplier name is required."] });
       return;
     }
     const cleanBankValue = (value: string | null | undefined) => value?.trim() || "";
@@ -661,6 +709,7 @@ export function SupplierDetailDrawer({
       : false;
     setSaving(true);
     setError(null);
+    setFieldErrors({});
     try {
       const payload = {
         name: form.name.trim(),
@@ -703,7 +752,9 @@ export function SupplierDetailDrawer({
         toast.success(bankChanged ? "Supplier saved. Bank verification needs review." : "Supplier saved");
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to save supplier");
+      const normalized = normalizeFieldErrors(err, SUPPLIER_FIELD_ALIASES, "Failed to save supplier");
+      setFieldErrors(normalized.fieldErrors);
+      setError(normalized.message);
     } finally {
       setSaving(false);
     }
@@ -923,6 +974,7 @@ export function SupplierDetailDrawer({
               setField={setField}
               canEdit={canEdit}
               error={error}
+              fieldErrors={fieldErrors}
               supplier={supplier}
               paymentSafety={overview?.paymentSafety ?? null}
               verifyingBank={verifyingBank}
@@ -1526,6 +1578,7 @@ function EditForm({
   setField,
   canEdit,
   error,
+  fieldErrors,
   supplier,
   paymentSafety,
   verifyingBank,
@@ -1535,6 +1588,7 @@ function EditForm({
   setField: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   canEdit: boolean;
   error: string | null;
+  fieldErrors: FieldErrorMap;
   supplier: SupplierDetail | null;
   paymentSafety: SupplierOverview["paymentSafety"] | null;
   verifyingBank: boolean;
@@ -1583,47 +1637,57 @@ function EditForm({
 
       <Section title="Basic Info">
         <Field label="Supplier Name" required>
-          <input type="text" value={form.name} onChange={(e) => setField("name", e.target.value)} disabled={!canEdit} className={common} />
+          <input type="text" value={form.name} onChange={(e) => setField("name", e.target.value)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "name"))} className={cn(common, supplierFieldClass(fieldErrors, "name"))} />
+          <SupplierFieldError fieldErrors={fieldErrors} field="name" />
         </Field>
         <Grid2>
           <Field label="Contact Person">
-            <input type="text" value={form.contactPerson ?? ""} onChange={(e) => setField("contactPerson", e.target.value || null)} disabled={!canEdit} className={common} />
+            <input type="text" value={form.contactPerson ?? ""} onChange={(e) => setField("contactPerson", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "contactPerson"))} className={cn(common, supplierFieldClass(fieldErrors, "contactPerson"))} />
+            <SupplierFieldError fieldErrors={fieldErrors} field="contactPerson" />
           </Field>
           <Field label="Mnemonic Code" hint="2-letter (e.g. WE)">
-            <input type="text" maxLength={2} value={form.mnemonicCode ?? ""} onChange={(e) => setField("mnemonicCode", e.target.value.toUpperCase() || null)} disabled={!canEdit} className={cn(common, "font-mono")} />
+            <input type="text" maxLength={2} value={form.mnemonicCode ?? ""} onChange={(e) => setField("mnemonicCode", e.target.value.toUpperCase() || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "mnemonicCode"))} className={cn(common, "font-mono", supplierFieldClass(fieldErrors, "mnemonicCode"))} />
+            <SupplierFieldError fieldErrors={fieldErrors} field="mnemonicCode" />
           </Field>
         </Grid2>
         <Grid2>
           <Field label="Phone">
-            <input type="tel" value={form.contactPhone ?? ""} onChange={(e) => setField("contactPhone", e.target.value || null)} disabled={!canEdit} className={common} />
+            <input type="tel" value={form.contactPhone ?? ""} onChange={(e) => setField("contactPhone", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "contactPhone"))} className={cn(common, supplierFieldClass(fieldErrors, "contactPhone"))} />
+            <SupplierFieldError fieldErrors={fieldErrors} field="contactPhone" />
           </Field>
           <Field label="Email">
-            <input type="email" value={form.contactEmail ?? ""} onChange={(e) => setField("contactEmail", e.target.value || null)} disabled={!canEdit} className={common} />
+            <input type="email" value={form.contactEmail ?? ""} onChange={(e) => setField("contactEmail", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "contactEmail"))} className={cn(common, supplierFieldClass(fieldErrors, "contactEmail"))} />
+            <SupplierFieldError fieldErrors={fieldErrors} field="contactEmail" />
           </Field>
         </Grid2>
         <Field label="Address">
-          <textarea rows={2} value={form.address ?? ""} onChange={(e) => setField("address", e.target.value || null)} disabled={!canEdit} className={common} />
+          <textarea rows={2} value={form.address ?? ""} onChange={(e) => setField("address", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "address"))} className={cn(common, supplierFieldClass(fieldErrors, "address"))} />
+          <SupplierFieldError fieldErrors={fieldErrors} field="address" />
         </Field>
         <Field label="TIN">
-          <input type="text" value={form.tin ?? ""} onChange={(e) => setField("tin", e.target.value || null)} disabled={!canEdit} className={common} />
+          <input type="text" value={form.tin ?? ""} onChange={(e) => setField("tin", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "tin"))} className={cn(common, supplierFieldClass(fieldErrors, "tin"))} />
+          <SupplierFieldError fieldErrors={fieldErrors} field="tin" />
         </Field>
       </Section>
 
       <Section title="Credit Terms">
         <Grid2>
           <Field label="Payment Terms">
-            <select value={form.paymentTermsDays} onChange={(e) => setField("paymentTermsDays", parseInt(e.target.value, 10))} disabled={!canEdit} className={common}>
+            <select value={form.paymentTermsDays} onChange={(e) => setField("paymentTermsDays", parseInt(e.target.value, 10))} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "paymentTermsDays"))} className={cn(common, supplierFieldClass(fieldErrors, "paymentTermsDays"))}>
               {PAYMENT_TERMS.map((t) => (
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
+            <SupplierFieldError fieldErrors={fieldErrors} field="paymentTermsDays" />
           </Field>
           <Field label="Credit Limit" hint="0 = unlimited">
-            <input type="number" min={0} step="0.01" value={form.creditLimit} onChange={(e) => setField("creditLimit", parseFloat(e.target.value) || 0)} disabled={!canEdit} className={common} />
+            <input type="number" min={0} step="0.01" value={form.creditLimit} onChange={(e) => setField("creditLimit", parseFloat(e.target.value) || 0)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "creditLimit"))} className={cn(common, supplierFieldClass(fieldErrors, "creditLimit"))} />
+            <SupplierFieldError fieldErrors={fieldErrors} field="creditLimit" />
           </Field>
         </Grid2>
         <Field label="Avg Lead Time (days)" hint="Typical delivery time from order to receipt">
-          <input type="number" min={0} value={form.avgLeadTimeDays} onChange={(e) => setField("avgLeadTimeDays", parseInt(e.target.value, 10) || 0)} disabled={!canEdit} className={common} />
+          <input type="number" min={0} value={form.avgLeadTimeDays} onChange={(e) => setField("avgLeadTimeDays", parseInt(e.target.value, 10) || 0)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "avgLeadTimeDays"))} className={cn(common, supplierFieldClass(fieldErrors, "avgLeadTimeDays"))} />
+          <SupplierFieldError fieldErrors={fieldErrors} field="avgLeadTimeDays" />
         </Field>
       </Section>
 
@@ -1678,14 +1742,17 @@ function EditForm({
           </div>
         </div>
         <Field label="Bank Name">
-          <input type="text" value={form.bankName ?? ""} onChange={(e) => setField("bankName", e.target.value || null)} disabled={!canEdit} className={common} />
+          <input type="text" value={form.bankName ?? ""} onChange={(e) => setField("bankName", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "bankName"))} className={cn(common, supplierFieldClass(fieldErrors, "bankName"))} />
+          <SupplierFieldError fieldErrors={fieldErrors} field="bankName" />
         </Field>
         <Grid2>
           <Field label="Account Number">
-            <input type="text" value={form.bankAccountNumber ?? ""} onChange={(e) => setField("bankAccountNumber", e.target.value || null)} disabled={!canEdit} className={cn(common, "font-mono")} />
+            <input type="text" value={form.bankAccountNumber ?? ""} onChange={(e) => setField("bankAccountNumber", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "bankAccountNumber"))} className={cn(common, "font-mono", supplierFieldClass(fieldErrors, "bankAccountNumber"))} />
+            <SupplierFieldError fieldErrors={fieldErrors} field="bankAccountNumber" />
           </Field>
           <Field label="Account Name">
-            <input type="text" value={form.bankAccountName ?? ""} onChange={(e) => setField("bankAccountName", e.target.value || null)} disabled={!canEdit} className={common} />
+            <input type="text" value={form.bankAccountName ?? ""} onChange={(e) => setField("bankAccountName", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "bankAccountName"))} className={cn(common, supplierFieldClass(fieldErrors, "bankAccountName"))} />
+            <SupplierFieldError fieldErrors={fieldErrors} field="bankAccountName" />
           </Field>
         </Grid2>
         <div className="flex flex-wrap gap-2">
@@ -1696,7 +1763,8 @@ function EditForm({
       </Section>
 
       <Section title="Notes">
-        <textarea rows={3} value={form.notes ?? ""} onChange={(e) => setField("notes", e.target.value || null)} disabled={!canEdit} className={common} placeholder="Internal notes about this supplier..." />
+        <textarea rows={3} value={form.notes ?? ""} onChange={(e) => setField("notes", e.target.value || null)} disabled={!canEdit} aria-invalid={Boolean(firstFieldError(fieldErrors, "notes"))} className={cn(common, supplierFieldClass(fieldErrors, "notes"))} placeholder="Internal notes about this supplier..." />
+        <SupplierFieldError fieldErrors={fieldErrors} field="notes" />
       </Section>
     </form>
   );

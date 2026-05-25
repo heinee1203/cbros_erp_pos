@@ -5,6 +5,12 @@ import { X, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
 import { fmtPeso } from "@/lib/format";
+import { cn } from "@/lib/utils";
+import {
+  firstFieldError,
+  normalizeFieldErrors,
+  type FieldErrorMap,
+} from "@/lib/field-errors";
 
 interface Supplier {
   id: string;
@@ -87,6 +93,28 @@ function recordButtonLabel(invoiceCount: number, creditMemoCount: number) {
   return `Record ${parts.join(" + ") || "0 Invoices"}`;
 }
 
+const INVOICE_FIELD_ALIASES: Record<string, string> = {
+  supplier_id: "supplierId",
+  supplierId: "supplierId",
+  source_po_id: "poReference",
+  sourcePoId: "poReference",
+  invoices: "invoices",
+  "invoices.0.invoiceNumber": "invoices",
+  "invoices.0.amount": "invoices",
+};
+
+function fieldClass(fieldErrors: FieldErrorMap, field: string) {
+  return firstFieldError(fieldErrors, field)
+    ? "border-red-500 bg-red-50/40 focus:border-red-600"
+    : "border-border";
+}
+
+function InlineFieldError({ fieldErrors, field }: { fieldErrors: FieldErrorMap; field: string }) {
+  const message = firstFieldError(fieldErrors, field);
+  if (!message) return null;
+  return <p className="mt-1 text-[11px] font-medium text-red-700">{message}</p>;
+}
+
 export function RecordInvoiceModal({
   open,
   onClose,
@@ -108,6 +136,7 @@ export function RecordInvoiceModal({
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrorMap>({});
   const [supplierError, setSupplierError] = useState<string | null>(null);
   const lastInvRef = useRef<HTMLInputElement>(null);
 
@@ -128,6 +157,7 @@ export function RecordInvoiceModal({
       setPoReference("");
       setNotes("");
       setError(null);
+      setFieldErrors({});
     }
   }, [open, today]);
 
@@ -153,6 +183,12 @@ export function RecordInvoiceModal({
 
   const updateRow = (key: string, field: keyof InvoiceRow, value: string) => {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
+    setFieldErrors((current) => {
+      if (!current.invoices) return current;
+      const next = { ...current };
+      delete next.invoices;
+      return next;
+    });
   };
 
   const removeRow = (key: string) => {
@@ -191,12 +227,17 @@ export function RecordInvoiceModal({
     const nums = submittedRows.map((r) => r.invoiceNumber);
     const dupSet = new Set<string>();
     for (const n of nums) {
-      if (dupSet.has(n)) { setError(`Duplicate invoice number in batch: ${n}`); return; }
+      if (dupSet.has(n)) {
+        setError("Please fix the highlighted invoice rows.");
+        setFieldErrors({ invoices: [`Duplicate invoice number in batch: ${n}`] });
+        return;
+      }
       dupSet.add(n);
     }
 
     setSaving(true);
     setError(null);
+    setFieldErrors({});
     const supplier = selectedSupplier;
 
     try {
@@ -247,7 +288,9 @@ export function RecordInvoiceModal({
       onClose();
     } catch (err: unknown) {
       // Network / 4xx / 5xx — the save did not happen at all.
-      const message = err instanceof Error ? err.message : "Failed to record invoices";
+      const normalized = normalizeFieldErrors(err, INVOICE_FIELD_ALIASES, "Failed to record invoices");
+      const message = normalized.message;
+      setFieldErrors(normalized.fieldErrors);
       setError(message);
       toast.error("Could not record invoice", {
         description: message || "Please try again or check your connection",
@@ -285,8 +328,17 @@ export function RecordInvoiceModal({
               <>
                 <select
                   value={supplierId}
-                  onChange={(e) => setSupplierId(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                  onChange={(e) => {
+                    setSupplierId(e.target.value);
+                    setFieldErrors((current) => {
+                      if (!current.supplierId) return current;
+                      const next = { ...current };
+                      delete next.supplierId;
+                      return next;
+                    });
+                  }}
+                  aria-invalid={Boolean(firstFieldError(fieldErrors, "supplierId"))}
+                  className={cn("w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary", fieldClass(fieldErrors, "supplierId"))}
                   required
                 >
                   <option value="">Select supplier...</option>
@@ -299,6 +351,7 @@ export function RecordInvoiceModal({
                     Terms: <span className="font-medium text-foreground">{termsLabel(paymentTermsDays)}</span>
                   </div>
                 )}
+                <InlineFieldError fieldErrors={fieldErrors} field="supplierId" />
               </>
             )}
           </div>
@@ -351,7 +404,7 @@ export function RecordInvoiceModal({
                           value={row.invoiceNumber}
                           onChange={(e) => handleInvoiceNumberChange(row.key, e.target.value)}
                           placeholder={row.kind === "credit_memo" ? "Credit memo #" : "Invoice #"}
-                          className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary"
+                          className={cn("h-8 w-full rounded border bg-background px-2 text-[12px] outline-none focus:border-primary", fieldClass(fieldErrors, "invoices"))}
                         />
                       </td>
                       <td className="px-2 py-1">
@@ -359,7 +412,7 @@ export function RecordInvoiceModal({
                           type="date"
                           value={row.invoiceDate}
                           onChange={(e) => updateRow(row.key, "invoiceDate", e.target.value)}
-                          className="h-8 w-full rounded border border-border bg-background px-2 text-[12px] outline-none focus:border-primary"
+                          className={cn("h-8 w-full rounded border bg-background px-2 text-[12px] outline-none focus:border-primary", fieldClass(fieldErrors, "invoices"))}
                         />
                       </td>
                       <td className="px-2 py-1">
@@ -370,9 +423,11 @@ export function RecordInvoiceModal({
                           value={row.amount}
                           onChange={(e) => updateRow(row.key, "amount", e.target.value)}
                           placeholder={row.kind === "credit_memo" ? "Credit" : "0.00"}
-                          className={`h-8 w-full rounded border border-border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary ${
-                            row.kind === "credit_memo" ? "text-emerald-700" : ""
-                          }`}
+                          className={cn(
+                            "h-8 w-full rounded border bg-background px-2 text-right text-[12px] tabular-nums outline-none focus:border-primary",
+                            row.kind === "credit_memo" && "text-emerald-700",
+                            fieldClass(fieldErrors, "invoices"),
+                          )}
                         />
                       </td>
                       <td className="px-2 py-1 text-center">
@@ -388,6 +443,7 @@ export function RecordInvoiceModal({
                 </tbody>
               </table>
             </div>
+            <InlineFieldError fieldErrors={fieldErrors} field="invoices" />
 
             {validRows.length > 0 && (
               <div className="mt-1 text-right text-[12px] tabular-nums font-semibold">
@@ -402,12 +458,16 @@ export function RecordInvoiceModal({
               <label className="mb-1 block text-xs font-medium text-muted-foreground">PO Reference (shared)</label>
               <input type="text" value={poReference} onChange={(e) => setPoReference(e.target.value)}
                 placeholder="e.g. PO-2024-0001"
-                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
+                aria-invalid={Boolean(firstFieldError(fieldErrors, "poReference"))}
+                className={cn("w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary", fieldClass(fieldErrors, "poReference"))} />
+              <InlineFieldError fieldErrors={fieldErrors} field="poReference" />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-muted-foreground">Notes (shared)</label>
               <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
+                aria-invalid={Boolean(firstFieldError(fieldErrors, "notes"))}
+                className={cn("w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary", fieldClass(fieldErrors, "notes"))} />
+              <InlineFieldError fieldErrors={fieldErrors} field="notes" />
             </div>
           </div>
 

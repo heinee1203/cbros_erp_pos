@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import {
   CreditCard, Search, X, Loader2, AlertTriangle, Clock, CheckCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { cn } from "@/lib/utils";
 import { fmtPeso, fmtDate } from "@/lib/format";
@@ -54,6 +55,8 @@ export default function CheckRegisterPage() {
   const [bankFilter, setBankFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [pendingBounce, setPendingBounce] = useState<CheckEntry | null>(null);
+  const [bounceReason, setBounceReason] = useState("");
 
   const fetchChecks = useCallback(async () => {
     if (!token || !locationId) return;
@@ -89,11 +92,10 @@ export default function CheckRegisterPage() {
     return Array.from(set).sort();
   }, [checks]);
 
-  const handleAction = async (id: string, action: "release" | "clear" | "bounce" | "cancel") => {
+  const handleAction = async (id: string, action: "release" | "clear" | "bounce" | "cancel", reason?: string) => {
     if (!token || !locationId) return;
     let body: string | undefined;
     if (action === "bounce") {
-      const reason = prompt("Enter bounce reason:");
       if (!reason) return;
       body = JSON.stringify({ reason });
     }
@@ -101,9 +103,13 @@ export default function CheckRegisterPage() {
       await apiFetch(`/ap/check-register/${id}/${action}`, {
         token, locationId, method: "POST", body,
       });
+      if (action === "bounce") {
+        setPendingBounce(null);
+        setBounceReason("");
+      }
       fetchChecks();
     } catch (err: any) {
-      alert(err.message || `Failed to ${action} check`);
+      toast.error(err.message || `Failed to ${action} check`);
     }
   };
 
@@ -227,7 +233,15 @@ export default function CheckRegisterPage() {
                   {c.status === "RELEASED" && (
                     <>
                       <button onClick={() => handleAction(c.id, "clear")} className="rounded px-2 py-0.5 text-[10px] font-medium text-emerald-600 hover:bg-emerald-50">Clear</button>
-                      <button onClick={() => handleAction(c.id, "bounce")} className="rounded px-2 py-0.5 text-[10px] font-medium text-red-500 hover:bg-red-50">Bounce</button>
+                      <button
+                        onClick={() => {
+                          setPendingBounce(c);
+                          setBounceReason(c.bounceReason ?? "");
+                        }}
+                        className="rounded px-2 py-0.5 text-[10px] font-medium text-red-500 hover:bg-red-50"
+                      >
+                        Bounce
+                      </button>
                     </>
                   )}
                 </div>
@@ -240,6 +254,51 @@ export default function CheckRegisterPage() {
           <span className="text-[11px] text-muted-foreground">{checks.length} check{checks.length !== 1 ? "s" : ""}</span>
         </div>
       </div>
+
+      {pendingBounce && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setPendingBounce(null)}>
+          <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-red-100 text-red-700">
+                <AlertTriangle size={18} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-foreground">Mark Check as Bounced?</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {pendingBounce.dvNumber} - {pendingBounce.checkNumber || "No check #"} - {fmtPeso(pendingBounce.amount)}
+                </p>
+                <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Bounce reason
+                </label>
+                <textarea
+                  value={bounceReason}
+                  onChange={(event) => setBounceReason(event.target.value)}
+                  rows={3}
+                  className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                  placeholder="e.g. Account closed, insufficient funds, stale check"
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingBounce(null)}
+                className="rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleAction(pendingBounce.id, "bounce", bounceReason.trim())}
+                disabled={!bounceReason.trim()}
+                className="rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                Mark Bounced
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

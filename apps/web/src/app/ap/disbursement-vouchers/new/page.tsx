@@ -8,6 +8,7 @@ import { fmtPeso, fmtDate } from "@/lib/format";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { buildDisbursementVoucherHtml } from "@/lib/disbursement-voucher-html";
+import { FinancialActionSummary } from "@/components/financial-action-summary";
 
 /* ── Types ── */
 
@@ -874,21 +875,31 @@ export default function NewDisbursementVoucherPage() {
           </div>
         )}
 
-        {/* Reconciliation summary */}
-        <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm tabular-nums">
-          <div className="flex justify-between"><span>SOA Amount</span><span className="font-medium">{fmtPeso(gross)}</span></div>
-          {totalCharges > 0 && (
-            <div className="flex justify-between text-emerald-600">
-              <span>Add: Additional Charges{chargeTypeSummary ? ` (${chargeTypeSummary})` : ""}</span>
-              <span>{fmtPeso(totalCharges)}</span>
-            </div>
-          )}
-          {totalDed > 0 && <div className="flex justify-between text-red-600"><span>Less: Deductions (EWT)</span><span>({fmtPeso(totalDed)})</span></div>}
-          {totalCMs > 0 && <div className="flex justify-between text-red-600"><span>Less: Credit Memos</span><span>({fmtPeso(totalCMs)})</span></div>}
-          <div className="mt-1 flex justify-between border-t border-border pt-1 text-base font-bold">
-            <span>Net Payment</span><span>{fmtPeso(netAmount)}</span>
-          </div>
-        </div>
+        <FinancialActionSummary
+          className="bg-muted/30 text-sm tabular-nums"
+          grossLabel="SOA Amount"
+          grossAmount={gross}
+          lines={[
+            ...(totalCharges > 0 ? [{
+              label: `Additional Charges${chargeTypeSummary ? ` (${chargeTypeSummary})` : ""}`,
+              amount: totalCharges,
+              tone: "charge" as const,
+            }] : []),
+            ...(totalDed > 0 ? [{
+              label: "Deductions (EWT)",
+              amount: totalDed,
+              tone: "deduction" as const,
+            }] : []),
+            ...(totalCMs > 0 ? [{
+              label: "Credit Memos",
+              amount: totalCMs,
+              tone: "credit" as const,
+            }] : []),
+          ]}
+          netLabel="Net Payment"
+          netAmount={netAmount}
+          netTone="neutral"
+        />
 
         {/* ── Payments ── */}
         <div>
