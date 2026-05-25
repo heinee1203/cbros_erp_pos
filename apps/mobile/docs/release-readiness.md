@@ -49,6 +49,28 @@ Record pass/fail notes locally for:
 
 Certification results appear in Recovery & Diagnostics and the copy-friendly support packet.
 
+## Store-Pilot Readiness
+
+Before the first pilot shift:
+
+- Create the device registration code from ERP > Settings > POS Devices, then scan or type it on the Android tablet.
+- Open More > Setup Wizard and complete printer connection, receipt test, label test, scanner/manual scan, manager authorization, and drawer kick.
+- Confirm More > Recovery & Diagnostics reports the pilot register as Ready or only Warning, never Blocked.
+- Confirm More > Manager Audit shows hardware outcomes, drawer variance history, and offline reconciliation outcomes.
+- Complete a small cash sale, then use More > Last Reprint to preview and reprint through the print queue.
+
+## Performance QA
+
+Keep this pass low-impact. Use one tablet or emulator and avoid long stress loops:
+
+- Build a 50+ line cart and confirm add/remove, discount, payment, and clear-cart restore stay responsive.
+- Search catalog terms with many matches and confirm barcode/manual scan still returns quickly.
+- Seed or simulate several pending sales and drawer events, then confirm Recovery & Diagnostics opens detail views without lag.
+- Create a large print queue with failed and printed jobs, then confirm preview, retry, and clear-printed actions remain usable.
+- Test weak/offline network by disconnecting briefly; non-cash checkout should block and recovery cards should stay visible.
+- Reprint the last receipt several times and confirm failed print jobs remain retryable rather than disappearing.
+- Capture tablet landscape, tablet portrait, and compact-width screenshots with `APEX_SMOKE_UI_SIZES=1`.
+
 ## Next 8 QA Checklist
 
 Use this after the emulator smoke and before a store pilot:

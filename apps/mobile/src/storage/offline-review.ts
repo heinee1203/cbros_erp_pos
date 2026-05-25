@@ -1,6 +1,7 @@
 import { KEYS } from '@/storage/keys';
 import { getJSON, setJSON, storage } from '@/storage/mmkv';
 import { recordSupportLog } from '@/storage/support-logs';
+import { recordOfflineReconciliationOutcome } from '@/storage/offline-reconciliation';
 
 export type OfflineReviewType = 'pending-sale' | 'drawer-event';
 
@@ -50,6 +51,14 @@ export function markOfflineRecordReviewed(input: {
     [keyFor(input.type, input.id)]: marker,
   };
   setJSON(storage, KEYS.OFFLINE_REVIEW_MARKERS, next);
+  recordOfflineReconciliationOutcome({
+    type: input.type,
+    id: input.id,
+    status: 'manager_reviewed',
+    message: marker.note,
+    reviewedBy: marker.reviewedBy,
+    reviewedAt: marker.reviewedAt,
+  });
   recordSupportLog({
     category: input.type === 'pending-sale' ? 'checkout' : 'drawer',
     level: 'info',

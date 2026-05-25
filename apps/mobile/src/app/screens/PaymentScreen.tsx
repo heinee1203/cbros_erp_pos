@@ -27,6 +27,7 @@ import { useCheckout, type CheckoutOverrideApproval } from '@/hooks/use-checkout
 import { apiFetch, ApiError } from '@/services/api-client';
 import { getPendingSales } from '@/storage/pending-sales';
 import { isGuidedCashierModeEnabled, subscribeGuidedCashierMode } from '@/storage/cashier-guidance';
+import { recordLastTransactionReprint } from '@/storage/last-transaction-reprint';
 import { usePrinter } from '@/hardware/printer/context';
 import { printReceiptSafely } from '@/hardware/printer/settings';
 import type { ReceiptData } from '@/hardware/printer/types';
@@ -729,6 +730,12 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
           }
           const receiptData = buildReceiptData(res.receiptNumber || res.saleNo);
           setCompletedReceiptData(receiptData);
+          recordLastTransactionReprint({
+            saleId: res.saleId,
+            saleNo: res.saleNo,
+            receiptNumber: res.receiptNumber || res.saleNo,
+            receipt: receiptData,
+          });
           setCompletedChange(getCashChange(payments));
           const printResult = await printReceiptSafely(printer, receiptData, {
             type: 'receipt',

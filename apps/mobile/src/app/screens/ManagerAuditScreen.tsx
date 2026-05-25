@@ -1,9 +1,12 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/hooks/use-auth';
+import { usePosPermission } from '@/hooks/use-pos-permission';
 import { getAuditLog } from '@/services/audit-logger';
 import { getPendingElevationLogs } from '@/services/elevation-log';
 import { getHardwareTestResults } from '@/storage/hardware-tests';
+import { getDrawerVarianceHistory } from '@/storage/drawer-variance-history';
+import { getOfflineReconciliationOutcomes } from '@/storage/offline-reconciliation';
 import { getOfflineReviewMarkers } from '@/storage/offline-review';
 import { getSupportLogs } from '@/storage/support-logs';
 import { colors, fonts, fontSize, radius, spacing, textStyles } from '@/theme';
@@ -23,12 +26,15 @@ function methodBadge(value?: string | null): string {
 
 export default function ManagerAuditScreen() {
   const { user } = useAuth();
+  const { can } = usePosPermission();
   const styles = createStyles();
-  const canView = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const canView = can('viewManagerAudit');
 
   const audit = getAuditLog();
   const elevation = getPendingElevationLogs();
   const hardware = getHardwareTestResults();
+  const varianceHistory = getDrawerVarianceHistory();
+  const reconciliationOutcomes = Object.values(getOfflineReconciliationOutcomes());
   const offlineReviews = Object.values(getOfflineReviewMarkers());
   const supportWarnings = getSupportLogs().filter(log => log.level !== 'info');
 
@@ -50,6 +56,16 @@ export default function ManagerAuditScreen() {
     'OFFLINE REVIEWS',
     ...offlineReviews.slice(0, 30).map(marker =>
       `${fmtTime(marker.reviewedAt)} / ${marker.type} / ${marker.id} / ${marker.reviewedBy} / ${marker.note}`,
+    ),
+    '',
+    'OFFLINE RECONCILIATION',
+    ...reconciliationOutcomes.slice(0, 30).map(outcome =>
+      `${fmtTime(outcome.updatedAt)} / ${outcome.type} / ${outcome.id} / ${outcome.status} / ${outcome.message || outcome.serverId || 'no outcome yet'}`,
+    ),
+    '',
+    'DRAWER VARIANCE HISTORY',
+    ...varianceHistory.slice(0, 30).map(record =>
+      `${fmtTime(record.createdAt)} / ${record.storeCode || 'store'} / ${record.shiftId} / expected ${record.expectedCash} / actual ${record.actualCash} / variance ${record.variance} / ${record.note || 'no note'}`,
     ),
     '',
     'HARDWARE CERTIFICATION',
@@ -83,6 +99,7 @@ export default function ManagerAuditScreen() {
       <View style={styles.metricRow}>
         <Metric label="Approvals" value={String(audit.length + elevation.length)} />
         <Metric label="Reviews" value={String(offlineReviews.length)} />
+        <Metric label="Variance" value={String(varianceHistory.length)} tone={varianceHistory.length > 0 ? 'warning' : 'default'} />
         <Metric label="Hardware" value={String(hardware.length)} />
         <Metric label="Warnings" value={String(supportWarnings.length)} tone={supportWarnings.length > 0 ? 'warning' : 'default'} />
       </View>
@@ -119,6 +136,32 @@ export default function ManagerAuditScreen() {
             detail={marker.note}
             meta={`${fmtTime(marker.reviewedAt)} / ${marker.reviewedBy}`}
             badge="Reviewed"
+          />
+        ))}
+      </Section>
+
+      <Section title="Offline Reconciliation Outcomes">
+        {reconciliationOutcomes.length === 0 ? <Empty label="No reconciliation outcomes recorded." /> : reconciliationOutcomes.slice(0, 10).map(outcome => (
+          <AuditRow
+            key={`${outcome.type}-${outcome.id}`}
+            title={outcome.type.replace('-', ' ')}
+            detail={outcome.message || outcome.serverId || 'No server outcome yet'}
+            meta={`${fmtTime(outcome.updatedAt)} / ${outcome.id}`}
+            badge={outcome.status.replace('_', ' ').toUpperCase()}
+            danger={outcome.status === 'blocked' || outcome.status === 'support_needed'}
+          />
+        ))}
+      </Section>
+
+      <Section title="Drawer Variance History">
+        {varianceHistory.length === 0 ? <Empty label="No drawer variance history recorded." /> : varianceHistory.slice(0, 10).map(record => (
+          <AuditRow
+            key={record.id}
+            title={`Shift ${record.shiftId}`}
+            detail={record.note || 'No closeout note'}
+            meta={`${fmtTime(record.createdAt)} / variance ${record.variance.toFixed(2)}`}
+            badge={record.variance === 0 ? 'EVEN' : 'VARIANCE'}
+            danger={record.variance !== 0}
           />
         ))}
       </Section>

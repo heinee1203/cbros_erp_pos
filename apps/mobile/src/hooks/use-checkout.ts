@@ -3,7 +3,14 @@ import { v4 as uuid } from 'uuid';
 import { useShallow } from 'zustand/react/shallow';
 import { apiFetch, ApiError } from '@/services/api-client';
 import { useCartStore, selectGrandTotal, type CartLine, type PaymentEntry } from '@/stores/cart-store';
-import { addPendingSale, removePendingSale, updatePendingSale, getPendingSales } from '@/storage/pending-sales';
+import {
+  addPendingSale,
+  getPendingSales,
+  markPendingSaleLifecycle,
+  removePendingSale,
+  updatePendingSale,
+} from '@/storage/pending-sales';
+import { recordOfflineReconciliationOutcome } from '@/storage/offline-reconciliation';
 import { getLockedLocationId } from '@/config/device-binding';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
@@ -413,6 +420,7 @@ export function useCheckout() {
         attempts: 0,
         lastAttemptAt: null,
         status: 'pending',
+        lifecycleStatus: 'queued',
       });
 
       const completed = await apiFetch<any>(`/sales/${saleId}/complete`, {
@@ -489,6 +497,7 @@ export function useCheckout() {
               attempts: 0,
               lastAttemptAt: null,
               status: 'pending',
+              lifecycleStatus: 'queued',
             });
           }
           setStatus('pending_offline');
@@ -557,8 +566,15 @@ export async function reconcilePendingSales(): Promise<PendingSalesReconciliatio
     if (sale.createPayload?.locationId && sale.createPayload.locationId !== lockedLocationId) {
       updatePendingSale(sale.idempotencyKey, {
         status: 'failed',
+        lifecycleStatus: 'blocked',
         lastAttemptAt: new Date().toISOString(),
         failureReason: 'Queued sale belongs to a different store binding.',
+      });
+      recordOfflineReconciliationOutcome({
+        type: 'pending-sale',
+        id: sale.idempotencyKey,
+        status: 'blocked',
+        message: 'Queued sale belongs to a different store binding.',
       });
       summary.failed += 1;
       continue;
@@ -574,8 +590,15 @@ export async function reconcilePendingSales(): Promise<PendingSalesReconciliatio
 
     updatePendingSale(sale.idempotencyKey, {
       status: 'reconciling',
+      lifecycleStatus: 'retrying',
       attempts: sale.attempts + 1,
       lastAttemptAt: new Date().toISOString(),
+    });
+    recordOfflineReconciliationOutcome({
+      type: 'pending-sale',
+      id: sale.idempotencyKey,
+      status: 'retrying',
+      message: 'Reconciliation attempt started',
     });
 
     try {
@@ -589,6 +612,16 @@ export async function reconcilePendingSales(): Promise<PendingSalesReconciliatio
 
       if (existing) {
         // Sale already completed on server — remove from queue
+        markPendingSaleLifecycle(sale.idempotencyKey, 'duplicate', {
+          serverOutcome: 'Sale already existed on server',
+        });
+        recordOfflineReconciliationOutcome({
+          type: 'pending-sale',
+          id: sale.idempotencyKey,
+          status: 'duplicate',
+          serverId: existing.sale?.id ?? existing.id ?? null,
+          message: 'Sale already existed on server',
+        });
         removePendingSale(sale.idempotencyKey);
         summary.alreadyCompleted += 1;
         continue;
@@ -606,6 +639,8 @@ export async function reconcilePendingSales(): Promise<PendingSalesReconciliatio
         updatePendingSale(sale.idempotencyKey, {
           saleId,
           status: 'pending',
+          lifecycleStatus: 'retrying',
+          serverOutcome: `Created sale ${saleId}`,
         });
 
         // Now complete the sale
@@ -615,6 +650,16 @@ export async function reconcilePendingSales(): Promise<PendingSalesReconciliatio
           body: JSON.stringify(sale.payload),
         });
 
+        markPendingSaleLifecycle(sale.idempotencyKey, 'accepted', {
+          serverOutcome: 'Sale completed on server',
+        });
+        recordOfflineReconciliationOutcome({
+          type: 'pending-sale',
+          id: sale.idempotencyKey,
+          status: 'accepted',
+          serverId: saleId,
+          message: 'Sale completed on server',
+        });
         removePendingSale(sale.idempotencyKey);
         summary.synced += 1;
       } else if (sale.saleId) {
@@ -625,24 +670,61 @@ export async function reconcilePendingSales(): Promise<PendingSalesReconciliatio
           body: JSON.stringify(sale.payload),
         });
 
+        markPendingSaleLifecycle(sale.idempotencyKey, 'accepted', {
+          serverOutcome: 'Sale completion accepted',
+        });
+        recordOfflineReconciliationOutcome({
+          type: 'pending-sale',
+          id: sale.idempotencyKey,
+          status: 'accepted',
+          serverId: sale.saleId,
+          message: 'Sale completion accepted',
+        });
         removePendingSale(sale.idempotencyKey);
         summary.synced += 1;
       }
     } catch (err: any) {
       if (err instanceof ApiError && err.status === 409) {
         // Race condition — already processed between check and retry
+        recordOfflineReconciliationOutcome({
+          type: 'pending-sale',
+          id: sale.idempotencyKey,
+          status: 'duplicate',
+          serverId: sale.saleId,
+          message: 'Sale already processed during retry',
+        });
         removePendingSale(sale.idempotencyKey);
         summary.alreadyCompleted += 1;
       } else if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
         // Business error — flag for manual review, don't retry
+        const failureReason = formatPosError(err, 'Sale could not be reconciled automatically.');
         updatePendingSale(sale.idempotencyKey, {
           status: 'failed',
-          failureReason: formatPosError(err, 'Sale could not be reconciled automatically.'),
+          lifecycleStatus: 'support_needed',
+          failureReason,
+        });
+        recordOfflineReconciliationOutcome({
+          type: 'pending-sale',
+          id: sale.idempotencyKey,
+          status: 'support_needed',
+          message: failureReason,
         });
         summary.failed += 1;
       } else {
         // Network still down — leave as pending for next reconciliation attempt
-        updatePendingSale(sale.idempotencyKey, { status: 'pending' });
+        const nextRetryAt = new Date(Date.now() + 60_000).toISOString();
+        updatePendingSale(sale.idempotencyKey, {
+          status: 'pending',
+          lifecycleStatus: 'queued',
+          nextRetryAt,
+        });
+        recordOfflineReconciliationOutcome({
+          type: 'pending-sale',
+          id: sale.idempotencyKey,
+          status: 'queued',
+          nextRetryAt,
+          message: 'Network unavailable; queued for retry',
+        });
         summary.retryLater += 1;
       }
     }

@@ -44,6 +44,10 @@ function actionLabel(type: RegisterDrawerEvent['type']): string {
 }
 
 function statusLabel(event: RegisterDrawerEvent): string {
+  if (event.lifecycleStatus === 'blocked') return 'Blocked';
+  if (event.lifecycleStatus === 'support_needed') return 'Support';
+  if (event.lifecycleStatus === 'manager_reviewed') return 'Reviewed';
+  if (event.lifecycleStatus === 'retrying') return 'Retrying';
   if (event.syncStatus === 'failed') return 'Manager retry';
   if (event.syncStatus === 'pending') return 'Waiting to sync';
   return 'Needs sync';
@@ -100,8 +104,10 @@ export function getRegisterDrawerRecoveryRows(
     .slice(0, limit)
     .map(event => {
       const detailParts = [
+        event.lifecycleStatus ? event.lifecycleStatus.replace(/_/g, ' ') : null,
         event.reason || 'No reason entered',
         event.approvedBy ? `approved by ${event.approvedBy}` : null,
+        event.nextRetryAt ? `next retry ${formatAgeFromTimestamp(event.nextRetryAt).replace('ago', 'from now')}` : null,
         event.drawerError ? `drawer issue: ${event.drawerError}` : null,
         event.syncError,
       ].filter(Boolean);
@@ -113,7 +119,11 @@ export function getRegisterDrawerRecoveryRows(
         amountLabel: amountLabel(event),
         ageLabel: formatAgeFromTimestamp(event.createdAt),
         statusLabel: statusLabel(event),
-        tone: event.syncStatus === 'failed' ? 'danger' : 'warning',
+        tone: event.syncStatus === 'failed' || event.lifecycleStatus === 'blocked' || event.lifecycleStatus === 'support_needed'
+          ? 'danger'
+          : event.lifecycleStatus === 'retrying'
+            ? 'info'
+            : 'warning',
       };
     });
 }

@@ -20,6 +20,7 @@ import { printEscposRawSafely } from '@/hardware/printer/settings';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
 import { getPendingSales, onPendingSalesChanged } from '@/storage/pending-sales';
+import { recordDrawerVariance } from '@/storage/drawer-variance-history';
 import {
   getRegisterDrawerEventsForShift,
   getUnsyncedRegisterDrawerEventsForShift,
@@ -37,6 +38,7 @@ import { ManagerPinModal, type ManagerAuthorization } from '@/components/Manager
 import { PrintJobPreviewModal } from '@/components/PrintJobPreviewModal';
 import type { PrintJob } from '@/storage/print-jobs';
 import { Icon } from '@/components/ui';
+import { useRequireElevation } from '@/hooks/use-require-elevation';
 
 function toNumber(amount: string | number | null | undefined): number {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount ?? 0;
@@ -196,6 +198,7 @@ export default function ZReadingScreen() {
 
   const { data: zReading, isLoading, refetch } = useZReadingQuery(shiftId);
   const printer = usePrinter();
+  const { guard: guardCloseShift, elevationProps: closeShiftElevationProps } = useRequireElevation();
   const [cashTendered, setCashTendered] = useState('');
   const [closing, setClosing] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -406,42 +409,51 @@ export default function ZReadingScreen() {
       return;
     }
 
-    Alert.alert(
-      'Close Shift',
-      `Actual cash: ${fmtPHP(parsedCash)}\nExpected: ${fmtPHP(expectedCash)}\nVariance: ${fmtSignedPHP(variance)}\n\nAre you sure you want to close this shift?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Close Shift',
-          style: 'destructive',
-          onPress: async () => {
-            setClosing(true);
-            try {
-              const closeoutNotes = buildCloseoutNotes(notes, drawerEvents, drawerSummary);
-              await apiFetch(`/shifts/${shiftId}/close`, {
-                method: 'POST',
-                requireLockedLocation: true,
-                body: JSON.stringify({
-                  actualCash: parsedCash.toFixed(2),
-                  expectedCashAdjustment: drawerExpectedAdjustment.toFixed(2),
-                  notes: closeoutNotes,
-                }),
-              });
-              queryClient.invalidateQueries({ queryKey: ['shifts'] });
-              queryClient.invalidateQueries({ queryKey: ['shifts', 'z-reading', shiftId] });
-              queryClient.invalidateQueries({ queryKey: ['sales'] });
-              Alert.alert('Shift Closed', 'Z-Reading saved successfully.', [
-                { text: 'OK', onPress: () => navigation.goBack() },
-              ]);
-            } catch (err: any) {
-              Alert.alert('Close Shift Failed', formatPosError(err, 'Failed to close shift'));
-            } finally {
-              setClosing(false);
-            }
+    guardCloseShift('closeShift', 'Close shift and file Z-reading', () => {
+      Alert.alert(
+        'Close Shift',
+        `Actual cash: ${fmtPHP(parsedCash)}\nExpected: ${fmtPHP(expectedCash)}\nVariance: ${fmtSignedPHP(variance)}\n\nAre you sure you want to close this shift?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Close Shift',
+            style: 'destructive',
+            onPress: async () => {
+              setClosing(true);
+              try {
+                const closeoutNotes = buildCloseoutNotes(notes, drawerEvents, drawerSummary);
+                recordDrawerVariance({
+                  shiftId,
+                  expectedCash,
+                  actualCash: parsedCash,
+                  note: closeoutNotes,
+                  cashier: zReading?.cashierName,
+                });
+                await apiFetch(`/shifts/${shiftId}/close`, {
+                  method: 'POST',
+                  requireLockedLocation: true,
+                  body: JSON.stringify({
+                    actualCash: parsedCash.toFixed(2),
+                    expectedCashAdjustment: drawerExpectedAdjustment.toFixed(2),
+                    notes: closeoutNotes,
+                  }),
+                });
+                queryClient.invalidateQueries({ queryKey: ['shifts'] });
+                queryClient.invalidateQueries({ queryKey: ['shifts', 'z-reading', shiftId] });
+                queryClient.invalidateQueries({ queryKey: ['sales'] });
+                Alert.alert('Shift Closed', 'Z-Reading saved successfully.', [
+                  { text: 'OK', onPress: () => navigation.goBack() },
+                ]);
+              } catch (err: any) {
+                Alert.alert('Close Shift Failed', formatPosError(err, 'Failed to close shift'));
+              } finally {
+                setClosing(false);
+              }
+            },
           },
-        },
-      ],
-    );
+        ],
+      );
+    });
   }, [
     cashTendered,
     parsedCash,
@@ -456,7 +468,9 @@ export default function ZReadingScreen() {
     handleDrawerSyncPress,
     navigation,
     handleReconcilePending,
+    guardCloseShift,
     reviewAcknowledged,
+    zReading?.cashierName,
     zReading?.accountability.refunds.length,
     zReading?.accountability.voids.length,
   ]);
@@ -1195,10 +1209,11 @@ export default function ZReadingScreen() {
       <ManagerPinModal
         visible={drawerAuthorizationVisible}
         action={`Sync ${unsyncedDrawerEvents.length} drawer event${unsyncedDrawerEvents.length === 1 ? '' : 's'} before closeout`}
-        requiredLevel={2}
+        requiredLevel={3}
         onApprove={handleDrawerAuthorization}
         onCancel={() => setDrawerAuthorizationVisible(false)}
       />
+      <ManagerPinModal {...closeShiftElevationProps} />
       <PrintJobPreviewModal
         visible={!!previewJob}
         job={previewJob}

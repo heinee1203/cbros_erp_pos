@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { BottomSheet, Input, Button, Divider } from '@/components/ui';
 import { colors, textStyles, spacing, radius, layout } from '@/theme';
 import { useCustomerSearch, type Customer, type Vehicle } from '@/hooks/use-customer-search';
 import { apiFetch } from '@/services/api-client';
+import { getRecentCustomers, recordRecentCustomer, type RecentCustomer } from '@/storage/recent-customers';
 
 interface CustomerLookupProps {
   visible: boolean;
@@ -36,6 +37,27 @@ function getCreditLine(customer: Customer): string {
   return `Balance ${fmtPHP(balance)} / Available ${fmtPHP(available)}`;
 }
 
+function getAccountStatus(customer: Customer): { label: string; warning: boolean } {
+  const balance = toMoney(customer.currentBalance);
+  const limit = toMoney(customer.creditLimit);
+  if (customer.isOverdue) return { label: 'Overdue', warning: true };
+  if (limit > 0 && balance >= limit) return { label: 'Credit limit reached', warning: true };
+  if (limit > 0 && balance >= limit * 0.85) return { label: 'Near credit limit', warning: true };
+  return { label: 'Account OK', warning: false };
+}
+
+function recentToCustomer(customer: RecentCustomer): Customer {
+  return {
+    id: customer.id,
+    name: customer.name,
+    phone: customer.phone ?? '',
+    primaryPlateNo: customer.primaryPlateNo,
+    currentBalance: customer.currentBalance,
+    creditLimit: customer.creditLimit,
+    isOverdue: customer.isOverdue,
+  };
+}
+
 export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupProps) {
   const styles = createStyles();
   const {
@@ -55,6 +77,11 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [vehicleList, setVehicleList] = useState<Vehicle[]>([]);
   const [loadingVehicles, setLoadingVehicles] = useState(false);
+  const [recentCustomers, setRecentCustomers] = useState(() => getRecentCustomers());
+  const visibleCustomers = useMemo(
+    () => (query.length >= 2 ? results : recentCustomers.map(recentToCustomer)),
+    [query.length, recentCustomers, results],
+  );
 
   const handleClose = useCallback(() => {
     clear();
@@ -67,6 +94,8 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
   }, [clear, onClose]);
 
   const handleSelectCustomer = useCallback(async (customer: Customer) => {
+    recordRecentCustomer(customer);
+    setRecentCustomers(getRecentCustomers());
     setSelectedCustomer(customer);
     setLoadingVehicles(true);
     const vehicles = await fetchVehicles(customer.id);
@@ -110,6 +139,8 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
         method: 'POST',
         body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim() }),
       });
+      recordRecentCustomer(customer);
+      setRecentCustomers(getRecentCustomers());
       onSelect(customer);
       handleClose();
     } catch (err: any) {
@@ -207,7 +238,7 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
           )}
 
           <FlatList
-            data={results}
+            data={visibleCustomers}
             keyExtractor={item => item.id}
             style={styles.list}
             keyboardShouldPersistTaps="handled"
@@ -216,23 +247,35 @@ export function CustomerLookup({ visible, onClose, onSelect }: CustomerLookupPro
                 style={styles.customerRow}
                 onPress={() => handleSelectCustomer(item)}
                 android_ripple={{ color: colors.accent.glow }}
-              >
-                <View style={styles.customerHeader}>
-                  <Text style={styles.customerName} numberOfLines={1}>{item.name}</Text>
-                  {item.isOverdue ? (
-                    <Text style={styles.overdueBadge}>Overdue</Text>
-                  ) : null}
-                </View>
-                <Text style={styles.customerPhone}>
-                  {item.phone}{item.primaryPlateNo ? `  /  ${item.primaryPlateNo}` : ''}
-                </Text>
-                <Text style={styles.customerCredit}>{getCreditLine(item)}</Text>
+                >
+                  <View style={styles.customerHeader}>
+                    <Text style={styles.customerName} numberOfLines={1}>{item.name}</Text>
+                    {(() => {
+                      const status = getAccountStatus(item);
+                      return (
+                        <Text style={[styles.accountBadge, status.warning && styles.accountBadgeWarning]}>
+                          {status.label}
+                        </Text>
+                      );
+                    })()}
+                  </View>
+                  <Text style={styles.customerPhone}>
+                    {item.phone}{item.primaryPlateNo ? `  /  ${item.primaryPlateNo}` : ''}
+                  </Text>
+                  <Text style={styles.customerCredit}>{getCreditLine(item)}</Text>
               </Pressable>
             )}
             ItemSeparatorComponent={Divider}
             ListEmptyComponent={
               query.length >= 2 && !loading ? (
                 <Text style={styles.emptyText}>No customers found</Text>
+              ) : recentCustomers.length === 0 ? (
+                <Text style={styles.emptyText}>Search customers or create a profile.</Text>
+              ) : null
+            }
+            ListHeaderComponent={
+              query.length < 2 && recentCustomers.length > 0 ? (
+                <Text style={styles.recentHeader}>Recent charge customers</Text>
               ) : null
             }
           />
@@ -293,6 +336,29 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.captionSmall,
     color: colors.text.muted,
     marginTop: 3,
+  },
+  recentHeader: {
+    ...textStyles.captionSmall,
+    color: colors.text.muted,
+    paddingHorizontal: layout.screenPadding,
+    paddingBottom: spacing.xs,
+    textTransform: 'uppercase',
+  },
+  accountBadge: {
+    ...textStyles.captionSmall,
+    color: colors.status.success,
+    backgroundColor: colors.status.successBg,
+    borderWidth: 1,
+    borderColor: colors.status.success,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    overflow: 'hidden',
+  },
+  accountBadgeWarning: {
+    color: colors.status.warningText,
+    backgroundColor: colors.status.warningBg,
+    borderColor: colors.status.warning,
   },
   overdueBadge: {
     ...textStyles.captionSmall,

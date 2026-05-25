@@ -1,23 +1,21 @@
 /**
- * POS Role-Based Access Control
+ * POS role and permission matrix.
  *
- * Maps existing user roles to numeric permission levels:
- *   CASHIER (1)         — basic: sell, search, scan, print
- *   MANAGER (2)         — elevated: discount >5%, void, Z-read, DOT override
- *   ADMIN (3)           — full: refund, price override, settings, see costs
- *   WAREHOUSE_STAFF (1) — treated as CASHIER level on POS
+ * Android remains POS-only: this matrix controls store-floor actions, while
+ * user/role administration stays in ERP.
  */
-
 export const ROLE_LEVEL: Record<string, number> = {
   CASHIER: 1,
   WAREHOUSE_STAFF: 1,
   SALES: 1,
-  MANAGER: 2,
-  ADMIN: 3,
+  LEAD_CASHIER: 2,
+  SHIFT_LEAD: 2,
+  SUPERVISOR: 2,
+  MANAGER: 3,
+  ADMIN: 4,
 };
 
 export const POS_PERMISSIONS = {
-  // Basic POS operations (level 1 — all roles)
   processSale: 1,
   holdCart: 1,
   searchProducts: 1,
@@ -26,38 +24,48 @@ export const POS_PERMISSIONS = {
   stockCheckAllLocations: 1,
   reprintOwnReceipt: 1,
 
-  // Tiered discount control
-  applyLineDiscount5: 1,    // CASHIER+ — up to 5%
-  applyLineDiscount15: 2,   // MANAGER+ — up to 15%
-  applyLineDiscountAny: 3,  // ADMIN only — any %
-  applyCartDiscount: 2,     // MANAGER+
-
-  // Elevated actions (level 2 — MANAGER+)
-  voidSale: 2,
+  applyLineDiscount5: 1,
+  applyLineDiscount15: 2,
+  applyCartDiscount: 2,
   zReading: 2,
   viewAllTransactions: 2,
   reprintAnyReceipt: 2,
-  overrideDotFIFO: 2,
-  overrideNegativeStock: 2,
-  viewSalesReports: 2,
-  manageProductPrice: 2,
+  runSetupWizard: 2,
 
-  // Full access (level 3 — ADMIN only)
+  applyLineDiscountAny: 3,
+  voidSale: 3,
   processRefund: 3,
   priceOverride: 3,
+  cashDrawerException: 3,
+  closeShift: 3,
+  reviewOfflineConflicts: 3,
+  certifyHardware: 3,
+  viewManagerAudit: 3,
+  overrideDotFIFO: 3,
+  overrideNegativeStock: 3,
+  viewSalesReports: 3,
   viewCostPrice: 3,
   viewMargin: 3,
-  posSettings: 3,
-  changeStoreBinding: 3,
+
+  posSettings: 4,
+  changeStoreBinding: 4,
 } as const;
 
 export type PosPermission = keyof typeof POS_PERMISSIONS;
 
-/**
- * Get the minimum required level for a given discount percentage.
- */
 export function getDiscountPermissionLevel(percentage: number): number {
   if (percentage <= 5) return POS_PERMISSIONS.applyLineDiscount5;
   if (percentage <= 15) return POS_PERMISSIONS.applyLineDiscount15;
   return POS_PERMISSIONS.applyLineDiscountAny;
+}
+
+export function getRoleLevel(role: string | undefined | null): number {
+  return ROLE_LEVEL[(role ?? '').toUpperCase()] ?? 1;
+}
+
+export function getRequiredRoleLabel(requiredLevel: number): string {
+  if (requiredLevel >= 4) return 'Admin';
+  if (requiredLevel >= 3) return 'Manager';
+  if (requiredLevel >= 2) return 'Lead Cashier';
+  return 'Cashier';
 }

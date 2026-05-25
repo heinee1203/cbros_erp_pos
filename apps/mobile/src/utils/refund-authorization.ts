@@ -1,6 +1,5 @@
 import { apiFetch } from '@/services/api-client';
-
-const REFUND_ROLES = new Set(['ADMIN', 'MANAGER']);
+import { POS_PERMISSIONS, getRoleLevel } from '@/config/pos-permissions';
 
 export type RefundAuthorizationMethod = 'pin' | 'barcode' | 'card';
 export interface RefundAuthorizationResult {
@@ -28,7 +27,7 @@ export async function verifyRefundAuthorizationCredential(
     });
 
     return {
-      valid: result.valid && REFUND_ROLES.has(result.role ?? ''),
+      valid: result.valid && getRoleLevel(result.role) >= POS_PERMISSIONS.processRefund,
       userId: result.userId ?? null,
       fullName: result.fullName,
       role: result.role,

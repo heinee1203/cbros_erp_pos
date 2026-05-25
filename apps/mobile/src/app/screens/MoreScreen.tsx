@@ -22,10 +22,12 @@ interface MenuItem {
 const MENU_ITEMS: MenuItem[] = [
   { icon: 'hold', label: 'Parked Orders', route: 'ParkedOrders', enabled: true, tone: 'warning' },
   { icon: 'receipt', label: 'Transactions', route: 'Transactions', enabled: true, tone: 'primary' },
+  { icon: 'receipt', label: 'Last Reprint', route: 'LastTransactionReprint', enabled: true, tone: 'success' },
   { icon: 'receipt', label: 'Shift History', route: 'ShiftHistory', enabled: true, tone: 'success' },
   { icon: 'cash', label: 'Register Tools', route: 'RegisterTools', enabled: true, tone: 'primary' },
   { icon: 'sync', label: 'Sync', route: 'SyncManagement', enabled: true, tone: 'primary' },
   { icon: 'printer', label: 'Printer Setup', route: 'PrinterSetup', enabled: true, tone: 'success' },
+  { icon: 'settings', label: 'Setup Wizard', route: 'SetupWizard', enabled: true, tone: 'success' },
   { icon: 'settings', label: 'Settings', route: 'Settings', enabled: true, tone: 'neutral' },
   { icon: 'info', label: 'About', route: 'About', enabled: true, tone: 'neutral' },
   { icon: 'receipt', label: 'Returns', route: 'Returns', enabled: true, tone: 'primary' },

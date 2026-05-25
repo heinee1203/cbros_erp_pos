@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '@/hooks/use-auth';
+import { usePosPermission } from '@/hooks/use-pos-permission';
 import { useActiveShiftQuery } from '@/hooks/use-shift';
 import { usePrinter } from '@/hardware/printer/context';
 import { getLockedLocationId } from '@/config/device-binding';
@@ -96,6 +97,7 @@ function toneColor(tone: DrawerActionOption['tone']): string {
 export default function RegisterToolsScreen() {
   const navigation = useNavigation<any>();
   const { user, locations, locationId, deviceBinding } = useAuth();
+  const { requiredLevel } = usePosPermission();
   const activeShiftQuery = useActiveShiftQuery();
   const activeShift = activeShiftQuery.data;
   const printer = usePrinter();
@@ -387,7 +389,7 @@ export default function RegisterToolsScreen() {
       <ManagerPinModal
         visible={authorizationVisible}
         action={`${selectedAction.title}${selectedAction.amountRequired ? ` ${fmtPHP(parsedAmount)}` : ''}`}
-        requiredLevel={2}
+        requiredLevel={requiredLevel('cashDrawerException')}
         onApprove={handleApproval}
         onCancel={() => setAuthorizationVisible(false)}
       />

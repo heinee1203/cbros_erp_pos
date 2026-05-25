@@ -11,6 +11,8 @@ import {
 } from '@/storage/hardware-tests';
 import { getDisabledDeviceState } from '@/storage/device-status';
 import { buildSupportLogText, getSupportLogs } from '@/storage/support-logs';
+import { buildDrawerVarianceHistoryText } from '@/storage/drawer-variance-history';
+import { getSupportQrMetadata } from '@/storage/support-qr';
 import { storage } from '@/storage/mmkv';
 import { KEYS } from '@/storage/keys';
 import { getSyncStatus } from '@/sync/sync-manager';
@@ -24,6 +26,7 @@ export interface RegisterHealthSnapshot {
   gitSha: string;
   disabledState: string;
   supportLogCount: number;
+  supportQr: string;
   boundStore: string;
   storeCode: string;
   storeLockStatus: string;
@@ -86,6 +89,9 @@ export function getRegisterHealthSnapshot(printer: PrinterProvider): RegisterHea
       ? `${disabledState.code || 'BLOCKED'}: ${disabledState.reason || 'Device blocked'}`
       : 'Active',
     supportLogCount: getSupportLogs().length,
+    supportQr: getSupportQrMetadata()
+      ? `Generated ${new Date(getSupportQrMetadata()!.generatedAt).toLocaleString('en-PH')}`
+      : 'Not generated',
     boundStore: binding?.locationName || 'Not registered',
     storeCode: binding?.locationCode || 'None',
     storeLockStatus: binding ? `Locked since ${new Date(binding.boundAt).toLocaleDateString('en-PH')}` : 'Not locked',
@@ -239,10 +245,13 @@ export function buildSupportDiagnosticText(snapshot: RegisterHealthSnapshot, api
     `Retryable Prints: ${snapshot.retryablePrintJobs}`,
     `Failed Prints: ${snapshot.failedPrintJobs}`,
     `Support Log Count: ${snapshot.supportLogCount}`,
+    `Support QR: ${snapshot.supportQr}`,
     `Catalog Sync: ${snapshot.lastCatalogSync}`,
     `Inventory Sync: ${snapshot.lastInventorySync}`,
     'Hardware Tests:',
     buildHardwareTestSummaryText(),
+    'Drawer Variance History:',
+    buildDrawerVarianceHistoryText(),
     'Support Logs:',
     buildSupportLogText(),
   ].join('\n');

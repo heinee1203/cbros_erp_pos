@@ -46,6 +46,7 @@ import { LabelPreviewModal } from '@/components/LabelPreviewModal';
 import { BarcodeScanModal } from '@/components/BarcodeScanModal';
 import { ManagerPinModal, type ManagerAuthorization } from '@/components/ManagerPinModal';
 import { PrintJobPreviewModal } from '@/components/PrintJobPreviewModal';
+import { SupportPacketQrCard } from '@/components/SupportPacketQrCard';
 import { verifyRefundAuthorizationCredential } from '@/utils/refund-authorization';
 import { formatPosError } from '@/utils/pos-error-messages';
 import { getPendingSaleReviewRows, summarizePendingSales } from '@/utils/pending-sale-summary';
@@ -61,8 +62,13 @@ import {
   markOfflineRecordReviewed,
   subscribeOfflineReviewMarkers,
 } from '@/storage/offline-review';
+import {
+  getOfflineReconciliationOutcome,
+  subscribeOfflineReconciliationOutcomes,
+} from '@/storage/offline-reconciliation';
 import { colors, fonts, fontSize, radius, spacing } from '@/theme';
 import { Button, Icon, type IconName } from '@/components/ui';
+import { usePosPermission } from '@/hooks/use-pos-permission';
 
 function fmtPHP(amount: number): string {
   return `\u20B1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -193,6 +199,10 @@ function pendingSaleAmount(sale: PendingSale): number {
 }
 
 function nextSaleActionLabel(sale: PendingSale): string {
+  if (sale.lifecycleStatus === 'accepted') return 'Accepted by server';
+  if (sale.lifecycleStatus === 'duplicate') return 'Duplicate found; support can confirm';
+  if (sale.lifecycleStatus === 'blocked') return 'Blocked until store/device issue is fixed';
+  if (sale.lifecycleStatus === 'support_needed') return 'Support review required';
   if (getOfflineReviewMarker('pending-sale', sale.idempotencyKey)) return 'Manager reviewed; keep for retry/support';
   if (sale.status === 'failed') return 'Manager review required';
   if (sale.status === 'reconciling') return 'Wait for current retry';
@@ -204,9 +214,17 @@ function drawerAmountLabel(event: RegisterDrawerEvent): string {
 }
 
 function nextDrawerActionLabel(event: RegisterDrawerEvent): string {
+  if (event.lifecycleStatus === 'accepted') return 'Accepted by server';
+  if (event.lifecycleStatus === 'blocked') return 'Blocked until store/device issue is fixed';
+  if (event.lifecycleStatus === 'support_needed') return 'Support review required';
   if (getOfflineReviewMarker('drawer-event', event.id)) return 'Manager reviewed; keep for retry/support';
   if (event.syncStatus === 'failed') return 'Manager review required';
   return 'Safe to sync when online';
+}
+
+function lifecycleLabel(value?: string | null): string {
+  if (!value) return 'Queued';
+  return value.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 }
 
 function fmtTxnTime(ts: string | null): string {
@@ -469,12 +487,15 @@ export function SyncManagementScreen() {
   const [checkingApiHealth, setCheckingApiHealth] = useState(false);
   const network = useNetworkStatus();
   const printer = usePrinter();
+  const { can, requiredLevel } = usePosPermission();
   const styles = createStyles();
   const pendingRetryCount = pendingSales.filter(sale => sale.status !== 'failed').length;
   const pendingFailedCount = pendingSales.length - pendingRetryCount;
   const retryablePrintJobs = getRetryablePrintJobs();
   const autoRetryPrintJobs = getAutoRetryPrintJobs();
   const failedPrintJobs = printJobs.filter(job => job.status === 'failed');
+  const canCertifyHardware = can('certifyHardware');
+  const canReviewOfflineConflicts = can('reviewOfflineConflicts');
   const hardwareCertification = React.useMemo(
     () => getHardwareCertificationSummary(hardwareTestResults),
     [hardwareTestResults],
@@ -573,6 +594,9 @@ export function SyncManagementScreen() {
     setSupportLogTick(tick => tick + 1);
   }), []);
   useEffect(() => subscribeOfflineReviewMarkers(() => {
+    setOfflineReviewTick(tick => tick + 1);
+  }), []);
+  useEffect(() => subscribeOfflineReconciliationOutcomes(() => {
     setOfflineReviewTick(tick => tick + 1);
   }), []);
 
@@ -793,6 +817,10 @@ export function SyncManagementScreen() {
   }, []);
 
   const handleMarkPendingSaleReviewed = useCallback((sale: PendingSale) => {
+    if (!canReviewOfflineConflicts) {
+      Alert.alert('Manager Required', 'Manager or admin access is required to mark offline conflicts reviewed.');
+      return;
+    }
     markOfflineRecordReviewed({
       type: 'pending-sale',
       id: sale.idempotencyKey,
@@ -800,9 +828,13 @@ export function SyncManagementScreen() {
       note: sale.failureReason || 'Pending sale reviewed; keep queued for retry/support.',
     });
     setSelectedPendingSale({ ...sale });
-  }, [user?.email, user?.fullName]);
+  }, [canReviewOfflineConflicts, user?.email, user?.fullName]);
 
   const handleMarkDrawerReviewed = useCallback((event: RegisterDrawerEvent) => {
+    if (!canReviewOfflineConflicts) {
+      Alert.alert('Manager Required', 'Manager or admin access is required to mark drawer conflicts reviewed.');
+      return;
+    }
     markOfflineRecordReviewed({
       type: 'drawer-event',
       id: event.id,
@@ -810,7 +842,7 @@ export function SyncManagementScreen() {
       note: event.syncError || event.drawerError || 'Drawer event reviewed; keep queued for retry/support.',
     });
     setSelectedDrawerEvent({ ...event });
-  }, [user?.email, user?.fullName]);
+  }, [canReviewOfflineConflicts, user?.email, user?.fullName]);
 
   const recordHardwareResult = useCallback((
     type: HardwareTestType,
@@ -993,8 +1025,12 @@ export function SyncManagementScreen() {
         >
           <View style={styles.pendingReviewHeader}>
             <View>
-              <Text style={styles.pendingReviewTitle}>Hardware Certification</Text>
-              <Text style={styles.pendingReviewSubtitle}>Certify receipt, label, scanner, manager, and drawer readiness for this store.</Text>
+              <Text style={styles.pendingReviewTitle}>Store-Pilot Hardware Certification</Text>
+              <Text style={styles.pendingReviewSubtitle}>
+                {canCertifyHardware
+                  ? 'Certify receipt, label, scanner, manager, and drawer readiness for this store.'
+                  : 'Manager authorization is required to certify register hardware.'}
+              </Text>
             </View>
             <Icon name="settings" size={22} color={colors.accent.primary} />
           </View>
@@ -1021,27 +1057,27 @@ export function SyncManagementScreen() {
             <HardwareTestButton
               label={runningHardwareTest === 'receipt-printer' ? 'Testing Receipt' : 'Receipt Test'}
               onPress={() => { void handleReceiptHardwareTest(); }}
-              disabled={runningHardwareTest !== null}
+              disabled={runningHardwareTest !== null || !canCertifyHardware}
             />
             <HardwareTestButton
               label={runningHardwareTest === 'label-printer' ? 'Testing Label' : 'Label Test'}
               onPress={() => { void handleLabelHardwareTest(); }}
-              disabled={runningHardwareTest !== null}
+              disabled={runningHardwareTest !== null || !canCertifyHardware}
             />
             <HardwareTestButton
               label="Scanner Test"
               onPress={() => setScannerTestVisible(true)}
-              disabled={runningHardwareTest !== null}
+              disabled={runningHardwareTest !== null || !canCertifyHardware}
             />
             <HardwareTestButton
               label="Manager Auth"
               onPress={() => setManagerTestVisible(true)}
-              disabled={runningHardwareTest !== null}
+              disabled={runningHardwareTest !== null || !canCertifyHardware}
             />
             <HardwareTestButton
               label={runningHardwareTest === 'cash-drawer' ? 'Testing Drawer' : 'Drawer Kick'}
               onPress={() => { void handleDrawerHardwareTest(); }}
-              disabled={runningHardwareTest !== null}
+              disabled={runningHardwareTest !== null || !canCertifyHardware}
             />
           </View>
           {hardwareTestResults.length === 0 ? (
@@ -1331,6 +1367,7 @@ export function SyncManagementScreen() {
             <InfoRow label="Device Status" value={healthSnapshot.disabledState} warning={healthSnapshot.disabledState !== 'Active'} />
             <InfoRow label="API Base" value={healthSnapshot.apiBaseUrl} />
           </View>
+          <SupportPacketQrCard text={supportDiagnosticText} />
           <Text selectable style={styles.diagnosticsText}>{supportDiagnosticText}</Text>
         </View>
       </ScrollView>
@@ -1355,7 +1392,7 @@ export function SyncManagementScreen() {
       <ManagerPinModal
         visible={drawerAuthorizationVisible}
         action={`Sync ${pendingDrawerEvents.length} register drawer event${pendingDrawerEvents.length === 1 ? '' : 's'}`}
-        requiredLevel={2}
+        requiredLevel={requiredLevel('reviewOfflineConflicts')}
         onApprove={handleDrawerAuthorization}
         onCancel={() => setDrawerAuthorizationVisible(false)}
       />
@@ -1370,7 +1407,7 @@ export function SyncManagementScreen() {
       <ManagerPinModal
         visible={managerTestVisible}
         action="Hardware manager authorization test"
-        requiredLevel={2}
+        requiredLevel={requiredLevel('certifyHardware')}
         onApprove={handleManagerHardwareApproved}
         onCancel={() => setManagerTestVisible(false)}
       />
@@ -1390,6 +1427,7 @@ function PendingSaleDetailModal({
   const styles = createStyles();
   if (!sale) return null;
   const marker = getOfflineReviewMarker('pending-sale', sale.idempotencyKey);
+  const outcome = getOfflineReconciliationOutcome('pending-sale', sale.idempotencyKey);
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.detailModalBackdrop}>
@@ -1411,6 +1449,9 @@ function PendingSaleDetailModal({
             <InfoRow label="Attempts" value={String(sale.attempts)} warning={sale.attempts > 0} />
             <InfoRow label="Last Attempt" value={sale.lastAttemptAt ? new Date(sale.lastAttemptAt).toLocaleString('en-PH') : 'Not tried'} />
             <InfoRow label="Status" value={sale.status} warning={sale.status === 'failed'} />
+            <InfoRow label="Lifecycle" value={lifecycleLabel(outcome?.status ?? sale.lifecycleStatus)} warning={['blocked', 'support_needed'].includes(outcome?.status ?? sale.lifecycleStatus ?? '')} />
+            <InfoRow label="Next Retry" value={sale.nextRetryAt || outcome?.nextRetryAt ? new Date((sale.nextRetryAt ?? outcome?.nextRetryAt) as string).toLocaleString('en-PH') : 'Not scheduled'} />
+            <InfoRow label="Server Outcome" value={outcome?.serverId || outcome?.message || sale.serverOutcome || 'Not accepted yet'} />
             <InfoRow label="Next Action" value={nextSaleActionLabel(sale)} warning={sale.status === 'failed'} />
           </View>
           {sale.failureReason ? <Text style={styles.detailError}>{sale.failureReason}</Text> : null}
@@ -1441,6 +1482,7 @@ function DrawerEventDetailModal({
   const styles = createStyles();
   if (!event) return null;
   const marker = getOfflineReviewMarker('drawer-event', event.id);
+  const outcome = getOfflineReconciliationOutcome('drawer-event', event.id);
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.detailModalBackdrop}>
@@ -1461,6 +1503,9 @@ function DrawerEventDetailModal({
             <InfoRow label="Method" value={event.authorizationMethod?.toUpperCase() || 'Unknown'} />
             <InfoRow label="Created" value={new Date(event.createdAt).toLocaleString('en-PH')} />
             <InfoRow label="Sync Status" value={event.syncStatus || 'pending'} warning={event.syncStatus === 'failed'} />
+            <InfoRow label="Lifecycle" value={lifecycleLabel(outcome?.status ?? event.lifecycleStatus)} warning={['blocked', 'support_needed'].includes(outcome?.status ?? event.lifecycleStatus ?? '')} />
+            <InfoRow label="Next Retry" value={event.nextRetryAt || outcome?.nextRetryAt ? new Date((event.nextRetryAt ?? outcome?.nextRetryAt) as string).toLocaleString('en-PH') : 'Not scheduled'} />
+            <InfoRow label="Server Outcome" value={outcome?.serverId || outcome?.message || event.serverOutcome || 'Not accepted yet'} />
             <InfoRow label="Drawer Opened" value={event.drawerOpened ? 'Yes' : 'No'} warning={!event.drawerOpened} />
             <InfoRow label="Next Action" value={nextDrawerActionLabel(event)} warning={event.syncStatus === 'failed'} />
           </View>
@@ -1483,6 +1528,7 @@ function DrawerEventDetailModal({
 
 export function AboutScreen() {
   const styles = createStyles();
+  const hardwareCertification = getHardwareCertificationSummary(getHardwareTestResults());
   return (
     <View style={styles.container}>
       <ScreenHeader title="About" />
@@ -1497,6 +1543,11 @@ export function AboutScreen() {
           <InfoRow label="Build" value={APP_BUILD_DATE} />
           <InfoRow label="Git SHA" value={APP_GIT_SHA} />
           <InfoRow label="Platform" value="Android POS" />
+          <InfoRow
+            label="Hardware"
+            value={`${hardwareCertification.state.toUpperCase()} / ${hardwareCertification.readyCount}/${hardwareCertification.totalRequired}`}
+            warning={hardwareCertification.state !== 'ready'}
+          />
         </View>
       </View>
     </View>

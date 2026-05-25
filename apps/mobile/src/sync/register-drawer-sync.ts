@@ -7,6 +7,7 @@ import {
 } from '@/storage/register-drawer-events';
 import { getLockedLocationId } from '@/config/device-binding';
 import { formatPosError } from '@/utils/pos-error-messages';
+import { recordOfflineReconciliationOutcome } from '@/storage/offline-reconciliation';
 
 export interface RegisterDrawerReconcileApproval {
   credential: string;
@@ -87,7 +88,14 @@ export async function reconcileRegisterDrawerEvents(
     if (event.locationId !== lockedLocationId) {
       updateRegisterDrawerEvent(event.id, {
         syncStatus: 'failed',
+        lifecycleStatus: 'blocked',
         syncError: 'Queued drawer event belongs to a different locked store.',
+      });
+      recordOfflineReconciliationOutcome({
+        type: 'drawer-event',
+        id: event.id,
+        status: 'blocked',
+        message: 'Queued drawer event belongs to a different locked store.',
       });
       summary.failed += 1;
       continue;
@@ -95,7 +103,14 @@ export async function reconcileRegisterDrawerEvents(
 
     updateRegisterDrawerEvent(event.id, {
       syncStatus: 'pending',
+      lifecycleStatus: 'retrying',
       syncError: undefined,
+    });
+    recordOfflineReconciliationOutcome({
+      type: 'drawer-event',
+      id: event.id,
+      status: 'retrying',
+      message: 'Drawer sync attempt started',
     });
 
     try {
@@ -103,7 +118,16 @@ export async function reconcileRegisterDrawerEvents(
       updateRegisterDrawerEvent(event.id, {
         serverId,
         syncStatus: 'synced',
+        lifecycleStatus: 'accepted',
+        serverOutcome: `Drawer event ${serverId}`,
         syncError: undefined,
+      });
+      recordOfflineReconciliationOutcome({
+        type: 'drawer-event',
+        id: event.id,
+        status: 'accepted',
+        serverId,
+        message: 'Drawer event accepted by server',
       });
       summary.synced += 1;
     } catch (error) {
@@ -111,13 +135,29 @@ export async function reconcileRegisterDrawerEvents(
       if (isTransientSyncError(error)) {
         updateRegisterDrawerEvent(event.id, {
           syncStatus: 'pending',
+          lifecycleStatus: 'queued',
+          nextRetryAt: new Date(Date.now() + 60_000).toISOString(),
           syncError: message,
+        });
+        recordOfflineReconciliationOutcome({
+          type: 'drawer-event',
+          id: event.id,
+          status: 'queued',
+          nextRetryAt: new Date(Date.now() + 60_000).toISOString(),
+          message,
         });
         summary.retryLater += 1;
       } else {
         updateRegisterDrawerEvent(event.id, {
           syncStatus: 'failed',
+          lifecycleStatus: 'support_needed',
           syncError: message,
+        });
+        recordOfflineReconciliationOutcome({
+          type: 'drawer-event',
+          id: event.id,
+          status: 'support_needed',
+          message,
         });
         summary.failed += 1;
       }

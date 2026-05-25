@@ -54,6 +54,10 @@ function saleTitle(sale: PendingSale): string {
 }
 
 function statusLabel(sale: PendingSale): string {
+  if (sale.lifecycleStatus === 'blocked') return 'Blocked';
+  if (sale.lifecycleStatus === 'support_needed') return 'Support';
+  if (sale.lifecycleStatus === 'manager_reviewed') return 'Reviewed';
+  if (sale.lifecycleStatus === 'retrying') return 'Retrying';
   if (sale.status === 'failed') return 'Manager review';
   if (sale.status === 'reconciling') return 'Reconciling';
   return 'Waiting to sync';
@@ -65,6 +69,7 @@ function paymentMethodsLabel(sale: PendingSale): string {
 }
 
 function retryLabel(sale: PendingSale): string {
+  if (sale.nextRetryAt) return `Next retry ${formatAgeFromTimestamp(sale.nextRetryAt).replace('ago', 'from now')}`;
   if (sale.status === 'failed') return 'Retry requires manager review';
   if (!sale.lastAttemptAt) return 'Next retry: now';
   const nextRetry = Date.parse(sale.lastAttemptAt) + 5 * 60_000;
@@ -105,13 +110,14 @@ export function getPendingSaleReviewRows(
       const lastAttempt = sale.lastAttemptAt ? `Last tried ${formatAgeFromTimestamp(sale.lastAttemptAt)}` : 'Not tried yet';
       const receipt = sale.createPayload?.receiptNumber || sale.saleId || sale.idempotencyKey.slice(0, 8);
       const baseDetail = [
+        sale.lifecycleStatus ? sale.lifecycleStatus.replace(/_/g, ' ') : null,
         offlineKind,
         `receipt ${receipt}`,
         paymentMethodsLabel(sale),
         attempts,
         lastAttempt,
         retryLabel(sale),
-      ].join(' / ');
+      ].filter(Boolean).join(' / ');
       const detail = sale.status === 'failed' && sale.failureReason
         ? `${sale.failureReason} / ${baseDetail}`
         : baseDetail;
@@ -123,7 +129,11 @@ export function getPendingSaleReviewRows(
         amountLabel: formatPHP(amount),
         ageLabel: formatAgeFromTimestamp(sale.createdAt),
         statusLabel: statusLabel(sale),
-        tone: sale.status === 'failed' ? 'danger' : sale.status === 'reconciling' ? 'info' : 'warning',
+        tone: sale.status === 'failed' || sale.lifecycleStatus === 'blocked' || sale.lifecycleStatus === 'support_needed'
+          ? 'danger'
+          : sale.status === 'reconciling' || sale.lifecycleStatus === 'retrying'
+            ? 'info'
+            : 'warning',
       };
     });
 }

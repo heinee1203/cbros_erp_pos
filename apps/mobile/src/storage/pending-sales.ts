@@ -46,6 +46,11 @@ export interface PendingSale {
   attempts: number;
   lastAttemptAt: string | null;
   status: 'pending' | 'reconciling' | 'failed';
+  lifecycleStatus?: 'queued' | 'retrying' | 'accepted' | 'duplicate' | 'blocked' | 'manager_reviewed' | 'support_needed';
+  nextRetryAt?: string | null;
+  serverOutcome?: string;
+  managerReviewedAt?: string;
+  managerReviewedBy?: string;
   failureReason?: string;
 }
 
@@ -77,15 +82,27 @@ export function addPendingSale(sale: PendingSale): void {
     current[idx] = {
       ...current[idx],
       ...sale,
+      lifecycleStatus: sale.lifecycleStatus ?? current[idx].lifecycleStatus ?? 'queued',
       createdAt: current[idx].createdAt,
       attempts: current[idx].attempts,
       lastAttemptAt: current[idx].lastAttemptAt,
     };
   } else {
-    current.push(sale);
+    current.push({ ...sale, lifecycleStatus: sale.lifecycleStatus ?? 'queued' });
   }
   setJSON(storage, KEYS.PENDING_SALES, current);
   notifyPendingSalesChanged();
+}
+
+export function markPendingSaleLifecycle(
+  idempotencyKey: string,
+  lifecycleStatus: NonNullable<PendingSale['lifecycleStatus']>,
+  extra: Partial<PendingSale> = {},
+): void {
+  updatePendingSale(idempotencyKey, {
+    ...extra,
+    lifecycleStatus,
+  });
 }
 
 export function updatePendingSale(

@@ -153,6 +153,8 @@ function navigateAndCapture(prefix) {
     const moreScreens = [
       { name: 'recovery', labels: ['Sync', 'Recovery & Diagnostics', 'SyncManagement'] },
       { name: 'manager-audit', labels: ['Manager Audit'] },
+      { name: 'setup-wizard', labels: ['Setup Wizard'] },
+      { name: 'last-reprint', labels: ['Last Reprint', 'Last Transaction Reprint'] },
       { name: 'returns', labels: ['Returns'] },
       { name: 'barcode-print', labels: ['Barcode Print'] },
       { name: 'z-reading', labels: ['Shift History', 'Z-reading'] },

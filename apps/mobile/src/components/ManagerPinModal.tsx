@@ -5,6 +5,7 @@ import { apiFetch } from '@/services/api-client';
 import { formatPosError } from '@/utils/pos-error-messages';
 import { getAuthorizationMethodLabel } from '@/utils/authorization-credentials';
 import { recordProtectedActionAuth } from '@/storage/protected-session';
+import { getRequiredRoleLabel, getRoleLevel } from '@/config/pos-permissions';
 import { colors, spacing, radius, fonts, fontSize } from '@/theme';
 import { Icon } from '@/components/ui';
 
@@ -173,18 +174,6 @@ export function ManagerPinModal({
       </Pressable>
     </Modal>
   );
-}
-
-function getRoleLevel(role: string): number {
-  switch (role.toUpperCase()) {
-    case 'ADMIN': return 3;
-    case 'MANAGER': return 2;
-    default: return 1;
-  }
-}
-
-function getRequiredRoleLabel(requiredLevel: number): string {
-  return requiredLevel >= 3 ? 'Admin' : 'Manager';
 }
 
 const styles = StyleSheet.create({

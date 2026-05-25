@@ -21,6 +21,11 @@ export interface RegisterDrawerEvent {
   drawerError?: string;
   createdAt: string;
   syncStatus?: 'pending' | 'synced' | 'failed';
+  lifecycleStatus?: 'queued' | 'retrying' | 'accepted' | 'duplicate' | 'blocked' | 'manager_reviewed' | 'support_needed';
+  nextRetryAt?: string | null;
+  serverOutcome?: string;
+  managerReviewedAt?: string;
+  managerReviewedBy?: string;
   syncError?: string;
 }
 
@@ -68,6 +73,7 @@ export function addRegisterDrawerEvent(
     id: createId(),
     createdAt: new Date().toISOString(),
     syncStatus: event.syncStatus ?? 'pending',
+    lifecycleStatus: event.lifecycleStatus ?? 'queued',
   };
   const events = [next, ...getRegisterDrawerEvents()].slice(0, MAX_EVENTS);
   setJSON(storage, KEYS.REGISTER_DRAWER_EVENTS, events);
