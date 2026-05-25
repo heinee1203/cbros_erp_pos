@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, Trash2, Printer } from "lucide-react";
+import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
 import { useTransferQuery, type TransferDetail, type TransferItem } from "@/hooks/use-transfer-query";
 import {
@@ -357,7 +358,7 @@ export default function TransferDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["transfer", transferNo] });
       setEditMode(false);
     } catch (err: any) {
-      alert(err.message || "Failed to save changes");
+      toast.error(err.message || "Failed to save changes");
     } finally {
       setEditSaving(false);
     }

@@ -130,6 +130,12 @@ function PODetailView({
   }
   const [editLines, setEditLines] = useState<EditLine[]>([]);
   const [deletedLineIds, setDeletedLineIds] = useState<string[]>([]);
+  const [duplicateLinePrompt, setDuplicateLinePrompt] = useState<{
+    existingLineId: string;
+    displayName: string;
+    currentQty: number;
+  } | null>(null);
+  const [duplicateAddQty, setDuplicateAddQty] = useState("1");
 
   // Initialize edit state when entering edit mode
   const enterEditMode = useCallback(() => {
@@ -182,18 +188,18 @@ function PODetailView({
       ? `${(product as any).parentName} (${product.name})`
       : product.name;
 
-    // Duplicate check — if product already in PO, prompt to add qty
-    setEditLines((prev) => {
-      const existing = prev.find((l) => l.productId === product.id);
-      if (existing) {
-        const addQty = parseInt(prompt(`"${displayName}" is already in this PO with ${existing.orderedQty} pcs.\n\nAdditional quantity to add (0 to cancel):`) || "0", 10);
-        if (addQty > 0) {
-          return prev.map((l) => l.id === existing.id ? { ...l, orderedQty: l.orderedQty + addQty } : l);
-        }
-        return prev; // cancelled
-      }
+    const existing = editLines.find((line) => line.productId === product.id);
+    if (existing) {
+      setDuplicateLinePrompt({
+        existingLineId: existing.id,
+        displayName,
+        currentQty: existing.orderedQty,
+      });
+      setDuplicateAddQty("1");
+      return;
+    }
 
-      return [
+    setEditLines((prev) => [
         ...prev,
         {
           id: `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -209,9 +215,26 @@ function PODetailView({
           rejectedQty: 0,
           isNew: true,
         },
-      ].sort((a, b) => a.productName.localeCompare(b.productName));
-    });
-  }, []);
+      ].sort((a, b) => a.productName.localeCompare(b.productName)),
+    );
+  }, [editLines]);
+
+  const applyDuplicateLineQty = useCallback(() => {
+    if (!duplicateLinePrompt) return;
+    const addQty = parseInt(duplicateAddQty, 10) || 0;
+    if (addQty <= 0) {
+      setDuplicateLinePrompt(null);
+      return;
+    }
+    setEditLines((prev) =>
+      prev.map((line) =>
+        line.id === duplicateLinePrompt.existingLineId
+          ? { ...line, orderedQty: line.orderedQty + addQty }
+          : line,
+      ),
+    );
+    setDuplicateLinePrompt(null);
+  }, [duplicateAddQty, duplicateLinePrompt]);
 
   // Save all edits
   const handleSave = useCallback(async () => {
@@ -368,6 +391,43 @@ function PODetailView({
 
   return (
     <div className="mx-auto max-w-7xl space-y-5">
+      {duplicateLinePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setDuplicateLinePrompt(null)}>
+          <div className="w-full max-w-sm rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-foreground">Add Quantity to Existing Line?</h3>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {duplicateLinePrompt.displayName} is already in this PO with {duplicateLinePrompt.currentQty} pcs.
+            </p>
+            <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Additional quantity
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={duplicateAddQty}
+              onChange={(event) => setDuplicateAddQty(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDuplicateLinePrompt(null)}
+                className="rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={applyDuplicateLineQty}
+                className="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                Add Quantity
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Header ── */}
       <div className="flex items-start justify-between">
         <div>

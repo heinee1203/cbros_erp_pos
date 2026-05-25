@@ -1,4 +1,6 @@
 import { AlertTriangle, Check, ShoppingCart, X } from "lucide-react";
+import { toast } from "sonner";
+import { useConfirm } from "@/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 import type { CreatedReorderPO, ReorderSupplierGroup } from "../types";
 import { fmtPeso } from "../utils";
@@ -195,6 +197,7 @@ export function ReorderActionFooter({
   onCreatePOs: () => void;
   onShowSupplierModal: () => void;
 }) {
+  const confirm = useConfirm();
   const supplierGroupCount = supplierGroups.filter((group) => group.supplierId)
     .length;
 
@@ -267,7 +270,7 @@ export function ReorderActionFooter({
           Cancel
         </button>
         <button
-          onClick={() => {
+          onClick={async () => {
             const noSupplierGroup = supplierGroups.find(
               (group) => !group.supplierId,
             );
@@ -276,8 +279,8 @@ export function ReorderActionFooter({
             );
 
             if (hasSupplierGroups.length === 0) {
-              alert(
-                `All ${selectedCount} items need a supplier assigned before creating a PO. Use the Supplier dropdown on each row.`,
+              toast.error(
+                `Assign a supplier before creating a PO for these ${selectedCount} items.`,
               );
               return;
             }
@@ -287,9 +290,13 @@ export function ReorderActionFooter({
                 (sum, group) => sum + group.items.length,
                 0,
               );
-              const proceed = confirm(
-                `${noSupplierGroup.items.length} items have no supplier and will be skipped. Create PO(s) for the ${assignedCount} items that have suppliers?`,
-              );
+              const proceed = await confirm({
+                title: "Skip items without supplier?",
+                message: `${noSupplierGroup.items.length} items have no supplier and will be skipped. Create PO(s) for the ${assignedCount} items that have suppliers?`,
+                confirmLabel: "Create PO(s)",
+                cancelLabel: "Review Suppliers",
+                variant: "warning",
+              });
               if (!proceed) return;
             }
 

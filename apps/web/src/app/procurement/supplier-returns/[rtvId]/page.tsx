@@ -14,6 +14,7 @@ import {
   type StatusHistoryEntry,
 } from "@/hooks/use-supplier-returns";
 import { fmtPeso, fmtDate, fmtDateTime } from "@/lib/format";
+import { useConfirm } from "@/components/confirm-dialog";
 
 // ── Status Config ──
 
@@ -269,6 +270,7 @@ export default function SupplierReturnDetailPage() {
   const rtvId = params?.rtvId as string;
   const router = useRouter();
   const { token, locationId, loading: authLoading } = useAuth();
+  const confirm = useConfirm();
 
   const { data: rtv, isLoading, error, refetch } = useSupplierReturnDetail(token, locationId, rtvId);
   const attachmentsQuery = useSupplierReturnAttachments(token, locationId, rtvId);
@@ -367,6 +369,19 @@ export default function SupplierReturnDetailPage() {
     reader.readAsDataURL(file);
   }
 
+  async function handleDeleteDraft() {
+    const ok = await confirm({
+      title: "Delete draft RTV?",
+      message: "This deletes the draft supplier return. Stock has not been deducted yet, but the draft record will be removed.",
+      confirmLabel: "Delete Draft",
+      variant: "danger",
+    });
+    if (!ok) return;
+    deleteMutation.mutate(rtvId, {
+      onSuccess: () => router.push("/procurement/supplier-returns"),
+    });
+  }
+
   if (authLoading || isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -456,12 +471,7 @@ export default function SupplierReturnDetailPage() {
                   Edit
                 </Link>
                 <button
-                  onClick={() => {
-                    if (!confirm("Are you sure you want to delete this draft RTV?")) return;
-                    deleteMutation.mutate(rtvId, {
-                      onSuccess: () => router.push("/procurement/supplier-returns"),
-                    });
-                  }}
+                  onClick={handleDeleteDraft}
                   disabled={deleteMutation.isPending}
                   className="rounded-md border border-destructive/30 px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/5 disabled:opacity-50"
                 >

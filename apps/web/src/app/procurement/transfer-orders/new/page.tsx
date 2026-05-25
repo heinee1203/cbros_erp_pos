@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   ArrowLeft, Search, Upload, Download, Trash2, Loader2,
   CheckCircle2, XCircle, AlertTriangle, Package,
@@ -280,7 +281,7 @@ export default function NewTransferPage() {
           `/procurement/transfer-orders/${transfer.transferNo ?? transfer.transfer_no}`
         );
       } catch (err: any) {
-        alert(err.message || "Failed to create transfer");
+        toast.error(err.message || "Failed to create transfer");
       } finally {
         setIsSaving(false);
       }
@@ -304,7 +305,7 @@ export default function NewTransferPage() {
   const handleCSVUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!sourceLocationId) {
-        alert("Select a source location first");
+        toast.error("Select a source location first");
         return;
       }
       const file = e.target.files?.[0];
@@ -316,7 +317,7 @@ export default function NewTransferPage() {
         const text = await file.text();
         const rowLines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
         if (rowLines.length < 2) {
-          alert("CSV must have a header row and at least one data row");
+          toast.error("CSV must have a header row and at least one data row");
           return;
         }
 

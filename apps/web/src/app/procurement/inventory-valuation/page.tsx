@@ -1,12 +1,5 @@
-import { DollarSign } from "lucide-react";
-import { PageShell } from "@/components/page-shell";
+import { redirect } from "next/navigation";
 
 export default function InventoryValuationPage() {
-  return (
-    <PageShell
-      icon={DollarSign}
-      title="Inventory Valuation"
-      description="Inventory valuation reports are coming soon. View cost basis, weighted average pricing, and total inventory value by location."
-    />
-  );
+  redirect("/reports/inventory-valuation");
 }

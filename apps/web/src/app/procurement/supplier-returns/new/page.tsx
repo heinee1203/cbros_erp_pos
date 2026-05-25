@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
 import { useSuppliers } from "@/hooks/use-suppliers";
 import { useLocations } from "@/hooks/use-locations";
@@ -319,7 +320,7 @@ export default function NewSupplierReturnPage() {
         }),
       })
         .then(() => router.push(`/procurement/supplier-returns/${editId}`))
-        .catch((err: any) => alert(err.message || "Update failed"));
+        .catch((err: any) => toast.error(err.message || "Update failed"));
     } else {
       createMutation.mutate(
         {

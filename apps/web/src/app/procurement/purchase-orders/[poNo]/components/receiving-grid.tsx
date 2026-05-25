@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { AlertTriangle, Loader2, X } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useReceivePOMutation, type ReceiptLineInput } from "@/hooks/use-po-mutations";
 import type { PODetail } from "@/hooks/use-po-query";
 import { useSuppliers } from "@/hooks/use-suppliers";
@@ -19,6 +21,7 @@ export function ReceivingGrid({
   refetch: () => void;
 }) {
   const { token, locationId } = useAuth();
+  const confirm = useConfirm();
   const scanRef = useRef<HTMLInputElement>(null);
 
   // ── Per-line receiving state ──
@@ -63,6 +66,13 @@ export function ReceivingGrid({
   const [receiptNotes, setReceiptNotes] = useState("");
   const [supplierDrNo, setSupplierDrNo] = useState("");
   const [drError, setDrError] = useState<string | null>(null);
+  const [validationIssue, setValidationIssue] = useState<{
+    title: string;
+    productName: string;
+    requiredLabel: string;
+    enteredLabel: string;
+    guidance: string;
+  } | null>(null);
 
   // ── Backorder decision modal state ──
   interface BackorderDecision {
@@ -281,7 +291,13 @@ export function ReceivingGrid({
     });
     if (serialMismatch) {
       const st = lineStates[serialMismatch.id]!;
-      alert(`Enter serial numbers for ${serialMismatch.productName} (${st.acceptedQty} required, ${st.serialNumbers.length} entered)`);
+      setValidationIssue({
+        title: "Serial numbers required",
+        productName: serialMismatch.productName,
+        requiredLabel: `${st.acceptedQty} serial number${st.acceptedQty === 1 ? "" : "s"} required`,
+        enteredLabel: `${st.serialNumbers.length} entered`,
+        guidance: "Add one serial number for every accepted serialized unit before posting this receipt.",
+      });
       return;
     }
 
@@ -295,7 +311,13 @@ export function ReceivingGrid({
     if (dotMismatch) {
       const st = lineStates[dotMismatch.id]!;
       const batchTotal = st.dotBatches.reduce((s, b) => s + b.quantity, 0);
-      alert(`Enter DOT batches for ${dotMismatch.productName} (${st.acceptedQty} units required, ${batchTotal} allocated)`);
+      setValidationIssue({
+        title: "DOT batch allocation required",
+        productName: dotMismatch.productName,
+        requiredLabel: `${st.acceptedQty} accepted tire unit${st.acceptedQty === 1 ? "" : "s"}`,
+        enteredLabel: `${batchTotal} allocated to DOT batches`,
+        guidance: "Allocate the accepted tire quantity across DOT batches before posting this receipt.",
+      });
       return;
     }
 
@@ -388,7 +410,7 @@ export function ReceivingGrid({
   }, [backorderDecisions, po, token, locationId]);
 
   // "Close PO" handler — calculates remaining and shows backorder modal
-  const handleClosePO = useCallback(() => {
+  const handleClosePO = useCallback(async () => {
     const defaultWait = new Date();
     defaultWait.setDate(defaultWait.getDate() + 14);
     const waitStr = defaultWait.toISOString().split("T")[0];
@@ -421,23 +443,35 @@ export function ReceivingGrid({
     }
 
     if (remaining.length === 0) {
-      // All items fully received — just close
-      if (confirm("All items have been received. Close this PO?")) {
-        apiFetch(`/procurement/purchase-orders/${po.id}/close-variance`, {
-          method: "POST",
-          token: token!,
-          locationId: locationId!,
-          body: {
-            notes: "Closed — all items received",
-            idempotencyKey: `close-${po.id}-${Date.now()}`,
-          } as any,
-        }).then(() => window.location.reload());
+      const shouldClose = await confirm({
+        title: "Close purchase order?",
+        message: `All receivable quantities for ${po.poNo} are complete. Closing this PO prevents further receiving against it.`,
+        confirmLabel: "Close PO",
+        cancelLabel: "Keep Open",
+        variant: "warning",
+      });
+
+      if (shouldClose) {
+        try {
+          await apiFetch(`/procurement/purchase-orders/${po.id}/close-variance`, {
+            method: "POST",
+            token: token!,
+            locationId: locationId!,
+            body: {
+              notes: "Closed — all items received",
+              idempotencyKey: `close-${po.id}-${Date.now()}`,
+            } as any,
+          });
+          window.location.reload();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed to close PO");
+        }
       }
     } else {
       setBackorderDecisions(remaining);
       setShowBackorderModal(true);
     }
-  }, [po, token, locationId]);
+  }, [confirm, po, token, locationId]);
 
   // Auto-refetch on success
   useEffect(() => {
@@ -943,6 +977,50 @@ export function ReceivingGrid({
                 : `${selectedCount} lines, ${selectedAccepted} units accepted`}
         </span>
       </div>
+
+      {validationIssue && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setValidationIssue(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-full bg-warning/10 text-warning">
+                <AlertTriangle size={18} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold">{validationIssue.title}</h3>
+                <p className="mt-1 text-sm text-foreground">{validationIssue.productName}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-lg border border-border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Required</div>
+                    <div className="font-semibold">{validationIssue.requiredLabel}</div>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Entered</div>
+                    <div className="font-semibold">{validationIssue.enteredLabel}</div>
+                  </div>
+                </div>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  {validationIssue.guidance}
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setValidationIssue(null)}
+                className="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                Review Entry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Backorder Decision Modal ── */}
       {showBackorderModal && (

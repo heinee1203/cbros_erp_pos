@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
+import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { useSuppliers } from "@/hooks/use-suppliers";
@@ -274,7 +275,7 @@ export function ReorderSuggestionsPanel({ open, onClose, inline, lastSoldAfter, 
       setCreatedPOs(created);
       setShowSupplierModal(false);
     } catch (err: any) {
-      alert(err.message || "Failed to create PO");
+      toast.error(err.message || "Failed to create PO");
     } finally {
       setCreating(false);
     }
