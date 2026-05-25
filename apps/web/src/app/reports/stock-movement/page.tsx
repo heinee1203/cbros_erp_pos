@@ -1,14 +1,12 @@
-import { ArrowLeftRight } from "lucide-react";
-import { PageShell } from "@/components/page-shell";
+import { UnavailableFeaturePage } from "@/components/unavailable-feature-page";
 
 export default function StockMovementPage() {
   return (
-    <PageShell
-      icon={ArrowLeftRight}
+    <UnavailableFeaturePage
       title="Stock Movement"
-      description="Track all inventory movements — sales, purchases, transfers, adjustments, and returns — in a unified timeline."
-      relatedHref="/procurement/inventory-history"
-      relatedLabel="View Inventory History"
+      description="The unified stock movement report is hidden until it reconciles sales, receiving, transfers, adjustments, and returns consistently. Use Inventory History for live movement checks."
+      returnHref="/procurement/inventory-history"
+      returnLabel="Open Inventory History"
     />
   );
 }

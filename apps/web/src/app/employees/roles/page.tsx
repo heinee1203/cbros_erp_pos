@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
+import { useConfirm } from "@/components/confirm-dialog";
 import {
   usePermissionsList,
   useRoles,
@@ -263,6 +264,7 @@ function PermissionMatrix({ allRoles, allPermissions, onSave, saving }: {
  * ═══���═════════════════��═══════════════════════════════════ */
 export default function RolesPage() {
   const { token, locationId } = useAuth();
+  const confirm = useConfirm();
   const rolesQuery = useRoles(token, locationId);
   const permsQuery = usePermissionsList(token, locationId);
   const createMut = useCreateRole(token, locationId);
@@ -316,7 +318,13 @@ export default function RolesPage() {
 
   const handleDelete = async (role: RoleListItem) => {
     if (role.isSystem) return;
-    if (!confirm(`Delete role "${role.name}"? This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: "Delete role?",
+      message: `Delete role "${role.name}"? This cannot be undone.`,
+      confirmLabel: "Delete Role",
+      variant: "danger",
+    });
+    if (!ok) return;
     try {
       await deleteMut.mutateAsync(role.id);
       showMsg("success", `Role "${role.name}" deleted`);

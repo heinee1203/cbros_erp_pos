@@ -12,7 +12,6 @@ import {
   Users,
   BarChart3,
   UserCog,
-  Plug,
   Settings,
   ChevronDown,
   PanelLeftClose,
@@ -89,7 +88,6 @@ const NAV_TOP: NavEntry[] = [
       { label: "Sales by Payment", href: "/reports/sales-by-payment", match: /^\/reports\/sales-by-payment/ },
       { label: "Discount Analysis", href: "/reports/discount-analysis", match: /^\/reports\/discount-analysis/ },
       { label: "Inventory Valuation", href: "/reports/inventory-valuation", match: /^\/reports\/inventory-valuation/ },
-      { label: "Stock Movement", href: "/reports/stock-movement", match: /^\/reports\/stock-movement/ },
       { label: "Demand by Application", href: "/reports/demand-by-tag", match: /^\/reports\/demand-by-tag/ },
       { label: "Mechanic Productivity", href: "/reports/mechanic-productivity", match: /^\/reports\/mechanic-productivity/ },
     ],
@@ -158,8 +156,6 @@ const NAV_TOP: NavEntry[] = [
     permission: "bo.view_sales_reports",
     children: [
       { label: "Job Cards", href: "/service/job-cards", match: /^\/service\/job-cards/ },
-      { label: "Service Ops", href: "/service/operations", match: /^\/service\/operations/ },
-      { label: "Estimates", href: "/service/estimates", match: /^\/service\/estimates/ },
     ],
   },
   {
@@ -250,18 +246,6 @@ const NAV_BOTTOM: NavEntry[] = [
   },
   {
     kind: "group",
-    label: "Integrations",
-    icon: Plug,
-    match: /^\/integrations/,
-    permission: "bo.manage_settings",
-    children: [
-      { label: "Devices & Scanners", href: "/integrations/devices", match: /^\/integrations\/devices/ },
-      { label: "Printers", href: "/integrations/printers", match: /^\/integrations\/printers/ },
-      { label: "Import / Export", href: "/integrations/import-export", match: /^\/integrations\/import-export/ },
-    ],
-  },
-  {
-    kind: "group",
     label: "Settings",
     icon: Settings,
     match: /^\/settings/,
@@ -269,12 +253,20 @@ const NAV_BOTTOM: NavEntry[] = [
     children: [
       { label: "General", href: "/settings", match: /^\/settings$/ },
       { label: "Locations", href: "/settings/locations", match: /^\/settings\/locations/ },
-      { label: "POS Settings", href: "/settings/pos", match: /^\/settings\/pos/ },
       { label: "Company Profile", href: "/settings/company", match: /^\/settings\/company/ },
       { label: "POS Devices", href: "/settings/devices", match: /^\/settings\/devices/, permission: "bo.manage_pos_devices" },
       { label: "Roles & Permissions", href: "/settings/roles", match: /^\/settings\/roles/, permission: "bo.manage_employees" },
       { label: "Audit Log", href: "/settings/audit-log", match: /^\/settings\/audit-log/ },
     ],
+  },
+  {
+    kind: "direct",
+    label: "Data Health",
+    icon: Activity,
+    href: "/admin/data-health",
+    match: /^\/admin\/data-health/,
+    permission: "bo.manage_settings",
+    requireRole: "ADMIN",
   },
 ];
 

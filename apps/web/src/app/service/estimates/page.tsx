@@ -1,14 +1,12 @@
-import { FileText } from "lucide-react";
-import { PageShell } from "@/components/page-shell";
+import { UnavailableFeaturePage } from "@/components/unavailable-feature-page";
 
 export default function EstimatesPage() {
   return (
-    <PageShell
-      icon={FileText}
-      title="Estimates"
-      description="Create and manage repair estimates for customers. Include parts, labor, and generate approval-ready quotes."
-      relatedHref="/service/job-cards"
-      relatedLabel="View Job Cards"
+    <UnavailableFeaturePage
+      title="Service Estimates"
+      description="Estimate creation is hidden until it can create approval-ready quotes without bypassing the active service and billing flow."
+      returnHref="/service/job-cards"
+      returnLabel="Open Job Cards"
     />
   );
 }

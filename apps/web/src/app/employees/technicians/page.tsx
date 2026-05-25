@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useLocations } from "@/hooks/use-locations";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
@@ -261,6 +262,7 @@ function TechnicianForm({
  * ═════════════════════════════════════════════════════════ */
 export default function TechniciansPage() {
   const { token, locationId } = useAuth();
+  const confirm = useConfirm();
   const techQuery = useTechnicians(token, locationId);
   const locationsQuery = useLocations(token);
   const createMut = useCreateTechnician(token, locationId);
@@ -379,7 +381,13 @@ export default function TechniciansPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Deactivate this technician? They will no longer appear in the POS dropdown.")) return;
+    const ok = await confirm({
+      title: "Deactivate technician?",
+      message: "They will no longer appear in the POS dropdown, but historical records remain intact.",
+      confirmLabel: "Deactivate",
+      variant: "warning",
+    });
+    if (!ok) return;
     try {
       await deleteMut.mutateAsync(id);
     } catch {}
