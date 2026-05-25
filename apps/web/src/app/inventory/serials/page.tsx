@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Package, ArrowLeft, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -332,7 +333,7 @@ function ReturnToSupplierModal({
         setSuccess({ rtvNumber: res.rtvNumber, rtvId: res.id });
       }
     } catch (err: any) {
-      alert(err.message || "Failed to create return");
+      toast.error(err.message || "Failed to create return");
     } finally {
       setSaving(false);
     }

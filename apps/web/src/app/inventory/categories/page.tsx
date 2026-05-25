@@ -2,7 +2,9 @@
 
 import { useState, useMemo, useRef } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
+import { useConfirm } from "@/components/confirm-dialog";
 import {
   useCategories,
   useCreateCategory,
@@ -37,6 +39,7 @@ import { EMPTY_CATEGORIES } from "./constants";
 
 export default function CategoriesPage() {
   const { token, locationId, loading: authLoading } = useAuth();
+  const confirm = useConfirm();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -234,17 +237,23 @@ export default function CategoriesPage() {
   }
 
   async function handleRemoveEmpty() {
-    if (!confirm("Remove all empty categories and subcategories (0 items)? This cannot be undone.")) return;
+    const ok = await confirm({
+      title: "Remove empty categories?",
+      message: "This removes all categories and subcategories with 0 items. This cannot be undone.",
+      confirmLabel: "Remove Empty",
+      variant: "danger",
+    });
+    if (!ok) return;
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}/categories/remove-empty`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "X-Location-ID": locationId },
       });
       const data = await res.json();
-      alert(`Removed ${data.categoriesRemoved} empty categories and ${data.subcategoriesRemoved} empty subcategories`);
+      toast.success(`Removed ${data.categoriesRemoved} empty categories and ${data.subcategoriesRemoved} empty subcategories`);
       window.location.reload();
     } catch (err: any) {
-      alert("Failed: " + (err.message || "Unknown error"));
+      toast.error("Failed: " + (err.message || "Unknown error"));
     }
   }
 

@@ -3,9 +3,11 @@
 import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Percent, Plus, Search, X, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronRight, Clock, Loader2, Users, Tag } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useCategories } from "@/hooks/use-categories";
 import { useBrands } from "@/hooks/use-brands";
 import { useProductFamilies } from "@/hooks/use-products";
@@ -49,6 +51,7 @@ function fmtValue(rule: DiscountRule): string {
 /* ── Page ── */
 export default function DiscountsPage() {
   const { token, locationId } = useAuth();
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("rules");
   const [search, setSearch] = useState("");
@@ -88,6 +91,16 @@ export default function DiscountsPage() {
     mutationFn: (id: string) => apiFetch(`/discounts/${id}`, { token, locationId, method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["discounts"] }),
   });
+
+  const handleDeleteRule = async (rule: DiscountRule) => {
+    const ok = await confirm({
+      title: "Delete discount rule?",
+      message: `Delete "${rule.name}"? This removes the rule from pricing calculations.`,
+      confirmLabel: "Delete Rule",
+      variant: "danger",
+    });
+    if (ok) deleteMut.mutate(rule.id);
+  };
 
   return (
     <div className="mx-auto flex h-full max-w-5xl flex-col">
@@ -169,7 +182,7 @@ export default function DiscountsPage() {
                       <div className="flex items-center gap-1 shrink-0">
                         <button onClick={() => { setEditingRule(rule); setShowForm(true); }}
                           className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"><Pencil size={13} /></button>
-                        <button onClick={() => { if (confirm(`Delete "${rule.name}"?`)) deleteMut.mutate(rule.id); }}
+                        <button onClick={() => void handleDeleteRule(rule)}
                           className="rounded p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
                       </div>
                     </div>
@@ -356,7 +369,7 @@ function RuleFormModal({ rule, isPromo, tiers, token, locationId, onClose, onSav
       }
       onSaved();
     } catch (err: any) {
-      alert(err.message || "Failed to save");
+      toast.error(err.message || "Failed to save");
     } finally {
       setSaving(false);
     }
@@ -489,7 +502,7 @@ function TierFormModal({ tier, token, locationId, onClose, onSaved }: {
       }
       onSaved();
     } catch (err: any) {
-      alert(err.message || "Failed to save");
+      toast.error(err.message || "Failed to save");
     } finally {
       setSaving(false);
     }

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { fmtPeso } from "@/lib/format";
 import { apiFetch } from "@/lib/api";
+import { useConfirm } from "@/components/confirm-dialog";
 
 export interface InvoiceGridRow {
   id: string;
@@ -79,6 +80,7 @@ export interface InvoiceEntryGridProps {
 }
 
 export function InvoiceEntryGrid({ token, locationId, onSubmitted }: InvoiceEntryGridProps) {
+  const confirm = useConfirm();
   const [rows, setRows] = useState<InvoiceGridRow[]>(() => [newRow()]);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -177,9 +179,17 @@ export function InvoiceEntryGrid({ token, locationId, onSubmitted }: InvoiceEntr
   const validRows = rows.filter(isRowValid);
   const total = validRows.reduce((s, r) => s + parseFloat(r.amount), 0);
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     const hasAny = rows.some(rowHasData) || notes.length > 0;
-    if (hasAny && !window.confirm("Discard all entered rows?")) return;
+    if (hasAny) {
+      const ok = await confirm({
+        title: "Discard entered invoices?",
+        message: "This clears all rows currently entered in the invoice grid. Nothing will be saved.",
+        confirmLabel: "Discard Rows",
+        variant: "warning",
+      });
+      if (!ok) return;
+    }
     setRows([newRow()]);
     setNotes("");
     setRowErrors({});

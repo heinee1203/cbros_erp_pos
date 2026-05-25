@@ -7,6 +7,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
+import { useConfirm } from "@/components/confirm-dialog";
 import { apiFetch } from "@/lib/api";
 import { ImportBatchPanel } from "./components/import-batch-panel";
 import { ImportHistoryHeader } from "./components/import-history-header";
@@ -34,6 +35,7 @@ import type {
 export default function ImportHistoryPage() {
   const { token, apiLocationId: locationId } = useAuth();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
 
   const [step, setStep] = useState<Step>("upload");
   const [file, setFile] = useState<File | null>(null);
@@ -249,7 +251,13 @@ export default function ImportHistoryPage() {
   /* ── Delete batch ── */
   const handleDeleteBatch = useCallback(
     async (batchId: string) => {
-      if (!confirm("Delete this import batch? This will remove all inventory history rows from this batch.")) return;
+      const ok = await confirm({
+        title: "Delete import batch?",
+        message: "This removes all inventory history rows from this import batch. This cannot be undone.",
+        confirmLabel: "Delete Batch",
+        variant: "danger",
+      });
+      if (!ok) return;
       setDeletingBatch(batchId);
       try {
         await apiFetch(`/inventory/import/history/batches/${batchId}`, {
@@ -265,7 +273,7 @@ export default function ImportHistoryPage() {
         setDeletingBatch(null);
       }
     },
-    [token, locationId, refetchBatches],
+    [confirm, token, locationId, refetchBatches],
   );
 
   /* ── Computed values ── */

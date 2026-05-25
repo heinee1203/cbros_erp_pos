@@ -2,6 +2,7 @@
 
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useConfirm } from "@/components/confirm-dialog";
 import { apiFetch } from "@/lib/api";
 import { useDeleteProduct, type ProductRow } from "@/hooks/use-products";
@@ -78,9 +79,12 @@ export function useInventoryBulkActions({
     if (ids.length === 0) return;
 
     const fieldName = Object.keys(updates)[0]?.replace("Id", "") ?? "field";
-    const confirmed = window.confirm(
-      `Update ${fieldName} for ${ids.length} item${ids.length !== 1 ? "s" : ""}?`,
-    );
+    const confirmed = await confirm({
+      title: "Apply Bulk Update?",
+      message: `Update ${fieldName} for ${ids.length} item${ids.length !== 1 ? "s" : ""}?`,
+      confirmLabel: "Update Items",
+      variant: "warning",
+    });
     if (!confirmed) return;
 
     try {
@@ -92,9 +96,9 @@ export function useInventoryBulkActions({
       });
       invalidateProductsAndClear();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Bulk update failed");
+      toast.error(err instanceof Error ? err.message : "Bulk update failed");
     }
-  }, [selectedIds, token, apiLocationId, invalidateProductsAndClear]);
+  }, [selectedIds, confirm, token, apiLocationId, invalidateProductsAndClear]);
 
   const handleDeleteSingle = useCallback(async (productId: string, productName: string, isParent?: boolean) => {
     const message = isParent

@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   Package,
@@ -42,6 +43,7 @@ import { useSuppliers } from "@/hooks/use-suppliers";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "@/app/sidebar-context";
+import { useConfirm } from "@/components/confirm-dialog";
 import { SelectWithQuickAdd } from "@/components/select-with-quick-add";
 import {
   useProductOptions,
@@ -97,6 +99,7 @@ export default function EditItemPage() {
   const productId = params?.productId as string;
   const queryClient = useQueryClient();
   const { token, locationId, user } = useAuth();
+  const confirm = useConfirm();
   const { isCollapsed } = useSidebar();
   const updateMutation = useUpdateProduct(token, locationId);
   const { data: product, isLoading, error: loadError } = useProductDetail(token, locationId, productId);
@@ -367,7 +370,7 @@ export default function EditItemPage() {
       );
       const skipped = copiedEntries.length - deduplicated.length;
       if (skipped > 0) {
-        alert(`Copied ${deduplicated.length} entries (${skipped} duplicates skipped)`);
+        toast.info(`Copied ${deduplicated.length} entries (${skipped} duplicates skipped)`);
       }
       return [...prev, ...deduplicated];
     });
@@ -1048,7 +1051,13 @@ export default function EditItemPage() {
                           <button
                             type="button"
                             onClick={async () => {
-                              if (confirm(`Delete option "${ot.name}" and all its values?`)) {
+                              const ok = await confirm({
+                                title: "Delete Variant Option?",
+                                message: `Delete option "${ot.name}" and all its values?`,
+                                confirmLabel: "Delete Option",
+                                variant: "danger",
+                              });
+                              if (ok) {
                                 await deleteOptionMut.mutateAsync({ productId, typeId: ot.id });
                               }
                             }}
@@ -1070,7 +1079,7 @@ export default function EditItemPage() {
                                   try {
                                     await deleteValueMut.mutateAsync({ productId, typeId: ot.id, valueId: val.id });
                                   } catch (err: any) {
-                                    alert(err?.message || "Cannot delete value");
+                                    toast.error(err?.message || "Cannot delete value");
                                   }
                                 }}
                                 className="hidden group-hover:inline-flex ml-0.5 rounded-full p-0.5 text-muted-foreground hover:text-red-600"
@@ -1132,7 +1141,7 @@ export default function EditItemPage() {
                       );
 
                       if (newCombos.length === 0) {
-                        alert("All variant combinations already exist!");
+                        toast.info("All variant combinations already exist");
                         return;
                       }
 
@@ -1153,7 +1162,7 @@ export default function EditItemPage() {
                       try {
                         await createVariantBatchMut.mutateAsync({ parentId: productId, variants });
                       } catch (err: any) {
-                        alert(err?.message || "Failed to generate variants");
+                        toast.error(err?.message || "Failed to generate variants");
                       }
                     }}
                     className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
@@ -1199,12 +1208,18 @@ export default function EditItemPage() {
                             onEdit={() => router.push(`/inventory/${v.id}/edit`)}
                             isDeleting={deletingVariantId === v.id}
                             onDelete={async () => {
-                              if (!confirm(`Delete variant ${v.sku}?`)) return;
+                              const ok = await confirm({
+                                title: "Delete Variant?",
+                                message: `Delete variant ${v.sku}?`,
+                                confirmLabel: "Delete Variant",
+                                variant: "danger",
+                              });
+                              if (!ok) return;
                               setDeletingVariantId(v.id);
                               try {
                                 await deleteVariantMut.mutateAsync({ parentId: productId, variantId: v.id });
                               } catch (err: any) {
-                                alert(err?.message || "Failed to delete variant");
+                                toast.error(err?.message || "Failed to delete variant");
                               } finally {
                                 setDeletingVariantId(null);
                               }
@@ -2250,7 +2265,7 @@ function AddValueInline({ onAdd }: { onAdd: (value: string) => Promise<void> }) 
       setValue("");
       inputRef.current?.focus();
     } catch (err: any) {
-      alert(err?.message || "Failed to add value");
+      toast.error(err?.message || "Failed to add value");
     } finally {
       setSaving(false);
     }

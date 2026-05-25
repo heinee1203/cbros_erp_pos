@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { X } from "lucide-react";
+import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -82,7 +83,7 @@ export function FindReplaceModal({
       });
       onApplied();
     } catch (err: any) {
-      alert("Error: " + (err.message || "Failed to apply"));
+      toast.error(err.message || "Failed to apply");
     } finally {
       setApplying(false);
     }

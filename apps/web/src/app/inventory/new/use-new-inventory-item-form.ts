@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import type { LocationInfo } from "@/app/auth-context";
 import { useBrands, useCreateBrand } from "@/hooks/use-brands";
@@ -290,7 +291,7 @@ export function useNewInventoryItemForm({
     setVehicles((prev) => {
       const result = mergeCopiedFitments(prev, copiedEntries);
       if (result.skippedCount > 0) {
-        alert(
+        toast.info(
           `Copied ${result.copiedCount} entries (${result.skippedCount} duplicates skipped)`,
         );
       }

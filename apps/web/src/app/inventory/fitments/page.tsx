@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { Car, Search, Plus, Check, Loader2 } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
+import { useConfirm } from "@/components/confirm-dialog";
 import { useVehicleMakes, useVehicleModels } from "@/hooks/use-vehicles";
 import { mergeVehicleMakes } from "@/lib/vehicle-makes";
 import {
@@ -28,6 +29,7 @@ interface SearchProduct {
 
 export default function FitmentManagerPage() {
   const { token, locationId, loading: authLoading } = useAuth();
+  const confirm = useConfirm();
   const { data: dbMakesData } = useVehicleMakes(token ?? "", locationId ?? "");
   const allMakes = useMemo(() => mergeVehicleMakes(dbMakesData?.data ?? []), [dbMakesData]);
 
@@ -218,8 +220,14 @@ export default function FitmentManagerPage() {
               <div className="mt-2 flex gap-2">
                 {fittedProducts.length > 0 && (
                   <button
-                    onClick={() => {
-                      if (confirm(`Remove fitment from all ${fittedProducts.length} products for ${make} ${model}?`)) {
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: "Remove Fitment From Products?",
+                        message: `Remove fitment from all ${fittedProducts.length} products for ${make} ${model}?`,
+                        confirmLabel: "Unfit All",
+                        variant: "warning",
+                      });
+                      if (ok) {
                         unfitAllMut.mutateAsync(selectedVehicleId);
                       }
                     }}
@@ -230,11 +238,17 @@ export default function FitmentManagerPage() {
                   </button>
                 )}
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     const msg = fittedProducts.length > 0
                       ? `Delete ${make} ${model} and remove all ${fittedProducts.length} fitment records?`
                       : `Delete ${make} ${model}?`;
-                    if (confirm(msg)) {
+                    const ok = await confirm({
+                      title: "Delete Vehicle Fitment?",
+                      message: msg,
+                      confirmLabel: "Delete",
+                      variant: "danger",
+                    });
+                    if (ok) {
                       deleteVehicleMut.mutateAsync({ id: selectedVehicleId, force: fittedProducts.length > 0 }).then(() => {
                         setSelectedVehicleId(null);
                         setMake(""); setModel(""); setYearFrom(""); setYearTo(""); setEngine("");
