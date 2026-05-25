@@ -17,6 +17,7 @@ import {
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/confirm-dialog";
 
 interface PrinterRow {
   id: string;
@@ -53,6 +54,7 @@ const EMPTY_FORM = {
 
 export default function PrintersSettingsPage() {
   const { token, locationId, loading: authLoading } = useAuth();
+  const confirm = useConfirm();
   const [printers, setPrinters] = useState<PrinterRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -137,7 +139,13 @@ export default function PrintersSettingsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this printer?")) return;
+    const ok = await confirm({
+      title: "Delete printer?",
+      message: "This removes the printer setup from the web ERP. Existing printed documents are not affected.",
+      confirmLabel: "Delete Printer",
+      variant: "danger",
+    });
+    if (!ok) return;
     await apiFetch(`/printing/printers/${id}`, {
       token: token!,
       locationId: locationId!,

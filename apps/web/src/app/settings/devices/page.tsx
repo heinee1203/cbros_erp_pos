@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Tablet, Edit, Power, PowerOff } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
+import { Tablet, Copy, Power, PowerOff, QrCode } from "lucide-react";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 
@@ -11,11 +12,23 @@ interface PosDevice {
   deviceId: string;
   locationId: string;
   locationName: string;
+  locationCode?: string | null;
   status: string;
   lastSeenAt: string | null;
   appVersion: string | null;
   registeredAt: string;
   registeredByName: string | null;
+}
+
+interface RegistrationCode {
+  id: string;
+  code: string;
+  status: string;
+  expiresAt: string;
+  locationId: string;
+  locationName: string;
+  locationCode: string;
+  qrPayload: string;
 }
 
 function timeAgo(iso: string | null): string {
@@ -36,6 +49,9 @@ export default function PosDevicesPage() {
   const [loading, setLoading] = useState(true);
   const [editId, setEditId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [creatingCode, setCreatingCode] = useState(false);
+  const [registrationCode, setRegistrationCode] = useState<RegistrationCode | null>(null);
+  const [codeError, setCodeError] = useState<string | null>(null);
 
   const fetchDevices = useCallback(async () => {
     if (!token || !locationId) return;
@@ -62,6 +78,39 @@ export default function PosDevicesPage() {
     fetchDevices();
   };
 
+  const handleCreateRegistrationCode = async () => {
+    if (!token || !locationId) return;
+    setCreatingCode(true);
+    setCodeError(null);
+    try {
+      const res = await apiFetch<{ registrationCode: RegistrationCode }>("/devices/registration-codes", {
+        token,
+        locationId,
+        method: "POST",
+        body: { locationId },
+      });
+      setRegistrationCode(res.registrationCode);
+    } catch (err: any) {
+      setCodeError(err?.message || "Unable to create registration code.");
+    } finally {
+      setCreatingCode(false);
+    }
+  };
+
+  const copyRegistrationPayload = async () => {
+    if (!registrationCode) return;
+    await navigator.clipboard?.writeText(
+      [
+        "APEX POS DEVICE REGISTRATION",
+        `Store: ${registrationCode.locationName} [${registrationCode.locationCode}]`,
+        `Code: ${registrationCode.code}`,
+        `Expires: ${new Date(registrationCode.expiresAt).toLocaleString()}`,
+        "",
+        registrationCode.qrPayload,
+      ].join("\n"),
+    );
+  };
+
   const saveEdit = async () => {
     if (!editId || !editName.trim()) return;
     await handleUpdate(editId, { name: editName.trim() });
@@ -77,6 +126,55 @@ export default function PosDevicesPage() {
       <div className="mb-4">
         <h2 className="text-lg font-semibold">POS Devices</h2>
         <p className="text-sm text-muted-foreground">Manage tablet devices bound to stores</p>
+      </div>
+
+      <div className="mb-4 grid gap-4 rounded-lg border border-border bg-card p-4 md:grid-cols-[1fr_auto]">
+        <div>
+          <div className="flex items-center gap-2">
+            <QrCode className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-semibold">Create Store Registration Code</h3>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Generate a one-use code for the current store. Android tablets scan or enter this code during first-time registration, then stay locked to that store.
+          </p>
+          {codeError && <p className="mt-2 text-xs font-medium text-destructive">{codeError}</p>}
+        </div>
+        <button
+          onClick={handleCreateRegistrationCode}
+          disabled={creatingCode}
+          className="inline-flex min-h-9 items-center justify-center rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50"
+        >
+          {creatingCode ? "Creating..." : "Create Code"}
+        </button>
+
+        {registrationCode && (
+          <div className="grid gap-4 rounded-md border border-border bg-background p-4 md:col-span-2 md:grid-cols-[180px_1fr] print:border-0">
+            <div className="flex items-center justify-center rounded-md bg-white p-3">
+              <QRCodeSVG value={registrationCode.qrPayload} size={150} />
+            </div>
+            <div className="space-y-2 text-sm">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Manual Code</p>
+                <p className="font-mono text-2xl font-bold tracking-wider">{registrationCode.code}</p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Store {registrationCode.locationName} [{registrationCode.locationCode}] / expires {new Date(registrationCode.expiresAt).toLocaleString()}
+              </p>
+              <pre className="max-h-28 overflow-auto rounded border border-border bg-muted/40 p-2 text-[10px] text-muted-foreground">
+                {registrationCode.qrPayload}
+              </pre>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={copyRegistrationPayload} className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs font-medium hover:bg-accent">
+                  <Copy className="h-3 w-3" />
+                  Copy payload
+                </button>
+                <button onClick={() => window.print()} className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-accent">
+                  Print
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-lg border border-border">
@@ -120,7 +218,10 @@ export default function PosDevicesPage() {
                   )}
                   <div className="text-[10px] font-mono text-muted-foreground">{d.deviceId}</div>
                 </td>
-                <td className="px-3 py-2 text-sm">{d.locationName}</td>
+                <td className="px-3 py-2 text-sm">
+                  {d.locationName}
+                  {d.locationCode ? <div className="text-[10px] font-mono text-muted-foreground">{d.locationCode}</div> : null}
+                </td>
                 <td className="px-3 py-2">
                   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                     d.status === "ACTIVATED" ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"

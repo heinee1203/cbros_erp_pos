@@ -24,6 +24,12 @@ export const KEYS = {
   OFFLINE_REVIEW_MARKERS: 'recovery.offlineReviewMarkers',
   PRINT_PREVIEW_METADATA: 'printer.previewMetadata',
   AUDIT_VIEW_FILTERS: 'audit.viewFilters',
+  HARDWARE_CHECKLIST_COMPLETION: 'hardware.checklistCompletion',
+  OFFLINE_RECONCILIATION_OUTCOMES: 'recovery.offlineReconciliationOutcomes',
+  DRAWER_VARIANCE_HISTORY: 'register.drawerVarianceHistory',
+  LAST_TRANSACTION_REPRINT: 'sales.lastTransactionReprint',
+  SETUP_WIZARD_PROGRESS: 'register.setupWizardProgress',
+  SUPPORT_QR_METADATA: 'support.qrMetadata',
 
   // Scanner
   SCANNER_MODE: 'scanner.mode',
@@ -51,4 +57,5 @@ export const KEYS = {
 
   // Cashier speed
   RECENT_PRODUCTS: 'catalog.recentProducts',
+  RECENT_CUSTOMERS: 'customers.recentCustomers',
 } as const;

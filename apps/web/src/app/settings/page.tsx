@@ -1,15 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { MapPin, Monitor, Receipt, Bell, Building2 } from "lucide-react";
+import { Building2, History, MapPin, Printer, ShieldCheck, Smartphone } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 const SETTINGS_SECTIONS: { icon: LucideIcon; label: string; href: string; description: string }[] = [
   { icon: MapPin, label: "Locations", href: "/settings/locations", description: "Manage stores and warehouses" },
-  { icon: Monitor, label: "POS Settings", href: "/settings/pos", description: "Configure point of sale" },
-  { icon: Receipt, label: "Receipt / Invoice", href: "/settings/receipts", description: "Customize receipt templates" },
-  { icon: Bell, label: "Stock Alerts", href: "/settings/stock-alerts", description: "Set reorder notifications" },
   { icon: Building2, label: "Company Profile", href: "/settings/company", description: "Business information" },
+  { icon: Smartphone, label: "POS Devices", href: "/settings/devices", description: "Register active POS devices" },
+  { icon: Printer, label: "Printers", href: "/settings/printers", description: "Manage receipt and label printers" },
+  { icon: ShieldCheck, label: "Roles & Permissions", href: "/settings/roles", description: "Control staff access" },
+  { icon: History, label: "Audit Log", href: "/settings/audit-log", description: "Review sensitive changes" },
 ];
 
 export default function SettingsPage() {

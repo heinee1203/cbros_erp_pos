@@ -1,14 +1,12 @@
-import { ShoppingCart } from "lucide-react";
-import { PageShell } from "@/components/page-shell";
+import { UnavailableFeaturePage } from "@/components/unavailable-feature-page";
 
 export default function PosSettingsPage() {
   return (
-    <PageShell
-      icon={ShoppingCart}
+    <UnavailableFeaturePage
       title="POS Settings"
-      description="Configure point of sale behavior — default tax rates, rounding rules, payment methods, and receipt options."
-      relatedHref="/sales/receipts"
-      relatedLabel="Go to Sales"
+      description="POS behavior settings are hidden until they are connected to the actual register configuration. This avoids operators changing values that the POS does not yet honor."
+      returnHref="/settings"
+      returnLabel="Back to Settings"
     />
   );
 }

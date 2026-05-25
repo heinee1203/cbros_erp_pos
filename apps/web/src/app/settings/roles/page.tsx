@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Shield, Plus, Users, Edit, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/app/auth-context";
 import { apiFetch } from "@/lib/api";
 
@@ -101,7 +102,7 @@ export default function RolesPage() {
       await apiFetch(`/rbac/roles/${id}`, { token: token!, locationId: locationId!, method: "DELETE" });
       fetchData();
     } catch (err: any) {
-      alert(err.message || "Cannot delete role");
+      toast.error(err.message || "Cannot delete role");
     }
   };
 
