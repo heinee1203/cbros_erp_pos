@@ -30,6 +30,7 @@ const MENU_ITEMS: MenuItem[] = [
   { icon: 'info', label: 'About', route: 'About', enabled: true, tone: 'neutral' },
   { icon: 'receipt', label: 'Returns', route: 'Returns', enabled: true, tone: 'primary' },
   { icon: 'barcode', label: 'Barcode Print', route: 'BarcodePrint', enabled: true, tone: 'success' },
+  { icon: 'alert', label: 'Manager Audit', route: 'ManagerAudit', enabled: true, tone: 'warning' },
 ];
 
 function toneColor(tone: MenuItem['tone']) {

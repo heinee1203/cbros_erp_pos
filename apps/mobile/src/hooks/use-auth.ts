@@ -23,6 +23,11 @@ import {
   getDisabledDeviceState,
   type DisabledDeviceState,
 } from '@/storage/device-status';
+import {
+  clearSessionRecoveryIntent,
+  getSessionRecoveryIntent,
+  subscribeSessionRecoveryIntent,
+} from '@/storage/session-recovery';
 import { useCartStore } from '@/stores/cart-store';
 
 type BindingInvalidReason = 'missing' | 'inactive' | null;
@@ -99,6 +104,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading] = useState(false);
   const bindingInvalidReason = getBindingInvalidReason(deviceBinding, locations);
 
+  useEffect(() => subscribeSessionRecoveryIntent((intent) => {
+    if (!intent || !token) return;
+    logoutService();
+    setToken(null);
+    setUser(null);
+    setLocationId(null);
+    setLocations([]);
+    setDeviceBindingState(getDeviceBinding());
+    setDisabledDeviceStateLocal(getDisabledDeviceState());
+    useCartStore.getState().reloadForCurrentLocation();
+  }), [token]);
+
   // Bootstrap from stored credentials
   useEffect(() => {
     let isMounted = true;
@@ -167,6 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [initialAuth.token, initialAuth.user, locationId]);
 
   const login = useCallback(async (email: string, password: string) => {
+    const recoveryIntent = getSessionRecoveryIntent();
     const result = await loginService(email, password);
     setToken(result.token);
     setUser(result.user);
@@ -207,6 +225,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       checkDeviceStatus()
         .then(() => setDisabledDeviceStateLocal(getDisabledDeviceState()))
         .catch(() => setDisabledDeviceStateLocal(getDisabledDeviceState()));
+      if (recoveryIntent) clearSessionRecoveryIntent();
       return;
     }
 
@@ -226,6 +245,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLocationId(restoredBinding.locationId);
         useCartStore.getState().reloadForCurrentLocation();
         setDisabledDeviceStateLocal(getDisabledDeviceState());
+        if (recoveryIntent) clearSessionRecoveryIntent();
         return;
       }
     } catch {
@@ -235,6 +255,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearActiveLocation();
     setLocationId(null);
     useCartStore.getState().reloadForCurrentLocation();
+    if (recoveryIntent) clearSessionRecoveryIntent();
   }, []);
 
   const logout = useCallback(() => {

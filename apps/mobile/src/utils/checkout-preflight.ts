@@ -41,15 +41,27 @@ interface PaymentActionPreflightInput {
   isProcessing: boolean;
   isFullyPaid: boolean;
   remaining: number;
+  cartTotal: number;
+  subtotal: number;
+  discountTotal: number;
   isCash: boolean;
   cashTendered: number;
   parsedAmount: number;
+  appliedPaymentsCount: number;
+  splitMode: boolean;
   nonCashOverpay: boolean;
   needsReference: boolean;
   hasReference: boolean;
   customerRequired: boolean;
   hasCustomer: boolean;
+  isOnline: boolean;
+  hasOfflineSensitiveTender: boolean;
 }
+
+const HIGH_CART_TOTAL_WARNING = 50000;
+const LARGE_DISCOUNT_AMOUNT = 5000;
+const LARGE_DISCOUNT_RATE = 0.2;
+const MONEY_EPSILON = 0.005;
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
@@ -167,6 +179,35 @@ export function buildPaymentActionPreflight(input: PaymentActionPreflightInput):
     });
   }
 
+  if (!input.isOnline && input.hasOfflineSensitiveTender) {
+    issues.push({
+      code: 'offline-sensitive-tender',
+      label: 'Online verification required',
+      detail: 'Card, transfer, wallet, cheque, and charge payments must be verified online before checkout.',
+      severity: 'blocking',
+    });
+  }
+
+  if (input.cartTotal >= HIGH_CART_TOTAL_WARNING) {
+    issues.push({
+      code: 'high-cart-total',
+      label: 'High cart total',
+      detail: `Review this ${input.cartTotal.toFixed(2)} sale before completing checkout.`,
+      severity: 'approval',
+    });
+  }
+
+  const discountBase = Math.max(input.subtotal, input.cartTotal + input.discountTotal, 0);
+  const discountRate = discountBase > MONEY_EPSILON ? input.discountTotal / discountBase : 0;
+  if (input.discountTotal >= LARGE_DISCOUNT_AMOUNT || discountRate >= LARGE_DISCOUNT_RATE) {
+    issues.push({
+      code: 'large-discount',
+      label: 'Large discount',
+      detail: 'Review the cart discount before taking payment.',
+      severity: 'approval',
+    });
+  }
+
   if (!input.isFullyPaid) {
     if (input.isCash) {
       if (input.cashTendered <= 0) {
@@ -175,6 +216,20 @@ export function buildPaymentActionPreflight(input: PaymentActionPreflightInput):
           label: 'Enter cash tendered',
           detail: 'Type the cash received from the customer before adding or completing payment.',
           severity: 'blocking',
+        });
+      }
+
+      if (
+        input.cashTendered > MONEY_EPSILON
+        && input.cashTendered < input.remaining - MONEY_EPSILON
+        && !input.splitMode
+        && input.appliedPaymentsCount === 0
+      ) {
+        issues.push({
+          code: 'cash-under-tender',
+          label: 'Cash under tender',
+          detail: 'Cash received is less than the balance. Add it as a split payment or collect the full amount.',
+          severity: 'approval',
         });
       }
     } else {

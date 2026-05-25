@@ -26,12 +26,31 @@ export interface HardwareTestResult {
   deviceId?: string;
   appBuild?: string;
   hardwareType?: string;
+  readinessState?: 'ready' | 'warning' | 'blocked';
+  freshness?: 'fresh' | 'stale';
   createdAt: string;
+}
+
+export interface HardwareCertificationSummary {
+  state: 'ready' | 'warning' | 'blocked';
+  readyCount: number;
+  warningCount: number;
+  blockedCount: number;
+  totalRequired: number;
+  detail: string;
 }
 
 type HardwareTestListener = (results: HardwareTestResult[]) => void;
 
 const MAX_HARDWARE_TEST_RESULTS = 60;
+const CERTIFICATION_FRESH_DAYS = 30;
+const REQUIRED_CERTIFICATIONS: HardwareTestType[] = [
+  'receipt-printer',
+  'label-printer',
+  'scanner',
+  'manager-authorization',
+  'cash-drawer',
+];
 let listeners: HardwareTestListener[] = [];
 
 function createId(): string {
@@ -57,6 +76,54 @@ export function getHardwareTestResults(): HardwareTestResult[] {
 
 export function getLastHardwareTestResult(type: HardwareTestType): HardwareTestResult | null {
   return getHardwareTestResults().find(result => result.type === type) ?? null;
+}
+
+function isFresh(result: HardwareTestResult | null): boolean {
+  if (!result) return false;
+  const createdAt = Date.parse(result.createdAt);
+  if (!Number.isFinite(createdAt)) return false;
+  return Date.now() - createdAt <= CERTIFICATION_FRESH_DAYS * 86_400_000;
+}
+
+function resultReadiness(result: HardwareTestResult | null): 'ready' | 'warning' | 'blocked' {
+  if (!result) return 'warning';
+  if (result.status === 'fail') return 'blocked';
+  return isFresh(result) ? 'ready' : 'warning';
+}
+
+export function getHardwareCertificationSummary(
+  results = getHardwareTestResults(),
+): HardwareCertificationSummary {
+  const latestByType = new Map<HardwareTestType, HardwareTestResult>();
+  for (const result of results) {
+    if (!latestByType.has(result.type)) latestByType.set(result.type, result);
+  }
+
+  let readyCount = 0;
+  let warningCount = 0;
+  let blockedCount = 0;
+  for (const type of REQUIRED_CERTIFICATIONS) {
+    const readiness = resultReadiness(latestByType.get(type) ?? null);
+    if (readiness === 'ready') readyCount += 1;
+    else if (readiness === 'blocked') blockedCount += 1;
+    else warningCount += 1;
+  }
+
+  const state = blockedCount > 0 ? 'blocked' : warningCount > 0 ? 'warning' : 'ready';
+  const detail = state === 'ready'
+    ? 'All required hardware certifications are fresh.'
+    : state === 'blocked'
+      ? `${blockedCount} certification${blockedCount === 1 ? '' : 's'} failed.`
+      : `${warningCount} certification${warningCount === 1 ? '' : 's'} missing or older than ${CERTIFICATION_FRESH_DAYS} days.`;
+
+  return {
+    state,
+    readyCount,
+    warningCount,
+    blockedCount,
+    totalRequired: REQUIRED_CERTIFICATIONS.length,
+    detail,
+  };
 }
 
 export function recordHardwareTestResult(input: {
@@ -85,6 +152,8 @@ export function recordHardwareTestResult(input: {
     deviceId: getStoredDeviceId(),
     appBuild: `${APP_VERSION} (${APP_BUILD_DATE})`,
     hardwareType: input.type,
+    readinessState: input.status === 'pass' ? 'ready' : 'blocked',
+    freshness: 'fresh',
     createdAt: new Date().toISOString(),
   };
 

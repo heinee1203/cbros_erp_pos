@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { getHeldCarts, type HeldCart } from '@/storage/held-carts';
 import { selectGrandTotal, selectLineCount, useCartStore } from '@/stores/cart-store';
-import { getPendingSales, onPendingSalesChanged } from '@/storage/pending-sales';
+import { getPendingSales, onPendingSalesChanged, type PendingSale } from '@/storage/pending-sales';
 import { reconcilePendingSales } from '@/hooks/use-checkout';
 import {
   getUnsyncedRegisterDrawerEvents,
   onRegisterDrawerEventsChanged,
+  type RegisterDrawerEvent,
 } from '@/storage/register-drawer-events';
 import { reconcileRegisterDrawerEvents } from '@/sync/register-drawer-sync';
 import { useCatalogSearch, type CatalogItem } from '@/hooks/use-catalog-search';
@@ -25,6 +26,7 @@ import {
 } from '@/storage/print-jobs';
 import {
   buildHardwareTestSummaryText,
+  getHardwareCertificationSummary,
   getHardwareTestResults,
   onHardwareTestResultsChanged,
   recordHardwareTestResult,
@@ -43,6 +45,7 @@ import { RefundFlow } from '@/components/RefundFlow';
 import { LabelPreviewModal } from '@/components/LabelPreviewModal';
 import { BarcodeScanModal } from '@/components/BarcodeScanModal';
 import { ManagerPinModal, type ManagerAuthorization } from '@/components/ManagerPinModal';
+import { PrintJobPreviewModal } from '@/components/PrintJobPreviewModal';
 import { verifyRefundAuthorizationCredential } from '@/utils/refund-authorization';
 import { formatPosError } from '@/utils/pos-error-messages';
 import { getPendingSaleReviewRows, summarizePendingSales } from '@/utils/pending-sale-summary';
@@ -53,6 +56,11 @@ import { printEscposRawSafely, printZplSafely, retryPrintJobSafely } from '@/har
 import { queryClient } from '@/services/query-client';
 import { apiFetch } from '@/services/api-client';
 import { APP_BUILD_DATE, APP_GIT_SHA, APP_VERSION } from '@/config/app-version';
+import {
+  getOfflineReviewMarker,
+  markOfflineRecordReviewed,
+  subscribeOfflineReviewMarkers,
+} from '@/storage/offline-review';
 import { colors, fonts, fontSize, radius, spacing } from '@/theme';
 import { Button, Icon, type IconName } from '@/components/ui';
 
@@ -170,6 +178,35 @@ function hardwareStatusLabel(result: HardwareTestResult | null): string {
 function hardwareStatusTone(result: HardwareTestResult | null): 'success' | 'warning' | 'danger' {
   if (!result) return 'warning';
   return result.status === 'pass' ? 'success' : 'danger';
+}
+
+function fmtPaymentMethods(sale: PendingSale): string {
+  const methods = Array.from(new Set(sale.payload.payments.map(payment => payment.method.toUpperCase())));
+  return methods.length ? methods.join(' + ') : 'No payment payload';
+}
+
+function pendingSaleAmount(sale: PendingSale): number {
+  return sale.payload.payments.reduce((sum, payment) => {
+    const value = parseFloat(String(payment.amount));
+    return sum + (Number.isFinite(value) ? value : 0);
+  }, 0);
+}
+
+function nextSaleActionLabel(sale: PendingSale): string {
+  if (getOfflineReviewMarker('pending-sale', sale.idempotencyKey)) return 'Manager reviewed; keep for retry/support';
+  if (sale.status === 'failed') return 'Manager review required';
+  if (sale.status === 'reconciling') return 'Wait for current retry';
+  return 'Safe to retry when online';
+}
+
+function drawerAmountLabel(event: RegisterDrawerEvent): string {
+  return event.type === 'NO_SALE' ? 'No cash movement' : fmtPHP(event.amount);
+}
+
+function nextDrawerActionLabel(event: RegisterDrawerEvent): string {
+  if (getOfflineReviewMarker('drawer-event', event.id)) return 'Manager reviewed; keep for retry/support';
+  if (event.syncStatus === 'failed') return 'Manager review required';
+  return 'Safe to sync when online';
 }
 
 function fmtTxnTime(ts: string | null): string {
@@ -422,7 +459,11 @@ export function SyncManagementScreen() {
   const [hardwareTestResults, setHardwareTestResults] = useState(() => getHardwareTestResults());
   const [scannerTick, setScannerTick] = useState(0);
   const [supportLogTick, setSupportLogTick] = useState(0);
+  const [offlineReviewTick, setOfflineReviewTick] = useState(0);
   const [retryingPrintJobId, setRetryingPrintJobId] = useState<string | null>(null);
+  const [selectedPrintJob, setSelectedPrintJob] = useState<PrintJob | null>(null);
+  const [selectedPendingSale, setSelectedPendingSale] = useState<PendingSale | null>(null);
+  const [selectedDrawerEvent, setSelectedDrawerEvent] = useState<RegisterDrawerEvent | null>(null);
   const [runningHardwareTest, setRunningHardwareTest] = useState<HardwareTestType | null>(null);
   const [apiHealth, setApiHealth] = useState('Not checked');
   const [checkingApiHealth, setCheckingApiHealth] = useState(false);
@@ -434,6 +475,10 @@ export function SyncManagementScreen() {
   const retryablePrintJobs = getRetryablePrintJobs();
   const autoRetryPrintJobs = getAutoRetryPrintJobs();
   const failedPrintJobs = printJobs.filter(job => job.status === 'failed');
+  const hardwareCertification = React.useMemo(
+    () => getHardwareCertificationSummary(hardwareTestResults),
+    [hardwareTestResults],
+  );
   const pendingSummary = React.useMemo(() => summarizePendingSales(pendingSales), [pendingSales]);
   const pendingRows = React.useMemo(() => getPendingSaleReviewRows(pendingSales, 5), [pendingSales]);
   const lastHardwareTests = React.useMemo(() => ({
@@ -464,6 +509,7 @@ export function SyncManagementScreen() {
       hardwareTestResults.length,
       scannerTick,
       supportLogTick,
+      offlineReviewTick,
       syncStatus.lastCatalogSync,
       syncStatus.lastInventorySync,
     ],
@@ -525,6 +571,9 @@ export function SyncManagementScreen() {
   }), []);
   useEffect(() => subscribeSupportLogs(() => {
     setSupportLogTick(tick => tick + 1);
+  }), []);
+  useEffect(() => subscribeOfflineReviewMarkers(() => {
+    setOfflineReviewTick(tick => tick + 1);
   }), []);
 
   useFocusEffect(useCallback(() => {
@@ -743,6 +792,26 @@ export function SyncManagementScreen() {
     setPrintJobs(getPrintJobs());
   }, []);
 
+  const handleMarkPendingSaleReviewed = useCallback((sale: PendingSale) => {
+    markOfflineRecordReviewed({
+      type: 'pending-sale',
+      id: sale.idempotencyKey,
+      reviewedBy: user?.fullName ?? user?.email ?? 'Unknown manager',
+      note: sale.failureReason || 'Pending sale reviewed; keep queued for retry/support.',
+    });
+    setSelectedPendingSale({ ...sale });
+  }, [user?.email, user?.fullName]);
+
+  const handleMarkDrawerReviewed = useCallback((event: RegisterDrawerEvent) => {
+    markOfflineRecordReviewed({
+      type: 'drawer-event',
+      id: event.id,
+      reviewedBy: user?.fullName ?? user?.email ?? 'Unknown manager',
+      note: event.syncError || event.drawerError || 'Drawer event reviewed; keep queued for retry/support.',
+    });
+    setSelectedDrawerEvent({ ...event });
+  }, [user?.email, user?.fullName]);
+
   const recordHardwareResult = useCallback((
     type: HardwareTestType,
     status: 'pass' | 'fail',
@@ -929,6 +998,19 @@ export function SyncManagementScreen() {
             </View>
             <Icon name="settings" size={22} color={colors.accent.primary} />
           </View>
+          <View style={[
+            styles.certificationSummary,
+            hardwareCertification.state === 'blocked'
+              ? styles.certificationSummaryBlocked
+              : hardwareCertification.state === 'warning'
+                ? styles.certificationSummaryWarning
+                : styles.certificationSummaryReady,
+          ]}>
+            <Text style={styles.certificationSummaryTitle}>
+              {hardwareCertification.state.toUpperCase()} / {hardwareCertification.readyCount} of {hardwareCertification.totalRequired} certified
+            </Text>
+            <Text style={styles.certificationSummaryText}>{hardwareCertification.detail}</Text>
+          </View>
           <View style={styles.pendingReviewMetrics}>
             <SyncMetric label="Receipt" value={hardwareStatusLabel(lastHardwareTests.receipt)} tone={hardwareStatusTone(lastHardwareTests.receipt)} />
             <SyncMetric label="Label" value={hardwareStatusLabel(lastHardwareTests.label)} tone={hardwareStatusTone(lastHardwareTests.label)} />
@@ -1009,22 +1091,32 @@ export function SyncManagementScreen() {
               <SyncMetric label="Complete" value={String(pendingSummary.completionOnly)} />
             </View>
             <View style={styles.pendingReviewRows}>
-              {pendingRows.map(row => (
-                <View key={row.id} style={styles.pendingSaleRow}>
+              {pendingRows.map(row => {
+                const sale = pendingSales.find(item => item.idempotencyKey === row.id);
+                const reviewMarker = getOfflineReviewMarker('pending-sale', row.id);
+                return (
+                <Pressable
+                  key={row.id}
+                  style={styles.pendingSaleRow}
+                  onPress={() => sale && setSelectedPendingSale(sale)}
+                  android_ripple={{ color: colors.accent.glow }}
+                >
                   <View style={[
                     styles.pendingSaleDot,
                     row.tone === 'danger' ? styles.pendingSaleDotDanger : row.tone === 'info' ? styles.pendingSaleDotInfo : styles.pendingSaleDotWarning,
                   ]} />
                   <View style={styles.pendingSaleCopy}>
                     <Text style={styles.pendingSaleTitle} numberOfLines={1}>{row.title}</Text>
-                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>{row.detail}</Text>
+                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>
+                      {reviewMarker ? `Reviewed by ${reviewMarker.reviewedBy} / ${row.detail}` : row.detail}
+                    </Text>
                   </View>
                   <View style={styles.pendingSaleMeta}>
                     <Text style={styles.pendingSaleAmount}>{row.amountLabel}</Text>
                     <Text style={styles.pendingSaleStatus}>{row.statusLabel}</Text>
                   </View>
-                </View>
-              ))}
+                </Pressable>
+              );})}
             </View>
           </View>
         )}
@@ -1049,22 +1141,32 @@ export function SyncManagementScreen() {
               <SyncMetric label="Paid Out" value={fmtPHP(drawerSummary.paidOutTotal)} />
             </View>
             <View style={styles.pendingReviewRows}>
-              {drawerRows.map(row => (
-                <View key={row.id} style={styles.pendingSaleRow}>
+              {drawerRows.map(row => {
+                const event = pendingDrawerEvents.find(item => item.id === row.id);
+                const reviewMarker = getOfflineReviewMarker('drawer-event', row.id);
+                return (
+                <Pressable
+                  key={row.id}
+                  style={styles.pendingSaleRow}
+                  onPress={() => event && setSelectedDrawerEvent(event)}
+                  android_ripple={{ color: colors.accent.glow }}
+                >
                   <View style={[
                     styles.pendingSaleDot,
                     row.tone === 'danger' ? styles.pendingSaleDotDanger : styles.pendingSaleDotWarning,
                   ]} />
                   <View style={styles.pendingSaleCopy}>
                     <Text style={styles.pendingSaleTitle} numberOfLines={1}>{row.title}</Text>
-                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>{row.detail}</Text>
+                    <Text style={styles.pendingSaleDetail} numberOfLines={1}>
+                      {reviewMarker ? `Reviewed by ${reviewMarker.reviewedBy} / ${row.detail}` : row.detail}
+                    </Text>
                   </View>
                   <View style={styles.pendingSaleMeta}>
                     <Text style={styles.pendingSaleAmount}>{row.amountLabel}</Text>
                     <Text style={styles.pendingSaleStatus}>{row.statusLabel}</Text>
                   </View>
-                </View>
-              ))}
+                </Pressable>
+              );})}
             </View>
           </View>
         )}
@@ -1103,10 +1205,17 @@ export function SyncManagementScreen() {
                         Last attempt: {job.lastAttemptReason}; auto retries: {job.autoRetryCount ?? 0}
                       </Text>
                     ) : null}
-                    {job.lastError ? (
-                      <Text style={styles.printJobError} numberOfLines={1}>{job.lastError}</Text>
-                    ) : null}
-                  </View>
+                  {job.lastError ? (
+                    <Text style={styles.printJobError} numberOfLines={1}>{job.lastError}</Text>
+                  ) : null}
+                </View>
+                  <Pressable
+                    style={styles.previewPrintButton}
+                    onPress={() => setSelectedPrintJob(job)}
+                    android_ripple={{ color: colors.accent.glow }}
+                  >
+                    <Text style={styles.retryPrintButtonText}>Preview</Text>
+                  </Pressable>
                   {(job.status === 'failed' || job.status === 'pending') && (
                     <Pressable
                       style={[styles.retryPrintButton, retryingPrintJobId === job.id && styles.retryPrintButtonDisabled]}
@@ -1225,6 +1334,24 @@ export function SyncManagementScreen() {
           <Text selectable style={styles.diagnosticsText}>{supportDiagnosticText}</Text>
         </View>
       </ScrollView>
+      <PendingSaleDetailModal
+        sale={selectedPendingSale}
+        onClose={() => setSelectedPendingSale(null)}
+        onMarkReviewed={handleMarkPendingSaleReviewed}
+      />
+      <DrawerEventDetailModal
+        event={selectedDrawerEvent}
+        onClose={() => setSelectedDrawerEvent(null)}
+        onMarkReviewed={handleMarkDrawerReviewed}
+      />
+      <PrintJobPreviewModal
+        visible={!!selectedPrintJob}
+        job={selectedPrintJob}
+        printerType={printer.type}
+        onClose={() => setSelectedPrintJob(null)}
+        onPrint={(job) => { void handleRetryPrintJob(job); }}
+        printing={!!selectedPrintJob && retryingPrintJobId === selectedPrintJob.id}
+      />
       <ManagerPinModal
         visible={drawerAuthorizationVisible}
         action={`Sync ${pendingDrawerEvents.length} register drawer event${pendingDrawerEvents.length === 1 ? '' : 's'}`}
@@ -1248,6 +1375,109 @@ export function SyncManagementScreen() {
         onCancel={() => setManagerTestVisible(false)}
       />
     </View>
+  );
+}
+
+function PendingSaleDetailModal({
+  sale,
+  onClose,
+  onMarkReviewed,
+}: {
+  sale: PendingSale | null;
+  onClose: () => void;
+  onMarkReviewed: (sale: PendingSale) => void;
+}) {
+  const styles = createStyles();
+  if (!sale) return null;
+  const marker = getOfflineReviewMarker('pending-sale', sale.idempotencyKey);
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.detailModalBackdrop}>
+        <View style={styles.detailModalCard}>
+          <View style={styles.pendingReviewHeader}>
+            <View>
+              <Text style={styles.pendingReviewTitle}>Pending Sale Detail</Text>
+              <Text style={styles.pendingReviewSubtitle}>{sale.createPayload?.receiptNumber || sale.saleId || sale.idempotencyKey}</Text>
+            </View>
+            <Pressable onPress={onClose} hitSlop={10} style={styles.detailCloseButton}>
+              <Text style={styles.detailCloseText}>X</Text>
+            </Pressable>
+          </View>
+          <View style={styles.detailGrid}>
+            <InfoRow label="Amount" value={fmtPHP(pendingSaleAmount(sale))} />
+            <InfoRow label="Payments" value={fmtPaymentMethods(sale)} />
+            <InfoRow label="Cashier" value={sale.createPayload?.notes || 'From local sale payload'} />
+            <InfoRow label="Created" value={new Date(sale.createdAt).toLocaleString('en-PH')} />
+            <InfoRow label="Attempts" value={String(sale.attempts)} warning={sale.attempts > 0} />
+            <InfoRow label="Last Attempt" value={sale.lastAttemptAt ? new Date(sale.lastAttemptAt).toLocaleString('en-PH') : 'Not tried'} />
+            <InfoRow label="Status" value={sale.status} warning={sale.status === 'failed'} />
+            <InfoRow label="Next Action" value={nextSaleActionLabel(sale)} warning={sale.status === 'failed'} />
+          </View>
+          {sale.failureReason ? <Text style={styles.detailError}>{sale.failureReason}</Text> : null}
+          {marker ? (
+            <Text style={styles.detailReviewed}>Reviewed by {marker.reviewedBy} at {new Date(marker.reviewedAt).toLocaleString('en-PH')}</Text>
+          ) : null}
+          <View style={styles.detailActions}>
+            {!marker && (
+              <Button title="Mark Manager Reviewed" onPress={() => onMarkReviewed(sale)} variant="secondary" fullWidth />
+            )}
+            <Button title="Close" onPress={onClose} fullWidth />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function DrawerEventDetailModal({
+  event,
+  onClose,
+  onMarkReviewed,
+}: {
+  event: RegisterDrawerEvent | null;
+  onClose: () => void;
+  onMarkReviewed: (event: RegisterDrawerEvent) => void;
+}) {
+  const styles = createStyles();
+  if (!event) return null;
+  const marker = getOfflineReviewMarker('drawer-event', event.id);
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.detailModalBackdrop}>
+        <View style={styles.detailModalCard}>
+          <View style={styles.pendingReviewHeader}>
+            <View>
+              <Text style={styles.pendingReviewTitle}>Drawer Event Detail</Text>
+              <Text style={styles.pendingReviewSubtitle}>{event.type.replace('_', ' ')}</Text>
+            </View>
+            <Pressable onPress={onClose} hitSlop={10} style={styles.detailCloseButton}>
+              <Text style={styles.detailCloseText}>X</Text>
+            </Pressable>
+          </View>
+          <View style={styles.detailGrid}>
+            <InfoRow label="Amount" value={drawerAmountLabel(event)} />
+            <InfoRow label="Cashier" value={event.cashierName || event.cashierId} />
+            <InfoRow label="Approved By" value={event.approvedBy || 'Unknown'} />
+            <InfoRow label="Method" value={event.authorizationMethod?.toUpperCase() || 'Unknown'} />
+            <InfoRow label="Created" value={new Date(event.createdAt).toLocaleString('en-PH')} />
+            <InfoRow label="Sync Status" value={event.syncStatus || 'pending'} warning={event.syncStatus === 'failed'} />
+            <InfoRow label="Drawer Opened" value={event.drawerOpened ? 'Yes' : 'No'} warning={!event.drawerOpened} />
+            <InfoRow label="Next Action" value={nextDrawerActionLabel(event)} warning={event.syncStatus === 'failed'} />
+          </View>
+          <Text style={styles.detailNote}>{event.reason || 'No reason entered.'}</Text>
+          {event.syncError || event.drawerError ? <Text style={styles.detailError}>{event.syncError || event.drawerError}</Text> : null}
+          {marker ? (
+            <Text style={styles.detailReviewed}>Reviewed by {marker.reviewedBy} at {new Date(marker.reviewedAt).toLocaleString('en-PH')}</Text>
+          ) : null}
+          <View style={styles.detailActions}>
+            {!marker && (
+              <Button title="Mark Manager Reviewed" onPress={() => onMarkReviewed(event)} variant="secondary" fullWidth />
+            )}
+            <Button title="Close" onPress={onClose} fullWidth />
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -2742,6 +2972,36 @@ const createStyles = () => StyleSheet.create({
   pendingReviewRows: {
     gap: spacing.sm,
   },
+  certificationSummary: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: 2,
+  },
+  certificationSummaryReady: {
+    backgroundColor: colors.status.successBg,
+    borderColor: colors.status.success,
+  },
+  certificationSummaryWarning: {
+    backgroundColor: colors.status.warningBg,
+    borderColor: colors.status.warning,
+  },
+  certificationSummaryBlocked: {
+    backgroundColor: colors.status.dangerBg,
+    borderColor: colors.status.danger,
+  },
+  certificationSummaryTitle: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  certificationSummaryText: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.xs,
+    lineHeight: 18,
+  },
   hardwareButtonGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2876,6 +3136,17 @@ const createStyles = () => StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.sm,
   },
+  previewPrintButton: {
+    minWidth: 78,
+    minHeight: 38,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.bg.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
   retryPrintButtonDisabled: {
     opacity: 0.5,
   },
@@ -2883,6 +3154,76 @@ const createStyles = () => StyleSheet.create({
     color: colors.accent.primary,
     fontFamily: fonts.body.semiBold,
     fontSize: fontSize.sm,
+  },
+  detailModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(23,32,51,0.48)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  detailModalCard: {
+    width: '100%',
+    maxWidth: 620,
+    maxHeight: '88%',
+    backgroundColor: colors.bg.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  detailCloseButton: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg.elevated,
+  },
+  detailCloseText: {
+    color: colors.text.primary,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+  },
+  detailGrid: {
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+  },
+  detailNote: {
+    color: colors.text.secondary,
+    fontFamily: fonts.body.medium,
+    fontSize: fontSize.sm,
+    lineHeight: 20,
+    borderRadius: radius.sm,
+    backgroundColor: colors.bg.elevated,
+    padding: spacing.md,
+  },
+  detailError: {
+    color: colors.status.dangerText,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+    lineHeight: 20,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.dangerBg,
+    padding: spacing.md,
+  },
+  detailReviewed: {
+    color: colors.status.successText,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.sm,
+    lineHeight: 20,
+    borderRadius: radius.sm,
+    backgroundColor: colors.status.successBg,
+    padding: spacing.md,
+  },
+  detailActions: {
+    gap: spacing.sm,
   },
   clearPrintedButton: {
     alignSelf: 'flex-start',

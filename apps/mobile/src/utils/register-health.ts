@@ -4,7 +4,11 @@ import { getPendingSales } from '@/storage/pending-sales';
 import { getUnsyncedRegisterDrawerEvents } from '@/storage/register-drawer-events';
 import { getPrintJobs, getRetryablePrintJobs } from '@/storage/print-jobs';
 import { getScannerDiagnostics } from '@/storage/scanner-diagnostics';
-import { buildHardwareTestSummaryText, getHardwareTestResults } from '@/storage/hardware-tests';
+import {
+  buildHardwareTestSummaryText,
+  getHardwareCertificationSummary,
+  getHardwareTestResults,
+} from '@/storage/hardware-tests';
 import { getDisabledDeviceState } from '@/storage/device-status';
 import { buildSupportLogText, getSupportLogs } from '@/storage/support-logs';
 import { storage } from '@/storage/mmkv';
@@ -34,6 +38,7 @@ export interface RegisterHealthSnapshot {
   lastScan: string;
   scannerLastError: string;
   lastHardwareTest: string;
+  hardwareCertification: string;
   lastCatalogSync: string;
   lastInventorySync: string;
 }
@@ -68,6 +73,7 @@ export function getRegisterHealthSnapshot(printer: PrinterProvider): RegisterHea
   const failedPrintJobs = printJobs.filter(job => job.status === 'failed').length;
   const hardwareTests = getHardwareTestResults();
   const lastHardwareTest = hardwareTests[0];
+  const certification = getHardwareCertificationSummary(hardwareTests);
   const disabledState = getDisabledDeviceState();
 
   return {
@@ -100,6 +106,7 @@ export function getRegisterHealthSnapshot(printer: PrinterProvider): RegisterHea
     lastHardwareTest: lastHardwareTest
       ? `${lastHardwareTest.status.toUpperCase()}: ${lastHardwareTest.title} at ${new Date(lastHardwareTest.createdAt).toLocaleTimeString('en-PH')}`
       : 'None',
+    hardwareCertification: `${certification.state.toUpperCase()}: ${certification.readyCount}/${certification.totalRequired} ready - ${certification.detail}`,
     lastCatalogSync: syncStatus.lastCatalogSync || 'Never',
     lastInventorySync: syncStatus.lastInventorySync || 'Never',
   };
@@ -180,11 +187,11 @@ export function buildHardwareReadinessItems(input: {
     {
       id: 'hardware-certification',
       label: 'Hardware certification',
-      detail: snapshot.lastHardwareTest,
-      state: snapshot.lastHardwareTest === 'None'
-        ? 'warning'
-        : snapshot.lastHardwareTest.startsWith('FAIL')
-          ? 'blocked'
+      detail: snapshot.hardwareCertification,
+      state: snapshot.hardwareCertification.startsWith('BLOCKED')
+        ? 'blocked'
+        : snapshot.hardwareCertification.startsWith('WARNING')
+          ? 'warning'
           : 'ready',
     },
     {
@@ -226,6 +233,7 @@ export function buildSupportDiagnosticText(snapshot: RegisterHealthSnapshot, api
     `Last Scan: ${snapshot.lastScan}`,
     `Scanner Error: ${snapshot.scannerLastError}`,
     `Last Hardware Test: ${snapshot.lastHardwareTest}`,
+    `Hardware Certification: ${snapshot.hardwareCertification}`,
     `Pending Sales: ${snapshot.pendingSales}`,
     `Drawer Events: ${snapshot.drawerEvents}`,
     `Retryable Prints: ${snapshot.retryablePrintJobs}`,

@@ -34,6 +34,8 @@ import { formatApiDateTime } from '@/utils/datetime';
 import { formatPosError } from '@/utils/pos-error-messages';
 import { summarizePendingSales } from '@/utils/pending-sale-summary';
 import { ManagerPinModal, type ManagerAuthorization } from '@/components/ManagerPinModal';
+import { PrintJobPreviewModal } from '@/components/PrintJobPreviewModal';
+import type { PrintJob } from '@/storage/print-jobs';
 import { Icon } from '@/components/ui';
 
 function toNumber(amount: string | number | null | undefined): number {
@@ -198,6 +200,7 @@ export default function ZReadingScreen() {
   const [closing, setClosing] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [printStatus, setPrintStatus] = useState<'not_printed' | 'printed' | 'failed'>('not_printed');
+  const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
   const [reconcilingPending, setReconcilingPending] = useState(false);
   const [reconcilingDrawer, setReconcilingDrawer] = useState(false);
   const [drawerAuthorizationVisible, setDrawerAuthorizationVisible] = useState(false);
@@ -458,31 +461,58 @@ export default function ZReadingScreen() {
     zReading?.accountability.voids.length,
   ]);
 
-  const handlePrint = useCallback(async () => {
-    if (!zReading) return;
+  const buildZReadingPrintJob = useCallback((): PrintJob | null => {
+    if (!zReading) return null;
     if (mode === 'close' && (!cashTendered.trim() || !Number.isFinite(parsedCashValue))) {
       Alert.alert('Required', 'Enter the actual cash count before printing the final Z-reading.');
-      return;
+      return null;
     }
+
+    const paperWidth = (storage.getString(KEYS.PRINTER_PAPER_WIDTH) || '80mm') as '58mm' | '80mm';
+    const printData = {
+      ...zReading,
+      cashReconciliation: {
+        ...zReading.cashReconciliation,
+        expectedCash: expectedCash.toFixed(2),
+        actualCash: mode === 'close' ? parsedCash.toFixed(2) : zReading.cashReconciliation.actualCash,
+        variance: mode === 'close' ? variance.toFixed(2) : zReading.cashReconciliation.variance,
+      },
+      accountability: {
+        ...zReading.accountability,
+        drawerEvents: drawerEvents.map(toReceiptDrawerEvent),
+      },
+    };
+    const receiptData = buildZReadingReceipt(printData, mode === 'view' ? 'view' : 'close', paperWidth);
+    const now = new Date().toISOString();
+    return {
+      id: `preview-${shiftId}`,
+      type: 'z-reading',
+      title: `${mode === 'view' ? 'X-Reading' : 'Z-Reading'} ${shiftId.slice(0, 8)}`,
+      status: 'pending',
+      payload: { rawBytes: Array.from(receiptData) },
+      printerLanguage: 'escpos',
+      attempts: 0,
+      autoRetryCount: 0,
+      lastAttemptReason: 'manual',
+      nextRetryAt: now,
+      sourceId: shiftId,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }, [zReading, mode, cashTendered, parsedCashValue, expectedCash, parsedCash, variance, drawerEvents, shiftId]);
+
+  const handlePreviewPrint = useCallback(() => {
+    const job = buildZReadingPrintJob();
+    if (job) setPreviewJob(job);
+  }, [buildZReadingPrintJob]);
+
+  const handlePrint = useCallback(async () => {
+    const job = buildZReadingPrintJob();
+    if (!job?.payload.rawBytes) return;
 
     setPrinting(true);
     try {
-      const paperWidth = (storage.getString(KEYS.PRINTER_PAPER_WIDTH) || '80mm') as '58mm' | '80mm';
-      const printData = {
-        ...zReading,
-        cashReconciliation: {
-          ...zReading.cashReconciliation,
-          expectedCash: expectedCash.toFixed(2),
-          actualCash: mode === 'close' ? parsedCash.toFixed(2) : zReading.cashReconciliation.actualCash,
-          variance: mode === 'close' ? variance.toFixed(2) : zReading.cashReconciliation.variance,
-        },
-        accountability: {
-          ...zReading.accountability,
-          drawerEvents: drawerEvents.map(toReceiptDrawerEvent),
-        },
-      };
-      const receiptData = buildZReadingReceipt(printData, mode === 'view' ? 'view' : 'close', paperWidth);
-      const result = await printEscposRawSafely(printer, receiptData, {
+      const result = await printEscposRawSafely(printer, Uint8Array.from(job.payload.rawBytes), {
         type: 'z-reading',
         title: `Z-Reading ${shiftId.slice(0, 8)}`,
         sourceId: shiftId,
@@ -497,7 +527,7 @@ export default function ZReadingScreen() {
     } finally {
       setPrinting(false);
     }
-  }, [zReading, printer, mode, cashTendered, parsedCashValue, parsedCash, expectedCash, variance]);
+  }, [buildZReadingPrintJob, printer, shiftId]);
 
   if (isLoading || !zReading) {
     return (
@@ -1084,6 +1114,14 @@ export default function ZReadingScreen() {
             <Pressable
               style={[styles.printBtn, printing && styles.btnDisabled]}
               android_ripple={{ color: colors.accent.glow }}
+              onPress={handlePreviewPrint}
+              disabled={printing}
+            >
+              <Text style={styles.printBtnText}>Preview</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.printBtn, printing && styles.btnDisabled]}
+              android_ripple={{ color: colors.accent.glow }}
               onPress={handlePrint}
               disabled={printing}
             >
@@ -1107,31 +1145,51 @@ export default function ZReadingScreen() {
             </Pressable>
           </>
         ) : isSnapshotMode ? (
-          <Pressable
-            style={[styles.printBtn, { flex: 1 }, printing && styles.btnDisabled]}
-            android_ripple={{ color: colors.accent.glow }}
-            onPress={handlePrint}
-            disabled={printing}
-          >
-            {printing ? (
-              <ActivityIndicator size="small" color={colors.accent.primary} />
-            ) : (
-              <Text style={styles.printBtnText}>Reprint Z-Reading</Text>
-            )}
-          </Pressable>
+          <>
+            <Pressable
+              style={[styles.printBtn, { flex: 1 }, printing && styles.btnDisabled]}
+              android_ripple={{ color: colors.accent.glow }}
+              onPress={handlePreviewPrint}
+              disabled={printing}
+            >
+              <Text style={styles.printBtnText}>Preview</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.printBtn, { flex: 1 }, printing && styles.btnDisabled]}
+              android_ripple={{ color: colors.accent.glow }}
+              onPress={handlePrint}
+              disabled={printing}
+            >
+              {printing ? (
+                <ActivityIndicator size="small" color={colors.accent.primary} />
+              ) : (
+                <Text style={styles.printBtnText}>Reprint Z-Reading</Text>
+              )}
+            </Pressable>
+          </>
         ) : (
-          <Pressable
-            style={[styles.printBtn, { flex: 1 }, printing && styles.btnDisabled]}
-            android_ripple={{ color: colors.accent.glow }}
-            onPress={handlePrint}
-            disabled={printing}
-          >
-            {printing ? (
-              <ActivityIndicator size="small" color={colors.accent.primary} />
-            ) : (
-              <Text style={styles.printBtnText}>Print X-Reading</Text>
-            )}
-          </Pressable>
+          <>
+            <Pressable
+              style={[styles.printBtn, { flex: 1 }, printing && styles.btnDisabled]}
+              android_ripple={{ color: colors.accent.glow }}
+              onPress={handlePreviewPrint}
+              disabled={printing}
+            >
+              <Text style={styles.printBtnText}>Preview</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.printBtn, { flex: 1 }, printing && styles.btnDisabled]}
+              android_ripple={{ color: colors.accent.glow }}
+              onPress={handlePrint}
+              disabled={printing}
+            >
+              {printing ? (
+                <ActivityIndicator size="small" color={colors.accent.primary} />
+              ) : (
+                <Text style={styles.printBtnText}>Print X-Reading</Text>
+              )}
+            </Pressable>
+          </>
         )}
       </View>
       <ManagerPinModal
@@ -1140,6 +1198,14 @@ export default function ZReadingScreen() {
         requiredLevel={2}
         onApprove={handleDrawerAuthorization}
         onCancel={() => setDrawerAuthorizationVisible(false)}
+      />
+      <PrintJobPreviewModal
+        visible={!!previewJob}
+        job={previewJob}
+        printerType={printer.type}
+        onClose={() => setPreviewJob(null)}
+        onPrint={() => { void handlePrint(); }}
+        printing={printing}
       />
     </View>
   );

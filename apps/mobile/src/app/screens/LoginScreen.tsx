@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useAuth } from '@/hooks/use-auth';
 import { getDeviceBinding } from '@/config/device-binding';
+import { clearSessionRecoveryIntent, getSessionRecoveryIntent } from '@/storage/session-recovery';
 import { colors, textStyles, spacing, radius } from '@/theme';
 import { Button, Input } from '@/components/ui';
 
@@ -19,6 +20,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [sessionMessage, setSessionMessage] = useState(() => getSessionRecoveryIntent()?.reason ?? '');
   const passwordRef = useRef<TextInput>(null);
 
   const styles = createStyles();
@@ -32,6 +34,10 @@ export default function LoginScreen() {
     setError('');
     try {
       await login(email.trim(), password);
+      if (sessionMessage) {
+        clearSessionRecoveryIntent();
+        setSessionMessage('');
+      }
       // Auth context either resumes the locked store or opens first-time registration.
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -59,6 +65,11 @@ export default function LoginScreen() {
         })()}
         <Text style={styles.title}>Sign In</Text>
         <Text style={styles.subtitle}>C-BROS retail terminal</Text>
+        {sessionMessage ? (
+          <View style={styles.sessionNotice}>
+            <Text style={styles.sessionNoticeText}>{sessionMessage}</Text>
+          </View>
+        ) : null}
 
         <Text style={styles.label}>Email</Text>
         <Input
@@ -157,6 +168,18 @@ const createStyles = () => StyleSheet.create({
     ...textStyles.caption,
     color: colors.status.danger,
     marginBottom: spacing.sm,
+  },
+  sessionNotice: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.status.warning,
+    backgroundColor: colors.status.warningBg,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  sessionNoticeText: {
+    ...textStyles.caption,
+    color: colors.status.warningText,
   },
   loadingContainer: {
     alignItems: 'center',

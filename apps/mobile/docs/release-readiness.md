@@ -49,6 +49,20 @@ Record pass/fail notes locally for:
 
 Certification results appear in Recovery & Diagnostics and the copy-friendly support packet.
 
+## Next 8 QA Checklist
+
+Use this after the emulator smoke and before a store pilot:
+
+- Recovery & Diagnostics shows Hardware Certification as Ready, Warning, or Blocked.
+- Pending sale and drawer-event rows open detail views and can be marked manager-reviewed without deleting the local record.
+- Receipt, Z-reading, test-page, and label print jobs can be previewed before retry/reprint.
+- Settings can enable Guided Cashier Mode, and checkout/tender removal prompts become more explicit.
+- Expired sessions return to login with a clear message while preserving store binding and local cart/sync state.
+- Checkout blocks unsafe cases: missing receipt, missing charge customer, offline non-cash/charge payment, overpay on non-cash tender, and missing payment references.
+- Checkout warns on high-value carts, large discounts, under-tendered cash, split-payment imbalance, and offline-sensitive workflows.
+- Manager Audit is visible from More and shows local approvals, offline reviews, hardware outcomes, and copy-friendly audit text.
+- Tablet landscape, tablet portrait, and compact screenshots show no clipped primary controls, modal overflow, unreachable buttons, or keyboard overlap on cashier paths.
+
 ## Rollback
 
 1. Stop rollout to new stores.

@@ -19,6 +19,11 @@ export const KEYS = {
   PRINT_JOBS: 'printer.printJobs',
   HARDWARE_TEST_RESULTS: 'hardware.testResults',
   SUPPORT_LOGS: 'support.logs',
+  GUIDED_CASHIER_MODE: 'cashier.guidedMode',
+  SESSION_RECOVERY_INTENT: 'auth.sessionRecoveryIntent',
+  OFFLINE_REVIEW_MARKERS: 'recovery.offlineReviewMarkers',
+  PRINT_PREVIEW_METADATA: 'printer.previewMetadata',
+  AUDIT_VIEW_FILTERS: 'audit.viewFilters',
 
   // Scanner
   SCANNER_MODE: 'scanner.mode',

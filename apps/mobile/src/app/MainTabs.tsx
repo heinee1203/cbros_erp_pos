@@ -26,6 +26,7 @@ import RegisterToolsScreen from './screens/RegisterToolsScreen';
 import InventoryScreen from './screens/InventoryScreen';
 import CustomersScreen from './screens/CustomersScreen';
 import MoreScreen from './screens/MoreScreen';
+import ManagerAuditScreen from './screens/ManagerAuditScreen';
 import {
   ParkedOrdersScreen,
   ReturnsScreen,
@@ -155,6 +156,7 @@ export type MoreStackParamList = {
   Returns: undefined;
   BarcodePrint: undefined;
   SyncManagement: undefined;
+  ManagerAudit: undefined;
   About: undefined;
 };
 
@@ -174,6 +176,7 @@ function MoreNavigator() {
       <MoreStack.Screen name="Returns" component={ReturnsScreen} />
       <MoreStack.Screen name="BarcodePrint" component={BarcodePrintScreen} />
       <MoreStack.Screen name="SyncManagement" component={SyncManagementScreen} />
+      <MoreStack.Screen name="ManagerAudit">{() => <ErrorBoundary><ManagerAuditScreen /></ErrorBoundary>}</MoreStack.Screen>
       <MoreStack.Screen name="About" component={AboutScreen} />
     </MoreStack.Navigator>
   );

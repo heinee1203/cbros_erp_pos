@@ -3,6 +3,7 @@ import { KEYS } from '@/storage/keys';
 import { getLockedLocationId, requireLockedLocationId } from '@/config/device-binding';
 import { isDeviceDisabled, setDisabledDeviceState } from '@/storage/device-status';
 import { recordSupportLog } from '@/storage/support-logs';
+import { recordSessionRecoveryIntent } from '@/storage/session-recovery';
 
 export class ApiError extends Error {
   constructor(
@@ -116,6 +117,11 @@ export async function apiFetch<T>(
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     if (res.status === 401) {
+      recordSessionRecoveryIntent({
+        reason: 'Session expired. Sign in again to continue.',
+        method,
+        path,
+      });
       recordSupportLog({
         category: 'auth',
         level: 'warning',

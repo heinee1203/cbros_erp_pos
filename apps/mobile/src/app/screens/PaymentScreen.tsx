@@ -26,11 +26,13 @@ import {
 import { useCheckout, type CheckoutOverrideApproval } from '@/hooks/use-checkout';
 import { apiFetch, ApiError } from '@/services/api-client';
 import { getPendingSales } from '@/storage/pending-sales';
+import { isGuidedCashierModeEnabled, subscribeGuidedCashierMode } from '@/storage/cashier-guidance';
 import { usePrinter } from '@/hardware/printer/context';
 import { printReceiptSafely } from '@/hardware/printer/settings';
 import type { ReceiptData } from '@/hardware/printer/types';
 import { useAuth } from '@/hooks/use-auth';
 import { useLayout } from '@/hooks/use-layout';
+import { useNetworkStatus } from '@/hooks/use-network-status';
 import { colors, textStyles, spacing, radius, fonts, fontSize, touchTarget } from '@/theme';
 import { Button, Icon, type IconName } from '@/components/ui';
 import { ManagerPinModal, type ManagerAuthorization } from '@/components/ManagerPinModal';
@@ -174,6 +176,10 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
   const { isTablet, screenPadding } = useLayout();
   const { user, locations, locationId } = useAuth();
   const printer = usePrinter();
+  const networkStatus = useNetworkStatus();
+  const [guidedMode, setGuidedMode] = useState(isGuidedCashierModeEnabled());
+
+  useEffect(() => subscribeGuidedCashierMode(setGuidedMode), []);
 
   // ── Cart store ──
   const lines = useCartStore(s => s.lines);
@@ -278,6 +284,7 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
   const isCharge = formMethod === 'CHARGE';
   const splitMode = paymentFlowMode === 'split';
   const hasChargePayment = payments.some(p => p.method === 'CHARGE');
+  const hasOfflineSensitiveTender = formMethod !== 'CASH' || payments.some(p => p.method !== 'CASH');
   const chargePaymentAmount = useMemo(
     () => payments
       .filter(p => p.method === 'CHARGE')
@@ -354,28 +361,42 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
     isProcessing,
     isFullyPaid,
     remaining,
+    cartTotal: grandTotal,
+    subtotal,
+    discountTotal: discount,
     isCash,
     cashTendered: parsedCashTendered,
     parsedAmount,
+    appliedPaymentsCount: payments.length,
+    splitMode,
     nonCashOverpay,
     needsReference: needsRef,
     hasReference: !!formReference.trim(),
     customerRequired: isCharge,
     hasCustomer: !!customerId,
+    isOnline: networkStatus.isOnline,
+    hasOfflineSensitiveTender,
   }), [
     customerId,
+    discount,
     formReference,
+    grandTotal,
+    hasOfflineSensitiveTender,
     isCash,
     isCharge,
     isFullyPaid,
     isProcessing,
     isRegisterLocked,
     needsRef,
+    networkStatus.isOnline,
     nonCashOverpay,
+    payments.length,
     parsedAmount,
     parsedCashTendered,
     receiptMissing,
     remaining,
+    splitMode,
+    subtotal,
   ]);
   const paymentActionBlocked = paymentPreflight.blockingIssues.length > 0;
   const paymentPreflightColor = paymentPreflight.ready
@@ -521,13 +542,15 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
     if (!payment) return;
     Alert.alert(
       'Remove Payment?',
-      `Remove ${payment.method.replace(/_/g, ' ')} payment for ${fmtPHP(payment.amount)}? The remaining balance will be recalculated.`,
+      guidedMode
+        ? `Remove ${payment.method.replace(/_/g, ' ')} payment for ${fmtPHP(payment.amount)}? This reverses only the tender line on this screen and recalculates the remaining balance before checkout.`
+        : `Remove ${payment.method.replace(/_/g, ' ')} payment for ${fmtPHP(payment.amount)}? The remaining balance will be recalculated.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Remove', style: 'destructive', onPress: () => removePayment(id) },
       ],
     );
-  }, [payments, removePayment]);
+  }, [guidedMode, payments, removePayment]);
 
   // ── Back navigation with confirmation ──
   const handleBack = useCallback(() => {
@@ -756,8 +779,24 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
   }, [checkout, allowNegativeStock, buildReceiptData, printer, payments, status, error, setReceiptNumber, reset, ensureAccountChargeApproved, queryClient, clear]);
 
   const handleCheckout = useCallback(() => {
+    if (guidedMode) {
+      Alert.alert(
+        'Complete Sale?',
+        `Confirm checkout for ${fmtPHP(grandTotal)} with ${payments.length} payment ${payments.length === 1 ? 'line' : 'lines'}.`,
+        [
+          { text: 'Review', style: 'cancel' },
+          {
+            text: 'Complete Sale',
+            onPress: () => {
+              void runCheckout(accountOverride ?? undefined);
+            },
+          },
+        ],
+      );
+      return;
+    }
     void runCheckout(accountOverride ?? undefined);
-  }, [accountOverride, runCheckout]);
+  }, [accountOverride, grandTotal, guidedMode, payments.length, runCheckout]);
 
   const handleCreditOverrideApprove = useCallback((
     approverName: string,
@@ -1104,6 +1143,14 @@ export default function PaymentScreen({ onBack, initialMethod = 'CASH' }: Paymen
             </View>
           </View>
           <Text style={s.workflowHint}>{paymentGuidance}</Text>
+          {guidedMode && (
+            <View style={s.guidedPanel}>
+              <Icon name="alert" size={16} color={colors.status.info} />
+              <Text style={s.guidedText}>
+                Guided mode is on: checkout, split payments, and tender removals use extra review prompts.
+              </Text>
+            </View>
+          )}
           <View style={s.progressTrack}>
             <View style={[s.progressFill, { width: `${paymentProgressRatio * 100}%` as any }]} />
           </View>
@@ -1616,6 +1663,25 @@ const styles = StyleSheet.create({
     fontFamily: fonts.body.medium,
     fontSize: fontSize.xs,
     color: colors.text.muted,
+  },
+  guidedPanel: {
+    minHeight: 36,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.status.info,
+    backgroundColor: colors.status.infoBg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+  },
+  guidedText: {
+    flex: 1,
+    color: colors.status.infoText,
+    fontFamily: fonts.body.semiBold,
+    fontSize: fontSize.xs,
+    lineHeight: 17,
   },
   progressTrack: {
     height: 6,

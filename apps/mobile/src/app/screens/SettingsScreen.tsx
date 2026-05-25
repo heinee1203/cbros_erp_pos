@@ -9,6 +9,7 @@ import {
   SafeAreaView,
   Modal,
   TextInput,
+  Switch,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
@@ -34,6 +35,11 @@ import {
   normalizeManagerAuthorizationPin,
 } from '@/utils/manager-authorization-badge';
 import { formatPosError } from '@/utils/pos-error-messages';
+import {
+  isGuidedCashierModeEnabled,
+  setGuidedCashierMode,
+  subscribeGuidedCashierMode,
+} from '@/storage/cashier-guidance';
 import type { SettingsStackParamList } from '@/app/MainTabs';
 import { useLayout } from '@/hooks/use-layout';
 import { colors, textStyles, spacing, layout } from '@/theme';
@@ -78,6 +84,7 @@ export default function SettingsScreen() {
   const [badgePreviewVisible, setBadgePreviewVisible] = React.useState(false);
   const [badgePrinting, setBadgePrinting] = React.useState(false);
   const [authorizationTestVisible, setAuthorizationTestVisible] = React.useState(false);
+  const [guidedMode, setGuidedMode] = React.useState(() => isGuidedCashierModeEnabled());
   const [lastAuthorizationTest, setLastAuthorizationTest] = React.useState<{
     approverName: string;
     method: ManagerAuthorization['method'];
@@ -91,6 +98,7 @@ export default function SettingsScreen() {
   }, []);
 
   React.useEffect(() => onPendingSalesChanged(setPendingSales), []);
+  React.useEffect(() => subscribeGuidedCashierMode(setGuidedMode), []);
 
   const refreshPendingSales = React.useCallback(() => {
     setPendingSales(getPendingSales());
@@ -292,6 +300,22 @@ export default function SettingsScreen() {
               <Text style={styles.rowValue}>{deviceBinding.boundBy}</Text>
             </View>
           ) : null}
+        </Card>
+
+        <Card style={styles.card}>
+          <Text style={styles.sectionLabel}>CASHIER GUIDANCE</Text>
+          <View style={styles.row}>
+            <View style={styles.rowCopy}>
+              <Text style={styles.rowLabel}>Guided Cashier Mode</Text>
+              <Text style={styles.rowHint}>Adds extra confirmations and plain-language hints for training shifts.</Text>
+            </View>
+            <Switch
+              value={guidedMode}
+              onValueChange={setGuidedCashierMode}
+              trackColor={{ false: colors.border.medium, true: colors.accent.primary }}
+              thumbColor={colors.white}
+            />
+          </View>
         </Card>
 
         {/* Authorization */}
@@ -571,6 +595,15 @@ const createStyles = () => StyleSheet.create({
   rowLabel: {
     ...textStyles.body,
     color: colors.text.secondary,
+  },
+  rowCopy: {
+    flex: 1,
+    paddingRight: spacing.md,
+  },
+  rowHint: {
+    ...textStyles.caption,
+    color: colors.text.muted,
+    marginTop: 2,
   },
   rowValue: {
     ...textStyles.bodyMedium,
