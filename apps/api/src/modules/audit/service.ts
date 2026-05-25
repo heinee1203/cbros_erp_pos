@@ -57,6 +57,12 @@ export interface AuditLogRow {
   createdAt: string;
 }
 
+function isMissingAuditLogTableError(error: unknown): boolean {
+  const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+  const message = `${(error as Error)?.message ?? ""} ${cause?.message ?? ""}`;
+  return cause?.code === "42P01" && message.includes("audit_logs");
+}
+
 export async function queryAuditLog(params: AuditQueryParams): Promise<{
   data: AuditLogRow[];
   nextCursor: string | null;
@@ -87,26 +93,32 @@ export async function queryAuditLog(params: AuditQueryParams): Promise<{
     conditions.push(sql`${auditLogs.id} < ${params.cursor}`);
   }
 
-  const rows = await db.execute(sql`
-    SELECT
-      al.id,
-      al.user_id,
-      u.full_name AS user_name,
-      al.action,
-      al.entity_type,
-      al.entity_id,
-      al.details,
-      al.ip_address,
-      al.created_at
-    FROM audit_logs al
-    LEFT JOIN users u ON u.id = al.user_id
-    WHERE ${and(...conditions)}
-    ORDER BY al.created_at DESC, al.id DESC
-    LIMIT ${limit + 1}
-  `);
+  let rows: any[];
+  try {
+    rows = (await db.execute(sql`
+      SELECT
+        al.id,
+        al.user_id,
+        u.full_name AS user_name,
+        al.action,
+        al.entity_type,
+        al.entity_id,
+        al.details,
+        al.ip_address,
+        al.created_at
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id = al.user_id
+      WHERE ${and(...conditions)}
+      ORDER BY al.created_at DESC, al.id DESC
+      LIMIT ${limit + 1}
+    `)) as any[];
+  } catch (error) {
+    if (!isMissingAuditLogTableError(error)) throw error;
+    rows = [];
+  }
 
-  const hasMore = (rows as any[]).length > limit;
-  const data = hasMore ? (rows as any[]).slice(0, limit) : (rows as any[]);
+  const hasMore = rows.length > limit;
+  const data = hasMore ? rows.slice(0, limit) : rows;
   const nextCursor = hasMore ? data[data.length - 1]!.id : null;
 
   return {
